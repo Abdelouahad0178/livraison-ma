@@ -5,7 +5,7 @@
 
 # ── CONFIGURATION (à modifier une seule fois) ──────────────
 $API_URL    = "https://us-central1-arelanc.cloudfunctions.net/downloadBackup"
-$API_KEY    = "REMPLACER_PAR_VOTRE_CLE_SECRETE"   # même clé que dans Firebase
+$API_KEY    = "5hYgTzDPr7NvO9b6ecqJkZG1jWw28naiVMUsAXpS"   # Clé configurée
 $BACKUP_DIR = "C:\BG-Backups"
 $MAX_LOCAL  = 10
 # ───────────────────────────────────────────────────────────

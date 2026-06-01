@@ -6,11 +6,13 @@ const { getStorage }              = require('firebase-admin/storage')
 const { onDocumentWritten }       = require('firebase-functions/v2/firestore')
 const { onSchedule }              = require('firebase-functions/v2/scheduler')
 const { onCall, onRequest }       = require('firebase-functions/v2/https')
-initializeApp()
+initializeApp({
+  storageBucket: 'arelanc.firebasestorage.app'
+})
 const db = getFirestore()
 
 // ── Backup automatique ─────────────────────────────────────────────────────
-const BACKUP_API_KEY = process.env.BACKUP_API_KEY || ''
+const BACKUP_API_KEY = '5hYgTzDPr7NvO9b6ecqJkZG1jWw28naiVMUsAXpS'
 
 const BACKUP_COLLECTIONS = [
   'settings', 'parcels', 'users', 'clients', 'payments',
@@ -38,7 +40,7 @@ function serializeForBackup(value) {
 }
 
 async function runWeeklyBackup() {
-  const bucket = getStorage().bucket()
+  const bucket = getStorage().bucket('arelanc.firebasestorage.app')
   const collections = {}
   const counts = {}
 
@@ -102,20 +104,33 @@ exports.downloadBackup = onRequest({
   timeoutSeconds: 300,
 }, async (req, res) => {
   const key = req.query.key || req.headers['x-backup-key'] || ''
+
   if (!BACKUP_API_KEY || key !== BACKUP_API_KEY) {
+    console.log('[downloadBackup] Authentification échouée')
     res.status(401).json({ error: 'Clé invalide' })
     return
   }
 
-  const bucket = getStorage().bucket()
+  const bucket = getStorage().bucket('arelanc.firebasestorage.app')
   const [allFiles] = await bucket.getFiles({ prefix: BACKUP_FOLDER + '/' })
   const sorted = allFiles
     .filter(f => f.name.startsWith(BACKUP_FOLDER + '/backup-bgexpress-'))
     .sort((a, b) => a.name.localeCompare(b.name))
 
   if (sorted.length === 0) {
-    res.status(404).json({ error: 'Aucun backup disponible' })
-    return
+    // Créer un backup maintenant
+    console.log('[downloadBackup] Aucun backup - création en cours...')
+    await runWeeklyBackup()
+    // Recharger la liste
+    const [newFiles] = await getStorage().bucket('arelanc.firebasestorage.app').getFiles({ prefix: BACKUP_FOLDER + '/' })
+    const newSorted = newFiles
+      .filter(f => f.name.startsWith(BACKUP_FOLDER + '/backup-bgexpress-'))
+      .sort((a, b) => a.name.localeCompare(b.name))
+    if (newSorted.length === 0) {
+      res.status(500).json({ error: 'Impossible de créer un backup' })
+      return
+    }
+    sorted.push(...newSorted)
   }
 
   const latest = sorted[sorted.length - 1]
