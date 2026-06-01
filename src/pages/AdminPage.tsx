@@ -1,0 +1,2089 @@
+﻿import { lazy, Suspense, useEffect, useRef, useState, useMemo } from 'react'
+import { signOut, createUserWithEmailAndPassword, signOut as fbSignOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth'
+import { collection, doc, setDoc, getDoc } from 'firebase/firestore'
+import { auth, authSecondary, db } from '../firebase/config'
+import { useNavigate } from 'react-router-dom'
+import {
+  subscribeAllParcels, subscribeAllUsers,
+  updateParcel, updateParcelStatus, markParcelAsReturned, remitCod, settleCodToSender, batchSettleCods, updateUser, deleteUserDoc,
+  subscribeAllCaisse, subscribeAllCaisseClotures,
+  subscribeAllCaissierRemarks,
+  createCaisseRequest, subscribeAllCaisseRequests, completeRhSalaryCaisseRequest,
+  subscribeAllDriverPortDuTransactions, addDriverPortDuTransaction, deleteDriverPortDuTransaction, updateDriverPortDuTransaction,
+  confirmDriverVersement,
+  createCaisseEntry,
+  subscribeAllSectors,
+  createReturnParcel,
+  subscribeAllReglementsGlobal, subscribeAllRapportsGlobal,
+  getParcelsPage,
+} from '../firebase/firestore'
+import {
+  createAgentCodRequest, subscribeAllAgentCodRequests, addAgentCodRequestReply, resolveAgentCodRequest,
+} from '../firebase/agentCodRequests'
+import {
+  createClient, updateClient, subscribeAllClientMessages, resolveClientMessage,
+  addClientMessageReply, deleteClientMessage, markClientMessageReadByStaff,
+} from '../firebase/clients'
+import { subscribeDirectorLogs, DIRECTOR_ACTION_ICONS } from '../firebase/directorLogs'
+import { subscribeAllBankDeposits, deleteBankDeposit } from '../firebase/bankDeposits'
+import { BACKUP_COLLECTIONS } from '../firebase/backupCollections'
+import { subscribeTariffConfig, saveTariffConfig } from '../firebase/tariffs'
+import { subscribeAllAgentNotes } from '../firebase/agentNotes'
+import {
+  DEFAULT_OPERATION_LOCKS, subscribeOperationLocks, updateGlobalSiteLock, updateAgencyLock,
+} from '../firebase/operationLocks'
+import {
+  CAISSE_CATEGORIES, CITIES, STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS,
+  DIRECTOR_PERMISSIONS, DEFAULT_TARIFF_CONFIG, calculateTariff, normalizeTariffConfig,
+  codCollectedLabel, REGLEMENT_MODES, REGLEMENT_STATUSES,
+} from '../firebase/constants'
+import {
+  LayoutDashboard, LogOut, Package, Clock, CheckCircle,
+  Banknote, Filter, ExternalLink, Edit2, X, Calendar, Users, Wallet,
+  ChevronDown, Save, Search, UserPlus, Eye, EyeOff, Contact, Menu,
+  BarChart2, Truck, MapPin, ArrowRight, Car, Ban, ShieldCheck, Trash2, TrendingUp, TrendingDown,
+  Building2, AlertTriangle, Download, Calculator, RotateCcw, Lock, CheckCircle2, FileText, Upload, Power, Copy, MessageCircle, Monitor, Star,
+} from 'lucide-react'
+import CompanyContact from '../components/CompanyContact'
+import SignatureViewerModal from '../components/SignatureViewerModal'
+import LiveClock from '../components/LiveClock'
+
+const AdminCaisseTab = lazy(() => import('./admin/tabs/AdminCaisseTab'))
+const AdminBanqueTab = lazy(() => import('./admin/tabs/AdminBanqueTab'))
+const AdminReglementsTab = lazy(() => import('./admin/tabs/AdminReglementsTab'))
+const AdminUsersTab = lazy(() => import('./admin/tabs/AdminUsersTab'))
+const AdminActivityTab = lazy(() => import('./admin/tabs/AdminActivityTab'))
+const AdminExpeditionsTab = lazy(() => import('./admin/tabs/AdminExpeditionsTab'))
+const AdminEmployeesTab = lazy(() => import('./admin/tabs/AdminEmployeesTab'))
+const AdminNotesTab = lazy(() => import('./admin/tabs/AdminNotesTab'))
+const AdminReturnsTab = lazy(() => import('./admin/tabs/AdminReturnsTab'))
+const AdminHomeTab   = lazy(() => import('./admin/tabs/AdminHomeTab'))
+const AdminCodTab    = lazy(() => import('./admin/tabs/AdminCodTab'))
+const AdminAgenciesTab = lazy(() => import('./admin/tabs/AdminAgenciesTab'))
+const AdminAlertsTab = lazy(() => import('./admin/tabs/AdminAlertsTab'))
+const AdminTariffsTab = lazy(() => import('./admin/tabs/AdminTariffsTab'))
+const AdminExportsTab = lazy(() => import('./admin/tabs/AdminExportsTab'))
+const AdminArchivageTab = lazy(() => import('./admin/tabs/AdminArchivageTab'))
+const EmployeeContractModal = lazy(() => import('./admin/components/EmployeeContractModal'))
+import { useAdminHandlers, downloadCsv, downloadJson, copyText } from './admin/hooks/useAdminHandlers'
+import UserEditModal from './admin/modals/UserEditModal'
+import UserActivityModal from './admin/modals/UserActivityModal'
+import DirectorLogsModal from './admin/modals/DirectorLogsModal'
+import DriverPortDuModal from './admin/modals/DriverPortDuModal'
+import AdminEditParcelModal from './admin/modals/AdminEditParcelModal'
+import { fmt } from '../utils/formatNumber'
+
+const parcelDate = (p: any) => {
+  if (p.createdAt?.toDate) return p.createdAt.toDate()
+  if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
+  return new Date(0)
+}
+const userDate = (u: any) => u.createdAt ? new Date(u.createdAt) : new Date(0)
+const logDate = (l: any) => {
+  if (l.timestamp?.toDate) return l.timestamp.toDate()
+  if (l.timestamp) return new Date(l.timestamp)
+  return new Date(0)
+}
+const anyDate = (value: any) => {
+  if (!value) return new Date(0)
+  if (value?.toDate) return value.toDate()
+  return new Date(value)
+}
+const caisseEntryDate = (e: any) => {
+  if (e.createdAt?.toDate) return e.createdAt.toDate()
+  if (e.createdAt) return new Date(e.createdAt)
+  return new Date(0)
+}
+const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parcelDate) => {
+  if (preset === 'all') return list
+  const now = new Date()
+  let start: any = null, end: any = now
+  if      (preset === 'today')  { start = new Date(); start.setHours(0,0,0,0) }
+  else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate()-6); start.setHours(0,0,0,0) }
+  else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
+  else if (preset === 'custom') { start = from ? new Date(from) : null; end = to ? new Date(to+'T23:59:59') : now }
+  if (!Array.isArray(list)) return []
+  return list.filter((p: any) => {
+    const d = getDate(p)
+    if (start && d < start) return false
+    if (end   && d > end)   return false
+    return true
+  })
+}
+
+const formatPeriod = (preset: any, from: any, to: any) => {
+  const fmtDate = (value: any) => value ? new Date(value + 'T00:00:00').toLocaleDateString('fr-MA') : ''
+  if (preset === 'today') return "Aujourd'hui"
+  if (preset === 'week') return '7 derniers jours'
+  if (preset === 'month') return 'Ce mois'
+  if (preset === 'custom') {
+    if (from && to) return `Du ${fmtDate(from)} au ${fmtDate(to)}`
+    if (from) return `Depuis le ${fmtDate(from)}`
+    if (to) return `Jusqu'au ${fmtDate(to)}`
+    return 'Période personnalisée'
+  }
+  return 'Toutes les dates'
+}
+
+const normalizeSearch = (value: any) => String(value ?? '').toLowerCase().replace(/\s+/g, '')
+const matchesSearch = (values: any, query: any) => {
+  const q = String(query ?? '').trim().toLowerCase()
+  if (!q) return true
+  const compactQ = normalizeSearch(q)
+  return values.some((v: any) => {
+    const raw = String(v ?? '').toLowerCase()
+    return raw.includes(q) || normalizeSearch(raw).includes(compactQ)
+  })
+}
+const parsePositiveNumber = (value: any, fallback = 0) => {
+  const num = parseFloat(String(value ?? '').replace(',', '.'))
+  return Number.isFinite(num) && num >= 0 ? num : fallback
+}
+const currentSalaryMonth = () => new Date().toISOString().slice(0, 7)
+const salaryMonthLabel = (month: any) => month
+  ? new Date(`${month}-01T00:00:00`).toLocaleDateString('fr-MA', { month: 'long', year: 'numeric' })
+  : 'Mois non précisé'
+const getLastHistoryDate = (p: any) => {
+  const last = Array.isArray(p.history) ? p.history[p.history.length - 1] : null
+  return last?.timestamp ? new Date(last.timestamp) : parcelDate(p)
+}
+const hoursSince = (date: any) => Math.max(0, Math.round((Date.now() - date.getTime()) / 36e5))
+const getDelayLimit = (status: string): number => (({
+  'Initialisé': 24,
+  'En transit': 48,
+  'Arrivé en agence': 24,
+  'En cours de livraison': 12,
+} as Record<string, number>)[status] || 48)
+const RETURN_REASONS = [
+  'Client absent',
+  'Refus client',
+  'Adresse introuvable',
+  'Téléphone incorrect',
+  'Colis endommagé',
+  'Autre',
+]
+const csvEscape = (value: any) => `"${String(value ?? '').replace(/"/g, '""')}"`
+const ROLES = [
+  { key: 'admin',       label: 'Admin',          emoji: '🖥',   badge: 'bg-red-100 text-red-700'         },
+  { key: 'directeur',   label: 'Directeur',       emoji: '👔',   badge: 'bg-purple-100 text-purple-700'   },
+  { key: 'chef_agence', label: "Chef d'agence",   emoji: '🏢',   badge: 'bg-indigo-100 text-indigo-700'   },
+  { key: 'agent',       label: 'Agent',           emoji: '🧑‍💼', badge: 'bg-blue-100 text-blue-700'      },
+  { key: 'aide_agent',           label: 'Aide Agent',         emoji: '✏️',   badge: 'bg-violet-100 text-violet-700'  },
+  { key: 'pointeur_encaisseur', label: 'Pointeur-Encaisseur', emoji: '💼',   badge: 'bg-indigo-100 text-indigo-700'  },
+  { key: 'encaisseur_central',   label: 'Encaisseur central',  emoji: '🏦',   badge: 'bg-emerald-100 text-emerald-700' },
+  { key: 'chauffeur',            label: 'Chauffeur',           emoji: '🚚',   badge: 'bg-orange-100 text-orange-700'  },
+  { key: 'livreur',              label: 'Livreur',             emoji: '🛵',   badge: 'bg-amber-100 text-amber-700'    },
+  { key: 'caissier',             label: 'Caissier',            emoji: '🏦',   badge: 'bg-teal-100 text-teal-700'     },
+  { key: 'salarie',     label: 'Salarié',         emoji: '👤',   badge: 'bg-rose-100 text-rose-700'      },
+  { key: 'client',      label: 'Client',          emoji: '🧾',   badge: 'bg-sky-100 text-sky-700'        },
+]
+
+export default function AdminPage() {
+  const navigate = useNavigate()
+
+  // Main tab
+  const [mainTab, setMainTab] = useState('home')
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [adminDatePreset, setAdminDatePreset] = useState('all')
+  const [adminDateFrom,   setAdminDateFrom]   = useState('')
+  const [adminDateTo,     setAdminDateTo]     = useState('')
+
+  // Parcels
+  const [parcels,      setParcels]      = useState<any[]>([])
+  const [moreParcels,  setMoreParcels]  = useState<any[]>([])
+  const lastPageDocRef = useRef<any>(null)
+  const [hasMore,      setHasMore]      = useState(true)
+  const [loadingMore,  setLoadingMore]  = useState(false)
+  const [loading,      setLoading]      = useState(true)
+  const [cityFilter,    setCityFilter]    = useState('Toutes')
+  const [statusFilter,  setStatusFilter]  = useState('Tous')
+  const [search,        setSearch]        = useState('')
+  const [statusModal,       setStatusModal]       = useState<any>(null)
+  const [returnModal,       setReturnModal]       = useState<any>(null)
+  const [returnParcelModal, setReturnParcelModal] = useState<any>(null) // { parcel, loading, result, error }
+  const [viewSignature,     setViewSignature]     = useState<any>(null)
+  const [archiveModal,      setArchiveModal]      = useState<any>(null)
+  const [archiveProgress,   setArchiveProgress]   = useState({ done: 0, total: 0 })
+
+  // RETOUR FOND tab
+  const [codFilter,     setCodFilter]     = useState('all')
+  const [codSearch,     setCodSearch]     = useState('')
+  const [alertFilter,   setAlertFilter]   = useState('all')
+
+  // Section
+  const [adminReglements,      setAdminReglements]      = useState<any[]>([])
+  const [adminRapports,        setAdminRapports]        = useState<any[]>([])
+  const [rgAgenceFilter,       setRgAgenceFilter]       = useState('all')
+  const [rgModeFilter,         setRgModeFilter]         = useState('all')
+  const [rgStatusFilter,       setRgStatusFilter]       = useState('all')
+  const [rgPointeurFilter,     setRgPointeurFilter]     = useState('all')
+  const [rgDatePreset,         setRgDatePreset]         = useState('all')
+  const [rgDateFrom,           setRgDateFrom]           = useState('')
+  const [rgDateTo,             setRgDateTo]             = useState('')
+  const [rgSearch,             setRgSearch]             = useState('')
+  const [rgTab,                setRgTab]                = useState('reglements')
+  const [rapportValidating,    setRapportValidating]    = useState<any>(null)
+  const [rapportNoteInput,     setRapportNoteInput]     = useState<any>({})
+
+  // Users tab
+  const [users,        setUsers]        = useState<any[]>([])
+  const [loadingUsers, setLoadingUsers] = useState(false)
+  const [userEdit,          setUserEdit]          = useState<any>(null)
+  const [deleteConfirmUser, setDeleteConfirmUser] = useState<any>(null)
+  const [userSearch,        setUserSearch]        = useState('')
+  const [roleFilter,        setRoleFilter]        = useState('Tous')
+  const [salaryModal,       setSalaryModal]       = useState<any>(null)
+  const [pwdForm,  setPwdForm]  = useState({ current: '', next: '', confirm: '', loading: false, error: '', success: '' })
+
+  const EMPTY_CREATE = {
+    name: '', email: '', password: '', role: 'chef_agence', city: '', code: '', tel: '', showPwd: false,
+    matricule: '', chauffeurType: 'transport', sectorId: '',
+    cin: '', cnss: '', assurance: '', dateEmbauche: '', dateSortie: '',
+    dateNaissance: '', salaire: '', adresse: '', situationFamiliale: '',
+    contactUrgence: '', noteRH: '',
+  }
+  const [createModal,  setCreateModal]  = useState<any>(null) // null | form data
+  const [createLoading,setCreateLoading]= useState(false)
+  const [createError,  setCreateError]  = useState('')
+  const [allSectors,   setAllSectors]   = useState<any[]>([])
+
+  // Activity tab
+  const [activityRoleFilter,   setActivityRoleFilter]   = useState('all')
+  const [userActivityModal,    setUserActivityModal]    = useState<any>(null)
+  const [userDetailTab,        setUserDetailTab]        = useState('created')
+
+  // Agent Notes tab
+  const [agentNotes,           setAgentNotes]           = useState<any[]>([])
+
+  // Section
+  const [driverPortDuTxs,      setDriverPortDuTxs]      = useState<any[]>([])
+  const [driverPortDuModal,    setDriverPortDuModal]    = useState<any>(null) // { driver, stat }
+  const [portDuForm,           setPortDuForm]           = useState({ type: 'versement', amount: '', note: '' })
+  const [portDuLoading,        setPortDuLoading]        = useState(false)
+  const [portDuError,          setPortDuError]          = useState('')
+  const [portDuEditId,         setPortDuEditId]         = useState<any>(null) // tx.id en cours d'édition
+  const [portDuEditForm,       setPortDuEditForm]       = useState({ amount: '', note: '' })
+
+  // Director logs
+  const [directorLogs,      setDirectorLogs]      = useState<any[]>([])
+  const [directorLogsModal, setDirectorLogsModal] = useState<any>(null) // director user object
+
+  // Caisse
+  const [caisseEntries,   setCaisseEntries]   = useState<any[]>([])
+  const [allRhRequests,   setAllRhRequests]   = useState<any[]>([])
+  const [caisseClotures,  setCaisseClotures]  = useState<any[]>([])
+  const [caisseCityFilter, setCaisseCityFilter] = useState('Toutes')
+  const [caisseTypeFilter, setCaisseTypeFilter] = useState('all')
+  const [clotureModal,    setClotureModal]    = useState<any>(null)
+  const [clotureLoading,  setClotureLoading]  = useState(false)
+  const [clotureError,    setClotureError]    = useState('')
+
+  // Section
+  const [allRemarks,       setAllRemarks]       = useState<any[]>([])
+  const [clientMessages,   setClientMessages]   = useState<any[]>([])
+  const [clientReplyDrafts, setClientReplyDrafts] = useState<any>({})
+  const [agentCodRequests, setAgentCodRequests] = useState<any[]>([])
+  const [codRequestDrafts, setCodRequestDrafts] = useState<any>({})
+  const [codRequestBusy,   setCodRequestBusy]   = useState('')
+  const [codRequestMsg,    setCodRequestMsg]    = useState<any>(null)
+  const staffReadMarks = useRef(new Set())
+  const [remarkFilter,     setRemarkFilter]     = useState('open')
+  const [remarkCityFilter, setRemarkCityFilter] = useState('Toutes')
+
+  // Section
+  const [allBankDeposits,    setAllBankDeposits]    = useState<any[]>([])
+  const [bankCityFilter,     setBankCityFilter]     = useState('Toutes')
+  const [bankDatePreset,     setBankDatePreset]     = useState('all')
+  const [bankDateFrom,       setBankDateFrom]       = useState('')
+  const [bankDateTo,         setBankDateTo]         = useState('')
+  const [bankSearch,         setBankSearch]         = useState('')
+  const [bankConfirmBusy,    setBankConfirmBusy]    = useState('')
+  const [bankDeleteConfirm,  setBankDeleteConfirm]  = useState<any>(null) // deposit id
+
+  // Section
+  const [userEditTab,      setUserEditTab]      = useState('access')
+  const [contractModal,    setContractModal]    = useState<any>(null) // null | { employee, form }
+  const [codEditModal,     setCodEditModal]     = useState<any>(null) // null | { parcel, value, loading, error }
+  const [adminEditModal,   setAdminEditModal]   = useState<any>(null) // null | { parcel, form, loading, error }
+  const [backupBusy,       setBackupBusy]       = useState(false)
+  const [backupMessage,    setBackupMessage]    = useState<any>(null)
+  const [copyMessage,      setCopyMessage]      = useState<any>(null)
+  const [importPreview,    setImportPreview]    = useState<any>(null)
+  const [operationLocks,   setOperationLocks]   = useState(DEFAULT_OPERATION_LOCKS)
+  const [lockBusy,         setLockBusy]         = useState('')
+  const [lockPanelOpen,    setLockPanelOpen]    = useState(false)
+  const [tariffDraft,      setTariffDraft]      = useState(DEFAULT_TARIFF_CONFIG)
+  const [tariffSaving,     setTariffSaving]     = useState(false)
+  const [tariffMessage,    setTariffMessage]    = useState<any>(null)
+
+  const datePreset = adminDatePreset
+  const dateFrom = adminDateFrom
+  const dateTo = adminDateTo
+  const setDatePreset = setAdminDatePreset
+  const setDateFrom = setAdminDateFrom
+  const setDateTo = setAdminDateTo
+  const codDatePreset = adminDatePreset
+  const codDateFrom = adminDateFrom
+  const codDateTo = adminDateTo
+  const setCodDatePreset = setAdminDatePreset
+  const setCodDateFrom = setAdminDateFrom
+  const setCodDateTo = setAdminDateTo
+  const usersDatePreset = adminDatePreset
+  const usersDateFrom = adminDateFrom
+  const usersDateTo = adminDateTo
+  const setUsersDatePreset = setAdminDatePreset
+  const setUsersDateFrom = setAdminDateFrom
+  const setUsersDateTo = setAdminDateTo
+  const activityDatePreset = adminDatePreset
+  const activityDateFrom = adminDateFrom
+  const activityDateTo = adminDateTo
+  const setActivityDatePreset = setAdminDatePreset
+  const setActivityDateFrom = setAdminDateFrom
+  const setActivityDateTo = setAdminDateTo
+  const periodLabel = formatPeriod(adminDatePreset, adminDateFrom, adminDateTo)
+
+  // Subscriptions de base — démarrent au montage du composant
+  useEffect(() => {
+    setLoading(true)
+    const unsubParcels        = subscribeAllParcels((data: any, lastSnap: any) => { setParcels(data); setLoading(false); if (!lastPageDocRef.current) lastPageDocRef.current = lastSnap })
+    const unsubUsers          = subscribeAllUsers(setUsers)
+    const unsubLocks          = subscribeOperationLocks(setOperationLocks)
+    const unsubTariffs        = subscribeTariffConfig((config: any) => { setTariffDraft(config) })
+    const unsubClientMessages = subscribeAllClientMessages(setClientMessages)
+    const unsubSectors        = subscribeAllSectors(setAllSectors)
+    // Règlements + Rapports : chargés dès le montage (pas lazy) pour éviter le blank
+    const unsubReglements     = subscribeAllReglementsGlobal(setAdminReglements, err => console.error('reglements:', err))
+    const unsubRapports       = subscribeAllRapportsGlobal(setAdminRapports, err => console.error('rapports:', err))
+    return () => { unsubParcels(); unsubUsers(); unsubLocks(); unsubTariffs(); unsubClientMessages(); unsubSectors(); unsubReglements(); unsubRapports() }
+  }, [])
+
+  // Subscriptions lazy — démarrent seulement à la première visite de l'onglet
+  const _lazyStarted = useRef<any>({})
+  useEffect(() => {
+    const started = _lazyStarted.current
+    if ((mainTab === 'caisse' || mainTab === 'employees' || mainTab === 'activity') && !started.caisseEntries) {
+      started.caisseEntries = [subscribeAllCaisse(setCaisseEntries)]
+    }
+    if (mainTab === 'caisse' && !started.caisseDetails) {
+      started.caisseDetails = [
+        subscribeAllCaisseClotures(setCaisseClotures),
+        subscribeAllCaissierRemarks(setAllRemarks),
+      ]
+    }
+    // reglements/rapports: abonnés dès le montage (voir useEffect de base)
+    if (mainTab === 'banque' && !started.banque) {
+      started.banque = [subscribeAllBankDeposits(setAllBankDeposits, err => console.error('bankDeps:', err))]
+    }
+    if (mainTab === 'cod' && !started.cod) {
+      started.cod = [subscribeAllAgentCodRequests(setAgentCodRequests)]
+    }
+    if (mainTab === 'activity' && !started.activity) {
+      started.activity = [subscribeDirectorLogs(setDirectorLogs)]
+    }
+    if ((mainTab === 'employees' || mainTab === 'expeditions' || mainTab === 'activity') && !started.portdu) {
+      started.portdu = [subscribeAllDriverPortDuTransactions(setDriverPortDuTxs)]
+    }
+    if (mainTab === 'employees' && !started.rhRequests) {
+      started.rhRequests = [subscribeAllCaisseRequests(setAllRhRequests)]
+    }
+    if (mainTab === 'notes' && !started.agentNotes) {
+      started.agentNotes = [subscribeAllAgentNotes(setAgentNotes, err => console.error('agentNotes:', err))]
+    }
+  }, [mainTab])
+
+  // Nettoyage des subscriptions lazy au démontage
+  useEffect(() => {
+    return () => {
+      ;(Object.values(_lazyStarted.current).flat() as any[]).forEach(unsub => unsub?.())
+    }
+  }, [])
+
+  useEffect(() => {
+    setUserActivityModal(null)
+    setDirectorLogsModal(null)
+  }, [adminDatePreset, adminDateFrom, adminDateTo])
+
+  useEffect(() => {
+    clientMessages.slice(0, 8).forEach(m => {
+      if (m.readByStaffAt || staffReadMarks.current.has(m.id)) return
+      staffReadMarks.current.add(m.id)
+      markClientMessageReadByStaff(m.id, auth.currentUser?.email || 'Admin').catch(() => {
+        staffReadMarks.current.delete(m.id)
+      })
+    })
+  }, [clientMessages])
+
+  // Section
+  // ── State vars used by archive/return handlers ─────────────────────────────
+  const [archiveDone,    setArchiveDone]    = useState<any>(null)
+  const [archiving,      setArchiving]      = useState(false)
+
+  // ── Admin handlers hook ─────────────────────────────────────────────────────
+  const _as = useRef<Record<string, any>>({})
+  Object.assign(_as.current, {
+    adminEditModal, setAdminEditModal, salaryModal, setSalaryModal,
+    statusModal, setStatusModal, allRhRequests, caisseEntries, users,
+    bankDeleteConfirm, setBankDeleteConfirm,
+    driverPortDuModal, setDriverPortDuModal, driverPortDuTxs,
+    portDuForm, setPortDuForm, portDuLoading, setPortDuLoading,
+    portDuError, setPortDuError, portDuEditId, setPortDuEditId,
+    portDuEditForm, setPortDuEditForm,
+    userEdit, setUserEdit, userEditTab, setUserEditTab,
+    contractModal, setContractModal, pwdForm, setPwdForm,
+    returnModal, setReturnModal,
+    archiveModal, setArchiveModal, archiveProgress, setArchiveProgress,
+    archiveDone, setArchiveDone, archiving, setArchiving,
+    codEditModal, setCodEditModal,
+    createModal, setCreateModal, createLoading, setCreateLoading, createError, setCreateError,
+    deleteConfirmUser, setDeleteConfirmUser,
+    copyMessage, setCopyMessage, mainTab, setMainTab,
+    tariffDraft, setTariffDraft, tariffSaving, setTariffSaving, tariffMessage, setTariffMessage,
+    clientMessages, clientReplyDrafts, setClientReplyDrafts,
+    agentCodRequests, codRequestDrafts, setCodRequestDrafts, codRequestBusy, setCodRequestBusy,
+    codRequestMsg, setCodRequestMsg,
+    importPreview, setImportPreview, backupBusy, setBackupBusy, backupMessage, setBackupMessage,
+    lockBusy, setLockBusy, operationLocks, allSectors, allUsers: users,
+    confirmDriverVersement,
+  })
+  const adminHandlers = useAdminHandlers(_as)
+  const {
+    handleDeleteBankDeposit, openAdminEdit, handleAdminEditSave,
+    handleSaveCodAmount, handleAddPortDuTx, handleDeletePortDuTx,
+    handleSavePortDuEdit, handleConfirmDriverVersement,
+    handleStatusUpdate, handleCreateReturnParcel,
+    handleRemitCod, handleSettleCodAdmin, handleBatchSettleAdmin,
+    handleReturnSave, handleExportBackup, handleBackupFile,
+    handleConfirmImportBackup, makeClientPortalLink, handleCopyClientPortalLink,
+    handleToggleGlobalLock, handleToggleAgencyLock,
+    updateTariffCityPrice, updateTariffWeightRule, handleSaveTariffs, handleResetTariffs,
+    handleReplyClientMessage, handleDeleteClientMessage,
+    handleSendCodRequest, handleReplyAgentCodRequest,
+    handleSaveUser, openContractModal, handleChangePassword,
+    handleToggleBlock, handleDeleteUser, handleCreateUser,
+    openSalaryPayment, handleSalaryPayment, handleCompleteRhRequest,
+    openArchiveModal, toggleArchiveStatus, downloadLocalArchiveFile, handleArchiveParcels,
+  } = adminHandlers
+  const selectCls = "border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:border-blue-500 focus:outline-none"
+  const inputCls  = "border border-gray-200 rounded-xl px-3 py-2 text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:outline-none w-full transition"
+
+  // ── Computed values (useMemo) ─────────────────────────────────────────────
+  const allParcels = useMemo(() => {
+    if (!Array.isArray(parcels) || !Array.isArray(moreParcels)) return []
+    const map = new Map()
+    parcels.forEach((p: any) => map.set(p.id, p))
+    moreParcels.forEach((p: any) => map.set(p.id, p))
+    return [...map.values()]
+  }, [parcels, moreParcels])
+
+  const periodParcels = useMemo(() =>
+    filterByDate(allParcels, adminDatePreset, adminDateFrom, adminDateTo, (p: any) => {
+      if (p.createdAt?.toDate) return p.createdAt.toDate()
+      if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
+      return new Date(0)
+    })
+  , [allParcels, adminDatePreset, adminDateFrom, adminDateTo])
+
+  const periodUsers = useMemo(() =>
+    filterByDate(users, adminDatePreset, adminDateFrom, adminDateTo, (u: any) =>
+      u.createdAt ? new Date(u.createdAt) : new Date(0))
+  , [users, adminDatePreset, adminDateFrom, adminDateTo])
+
+  const periodDirectorLogs = useMemo(() =>
+    filterByDate(directorLogs, adminDatePreset, adminDateFrom, adminDateTo, (l: any) =>
+      l.timestamp?.toDate ? l.timestamp.toDate() : l.timestamp ? new Date(l.timestamp) : new Date(0))
+  , [directorLogs, adminDatePreset, adminDateFrom, adminDateTo])
+
+  const codDateFiltered = useMemo(() =>
+    filterByDate(allParcels.filter((p: any) => parseFloat(p.codAmount) > 0),
+      adminDatePreset, adminDateFrom, adminDateTo, (p: any) => {
+        if (p.createdAt?.toDate) return p.createdAt.toDate()
+        return new Date(p.createdAt || 0)
+      })
+  , [allParcels, adminDatePreset, adminDateFrom, adminDateTo])
+
+  const filteredCod = useMemo(() => {
+    if (!Array.isArray(codDateFiltered)) return []
+    let list = codDateFiltered
+    if (codFilter === 'pending')   list = list.filter((p: any) => !p.codStatus || p.codStatus === 'pending')
+    if (codFilter === 'collected') list = list.filter((p: any) => p.codStatus === 'collected')
+    if (codFilter === 'remis')     list = list.filter((p: any) => p.codStatus === 'remis' && !p.codSenderPaid)
+    if (codFilter === 'transit')   list = list.filter((p: any) => p.codSentToSource && !p.codReceivedBySource)
+    if (codFilter === 'recu')      list = list.filter((p: any) => p.codReceivedBySource && !p.codSenderPaid)
+    if (codFilter === 'regle')     list = list.filter((p: any) => p.codSenderPaid)
+    if (codSearch) {
+      const q = codSearch.toLowerCase()
+      list = list.filter((p: any) =>
+        (p.trackingId||'').toLowerCase().includes(q) ||
+        (p.receiver?.name||'').toLowerCase().includes(q) ||
+        (p.sender?.name||'').toLowerCase().includes(q) ||
+        (p.receiver?.city||'').toLowerCase().includes(q))
+    }
+    return list
+  }, [codDateFiltered, codFilter, codSearch])
+
+  const codStats = useMemo(() => {
+    if (!Array.isArray(allParcels)) return { pendingDH: 0, collectedDH: 0, remisDH: 0, regleDH: 0 }
+    return {
+      pendingDH:   allParcels.filter((p: any) => parseFloat(p.codAmount) > 0 && (!p.codStatus || p.codStatus === 'pending')).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
+      collectedDH: allParcels.filter((p: any) => p.codStatus === 'collected').reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
+      remisDH:     allParcels.filter((p: any) => p.codStatus === 'remis' && !p.codSenderPaid).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
+      regleDH:     allParcels.filter((p: any) => p.codSenderPaid).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
+    }
+  }, [allParcels])
+
+  const codStatsFiltered = useMemo(() => {
+    if (!Array.isArray(codDateFiltered)) return { pendingDH: 0, collectedDH: 0, remisDH: 0, regleDH: 0, byType: [] }
+    return {
+      pendingDH:   codDateFiltered.filter((p: any) => !p.codStatus || p.codStatus === 'pending').reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
+      collectedDH: codDateFiltered.filter((p: any) => p.codStatus === 'collected').reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
+      remisDH:     codDateFiltered.filter((p: any) => p.codStatus === 'remis' && !p.codSenderPaid).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
+      regleDH:     codDateFiltered.filter((p: any) => p.codSenderPaid).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
+      byType: COD_PAYMENT_TYPES.map(pt => ({
+        ...pt,
+        total: codDateFiltered.filter((p: any) => p.codPaymentType === pt.key).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
+        count: codDateFiltered.filter((p: any) => p.codPaymentType === pt.key).length,
+      })).filter(pt => pt.total > 0),
+    }
+  }, [codDateFiltered])
+
+  const kpis = useMemo(() => {
+    if (!Array.isArray(periodParcels)) return { total: 0, delivered: 0, returned: 0, inTransit: 0, cod: 0 }
+    return {
+      total:     periodParcels.length,
+      delivered: periodParcels.filter((p: any) => p.status === 'Livré').length,
+      returned:  periodParcels.filter((p: any) => p.status === 'Retourné').length,
+      inTransit: periodParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status)).length,
+      cod:       periodParcels.filter((p: any) => parseFloat(p.codAmount) > 0 && (!p.codStatus || p.codStatus === 'pending')).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
+    }
+  }, [periodParcels])
+
+  const filteredUsers = useMemo(() => {
+    if (!Array.isArray(periodUsers)) return []
+    const roleOk = (u: any) => roleFilter === 'Tous' || u.role === roleFilter
+    const searchOk = (u: any) => !userSearch || [u.name, u.email, u.city, u.code, u.cin, u.cnss, u.tel].some(v => v?.toLowerCase().includes(userSearch.toLowerCase()))
+    return periodUsers.filter((u: any) => roleOk(u) && searchOk(u))
+  }, [periodUsers, roleFilter, userSearch])
+
+  const activityStats = useMemo(() => {
+    // Protection: s'assurer que tous les tableaux sont valides
+    if (!Array.isArray(users) || !Array.isArray(periodParcels) || !Array.isArray(caisseEntries) || !Array.isArray(driverPortDuTxs)) {
+      return []
+    }
+    const pDate = (p: any) => p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt || 0)
+    const eDate = (e: any) => e.createdAt?.toDate ? e.createdAt.toDate() : new Date(e.createdAt || 0)
+    const periodEntries = filterByDate(caisseEntries, adminDatePreset, adminDateFrom, adminDateTo, eDate)
+    if (!Array.isArray(periodEntries)) return []
+    return users
+      .filter((u: any) => ['agent','chauffeur','livreur','caissier'].includes(u.role))
+      .filter((u: any) => activityRoleFilter === 'all' || u.role === activityRoleFilter)
+      .map((u: any) => {
+        const created    = periodParcels.filter((p: any) => p.agentId === u.id && p.agentRole !== 'aide_agent')
+        const claimed    = periodParcels.filter((p: any) => p.destinationAgentId === u.id)
+        const transports = periodParcels.filter((p: any) => p.chauffeurId === u.id)
+        const deliveries = periodParcels.filter((p: any) => p.deliveryDriverId === u.id)
+        const myParcels  = [...new Map([...created, ...claimed, ...transports, ...deliveries].map((p: any) => [p.id, p])).values()]
+        const myEntries  = periodEntries.filter((e: any) => e.cashierId === u.id || e.agentId === u.id)
+        // Agent fields
+        const livres     = created.filter((p: any) => p.status === 'Livré').length
+        const enCours    = created.filter((p: any) => !['Livré','Retourné'].includes(p.status)).length
+        const retournes  = created.filter((p: any) => p.status === 'Retourné').length
+        const totalRevenue = created.reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
+        const codTotal   = created.reduce((s: number, p: any) => s + (parseFloat(p.codAmount) || 0), 0)
+        // Cashier fields
+        const totalEntrees = myEntries.filter((e: any) => e.type === 'entree').reduce((s: number, e: any) => s + (e.amount || 0), 0)
+        const totalSorties = myEntries.filter((e: any) => e.type === 'sortie').reduce((s: number, e: any) => s + (e.amount || 0), 0)
+        const depotsAgents = myEntries.filter((e: any) => e.category === 'depot_agent')
+        const charges      = myEntries.filter((e: any) => ['charge','frais','salaire','avance'].includes(e.category))
+        // Driver fields
+        const colisLivres      = [...transports, ...deliveries].filter((p: any) => p.status === 'Livré').length
+        const activeTransports = transports.filter((p: any) => p.status === 'En transit').length
+        const activeDeliveries = deliveries.filter((p: any) => p.status === 'En cours de livraison').length
+        const codCollected     = deliveries.reduce((s: number, p: any) => p.codStatus === 'collected' ? s + (parseFloat(p.codAmount) || 0) : s, 0)
+        const driverTxs        = driverPortDuTxs.filter((t: any) => t.driverId === u.id)
+        const portDuCollecte   = deliveries.filter((p: any) => p.portType === 'port_du' && p.portStatus === 'collected').reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
+        const versements       = driverTxs.filter((t: any) => t.type === 'versement').reduce((s: number, t: any) => s + (t.amount || 0), 0)
+        const avances          = driverTxs.filter((t: any) => t.type === 'avance').reduce((s: number, t: any) => s + (t.amount || 0), 0)
+        const remises          = driverTxs.filter((t: any) => t.type === 'remise').reduce((s: number, t: any) => s + (t.amount || 0), 0)
+        const solde            = portDuCollecte - versements - remises + avances
+        const allDates = myParcels.map((p: any) => pDate(p).getTime())
+        const lastActivity = allDates.length ? Math.max(...allDates) : null
+        return {
+          user: u, parcels: myParcels, created, claimed, transports, deliveries,
+          entries: myEntries,
+          entrees: myEntries.filter((e: any) => e.type === 'entree'),
+          sorties: myEntries.filter((e: any) => e.type === 'sortie'),
+          livres, enCours, retournes, totalRevenue, codTotal,
+          totalEntrees, totalSorties, depotsAgents, charges,
+          colisLivres, activeTransports, activeDeliveries, codCollected,
+          portDuCollecte, versements, avances, remises, solde, txs: driverTxs,
+          lastActivity,
+        }
+      })
+      .sort((a, b) => (b.parcels.length || 0) - (a.parcels.length || 0))
+  }, [periodParcels, caisseEntries, driverPortDuTxs, users, activityRoleFilter, adminDatePreset, adminDateFrom, adminDateTo])
+
+  const agencyStats = useMemo(() => {
+    if (!Array.isArray(periodParcels) || !Array.isArray(users)) return []
+    return CITIES.map(city => {
+    const cityParcels = periodParcels.filter((p: any) => p.originCity === city || p.destinationCity === city || p.sender?.city === city || p.receiver?.city === city)
+    const incoming  = cityParcels.filter((p: any) => p.destinationCity === city || p.receiver?.city === city)
+    const outgoing  = cityParcels.filter((p: any) => p.originCity === city || p.sender?.city === city)
+    const active    = cityParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status))
+    const delivered = cityParcels.filter((p: any) => p.status === 'Livré')
+    const returned  = cityParcels.filter((p: any) => p.status === 'Retourné')
+    const agents    = users.filter((u: any) => u.city === city && u.role !== 'client')
+    const manager   = users.find((u: any) => u.city === city && (u.role === 'chef_agence' || u.role === 'admin'))
+    const codPending = cityParcels.filter((p: any) => parseFloat(p.codAmount) > 0 && (!p.codStatus || p.codStatus === 'pending')).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0)
+    return { city, incoming, outgoing, active, delivered, returned, agents, manager, codPending }
+  })}, [periodParcels, users])
+
+  const delayedAlerts = useMemo(() => {
+    if (!Array.isArray(periodParcels)) return []
+    const limits: Record<string, number> = { 'Initialisé': 24, 'En transit': 48, 'Arrivé en agence': 24, 'En cours de livraison': 12 }
+    return periodParcels
+      .filter((p: any) => limits[p.status])
+      .map((p: any) => {
+        const d = p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt || 0)
+        const ageHours = Math.round((Date.now() - d.getTime()) / 3.6e6)
+        const limit = limits[p.status] || 48
+        return { parcel: p, ageHours, overdue: Math.max(0, ageHours - limit), type: 'delay' }
+      })
+      .filter((a: any) => a.ageHours > (limits[a.parcel.status] || 48))
+  }, [periodParcels])
+
+  const codAlerts = useMemo(() => {
+    if (!Array.isArray(periodParcels)) return []
+    return periodParcels
+      .filter((p: any) => p.codStatus === 'collected' && parseFloat(p.codAmount) > 0 && !p.codSenderPaid)
+      .map((p: any) => {
+        const d = p.codCollectedAt ? new Date(p.codCollectedAt) : new Date(p.createdAt || 0)
+        return { parcel: p, ageHours: Math.round((Date.now() - d.getTime()) / 3.6e6), type: 'cod' }
+      })
+  }, [periodParcels])
+
+  const returnParcels = useMemo(() => {
+    if (!Array.isArray(periodParcels)) return []
+    return periodParcels.filter((p: any) => p.status === 'Retourné' || p.returnToCity || p.returnOf)
+  }, [periodParcels])
+
+  const visibleAlerts = useMemo(() => {
+    if (!Array.isArray(delayedAlerts) || !Array.isArray(codAlerts)) return []
+    const all = [...delayedAlerts, ...codAlerts]
+    if (alertFilter === 'delay') return delayedAlerts
+    if (alertFilter === 'cod')   return codAlerts
+    return all
+  }, [delayedAlerts, codAlerts, alertFilter])
+
+  const exportRows = useMemo(() => ({
+    expeditions: Array.isArray(periodParcels) ? periodParcels.map((p: any) => ({
+      tracking: p.trackingId, status: p.status, expediteur: p.sender?.name, destinataire: p.receiver?.name,
+      origine: p.originCity, destination: p.destinationCity, poids: p.weight, nbColis: p.nbColis,
+      cod: p.codAmount, portType: p.portType, prix: p.price,
+    })) : [],
+    cod: Array.isArray(filteredCod) ? filteredCod.map((p: any) => ({
+      tracking: p.trackingId, destinataire: p.receiver?.name, ville: p.receiver?.city,
+      montant: p.codAmount, statut: p.codStatus, mode: p.codPaymentType,
+    })) : [],
+    retours: Array.isArray(returnParcels) ? returnParcels.map((p: any) => ({ tracking: p.trackingId, status: p.status, motif: p.returnReason, destinataire: p.receiver?.name })) : [],
+    agences: Array.isArray(agencyStats) ? agencyStats.map((a: any) => ({ ville: a.city, entrants: a.incoming.length, sortants: a.outgoing.length, livres: a.delivered.length, retours: a.returned.length })) : [],
+    alertes: Array.isArray(visibleAlerts) ? visibleAlerts.map((a: any) => ({ tracking: a.parcel.trackingId, type: a.type, age: a.ageHours + 'h', statut: a.parcel.status })) : [],
+  }), [periodParcels, filteredCod, returnParcels, agencyStats, visibleAlerts])
+
+  const filtered = useMemo(() => {
+    if (!Array.isArray(allParcels)) return []
+    let list = allParcels
+    if (cityFilter !== 'Toutes') list = list.filter((p: any) => p.originCity === cityFilter || p.destinationCity === cityFilter || p.sender?.city === cityFilter || p.receiver?.city === cityFilter)
+    if (statusFilter !== 'Tous') list = list.filter((p: any) => p.status === statusFilter)
+    if (search.trim()) {
+      const q = search.trim().toLowerCase()
+      list = list.filter((p: any) => (p.trackingId||'').toLowerCase().includes(q) || (p.sender?.name||'').toLowerCase().includes(q) || (p.receiver?.name||'').toLowerCase().includes(q) || (p.receiver?.tel||'').includes(q))
+    }
+    return list
+  }, [allParcels, cityFilter, statusFilter, search])
+
+  const loadMoreParcels = async () => {
+    if (!hasMore || loadingMore) return
+    setLoadingMore(true)
+    try {
+      const { docs: data, lastDocSnap: lastSnap, hasMore: moreAvailable } = await getParcelsPage(lastPageDocRef.current, 50)
+      setMoreParcels((prev: any[]) => { const map = new Map(); prev.forEach((p: any) => map.set(p.id, p)); data.forEach((p: any) => map.set(p.id, p)); return [...map.values()] })
+      lastPageDocRef.current = lastSnap
+      if (!moreAvailable) setHasMore(false)
+    } finally { setLoadingMore(false) }
+  }
+
+  const activityFeed = useMemo(() => {
+    // Protection: s'assurer que periodDirectorLogs est un tableau
+    if (!Array.isArray(periodDirectorLogs)) return []
+    const logDate = (l: any) => l.timestamp?.toDate ? l.timestamp.toDate() : l.timestamp ? new Date(l.timestamp) : new Date(0)
+    return periodDirectorLogs
+      .map((l: any) => ({
+        ts:        logDate(l).getTime(),
+        date:      logDate(l),
+        userId:    l.uid,
+        userName:  l.userName || l.userEmail || 'Utilisateur',
+        role:      l.userRole || '',
+        city:      l.city || '',
+        action:    l.action || '',
+        title:     l.actionLabel || l.action || '',
+        reference: l.parcelId || l.targetId || '',
+        details:   l.details || {},
+      }))
+      .sort((a: any, b: any) => b.ts - a.ts)
+  }, [periodDirectorLogs])
+
+  const getArchiveDays = (modal: any) => modal?.days === 'custom' ? parseInt(modal.customDays, 10) : Number(modal?.days || 0)
+  const getArchivePreviewCount = (modal: any) => {
+    const days = getArchiveDays(modal)
+    if (!days || !modal?.city) return 0
+    const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - days); cutoff.setHours(0,0,0,0)
+    return allParcels.filter((p: any) => {
+      if (modal.city !== 'Toutes' && p.originCity !== modal.city) return false
+      if (!modal.statuses?.includes(p.status)) return false
+      const d = p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt || 0)
+      return d < cutoff
+    }).length
+  }
+
+  return (
+    <div className="min-h-screen bg-gray-50">
+      <CompanyContact />
+
+      {/* Section */}
+      <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-4">
+          {/* Top bar */}
+          <div className="flex items-center justify-between py-3">
+            <div className="flex items-center gap-3">
+              <img src="/LOGO.jpg" alt="BG Express" className="h-9 object-contain" />
+              <div className="flex items-center gap-1.5 border-l border-gray-200 pl-3">
+                <LayoutDashboard className="w-4 h-4 text-blue-600" />
+                <span className="font-bold text-gray-800 hidden sm:inline">Dashboard Admin</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <LiveClock className="text-gray-400 hidden sm:inline" />
+              <span className="hidden sm:flex items-center gap-1.5 text-xs text-green-600 font-medium">
+                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" /> Temps réel
+              </span>
+              <button onClick={() => signOut(auth).then(() => navigate('/login'))}
+                className="hidden md:flex items-center gap-1.5 text-sm text-red-500 hover:text-red-600 transition">
+                <LogOut className="w-4 h-4" /> Déconnexion
+              </button>
+              <button onClick={() => setMenuOpen(v => !v)}
+                className="md:hidden p-2 hover:bg-gray-100 rounded-xl transition">
+                {menuOpen ? <X className="w-5 h-5 text-gray-600" /> : <Menu className="w-5 h-5 text-gray-600" />}
+              </button>
+            </div>
+          </div>
+
+          {/* Breadcrumb quand on est dans une section */}
+          {mainTab !== 'home' && (
+            <div className="hidden md:flex border-t border-gray-50 items-center gap-2 py-2.5 px-1">
+              <button onClick={() => setMainTab('home')}
+                className="flex items-center gap-1.5 text-sm text-gray-400 hover:text-blue-600 transition font-medium">
+                <ChevronDown className="w-4 h-4 rotate-90" /> Accueil
+              </button>
+              <span className="text-gray-200 font-light">/</span>
+              <span className="text-sm font-bold text-blue-600">
+                {{ expeditions:'Expéditions', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', exports:'Exports', caisse:'Caisse', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents' }[mainTab] || mainTab}
+              </span>
+            </div>
+          )}
+
+          {/* Mobile dropdown */}
+          {menuOpen && (
+            <div className="md:hidden border-t border-gray-100 py-2 space-y-1">
+              <button onClick={() => { setMainTab('home'); setMenuOpen(false) }}
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">
+                🏠 <span>Accueil</span>
+              </button>
+              {[
+                { key: 'expeditions', label: 'Expéditions',         icon: Package   },
+                { key: 'cod',         label: 'RETOUR FOND / Remboursement', icon: Wallet    },
+                { key: 'users',       label: 'Utilisateurs',         icon: Users     },
+                { key: 'activity',    label: 'Activité',             icon: BarChart2 },
+                { key: 'agencies',    label: 'Agences',              icon: Building2 },
+                { key: 'alerts',      label: 'Alertes',              icon: AlertTriangle },
+                { key: 'tariffs',     label: 'Tarifs',               icon: Calculator },
+                { key: 'returns',     label: 'Retours',              icon: RotateCcw },
+                { key: 'exports',     label: 'Exports',              icon: Download },
+                { key: 'caisse',      label: 'Caisse',               icon: Wallet    },
+                { key: 'employees',   label: 'Dossiers RH',          icon: FileText  },
+                { key: 'reglements',  label: 'Règlements',            icon: Banknote  },
+                { key: 'banque',      label: 'Banque RETOUR FOND',    icon: Building2 },
+                { key: 'notes',       label: 'Notes agents',          icon: Star      },
+              ].map(({ key, label, icon: Icon }) => (
+                <button key={key} onClick={() => { setMainTab(key); setMenuOpen(false) }}
+                  className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold transition ${
+                    mainTab === key ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'
+                  }`}>
+                  <Icon className="w-5 h-5" />
+                  <span className="flex-1 text-left">{label}</span>
+                  {key === 'cod' && codStats.collectedDH > 0 && (
+                    <span className="bg-orange-500 text-white text-xs px-2 py-0.5 rounded-full">{fmt(codStats.collectedDH)} DH</span>
+                  )}
+                </button>
+              ))}
+              <button onClick={() => { navigate('/clients'); setMenuOpen(false) }}
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">
+                <Contact className="w-5 h-5" /> Clients
+              </button>
+              <button onClick={() => { navigate('/fleet'); setMenuOpen(false) }}
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">
+                <Car className="w-5 h-5" /> Parc véhicules
+              </button>
+              <button onClick={() => { navigate('/dashboard'); setMenuOpen(false) }}
+                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">
+                <TrendingUp className="w-5 h-5" /> Tableau de bord
+              </button>
+              <div className="flex items-center justify-between px-3 pt-2 border-t border-gray-100">
+                <span className="flex items-center gap-1.5 text-xs text-green-600 font-medium">
+                  <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" /> Temps réel
+                </span>
+                <button onClick={() => signOut(auth).then(() => navigate('/login'))}
+                  className="flex items-center gap-1.5 text-sm text-red-500 hover:text-red-600 py-1 transition">
+                  <LogOut className="w-4 h-4" /> Déconnexion
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </header>
+
+      <main className="max-w-7xl mx-auto p-4 pb-16">
+        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 mb-4">
+          <div className="flex flex-col lg:flex-row lg:items-center gap-3">
+            <div className="flex items-center gap-2 min-w-0">
+              <div className="w-9 h-9 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center shrink-0">
+                <Calendar className="w-4 h-4" />
+              </div>
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Période admin</p>
+                <p className="text-sm font-bold text-gray-800 truncate">{periodLabel}</p>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 items-center lg:ml-auto">
+              {[
+                { key: 'all',    label: 'Tout' },
+                { key: 'today',  label: "Aujourd'hui" },
+                { key: 'week',   label: '7 derniers jours' },
+                { key: 'month',  label: 'Ce mois' },
+                { key: 'custom', label: 'Personnalisé' },
+              ].map(({ key, label }) => (
+                <button key={key} onClick={() => setAdminDatePreset(key)}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                    adminDatePreset === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >{label}</button>
+              ))}
+              {adminDatePreset === 'custom' && (
+                <div className="flex items-center gap-2">
+                  <input type="date" value={adminDateFrom} onChange={e => setAdminDateFrom(e.target.value)}
+                    className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
+                  />
+                  <span className="text-gray-400 text-xs">→</span>
+                  <input type="date" value={adminDateTo} onChange={e => setAdminDateTo(e.target.value)}
+                    className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
+                  />
+                </div>
+              )}
+              <span className="text-xs text-gray-400 bg-gray-100 rounded-lg px-2 py-1">
+                {periodParcels.length} colis · {periodUsers.length} utilisateurs
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Section */}
+        {mainTab === 'home' && (
+          <Suspense fallback={<div className="mt-6 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminHomeTab
+              periodParcels={periodParcels}
+              periodUsers={periodUsers}
+              users={users}
+              codStats={codStats}
+              agencyStats={agencyStats}
+              caisseEntries={caisseEntries}
+              adminRapports={adminRapports}
+              allBankDeposits={allBankDeposits}
+              returnParcels={returnParcels}
+              delayedAlerts={delayedAlerts}
+              codAlerts={codAlerts}
+              lockPanelOpen={lockPanelOpen}
+              setLockPanelOpen={setLockPanelOpen}
+              operationLocks={operationLocks}
+              lockBusy={lockBusy}
+              backupBusy={backupBusy}
+              backupMessage={backupMessage}
+              importPreview={importPreview}
+              setImportPreview={setImportPreview}
+              handleExportBackup={handleExportBackup}
+              handleBackupFile={handleBackupFile}
+              handleConfirmImportBackup={handleConfirmImportBackup}
+              handleToggleGlobalLock={handleToggleGlobalLock}
+              handleToggleAgencyLock={handleToggleAgencyLock}
+              setMainTab={setMainTab}
+              navigate={navigate}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: EXPEDITIONS */}
+        {mainTab === 'expeditions' && (
+          <Suspense fallback={<div className="py-10 text-center text-sm text-gray-400">Chargement des expeditions...</div>}>
+            <AdminExpeditionsTab
+              kpis={kpis}
+              search={search}
+              setSearch={setSearch}
+              cityFilter={cityFilter}
+              setCityFilter={setCityFilter}
+              statusFilter={statusFilter}
+              setStatusFilter={setStatusFilter}
+              datePreset={datePreset}
+              setDatePreset={setDatePreset}
+              dateFrom={dateFrom}
+              setDateFrom={setDateFrom}
+              dateTo={dateTo}
+              setDateTo={setDateTo}
+              filtered={filtered}
+              loading={loading}
+              setCodEditModal={setCodEditModal}
+              setStatusModal={setStatusModal}
+              openAdminEdit={openAdminEdit}
+              allParcels={allParcels}
+              hasMore={hasMore}
+              loadMoreParcels={loadMoreParcels}
+              loadingMore={loadingMore}
+              openArchiveModal={openArchiveModal}
+              selectCls={selectCls}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: RETOUR */}
+        {mainTab === 'cod' && (
+          <Suspense fallback={<div className="mt-4 h-72 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminCodTab
+              codDatePreset={codDatePreset}
+              codDateFrom={codDateFrom}
+              codDateTo={codDateTo}
+              setCodDatePreset={setCodDatePreset}
+              setCodDateFrom={setCodDateFrom}
+              setCodDateTo={setCodDateTo}
+              codDateFiltered={codDateFiltered}
+              codStatsFiltered={codStatsFiltered}
+              codFilter={codFilter}
+              setCodFilter={setCodFilter}
+              codSearch={codSearch}
+              setCodSearch={setCodSearch}
+              codRequestMsg={codRequestMsg}
+              codRequestDrafts={codRequestDrafts}
+              setCodRequestDrafts={setCodRequestDrafts}
+              codRequestBusy={codRequestBusy}
+              agentCodRequests={agentCodRequests}
+              filteredCod={filteredCod}
+              adminEmail={auth.currentUser?.email || 'Admin'}
+              handleBatchSettleAdmin={handleBatchSettleAdmin}
+              handleRemitCod={handleRemitCod}
+              handleSettleCodAdmin={handleSettleCodAdmin}
+              handleSendCodRequest={handleSendCodRequest}
+              handleReplyAgentCodRequest={handleReplyAgentCodRequest}
+              resolveAgentCodRequest={resolveAgentCodRequest}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: AGENCES */}
+        {mainTab === 'agencies' && (
+          <Suspense fallback={<div className="mt-4 h-72 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminAgenciesTab
+              agencyStats={agencyStats}
+              periodLabel={periodLabel}
+              exportRows={exportRows}
+              downloadCsv={downloadCsv}
+              backupBusy={backupBusy}
+              backupMessage={backupMessage}
+              importPreview={importPreview}
+              setImportPreview={setImportPreview}
+              handleExportBackup={handleExportBackup}
+              handleBackupFile={handleBackupFile}
+              handleConfirmImportBackup={handleConfirmImportBackup}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: ALERTES */}
+        {mainTab === 'alerts' && (
+          <Suspense fallback={<div className="mt-4 h-72 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminAlertsTab
+              delayedAlerts={delayedAlerts}
+              codAlerts={codAlerts}
+              visibleAlerts={visibleAlerts}
+              alertFilter={alertFilter}
+              setAlertFilter={setAlertFilter}
+              clientMessages={clientMessages}
+              clientReplyDrafts={clientReplyDrafts}
+              setClientReplyDrafts={setClientReplyDrafts}
+              exportRows={exportRows}
+              adminEmail={auth.currentUser?.email || 'Admin'}
+              downloadCsv={downloadCsv}
+              handleRemitCod={handleRemitCod}
+              handleDeleteClientMessage={handleDeleteClientMessage}
+              handleReplyClientMessage={handleReplyClientMessage}
+              resolveClientMessage={resolveClientMessage}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: TARIFS */}
+        {mainTab === 'tariffs' && (
+          <Suspense fallback={<div className="mt-4 h-72 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminTariffsTab
+              tariffDraft={tariffDraft}
+              setTariffDraft={setTariffDraft}
+              tariffSaving={tariffSaving}
+              tariffMessage={tariffMessage}
+              handleSaveTariffs={handleSaveTariffs}
+              handleResetTariffs={handleResetTariffs}
+              updateTariffCityPrice={updateTariffCityPrice}
+              updateTariffWeightRule={updateTariffWeightRule}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: RETOURS */}
+        {mainTab === 'returns' && (
+          <Suspense fallback={<div className="mt-4 h-72 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminReturnsTab
+              returnParcels={returnParcels}
+              exportRows={exportRows}
+              downloadCsv={downloadCsv}
+              setReturnModal={setReturnModal}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: EXPORTS */}
+        {mainTab === 'exports' && (
+          <Suspense fallback={<div className="mt-4 h-72 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminExportsTab
+              periodLabel={periodLabel}
+              exportRows={exportRows}
+              downloadCsv={downloadCsv}
+              backupBusy={backupBusy}
+              backupMessage={backupMessage}
+              importPreview={importPreview}
+              setImportPreview={setImportPreview}
+              handleExportBackup={handleExportBackup}
+              handleBackupFile={handleBackupFile}
+              handleConfirmImportBackup={handleConfirmImportBackup}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: CAISSE */}
+        {mainTab === 'caisse' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminCaisseTab
+              caisseEntries={caisseEntries}
+              caisseClotures={caisseClotures}
+              users={users}
+              allRemarks={allRemarks}
+              adminDatePreset={adminDatePreset}
+              adminDateFrom={adminDateFrom}
+              adminDateTo={adminDateTo}
+              caisseCityFilter={caisseCityFilter}
+              setCaisseCityFilter={setCaisseCityFilter}
+              caisseTypeFilter={caisseTypeFilter}
+              setCaisseTypeFilter={setCaisseTypeFilter}
+              clotureModal={clotureModal}
+              setClotureModal={setClotureModal}
+              clotureLoading={clotureLoading}
+              setClotureLoading={setClotureLoading}
+              clotureError={clotureError}
+              setClotureError={setClotureError}
+              remarkCityFilter={remarkCityFilter}
+              setRemarkCityFilter={setRemarkCityFilter}
+              remarkFilter={remarkFilter}
+              setRemarkFilter={setRemarkFilter}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: UTILISATEURS */}
+        {mainTab === 'users' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminUsersTab
+              filteredUsers={filteredUsers}
+              periodUsers={periodUsers}
+              loadingUsers={loadingUsers}
+              userSearch={userSearch}
+              setUserSearch={setUserSearch}
+              roleFilter={roleFilter}
+              setRoleFilter={setRoleFilter}
+              ROLES={ROLES}
+              EMPTY_CREATE={EMPTY_CREATE}
+              setCreateModal={setCreateModal}
+              setCreateError={setCreateError}
+              usersDatePreset={usersDatePreset}
+              setUsersDatePreset={setUsersDatePreset}
+              usersDateFrom={usersDateFrom}
+              setUsersDateFrom={setUsersDateFrom}
+              usersDateTo={usersDateTo}
+              setUsersDateTo={setUsersDateTo}
+              copyMessage={copyMessage}
+              makeClientPortalLink={makeClientPortalLink}
+              handleCopyClientPortalLink={handleCopyClientPortalLink}
+              setUserEditTab={setUserEditTab}
+              setPwdForm={setPwdForm}
+              setUserEdit={setUserEdit}
+              handleToggleBlock={handleToggleBlock}
+              setDeleteConfirmUser={setDeleteConfirmUser}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: ACTIVITÉ */}
+        {mainTab === 'activity' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminActivityTab
+              activityRoleFilter={activityRoleFilter}
+              setActivityRoleFilter={setActivityRoleFilter}
+              activityDatePreset={activityDatePreset}
+              setActivityDatePreset={setActivityDatePreset}
+              activityDateFrom={activityDateFrom}
+              setActivityDateFrom={setActivityDateFrom}
+              activityDateTo={activityDateTo}
+              setActivityDateTo={setActivityDateTo}
+              activityStats={Array.isArray(activityStats) ? activityStats : []}
+              activityFeed={Array.isArray(activityFeed) ? activityFeed : []}
+              users={Array.isArray(users) ? users : []}
+              periodDirectorLogs={Array.isArray(periodDirectorLogs) ? periodDirectorLogs : []}
+              setDirectorLogsModal={setDirectorLogsModal}
+              setDriverPortDuModal={setDriverPortDuModal}
+              setPortDuForm={setPortDuForm}
+              setPortDuError={setPortDuError}
+              setUserActivityModal={setUserActivityModal}
+              setUserDetailTab={setUserDetailTab}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: DOSSIERS */}
+        {mainTab === 'employees' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminEmployeesTab
+              users={users}
+              roleFilter={roleFilter}
+              setRoleFilter={setRoleFilter}
+              userSearch={userSearch}
+              setUserSearch={setUserSearch}
+              roles={ROLES}
+              caisseEntries={caisseEntries}
+              openSalaryPayment={openSalaryPayment}
+              setUserEditTab={setUserEditTab}
+              setUserEdit={setUserEdit}
+              rhRequests={allRhRequests}
+              onCompleteRhRequest={handleCompleteRhRequest}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: RÈGLEMENTS */}
+        {mainTab === 'reglements' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminReglementsTab
+              adminReglements={adminReglements}
+              adminRapports={adminRapports}
+              parcels={parcels}
+              rgAgenceFilter={rgAgenceFilter}
+              setRgAgenceFilter={setRgAgenceFilter}
+              rgModeFilter={rgModeFilter}
+              setRgModeFilter={setRgModeFilter}
+              rgStatusFilter={rgStatusFilter}
+              setRgStatusFilter={setRgStatusFilter}
+              rgPointeurFilter={rgPointeurFilter}
+              setRgPointeurFilter={setRgPointeurFilter}
+              rgDatePreset={rgDatePreset}
+              setRgDatePreset={setRgDatePreset}
+              rgDateFrom={rgDateFrom}
+              setRgDateFrom={setRgDateFrom}
+              rgDateTo={rgDateTo}
+              setRgDateTo={setRgDateTo}
+              rgSearch={rgSearch}
+              setRgSearch={setRgSearch}
+              rgTab={rgTab}
+              setRgTab={setRgTab}
+              rapportValidating={rapportValidating}
+              setRapportValidating={setRapportValidating}
+              rapportNoteInput={rapportNoteInput}
+              setRapportNoteInput={setRapportNoteInput}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: BANQUE */}
+        {mainTab === 'banque' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminBanqueTab
+              allBankDeposits={allBankDeposits}
+              bankCityFilter={bankCityFilter}
+              setBankCityFilter={setBankCityFilter}
+              bankDatePreset={bankDatePreset}
+              setBankDatePreset={setBankDatePreset}
+              bankDateFrom={bankDateFrom}
+              setBankDateFrom={setBankDateFrom}
+              bankDateTo={bankDateTo}
+              setBankDateTo={setBankDateTo}
+              bankSearch={bankSearch}
+              setBankSearch={setBankSearch}
+              bankConfirmBusy={bankConfirmBusy}
+              setBankConfirmBusy={setBankConfirmBusy}
+              setBankDeleteConfirm={setBankDeleteConfirm}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: NOTES AGENTS */}
+        {mainTab === 'notes' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminNotesTab
+              agentNotes={agentNotes}
+              users={users}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: ARCHIVAGE */}
+        {mainTab === 'archivage' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminArchivageTab />
+          </Suspense>
+        )}
+
+      </main>
+
+      {/* Modal suppression versement banque */}
+      {bankDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[70] p-4" onClick={() => setBankDeleteConfirm(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-xs w-full p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="text-center">
+              <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-3">
+                <Trash2 className="w-7 h-7 text-red-600" />
+              </div>
+              <h3 className="font-bold text-gray-800">Supprimer ce versement ?</h3>
+              <p className="text-xs text-gray-500 mt-1">Cette action est irréversible.</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={() => setBankDeleteConfirm(null)}
+                className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">
+                Annuler
+              </button>
+              <button onClick={() => handleDeleteBankDeposit(bankDeleteConfirm)}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-bold transition">
+                Supprimer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL PAIEMENT */}
+      {salaryModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between p-5 border-b">
+              <div>
+                <h3 className="font-bold text-gray-800">
+                  {salaryModal.category === 'salaire' ? 'Paiement salaire' : 'Avance sur salaire'}
+                </h3>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  {salaryModal.employee.name} · {ROLES.find(r => r.key === salaryModal.employee.role)?.label || salaryModal.employee.role}
+                </p>
+              </div>
+              <button onClick={() => setSalaryModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              {salaryModal.error && (
+                <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">
+                  {salaryModal.error}
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div className="bg-gray-50 rounded-xl p-3">
+                  <p className="text-xs text-gray-400">Salaire mensuel</p>
+                  <p className="font-black text-gray-800">{fmt(parseFloat(salaryModal.employee.salaire || 0) || 0)} DH</p>
+                </div>
+                <div className="bg-gray-50 rounded-xl p-3">
+                  <p className="text-xs text-gray-400">Agence</p>
+                  <p className="font-bold text-gray-800">{salaryModal.employee.city || '—'}</p>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Mois concerné</label>
+                <input
+                  type="month"
+                  value={salaryModal.month}
+                  onChange={e => setSalaryModal((m: any) => ({ ...m, month: e.target.value }))}
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Montant payé (DH)</label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={salaryModal.amount}
+                  onChange={e => setSalaryModal((m: any) => ({ ...m, amount: e.target.value }))}
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Référence</label>
+                <input
+                  value={salaryModal.reference}
+                  onChange={e => setSalaryModal((m: any) => ({ ...m, reference: e.target.value }))}
+                  placeholder="N° re?u, virement, bon de caisse..."
+                  className={inputCls}
+                />
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Note</label>
+                <textarea
+                  rows={3}
+                  value={salaryModal.note}
+                  onChange={e => setSalaryModal((m: any) => ({ ...m, note: e.target.value }))}
+                  placeholder="Observation RH ou mode de paiement..."
+                  className={inputCls}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => setSalaryModal(null)}
+                  className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition">
+                  Annuler
+                </button>
+                <button onClick={handleSalaryPayment} disabled={salaryModal.loading}
+                  className="py-3 rounded-xl bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white font-bold transition flex items-center justify-center gap-2">
+                  {salaryModal.loading
+                    ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Envoi...</>
+                    : <><Banknote className="w-4 h-4" /> Envoyer au caissier</>
+                  }
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL MOTIF */}
+      {archiveModal && (() => {
+        const days = getArchiveDays(archiveModal)
+        const previewCount = getArchivePreviewCount(archiveModal)
+        const periodOptions = [
+          { value: 7, label: '7 jours' },
+          { value: 15, label: '15 jours' },
+          { value: 30, label: '30 jours' },
+          { value: 60, label: '60 jours' },
+          { value: 90, label: '90 jours' },
+          { value: 180, label: '180 jours' },
+          { value: 'custom', label: 'Personnalise' },
+        ]
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-2xl shadow-2xl max-h-[calc(100vh-2rem)] overflow-y-auto">
+              <div className="flex items-center justify-between p-5 border-b">
+                <div>
+                  <h3 className="font-bold text-gray-800">Archive locale des expeditions</h3>
+                  <p className="text-xs text-gray-400 mt-0.5">Cree un fichier local. Rien n'est envoye ni supprime dans le cloud.</p>
+                </div>
+                <button onClick={() => setArchiveModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
+                  <X className="w-5 h-5 text-gray-500" />
+                </button>
+              </div>
+              <div className="p-5 space-y-5">
+                {archiveModal.error && (
+                  <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">{archiveModal.error}</div>
+                )}
+                {archiveModal.result !== null && (
+                  <div className="bg-green-50 border border-green-200 text-green-700 p-3 rounded-xl text-sm font-semibold">
+                    {archiveModal.result === 0 ? 'Aucune expedition a archiver pour ces criteres.' : `${archiveModal.result} expedition(s) archivee(s) localement.`}
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Ville</label>
+                  <select value={archiveModal.city} onChange={e => setArchiveModal((m: any) => ({ ...m, city: e.target.value, result: null, error: '' }))} className={selectCls}>
+                    <option value="Toutes">Toutes les villes</option>
+                    {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Statuts a archiver</label>
+                  <div className="flex flex-wrap gap-2">
+                    {STATUSES.map(s => {
+                      const active = archiveModal.statuses.includes(s)
+                      const sc = STATUS_COLORS[s] || STATUS_COLORS['Initialisé']
+                      return (
+                        <button key={s} type="button" onClick={() => toggleArchiveStatus(s)}
+                          className={`px-3 py-2 rounded-xl text-xs font-bold border transition ${active ? `${sc.bg} ${sc.text} border-current` : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}
+                        >
+                          {s}
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold text-gray-500 uppercase mb-2">Periode</label>
+                  <div className="flex flex-wrap gap-2">
+                    {periodOptions.map(opt => (
+                      <button key={String(opt.value)} type="button" onClick={() => setArchiveModal((m: any) => ({ ...m, days: opt.value, result: null, error: '' }))}
+                        className={`px-3 py-2 rounded-xl text-xs font-bold border transition ${archiveModal.days === opt.value ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-500 border-gray-200 hover:bg-gray-50'}`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                  {archiveModal.days === 'custom' && (
+                    <input type="number" min="1" value={archiveModal.customDays}
+                      onChange={e => setArchiveModal((m: any) => ({ ...m, customDays: e.target.value, result: null, error: '' }))}
+                      placeholder="Nombre de jours"
+                      className={`${inputCls} mt-3`}
+                    />
+                  )}
+                </div>
+
+                <div className="rounded-2xl border border-gray-100 bg-gray-50 p-4">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-bold text-gray-800">Apercu de l'archive locale</p>
+                      <p className="text-xs text-gray-400 mt-0.5">
+                        Statuts: {archiveModal.statuses.join(', ') || '-'} - plus ancien que {days || 0} jour(s)
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-2xl font-black text-slate-900">{previewCount}</p>
+                      <p className="text-xs text-gray-400">visible(s)</p>
+                    </div>
+                  </div>
+                  {archiveModal.loading && (
+                    <div className="mt-3">
+                      <div className="h-2 rounded-full bg-gray-200 overflow-hidden">
+                        <div className="h-full bg-blue-600 transition-all" style={{ width: `${archiveProgress.total ? Math.round((archiveProgress.done / archiveProgress.total) * 100) : 20}%` }} />
+                      </div>
+                      <p className="text-xs text-gray-500 mt-2">Preparation locale... {archiveProgress.done}/{archiveProgress.total}</p>
+                    </div>
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <button onClick={() => setArchiveModal(null)} disabled={archiveModal.loading}
+                    className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 disabled:opacity-60 transition">
+                    Annuler
+                  </button>
+                  <button onClick={handleArchiveParcels} disabled={archiveModal.loading || !days || !archiveModal.statuses.length}
+                    className="py-3 rounded-xl bg-slate-900 hover:bg-slate-800 disabled:opacity-60 text-white font-bold transition flex items-center justify-center gap-2">
+                    {archiveModal.loading
+                      ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Preparation...</>
+                      : 'Archiver localement'}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {returnModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md shadow-2xl">
+            <div className="flex items-center justify-between p-5 border-b">
+              <div>
+                <h3 className="font-bold text-gray-800">Motif du retour</h3>
+                <p className="text-xs font-mono text-blue-600 mt-0.5">{returnModal.parcel.trackingId}</p>
+              </div>
+              <button onClick={() => setReturnModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              {returnModal.error && (
+                <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">{returnModal.error}</div>
+              )}
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Motif</label>
+                <select value={returnModal.reason} onChange={e => setReturnModal((m: any) => ({ ...m, reason: e.target.value }))}
+                  className={selectCls}>
+                  {RETURN_REASONS.map(reason => <option key={reason}>{reason}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Note</label>
+                <textarea value={returnModal.note} onChange={e => setReturnModal((m: any) => ({ ...m, note: e.target.value }))}
+                  rows={3}
+                  placeholder="Ex : client absent deux fois, téléphone injoignable..."
+                  className={inputCls}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => setReturnModal(null)}
+                  className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition">
+                  Annuler
+                </button>
+                <button onClick={handleReturnSave} disabled={returnModal.loading}
+                  className="py-3 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white font-semibold transition flex items-center justify-center gap-2">
+                  {returnModal.loading ? 'Enregistrement...' : 'Enregistrer'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL STATUT */}
+      {codEditModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl">
+            <div className="flex items-center justify-between p-5 border-b">
+              <div>
+                <h3 className="font-bold text-gray-800 flex items-center gap-2"><Banknote className="w-4 h-4 text-orange-500" /> Modifier le RETOUR FOND</h3>
+                <p className="text-xs font-mono text-blue-600 mt-0.5">{codEditModal.parcel.trackingId}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{codEditModal.parcel.receiver?.name} — {codEditModal.parcel.receiver?.city}</p>
+              </div>
+              <button onClick={() => setCodEditModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              {codEditModal.error && (
+                <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {codEditModal.error}</div>
+              )}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Montant RETOUR FOND (DH)</label>
+                <input
+                  type="number" min="0" step="0.01"
+                  value={codEditModal.value}
+                  onChange={e => setCodEditModal((m: any) => ({ ...m, value: e.target.value }))}
+                  onKeyDown={e => e.key === 'Enter' && handleSaveCodAmount()}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-orange-400 focus:outline-none bg-gray-50 focus:bg-white transition font-bold text-orange-600"
+                  autoFocus
+                />
+                <p className="text-xs text-gray-400 mt-1">Mettre 0 pour supprimer le RETOUR FOND.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => setCodEditModal(null)}
+                  className="py-2.5 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition text-sm"
+                >Annuler</button>
+                <button onClick={handleSaveCodAmount} disabled={codEditModal.loading}
+                  className="py-2.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-semibold transition text-sm disabled:opacity-50"
+                >{codEditModal.loading ? 'Sauvegarde…' : 'Enregistrer'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {statusModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-5 border-b">
+              <div>
+                <h3 className="font-bold text-gray-800">Changer le statut</h3>
+                <p className="text-xs font-mono text-blue-600 mt-0.5">{statusModal.parcel.trackingId}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{statusModal.parcel.receiver?.name} → {statusModal.parcel.receiver?.city}</p>
+              </div>
+              <button onClick={() => setStatusModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              {statusModal.error && (
+                <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {statusModal.error}</div>
+              )}
+              {statusModal.parcel.signatureConfirmedAt && (
+                <button
+                  onClick={() => setViewSignature(statusModal.parcel)}
+                  className="w-full flex items-center gap-2 bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition"
+                >
+                  ✍️ Voir la signature électronique du destinataire
+                </button>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                {STATUSES.map(s => {
+                  const sc = STATUS_COLORS[s] || STATUS_COLORS['Initialisé']
+                  const selected = statusModal.status === s
+                  return (
+                    <button key={s} onClick={() => setStatusModal((m: any) => ({ ...m, status: s }))}
+                      className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-medium transition border ${
+                        selected ? `${sc.bg} ${sc.text} border-current ring-2 ring-offset-1 ring-current` : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+                      }`}
+                    >
+                      <span className={`w-2 h-2 rounded-full ${sc.dot} shrink-0`} /> {s}
+                    </button>
+                  )
+                })}
+              </div>
+              {/* Avertissement incohérences */}
+              {statusModal.status !== 'Livré' && (() => {
+                const p = statusModal.parcel
+                const items: any[] = []
+                if (p.portStatus === 'collected') items.push('Port dû encaissé → remis à "en attente"')
+                if (p.signatureConfirmedAt) items.push('Signature électronique → effacée')
+                if (p.codStatus === 'collected' && !p.codSentToSource && !p.codSenderPaid) items.push('RETOUR FOND encaissé → remis à "en attente"')
+                if (!items.length) return null
+                return (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 space-y-1">
+                    <p className="text-xs font-bold text-amber-800 flex items-center gap-1">⚠️ Champs qui seront réinitialisés automatiquement :</p>
+                    {items.map(item => (
+                      <p key={item} className="text-xs text-amber-700 flex items-center gap-1.5 pl-3">• {item}</p>
+                    ))}
+                  </div>
+                )
+              })()}
+              <input placeholder="Note (optionnel)" value={statusModal.note}
+                onChange={e => setStatusModal((m: any) => ({ ...m, note: e.target.value }))}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none bg-gray-50 focus:bg-white transition"
+              />
+              {statusModal.status === 'Retourné' && (
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Motif du retour</label>
+                  <select value={statusModal.returnReason}
+                    onChange={e => setStatusModal((m: any) => ({ ...m, returnReason: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-blue-500 focus:outline-none bg-gray-50 focus:bg-white transition">
+                    {RETURN_REASONS.map(reason => <option key={reason}>{reason}</option>)}
+                  </select>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => setStatusModal(null)}
+                  className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition"
+                >Annuler</button>
+                <button onClick={handleStatusUpdate}
+                  disabled={statusModal.loading || statusModal.status === statusModal.parcel.status}
+                  className="py-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold transition flex items-center justify-center gap-2"
+                >
+                  {statusModal.loading
+                    ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Mise à jour...</>
+                    : <><CheckCircle className="w-4 h-4" /> Confirmer</>
+                  }
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL CRÉATION */}
+      {createModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50 p-4 sm:p-6">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md shadow-2xl max-h-[92vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-5 border-b">
+              <div className="flex items-center gap-2">
+                <div className="w-9 h-9 bg-blue-600 rounded-xl flex items-center justify-center">
+                  <UserPlus className="w-5 h-5 text-white" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-gray-800">Créer un membre</h3>
+                  <p className="text-xs text-gray-400">Compte système ou fiche salarié RH</p>
+                </div>
+              </div>
+              <button onClick={() => setCreateModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            <form onSubmit={handleCreateUser} className="p-5 space-y-3">
+              {createError && (
+                <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {createError}</div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3">
+                <div className="col-span-2">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Nom complet *</label>
+                  <input required value={createModal.name}
+                    onChange={e => setCreateModal((m: any) => ({ ...m, name: e.target.value }))}
+                    placeholder="Prénom et nom" className={inputCls}
+                  />
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Téléphone</label>
+                  <input type="tel" value={createModal.tel}
+                    onChange={e => setCreateModal((m: any) => ({ ...m, tel: e.target.value }))}
+                    placeholder="06XXXXXXXX" className={inputCls}
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">
+                    Email {createModal.role !== 'salarie' && '*'}
+                  </label>
+                  <input required={createModal.role !== 'salarie'} type="email" value={createModal.email}
+                    onChange={e => setCreateModal((m: any) => ({ ...m, email: e.target.value }))}
+                    placeholder={createModal.role === 'salarie' ? 'optionnel' : 'exemple@domaine.com'} className={inputCls}
+                  />
+                </div>
+
+                {createModal.role !== 'salarie' && (
+                  <div className="col-span-2">
+                    <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Mot de passe * (min. 6 caractères)</label>
+                    <div className="relative">
+                      <input required
+                        type={createModal.showPwd ? 'text' : 'password'}
+                        value={createModal.password}
+                        onChange={e => setCreateModal((m: any) => ({ ...m, password: e.target.value }))}
+                        placeholder="••••••••" className={inputCls + ' pr-10'}
+                      />
+                      <button type="button"
+                        onClick={() => setCreateModal((m: any) => ({ ...m, showPwd: !m.showPwd }))}
+                        className="absolute right-3 top-2.5 text-gray-400 hover:text-gray-600 transition"
+                      >
+                        {createModal.showPwd ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                <div className="col-span-2">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-2">Rôle *</label>
+                  <div className="grid grid-cols-3 gap-2">
+                    {ROLES.filter(r => r.key !== 'admin').map(r => (
+                      <button type="button" key={r.key}
+                        onClick={() => setCreateModal((m: any) => ({ ...m, role: r.key }))}
+                        className={`flex flex-col items-center gap-1.5 py-3 px-2 rounded-xl border-2 text-sm font-semibold transition ${
+                          createModal.role === r.key
+                            ? `${r.badge} border-current shadow-sm`
+                            : 'bg-gray-50 text-gray-500 border-gray-200 hover:border-gray-300'
+                        }`}
+                      >
+                        <span className="text-xl">{r.emoji}</span>
+                        {r.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">
+                    {createModal.role === 'salarie' ? 'Matricule' : 'Code agent'}
+                  </label>
+                  <input value={createModal.code}
+                    onChange={e => setCreateModal((m: any) => ({ ...m, code: e.target.value }))}
+                    placeholder={createModal.role === 'salarie' ? 'Ex: SAL-001' : 'Ex: A123'} className={inputCls}
+                  />
+                </div>
+
+                <div className="col-span-2">
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Ville / Agence</label>
+                  <div className="relative">
+                    <select value={createModal.city}
+                      onChange={e => setCreateModal((m: any) => ({ ...m, city: e.target.value }))}
+                      className={inputCls + ' appearance-none'}
+                    >
+                      <option value="">— Sélectionner une ville —</option>
+                      {CITIES.map(c => <option key={c}>{c}</option>)}
+                    </select>
+                    <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-gray-400 pointer-events-none" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Matricule transport + secteur livreur */}
+              {createModal.role === 'chauffeur' && (
+                <>
+                  <div>
+                    <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">
+                      🚛 Matricule du camion
+                    </label>
+                    <input
+                      value={createModal.matricule || ''}
+                      onChange={e => setCreateModal((m: any) => ({ ...m, matricule: e.target.value.toUpperCase() }))}
+                      placeholder="Ex: 12345 Ø£ 1"
+                      className={inputCls}
+                    />
+                  </div>
+                </>
+              )}
+              {createModal.role === 'livreur' && (
+                <div className="col-span-2">
+                    <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">
+                      📍 Secteur assigné
+                    </label>
+                    <div className="relative">
+                      <select
+                        value={createModal.sectorId || ''}
+                        onChange={e => setCreateModal((m: any) => ({ ...m, sectorId: e.target.value }))}
+                        className={`${inputCls} appearance-none`}>
+                        <option value="">— Aucun secteur —</option>
+                        {allSectors.filter(s => !createModal.city || s.city === createModal.city).map(s => (
+                          <option key={s.id} value={s.id}>{s.code}{s.name !== s.code ? ` – ${s.name}` : ''} ({s.city})</option>
+                        ))}
+                      </select>
+                      <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-gray-400 pointer-events-none" />
+                    </div>
+                  </div>
+              )}
+
+              {/* Role badge preview */}
+              {(() => {
+                const r = ROLES.find(x => x.key === createModal.role)
+                return (
+                  <div className={`rounded-xl px-4 py-2.5 text-sm font-medium flex items-center gap-2 ${r?.badge || 'bg-gray-50 text-gray-700 border border-gray-200'} border`}>
+                    <span className="text-lg">{r?.emoji}</span>
+                    {createModal.role === 'salarie'
+                      ? <>Fiche salarié société, sans accès obligatoire à l'application</>
+                      : <>Ce compte aura accès à l'interface <strong>{r?.label || createModal.role}</strong></>
+                    }
+                    {createModal.city && <span> · Agence de <strong>{createModal.city}</strong></span>}
+                  </div>
+                )
+              })()}
+
+              {/* Permissions directeur */}
+              {createModal.role === 'directeur' && (
+                <div>
+                  <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-2">
+                    🔑 Permissions accordées
+                  </label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {DIRECTOR_PERMISSIONS.map(p => {
+                      const active = (createModal.directorPermissions || []).includes(p.key)
+                      return (
+                        <button type="button" key={p.key}
+                          onClick={() => setCreateModal((m: any) => ({
+                            ...m,
+                            directorPermissions: active
+                              ? (m.directorPermissions || []).filter((k: any) => k !== p.key)
+                              : [...(m.directorPermissions || []), p.key]
+                          }))}
+                          className={`flex items-start gap-2 p-3 rounded-xl border-2 text-left transition ${
+                            active ? 'bg-purple-50 border-purple-400 text-purple-800' : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-gray-300'
+                          }`}
+                        >
+                          <span className="text-lg shrink-0">{p.emoji}</span>
+                          <div>
+                            <p className="text-xs font-bold leading-tight">{p.label}</p>
+                            <p className="text-xs opacity-70 leading-tight mt-0.5">{p.desc}</p>
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-3 pt-1">
+                <button type="button" onClick={() => setCreateModal(null)}
+                  className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition"
+                >
+                  Annuler
+                </button>
+                <button type="submit" disabled={createLoading}
+                  className="py-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white font-bold transition flex items-center justify-center gap-2"
+                >
+                  {createLoading
+                    ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Création...</>
+                    : <><UserPlus className="w-4 h-4" /> {createModal.role === 'salarie' ? 'Créer la fiche' : 'Créer le compte'}</>
+                  }
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL ÉDITION */}
+      <UserEditModal
+        userEdit={userEdit}
+        setUserEdit={setUserEdit}
+        userEditTab={userEditTab}
+        setUserEditTab={setUserEditTab}
+        pwdForm={pwdForm}
+        setPwdForm={setPwdForm}
+        allSectors={allSectors}
+        ROLES={ROLES}
+        DIRECTOR_PERMISSIONS={DIRECTOR_PERMISSIONS}
+        CITIES={CITIES}
+        inputCls={inputCls}
+        handleSaveUser={handleSaveUser}
+        handleChangePassword={handleChangePassword}
+        openContractModal={openContractModal}
+      />
+
+      {contractModal && (
+        <Suspense fallback={null}>
+          <EmployeeContractModal contractModal={contractModal} setContractModal={setContractModal} />
+        </Suspense>
+      )}
+      {/* MODAL ACTIVITÉ */}
+      <UserActivityModal
+        userActivityModal={userActivityModal}
+        setUserActivityModal={setUserActivityModal}
+        userDetailTab={userDetailTab}
+        setUserDetailTab={setUserDetailTab}
+      />
+
+      {/* MODAL JOURNAL */}
+      <DirectorLogsModal
+        directorLogsModal={directorLogsModal}
+        setDirectorLogsModal={setDirectorLogsModal}
+        periodDirectorLogs={periodDirectorLogs}
+      />
+
+      {/* MODAL SUPPRESSION */}
+      {deleteConfirmUser && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl p-6">
+            <div className="w-14 h-14 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+              <Trash2 className="w-7 h-7 text-red-600" />
+            </div>
+            <h3 className="font-bold text-gray-800 text-lg text-center mb-1">Supprimer l'utilisateur ?</h3>
+            <p className="text-gray-500 text-sm text-center mb-1">
+              <span className="font-semibold text-gray-700">{deleteConfirmUser.name}</span>
+            </p>
+            <p className="text-gray-400 text-xs text-center mb-6">
+              Cette action supprime uniquement les données du profil. Le compte email reste actif.
+            </p>
+            <div className="grid grid-cols-2 gap-3">
+              <button onClick={() => setDeleteConfirmUser(null)}
+                className="py-2.5 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition text-sm">
+                Annuler
+              </button>
+              <button onClick={handleDeleteUser}
+                className="py-2.5 rounded-xl bg-red-600 hover:bg-red-700 text-white font-semibold transition text-sm flex items-center justify-center gap-2">
+                <Trash2 className="w-4 h-4" /> Supprimer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL GESTION */}
+      <DriverPortDuModal
+        driverPortDuModal={driverPortDuModal}
+        setDriverPortDuModal={setDriverPortDuModal}
+        driverPortDuTxs={driverPortDuTxs}
+        parcels={allParcels}
+        portDuForm={portDuForm}
+        setPortDuForm={setPortDuForm}
+        portDuLoading={portDuLoading}
+        portDuError={portDuError}
+        portDuEditId={portDuEditId}
+        setPortDuEditId={setPortDuEditId}
+        portDuEditForm={portDuEditForm}
+        setPortDuEditForm={setPortDuEditForm}
+        handleAddPortDuTx={handleAddPortDuTx}
+        handleDeletePortDuTx={handleDeletePortDuTx}
+        handleSavePortDuEdit={handleSavePortDuEdit}
+        handleConfirmDriverVersement={handleConfirmDriverVersement}
+      />
+
+      {/* Modal colis retour */}
+      {returnParcelModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[70] p-4" onClick={() => !returnParcelModal.loading && setReturnParcelModal(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6" onClick={e => e.stopPropagation()}>
+            {returnParcelModal.result ? (
+              <div className="text-center space-y-4">
+                <div className="w-16 h-16 mx-auto rounded-full bg-green-100 flex items-center justify-center text-3xl">↩️</div>
+                <h3 className="font-bold text-gray-900 text-lg">Colis retour créé !</h3>
+                <div className="bg-green-50 border border-green-200 rounded-xl p-4 space-y-1">
+                  <p className="text-xs text-gray-500">Nouveau tracking ID</p>
+                  <p className="font-mono font-bold text-green-700 text-base">{returnParcelModal.result.trackingId}</p>
+                  <p className="text-xs text-gray-500 mt-2">
+                    {returnParcelModal.parcel.receiver?.city} → {returnParcelModal.parcel.sender?.city}
+                  </p>
+                </div>
+                <button onClick={() => setReturnParcelModal(null)} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition">
+                  Fermer
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-xl">↩️</div>
+                  <div>
+                    <h3 className="font-bold text-gray-900">Créer un colis retour ?</h3>
+                    <p className="text-xs text-gray-500">Expédition inversée automatiquement</p>
+                  </div>
+                </div>
+                <div className="bg-gray-50 rounded-xl p-4 text-sm space-y-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-400 text-xs w-20">Expéditeur</span>
+                    <span className="font-semibold text-gray-800">{returnParcelModal.parcel.receiver?.name}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-gray-400 text-xs w-20">Destinataire</span>
+                    <span className="font-semibold text-gray-800">{returnParcelModal.parcel.sender?.name}</span>
+                  </div>
+                  <div className="flex items-center gap-2 pt-1 border-t border-gray-200">
+                    <span className="text-gray-400 text-xs w-20">Trajet</span>
+                    <span className="font-semibold text-blue-700 text-xs">
+                      {returnParcelModal.parcel.destinationCity} → {returnParcelModal.parcel.originCity}
+                    </span>
+                  </div>
+                </div>
+                {returnParcelModal.error && <p className="text-xs text-red-600">{returnParcelModal.error}</p>}
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setReturnParcelModal(null)}
+                    className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition"
+                  >
+                    Non, ignorer
+                  </button>
+                  <button
+                    onClick={handleCreateReturnParcel}
+                    disabled={returnParcelModal.loading}
+                    className="flex-1 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white text-sm font-bold transition"
+                  >
+                    {returnParcelModal.loading ? 'Création...' : 'Oui, créer'}
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Visionneuse signature */}
+      {viewSignature && (
+        <SignatureViewerModal
+          parcelId={viewSignature.id}
+          trackingId={viewSignature.trackingId}
+          recipientName={viewSignature.receiver?.name}
+          nexpCode={viewSignature.sender?.nic}
+          onClose={() => setViewSignature(null)}
+          canEdit={true}
+          userName={auth.currentUser?.displayName || auth.currentUser?.email || 'Admin'}
+          isReturn={!!(viewSignature.returnedAt || viewSignature.returnToCity)}
+        />
+      )}
+
+      {/* Section */}
+      <AdminEditParcelModal
+        adminEditModal={adminEditModal}
+        setAdminEditModal={setAdminEditModal}
+        handleAdminEditSave={handleAdminEditSave}
+      />
+
+      {/* Visionneuse signature */}
+      {viewSignature && (
+        <SignatureViewerModal
+          parcelId={viewSignature.id}
+          trackingId={viewSignature.trackingId}
+          recipientName={viewSignature.receiver?.name}
+          nexpCode={viewSignature.sender?.nic}
+          onClose={() => setViewSignature(null)}
+          canEdit={true}
+          userName={auth.currentUser?.displayName || auth.currentUser?.email || 'Admin'}
+          isReturn={!!(viewSignature.returnedAt || viewSignature.returnToCity)}
+        />
+      )}
+    </div>
+  )
+}

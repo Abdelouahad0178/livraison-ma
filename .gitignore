@@ -1,0 +1,13 @@
+node_modules
+dist
+.env
+.env.local
+.env.production
+.env.development
+.firebase
+*.log
+.DS_Store
+
+# Firebase Admin Service Account (NEVER commit this!)
+serviceAccount.json
+*-firebase-adminsdk-*.json

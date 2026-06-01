@@ -1,0 +1,70 @@
+====================================================
+  BG Express — Mise en place des sauvegardes
+====================================================
+
+ETAPE 1 : Générer une clé secrète (exécuter une fois sur TON PC de travail)
+---------------------------------------------------------------------------
+Ouvre PowerShell et colle :
+
+  -join ((65..90)+(97..122)+(48..57) | Get-Random -Count 40 | ForEach-Object {[char]$_})
+
+Copie le résultat (ex: "aB3xK9mZpQ2rLwN..."). C'est ta CLE_SECRETE.
+
+
+ETAPE 2 : Enregistrer la clé dans Firebase (sur TON PC de travail)
+---------------------------------------------------------------------------
+Dans le dossier du projet, ouvre un terminal et tape :
+
+  firebase functions:secrets:set BACKUP_API_KEY
+
+  → Colle ta CLE_SECRETE quand demandé, puis Entrée.
+
+
+ETAPE 3 : Déployer les nouvelles Cloud Functions
+---------------------------------------------------------------------------
+  firebase deploy --only functions
+
+  → Attendre que le déploiement se termine (1-2 minutes).
+
+
+ETAPE 4 : Configurer le script sur le PC SERVEUR
+---------------------------------------------------------------------------
+Copier le dossier "backup-pc-server" sur le PC serveur.
+
+Ouvrir "telecharger-backup.ps1" avec Notepad et modifier :
+  $API_KEY = "REMPLACER_PAR_VOTRE_CLE_SECRETE"
+  → Remplacer par ta CLE_SECRETE (la même qu'en Etape 1)
+
+Tu peux aussi changer :
+  $BACKUP_DIR = "C:\BG-Backups"   ← dossier de stockage des backups
+
+
+ETAPE 5 : Installer la tâche planifiée (sur le PC SERVEUR)
+---------------------------------------------------------------------------
+Clic droit sur "installer-tache.ps1" → "Exécuter en tant qu'administrateur"
+
+La tâche se déclenchera automatiquement chaque LUNDI à 08h00.
+
+
+ETAPE 6 : Tester manuellement (sur le PC SERVEUR)
+---------------------------------------------------------------------------
+Clic droit sur "telecharger-backup.ps1" → "Exécuter avec PowerShell"
+
+Si tout va bien, le fichier backup-bgexpress-YYYY-MM-DD_HH-mm.json
+apparaît dans C:\BG-Backups\ et le log backup.log est créé.
+
+
+====================================================
+  RÉSUMÉ DU FONCTIONNEMENT
+====================================================
+
+Dimanche 03h00 : Firebase Cloud Function exporte toutes les collections
+                 et sauvegarde le fichier dans Firebase Storage.
+                 Les 10 derniers backups sont conservés en ligne.
+
+Lundi 08h00    : Le PC serveur Windows télécharge automatiquement
+                 le dernier backup dans C:\BG-Backups\.
+                 Les 10 derniers backups locaux sont conservés.
+
+En cas de problème : consulter C:\BG-Backups\backup.log
+====================================================

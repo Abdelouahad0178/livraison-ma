@@ -1,0 +1,82 @@
+@import "tailwindcss";
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+  html,
+  body,
+  #root {
+    min-width: 0;
+    width: 100%;
+  }
+  body {
+    margin: 0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    overflow-x: clip;
+  }
+  img,
+  svg,
+  video,
+  canvas {
+    max-width: 100%;
+  }
+}
+
+@layer utilities {
+  .responsive-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
+    scrollbar-width: thin;
+    scrollbar-color: #bfdbfe transparent;
+  }
+
+  .responsive-scroll::-webkit-scrollbar {
+    height: 6px;
+  }
+
+  .responsive-scroll::-webkit-scrollbar-thumb {
+    background: #bfdbfe;
+    border-radius: 999px;
+  }
+
+  .responsive-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  .text-balance-safe {
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Boutons */
+button {
+  filter: drop-shadow(0 3px 6px #0003);
+}
+
+/* Timeline vertical */
+.timeline-line {
+  position: absolute;
+  left: 8px;
+  top: 12px;
+  bottom: 0;
+  width: 2px;
+  background: #e5e7eb;
+}
+
+/* Print styles pour le bon de ramassage */
+@media print {
+  body * { visibility: hidden; }
+  #ticket-print, #ticket-print * { visibility: visible; }
+  #ticket-print {
+    position: static;
+    width: 148mm;
+    max-width: 148mm;
+    margin: 0 auto;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npx firebase-tools *)",
+      "Bash(firebase deploy *)",
+      "Bash(Get-ChildItem -Path \"c:\\\\Users\\\\chaab\\\\Desktop\\\\livraison-ma\" -Recurse)",
+      "Bash(Select-Object FullName)",
+      "Bash(ConvertTo-Csv -NoTypeInformation)",
+      "Bash(Select-Object -Skip 1)",
+      "Bash(Remove-Item \"c:\\\\Users\\\\chaab\\\\Desktop\\\\livraison-ma\\\\src\\\\constants.js\")",
+      "Bash(Get-Content -Path \"c:\\\\Users\\\\chaab\\\\Desktop\\\\livraison-ma\\\\firestore.rules\" -Raw)",
+      "Bash(node -e ' *)",
+      "Bash(node -e \"const fs = require\\('fs'\\); const p = 'c:/Users/chaab/Desktop/livraison-ma/src/pages/AgentPage.jsx'; const c = fs.readFileSync\\(p, 'utf8'\\); const s = c.indexOf\\('{false && true && \\(\\(\\) => { return \\( // port du removed placeholder'\\); const e = c.indexOf\\('}\\)\\(\\)}\\\\n\\\\n        {/* ── FEUILLE DE CHARGE ── */}'\\); console.log\\('start:', s, 'end:', e\\);\")",
+      "Skill(update-config)",
+      "Bash(claude config *)",
+      "Bash(npm run *)",
+      "Bash(npm install *)",
+      "Bash(node *)",
+      "Bash(xargs grep -l \"private_key.*BEGIN PRIVATE KEY\")",
+      "Bash(firebase --version)"
+    ]
+  }
+}
