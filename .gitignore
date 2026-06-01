@@ -10,4 +10,6 @@ dist
 
 # Firebase Admin Service Account (NEVER commit this!)
 serviceAccount.json
+serviceAccountKey.json
+**/serviceAccountKey.json
 *-firebase-adminsdk-*.json
