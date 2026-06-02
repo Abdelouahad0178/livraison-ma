@@ -8,9 +8,6 @@ const makeParcel = (dateStr: any) => ({
   createdAt: { toDate: () => new Date(dateStr) },
 })
 
-// Build a fake entry whose createdAt is an ISO string
-const makeEntry = (dateStr: any) => ({ createdAt: dateStr })
-
 // Pin "now" to 2026-05-27 at 14:00 Morocco time (UTC+1 → UTC 13:00)
 // Using a concrete UTC instant avoids any tz-related test flakiness.
 const FIXED_NOW = new Date('2026-05-27T13:00:00.000Z') // 14:00 Morocco
