@@ -266,6 +266,13 @@ export default function AdminPage() {
   const [portDuEditId,         setPortDuEditId]         = useState<any>(null) // tx.id en cours d'édition
   const [portDuEditForm,       setPortDuEditForm]       = useState({ amount: '', note: '' })
 
+  // Caisse centrale
+  const [centralCash, setCentralCash] = useState<any>(null)
+  const [centralCashModal, setCentralCashModal] = useState(false)
+  const [centralCashForm, setCentralCashForm] = useState({ amount: '', type: 'especes', operation: 'add', reason: '' })
+  const [centralCashLoading, setCentralCashLoading] = useState(false)
+  const [centralCashError, setCentralCashError] = useState('')
+
   // Director logs
   const [directorLogs,      setDirectorLogs]      = useState<any[]>([])
   const [directorLogsModal, setDirectorLogsModal] = useState<any>(null) // director user object
@@ -355,10 +362,11 @@ export default function AdminPage() {
     const unsubTariffs        = subscribeTariffConfig((config: any) => { setTariffDraft(config) })
     const unsubClientMessages = subscribeAllClientMessages(setClientMessages)
     const unsubSectors        = subscribeAllSectors(setAllSectors)
+    const unsubCentralCash    = subscribeCentralCash(setCentralCash)
     // Règlements + Rapports : chargés dès le montage (pas lazy) pour éviter le blank
     const unsubReglements     = subscribeAllReglementsGlobal(setAdminReglements, err => console.error('reglements:', err))
     const unsubRapports       = subscribeAllRapportsGlobal(setAdminRapports, err => console.error('rapports:', err))
-    return () => { unsubParcels(); unsubUsers(); unsubLocks(); unsubTariffs(); unsubClientMessages(); unsubSectors(); unsubReglements(); unsubRapports() }
+    return () => { unsubParcels(); unsubUsers(); unsubLocks(); unsubTariffs(); unsubClientMessages(); unsubSectors(); unsubCentralCash(); unsubReglements(); unsubRapports() }
   }, [])
 
   // Subscriptions lazy — démarrent seulement à la première visite de l'onglet
@@ -736,6 +744,46 @@ export default function AdminPage() {
     } finally { setLoadingMore(false) }
   }
 
+  const handleAdjustCentralCash = async () => {
+    const amount = parseFloat(centralCashForm.amount)
+    if (!amount || amount <= 0) {
+      setCentralCashError('Montant invalide')
+      return
+    }
+    if (!centralCashForm.reason.trim()) {
+      setCentralCashError('Raison obligatoire')
+      return
+    }
+
+    setCentralCashLoading(true)
+    setCentralCashError('')
+    try {
+      const delta = centralCashForm.operation === 'add' ? amount : -amount
+      const data: any = {
+        soldeDelta: delta,
+        lastUpdatedBy: profile?.name || 'Admin',
+        reason: centralCashForm.reason,
+      }
+
+      // Appliquer selon le type
+      if (centralCashForm.type === 'especes') {
+        data.especesDelta = delta
+      } else if (centralCashForm.type === 'cheques') {
+        data.chequesDelta = delta
+      } else if (centralCashForm.type === 'virement') {
+        data.virementDelta = delta
+      }
+
+      await adjustCentralCash(data)
+      setCentralCashModal(false)
+      setCentralCashForm({ amount: '', type: 'especes', operation: 'add', reason: '' })
+    } catch (err: any) {
+      setCentralCashError(err.message || 'Erreur lors de l\'ajustement')
+    } finally {
+      setCentralCashLoading(false)
+    }
+  }
+
   const activityFeed = useMemo(() => {
     // Protection: s'assurer que periodDirectorLogs est un tableau
     if (!Array.isArray(periodDirectorLogs)) return []
@@ -921,8 +969,44 @@ export default function AdminPage() {
 
         {/* Section */}
         {mainTab === 'home' && (
-          <Suspense fallback={<div className="mt-6 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
-            <AdminHomeTab
+          <>
+            {/* CAISSE CENTRALE */}
+            <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-4 mb-6">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="bg-emerald-100 p-3 rounded-xl">
+                    <Building2 className="w-6 h-6 text-emerald-600" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-emerald-900 text-lg">🏦 Caisse Centrale</h3>
+                    <p className="text-xs text-emerald-600">Solde de l'encaisseur central</p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-4">
+                  <div className="text-right">
+                    <div className="text-xs text-emerald-600 font-medium">Solde Total</div>
+                    <div className="text-2xl font-bold text-emerald-900">
+                      {centralCash ? (parseFloat(centralCash.solde || 0) || 0).toLocaleString('fr-MA') : '—'} DH
+                    </div>
+                    <div className="text-xs text-emerald-600 mt-1 space-x-2">
+                      <span>💵 {centralCash ? (parseFloat(centralCash.soldeEspeces || 0) || 0).toLocaleString('fr-MA') : '—'}</span>
+                      <span>📋 {centralCash ? (parseFloat(centralCash.soldeCheques || 0) || 0).toLocaleString('fr-MA') : '—'}</span>
+                      <span>🏦 {centralCash ? (parseFloat(centralCash.soldeVirement || 0) || 0).toLocaleString('fr-MA') : '—'}</span>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setCentralCashModal(true)}
+                    className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition font-medium text-sm"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                    Ajuster
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            <Suspense fallback={<div className="mt-6 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+              <AdminHomeTab
               periodParcels={periodParcels}
               periodUsers={periodUsers}
               users={users}
@@ -951,6 +1035,7 @@ export default function AdminPage() {
               navigate={navigate}
             />
           </Suspense>
+          </>
         )}
 
         {/* TAB: EXPEDITIONS */}
@@ -2109,6 +2194,135 @@ export default function AdminPage() {
           userName={auth.currentUser?.displayName || auth.currentUser?.email || 'Admin'}
           isReturn={!!(viewSignature.returnedAt || viewSignature.returnToCity)}
         />
+      )}
+
+      {/* Modal: Ajuster caisse centrale */}
+      {centralCashModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+            <div className="bg-gradient-to-r from-emerald-600 to-teal-600 text-white px-6 py-4 rounded-t-2xl">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Building2 className="w-6 h-6" />
+                  <h3 className="font-bold text-lg">Ajuster Caisse Centrale</h3>
+                </div>
+                <button
+                  onClick={() => {
+                    setCentralCashModal(false)
+                    setCentralCashError('')
+                  }}
+                  className="text-white/80 hover:text-white transition"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {centralCashError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg text-sm">
+                  {centralCashError}
+                </div>
+              )}
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Opération
+                </label>
+                <select
+                  value={centralCashForm.operation}
+                  onChange={(e) => setCentralCashForm({ ...centralCashForm, operation: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
+                >
+                  <option value="add">⊕ Ajouter de l'argent</option>
+                  <option value="remove">⊖ Retirer de l'argent</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Montant (DH)
+                </label>
+                <input
+                  type="number"
+                  value={centralCashForm.amount}
+                  onChange={(e) => setCentralCashForm({ ...centralCashForm, amount: e.target.value })}
+                  placeholder="0.00"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
+                  min="0"
+                  step="0.01"
+                />
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Type de paiement
+                </label>
+                <select
+                  value={centralCashForm.type}
+                  onChange={(e) => setCentralCashForm({ ...centralCashForm, type: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
+                >
+                  <option value="especes">💵 Espèces</option>
+                  <option value="cheques">📋 Chèques</option>
+                  <option value="virement">🏦 Virement</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Raison (obligatoire)
+                </label>
+                <textarea
+                  value={centralCashForm.reason}
+                  onChange={(e) => setCentralCashForm({ ...centralCashForm, reason: e.target.value })}
+                  placeholder="Ex: Versement société, Ajustement inventaire..."
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 resize-none"
+                  rows={3}
+                />
+              </div>
+
+              <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
+                <div className="text-sm text-emerald-700">
+                  <strong>Aperçu :</strong>
+                  <div className="mt-2">
+                    {centralCashForm.operation === 'add' ? '➕' : '➖'} {centralCashForm.amount || '0'} DH
+                    {' '}({{'especes': '💵 Espèces', 'cheques': '📋 Chèques', 'virement': '🏦 Virement'}[centralCashForm.type]})
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-gray-50 px-6 py-4 rounded-b-2xl flex items-center justify-end gap-3">
+              <button
+                onClick={() => {
+                  setCentralCashModal(false)
+                  setCentralCashError('')
+                }}
+                className="px-4 py-2 text-gray-600 hover:text-gray-800 font-medium transition"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleAdjustCentralCash}
+                disabled={centralCashLoading}
+                className="flex items-center gap-2 px-6 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 disabled:opacity-50 font-medium transition"
+              >
+                {centralCashLoading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                    Enregistrement...
+                  </>
+                ) : (
+                  <>
+                    <Save className="w-4 h-4" />
+                    Enregistrer
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )
