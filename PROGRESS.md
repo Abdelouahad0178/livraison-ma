@@ -1,6 +1,8 @@
 # 📊 Progression vers 9/10
 
-**Objectif :** 8.5/10 → 9.0/10  
+**Note actuelle :** 8.0/10 (confirmé par 2 IA)  
+**Objectif intermédiaire :** 8.5/10 (typecheck:strict ✅)  
+**Objectif final :** 9.0/10  
 **Deadline :** 15 jours (17 juin 2026)  
 **Démarré :** 2 juin 2026
 
@@ -8,14 +10,15 @@
 
 ## 🎯 Vue d'Ensemble
 
-| Priorité | Status | Progression | Temps estimé | Temps réel |
-|----------|--------|-------------|--------------|------------|
-| **P1: Encodage** | ✅ DONE | 100% ████████████ | 1 jour | 30 min ⚡ |
-| **P2: Réduire any** | 🟡 IN PROGRESS | 0% ░░░░░░░░░░░░ | 10 jours | - |
-| **P3: typecheck:strict** | ⏳ TODO | 0% ░░░░░░░░░░░░ | 3 jours | - |
-| **P4: Découper pages** | ⏳ TODO | 0% ░░░░░░░░░░░░ | 7 jours | - |
+| Priorité | Pour | Status | Progression | Temps estimé | Temps réel |
+|----------|------|--------|-------------|--------------|------------|
+| **P0: typecheck:strict** | 8.5/10 | ⏳ NEXT | 0% ░░░░░░░░░░░░ | 3 jours | - |
+| **P1: Réduire any** | 9.0/10 | ⏳ TODO | 0% ░░░░░░░░░░░░ | 10 jours | - |
+| **P2: Découper pages** | 9.0/10 | ⏳ TODO | 0% ░░░░░░░░░░░░ | 7 jours | - |
+| ~~P-1: Encodage~~ | - | ✅ DONE | 100% ████████████ | 1 jour | 30 min ⚡ |
 
-**Progression globale : 5% █░░░░░░░░░░░░░░░░░░░**
+**Progression globale : 0% ░░░░░░░░░░░░░░░░░░░░**  
+**Note actuelle : 8.0/10**
 
 ---
 
