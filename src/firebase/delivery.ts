@@ -103,17 +103,44 @@ export function subscribeDriverParcels(driverId: any, callback: any) {
 // Colis d'un livreur local
 export function subscribeDeliveryDriverParcels(driverId: any, callback: any) {
   const since = daysAgoTimestamp(30)
-  const q = query(collection(db, 'parcels'), where('deliveryDriverId', '==', driverId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(50))
-  return onSnapshot(
-    q,
-    snap => {
-      callback(snap.docs.map(d => ({ id: d.id, ...d.data() })))
-    },
-    err => {
-      console.warn('subscribeDeliveryDriverParcels permission error:', err.code)
-      callback([])
-    }
-  )
+
+  // Deux requêtes : colis assignés + colis retournés par ce livreur (historique)
+  const q1 = query(collection(db, 'parcels'), where('deliveryDriverId', '==', driverId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(50))
+  const q2 = query(collection(db, 'parcels'), where('returnedByDriverId', '==', driverId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(50))
+
+  let assigned: any[] = []
+  let returned: any[] = []
+
+  const merge = () => {
+    // Fusionner et dédupliquer par ID
+    const map = new Map()
+    assigned.forEach(p => map.set(p.id, p))
+    returned.forEach(p => map.set(p.id, p))
+    callback([...map.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))
+  }
+
+  const unsub1 = onSnapshot(q1, snap => {
+    assigned = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    merge()
+  }, err => {
+    console.warn('subscribeDeliveryDriverParcels (assigned) permission error:', err.code)
+    assigned = []
+    merge()
+  })
+
+  const unsub2 = onSnapshot(q2, snap => {
+    returned = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    merge()
+  }, err => {
+    console.warn('subscribeDeliveryDriverParcels (returned) permission error:', err.code)
+    returned = []
+    merge()
+  })
+
+  return () => {
+    unsub1()
+    unsub2()
+  }
 }
 export async function assignDeliveryDriver(parcelId: any, deliveryDriverId: any, deliveryDriverName: any, extra: any = {}) {
   const patch = {
@@ -132,8 +159,17 @@ export async function assignDeliveryDriver(parcelId: any, deliveryDriverId: any,
 export async function rejectDeliveryAssignment(parcelId: any, driverId: any, driverName: any, note = '') {
   const now = new Date().toISOString()
   await updateDoc(doc(db, 'parcels', parcelId), {
-    deliveryDriverId: null,
-    deliveryDriverName: null,
+    // Retirer l'assignation de livraison (mettre à null au lieu de deleteField)
+    deliveryDriverId:     null,
+    deliveryDriverName:   null,
+    deliverySectorId:     null,
+    deliverySectorCode:   null,
+    deliverySectorName:   null,
+    deliveryVehicleId:    null,
+    deliveryVehicleLabel: null,
+    deliveryAssignedAt:   null,
+    deliveryAssignedBy:   null,
+    // Marquer le refus et remettre en agence
     status: 'Arrivé en agence',
     deliveryRejectedAt: now,
     deliveryRejectedById: driverId || null,
@@ -315,8 +351,8 @@ export function subscribeArrivedParcelsByCity(city: any, callback: any, onError:
   }, onError)
 }
 export function subscribeAllArrivages(callback: any, onError: (err?: any) => void = () => {}) {
-  const since = daysAgoTimestamp(90)
-  const q = query(collection(db, 'arrivages'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(300))
+  // Récupérer tous les arrivages sans filtre de date
+  const q = query(collection(db, 'arrivages'), orderBy('createdAt', 'desc'), limit(500))
   return onSnapshot(q, snap => {
     callback(sortArrivagesDocs(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
   }, onError)

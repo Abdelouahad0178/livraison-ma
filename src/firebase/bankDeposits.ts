@@ -13,7 +13,6 @@ import {
   Timestamp,
 } from 'firebase/firestore'
 import { db } from './db'
-import { daysAgoTimestamp } from './firestoreUtils'
 
 export async function createBankDeposit({ parcelId, trackingId, senderName, receiverName, amount, bankName, refNum, depositDate, city, agentId, agentName, note }: any) {
   const ref = await addDoc(collection(db, 'bankDeposits'), {
@@ -56,8 +55,8 @@ export function subscribeBankDepositsByCity(city: any, callback: any, onError: (
 }
 
 export function subscribeAllBankDeposits(callback: any, onError: (err?: any) => void = () => {}) {
-  const since = daysAgoTimestamp(90)
-  const q = query(collection(db, 'bankDeposits'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(300))
+  // Récupérer tous les versements sans filtre de date
+  const q = query(collection(db, 'bankDeposits'), orderBy('createdAt', 'desc'), limit(500))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 

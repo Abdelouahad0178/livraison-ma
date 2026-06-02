@@ -88,8 +88,8 @@ export async function createCentralCodDeposit({ parcelIds = [], parcels = [] as 
   })
 }
 export function subscribeAllCentralCodDeposits(callback: any, onError: (err?: any) => void = () => {}) {
-  const since = daysAgoTimestamp(90)
-  const q = query(collection(db, 'centralCodDeposits'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
+  // Récupérer tous les versements sans filtre de date
+  const q = query(collection(db, 'centralCodDeposits'), orderBy('createdAt', 'desc'), limit(500))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 export async function createCentralSupplierPayment({ parcelIds = [], parcels = [] as any[], amount, senderName, senderTel, chequeNum, bankName, chequeDate, preparedBy, preparedById, note }: any) {
@@ -187,8 +187,101 @@ export async function markCentralSupplierPaymentPaid(paymentId: any, paidBy: any
   })
   return paymentId
 }
+
+export async function updateCentralSupplierPayment(paymentId: any, { amount, senderName, senderTel, chequeNum, bankName, chequeDate, note, updatedBy, updatedById }: any) {
+  if (!paymentId) throw new Error('Paiement invalide.')
+
+  const paymentRef = doc(db, 'centralSupplierPayments', paymentId)
+  const snap = await getDoc(paymentRef)
+  if (!snap.exists()) throw new Error('Paiement introuvable.')
+
+  const payment: any = snap.data()
+  if (payment.status === 'paid') {
+    throw new Error('Ce paiement a déjà été réglé. Seul l\'admin peut le modifier.')
+  }
+
+  const total = parseFloat(amount) || payment.amount
+  const now = new Date().toISOString()
+
+  await updateDoc(paymentRef, {
+    amount: total,
+    senderName: senderName || payment.senderName,
+    senderTel: senderTel || payment.senderTel,
+    chequeNum: chequeNum || payment.chequeNum,
+    bankName: bankName || payment.bankName,
+    chequeDate: chequeDate || payment.chequeDate,
+    note: note !== undefined ? note : payment.note,
+    updatedAt: now,
+    updatedBy: updatedBy || 'Encaisseur central',
+    updatedById: updatedById || null,
+  })
+
+  // Mettre à jour les colis associés
+  const ids = payment.parcelIds || []
+  const chunks: any[][] = []
+  for (let i = 0; i < ids.length; i += 500) chunks.push(ids.slice(i, i + 500))
+  for (const chunk of chunks) {
+    const batch = writeBatch(db)
+    chunk.forEach((id: string) => {
+      batch.update(doc(db, 'parcels', id), {
+        centralChequeNum: chequeNum || payment.chequeNum,
+        centralChequeBank: bankName || payment.bankName,
+        centralChequeDate: chequeDate || payment.chequeDate,
+      })
+    })
+    await batch.commit()
+  }
+
+  return paymentId
+}
+
+export async function deleteCentralSupplierPayment(paymentId: any, deletedBy: any, deletedById: any) {
+  if (!paymentId) throw new Error('Paiement invalide.')
+
+  const paymentRef = doc(db, 'centralSupplierPayments', paymentId)
+  const snap = await getDoc(paymentRef)
+  if (!snap.exists()) throw new Error('Paiement introuvable.')
+
+  const payment: any = snap.data()
+  if (payment.status === 'paid') {
+    throw new Error('Ce paiement a déjà été réglé. Seul l\'admin peut le supprimer.')
+  }
+
+  const ids = payment.parcelIds || []
+
+  // Retirer les champs de paiement des colis
+  const chunks: any[][] = []
+  for (let i = 0; i < ids.length; i += 500) chunks.push(ids.slice(i, i + 500))
+  for (const chunk of chunks) {
+    const batch = writeBatch(db)
+    chunk.forEach((id: string) => {
+      batch.update(doc(db, 'parcels', id), {
+        centralSupplierPaymentId: deleteField(),
+        centralSupplierPaymentStatus: deleteField(),
+        centralSupplierPreparedAt: deleteField(),
+        centralSupplierPreparedBy: deleteField(),
+        centralSupplierPreparedById: deleteField(),
+        centralChequeNum: deleteField(),
+        centralChequeBank: deleteField(),
+        centralChequeDate: deleteField(),
+      })
+    })
+    await batch.commit()
+  }
+
+  // Supprimer le paiement
+  await updateDoc(paymentRef, {
+    status: 'deleted',
+    deletedAt: new Date().toISOString(),
+    deletedBy: deletedBy || 'Encaisseur central',
+    deletedById: deletedById || null,
+  })
+
+  return paymentId
+}
+
 export function subscribeAllCentralSupplierPayments(callback: any, onError: (err?: any) => void = () => {}) {
-  const since = daysAgoTimestamp(90)
-  const q = query(collection(db, 'centralSupplierPayments'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
-  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
+  // Récupérer tous les paiements sans filtre de date
+  const q = query(collection(db, 'centralSupplierPayments'), orderBy('createdAt', 'desc'), limit(500))
+  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((p: any) => p.status !== 'deleted')), onError)
 }

@@ -13,7 +13,7 @@ import {
   where,
 } from 'firebase/firestore'
 import { db } from './db'
-import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
+import { sortByCreatedDesc } from './firestoreUtils'
 
 type FirestoreRow = Record<string, any> & { id: string; createdAt?: any }
 
@@ -46,8 +46,8 @@ export async function createAgentCodRequest(data: Record<string, any>) {
 }
 
 export function subscribeAllAgentCodRequests(callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
-  const since = daysAgoTimestamp(90)
-  const q = query(collection(db, 'agentCodRequests'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
+  // Récupérer toutes les demandes sans filtre de date
+  const q = query(collection(db, 'agentCodRequests'), orderBy('createdAt', 'desc'), limit(500))
   return onSnapshot(q, snap => callback(snap.docs.map(rowFromDoc)), onError)
 }
 

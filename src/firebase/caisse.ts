@@ -125,8 +125,8 @@ export function subscribeCaisseByCity(city: any, callback: any, onError: (err?: 
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 export function subscribeAllCaisse(callback: any, onError: (err?: any) => void = () => {}) {
-  const since = daysAgoTimestamp(90)
-  const q = query(collection(db, 'caisseEntries'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(500))
+  // Récupérer tous les mouvements sans filtre de date
+  const q = query(collection(db, 'caisseEntries'), orderBy('createdAt', 'desc'), limit(1000))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 
@@ -185,8 +185,8 @@ export function subscribeCaissierRemarks(city: any, callback: any) {
   )
 }
 export function subscribeAllCaissierRemarks(callback: any) {
-  const since = daysAgoTimestamp(90)
-  const q = query(collection(db, 'caissierRemarks'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(300))
+  // Récupérer toutes les remarques sans filtre de date
+  const q = query(collection(db, 'caissierRemarks'), orderBy('createdAt', 'desc'), limit(500))
   return onSnapshot(
     q,
     snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
@@ -840,8 +840,8 @@ export async function updateDriverPortDuTransaction(id: any, data: any) {
   })
 }
 export function subscribeAllDriverPortDuTransactions(callback: any, onError: (err?: any) => void = () => {}) {
-  const since = daysAgoTimestamp(90)
-  const q = query(collection(db, 'driverPortDuTransactions'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(300))
+  // Récupérer toutes les transactions sans filtre de date
+  const q = query(collection(db, 'driverPortDuTransactions'), orderBy('createdAt', 'desc'), limit(500))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 export function subscribeDriverPortDuTransactionsByCity(city: any, callback: any, onError: (err?: any) => void = () => {}) {

@@ -191,19 +191,19 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     requestedByClientId:  data.agentRole === 'client_portal' ? (data.clientId || null) : null,
     requestedByClientName:data.agentRole === 'client_portal' ? (data.clientName || '') : '',
     requestedAt:          data.agentRole === 'client_portal' ? serverTimestamp() : null,
-    validatedByChef:      requiresChefValidation ? false : null,
+    // NOUVELLE POLITIQUE : Pas de validation nécessaire, enregistrement direct
+    // Un colis est verrouillé pour aide-agent seulement si chargé (transportAssignedAt existe)
     aideEditUnlocked:     false,
   }
   const ref = await addDoc(collection(db, 'parcels'), parcel)
+  // NOUVELLE POLITIQUE : Toujours créer le client destinataire (pas d'attente de validation)
   let receiverClientId = null
-  if (!requiresChefValidation) {
-    try {
-      receiverClientId = await ensureReceiverClientForAgency(parcel, ref.id)
-      if (receiverClientId) await updateDoc(ref, { receiverClientId })
-    } catch (err: any) {
-      if (err?.code !== 'permission-denied') {
-        console.warn('ensureReceiverClientForAgency:', err)
-      }
+  try {
+    receiverClientId = await ensureReceiverClientForAgency(parcel, ref.id)
+    if (receiverClientId) await updateDoc(ref, { receiverClientId })
+  } catch (err: any) {
+    if (err?.code !== 'permission-denied') {
+      console.warn('ensureReceiverClientForAgency:', err)
     }
   }
   return { id: ref.id, ...parcel, receiverClientId }
@@ -341,8 +341,16 @@ export async function markParcelAsReturned(parcel: any, extra: any = {}) {
   const now = new Date().toISOString()
   const newSender   = parcel.receiver   || {}
   const newReceiver = parcel.sender     || {}
-  const newOrigin   = parcel.destinationCity || parcel.receiver?.city || ''
-  const newDest     = parcel.originCity      || parcel.sender?.city   || ''
+  // IMPORTANT: Pour les retours, utiliser les AGENCES (originCity/destinationCity),
+  // PAS les villes des clients (sender.city/receiver.city)
+  // Cela garantit que les livreurs filtrés sont ceux de l'AGENCE d'expédition
+  const newOrigin   = parcel.destinationCity || ''
+  const newDest     = parcel.originCity      || ''
+
+  // Garder trace du livreur qui a retourné le colis (pour son historique)
+  const returnedByDriverId = parcel.deliveryDriverId || extra.driverId || null
+  const returnedByDriverName = parcel.deliveryDriverName || extra.driverName || ''
+
   await updateDoc(doc(db, 'parcels', parcel.id), {
     status:          'Retourné',
     sender:          newSender,
@@ -354,6 +362,21 @@ export async function markParcelAsReturned(parcel: any, extra: any = {}) {
     returnedAt:      now,
     returnReason:    extra.note || '',
     arrivedNbColis:  deleteField(),
+    // Marquer comme retourné de façon permanente (garde le signe même après réassignation)
+    wasReturned:     true,
+    returnedByDriverId: returnedByDriverId,
+    returnedByDriverName: returnedByDriverName,
+    // IMPORTANT: Retirer l'assignation au livreur de destination
+    // Le colis retourne à l'agence SOURCE et ne doit plus être visible pour le livreur
+    deliveryDriverId:     deleteField(),
+    deliveryDriverName:   deleteField(),
+    deliverySectorId:     deleteField(),
+    deliverySectorCode:   deleteField(),
+    deliverySectorName:   deleteField(),
+    deliveryVehicleId:    deleteField(),
+    deliveryVehicleLabel: deleteField(),
+    deliveryAssignedAt:   deleteField(),
+    deliveryAssignedBy:   deleteField(),
     history:         arrayUnion({
       status:    'Retourné',
       timestamp: now,
@@ -608,14 +631,21 @@ export async function archiveAllParcels(olderThanDays = 90) {
   }
   return { archived: docs.length }
 }
-export function subscribeAllParcels(callback: any, onError: (err?: any) => void = () => {}, days = 90, pageSize = FIRESTORE_PAGE_LIMITS.adminLiveParcels) {
-  const since = daysAgoTimestamp(days)
-  const q = query(
-    collection(db, 'parcels'),
-    where('createdAt', '>=', since),
-    orderBy('createdAt', 'desc'),
-    limit(pageSize)
-  )
+export function subscribeAllParcels(callback: any, onError: (err?: any) => void = () => {}, days = 0, pageSize = FIRESTORE_PAGE_LIMITS.adminLiveParcels) {
+  // Si days > 0, filtrer par date, sinon récupérer tous les colis
+  const q = days > 0
+    ? query(
+        collection(db, 'parcels'),
+        where('createdAt', '>=', daysAgoTimestamp(days)),
+        orderBy('createdAt', 'desc'),
+        limit(pageSize)
+      )
+    : query(
+        collection(db, 'parcels'),
+        orderBy('createdAt', 'desc'),
+        limit(pageSize)
+      )
+
   return onSnapshot(q, snap => {
     const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
     const lastSnap = snap.docs[snap.docs.length - 1] || null

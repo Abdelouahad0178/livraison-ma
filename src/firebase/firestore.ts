@@ -103,6 +103,7 @@ export {
 export {
   createCentralCodDeposit, subscribeAllCentralCodDeposits,
   createCentralSupplierPayment, markCentralSupplierPaymentPaid,
+  updateCentralSupplierPayment, deleteCentralSupplierPayment,
   subscribeAllCentralSupplierPayments,
 } from './central'
 

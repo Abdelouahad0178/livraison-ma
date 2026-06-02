@@ -93,7 +93,7 @@ export function codCollectedLabel(paymentType: string): string {
 
 export const STATUSES = [
   'Initialisé', 'En transit', 'Arrivé en agence',
-  'En cours de livraison', 'Livré', 'Retourné', 'En transit retour',
+  'En cours de livraison', 'Livré', 'Retourné', 'En transit retour', 'Retourné à l\'expéditeur',
 ]
 
 export const COD_PAYMENT_TYPES = [
@@ -117,6 +117,7 @@ export const STATUS_COLORS: Record<string, { bg: string; text: string; dot: stri
   'Livré':                 { bg: 'bg-green-100',  text: 'text-green-700',  dot: 'bg-green-500'  },
   'Retourné':              { bg: 'bg-red-100',    text: 'text-red-700',    dot: 'bg-red-500'    },
   'En transit retour':     { bg: 'bg-orange-100', text: 'text-orange-700', dot: 'bg-orange-500' },
+  'Retourné à l\'expéditeur': { bg: 'bg-teal-100', text: 'text-teal-700',  dot: 'bg-teal-500'   },
 }
 
 export const MOD_TYPES = [
