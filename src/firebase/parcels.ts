@@ -38,15 +38,11 @@ const cleanIdentity = (value: any) => String(value || '').trim()
 const sameText = (a: any, b: any) => cleanIdentity(a).toLowerCase() === cleanIdentity(b).toLowerCase()
 const LEGACY_DELIVERED_STATUS = 'Livr\u00c3\u00a9'
 const isDeliveredStatus = (status: any) => status === 'Livré' || status === LEGACY_DELIVERED_STATUS
-const DESTINATION_VISIBLE_STATUSES = ['En transit', 'Arrivé en agence', 'En cours de livraison', 'Livré', 'Retourné', 'En transit retour']
+const DESTINATION_VISIBLE_STATUSES = ['En transit', 'Arrivé en agence', 'En cours de livraison', 'Livré', 'Retourné']
 export function isParcelVisibleInDestinationAgency(parcel: Partial<Parcel> = {}) {
   // Les retours ne vont PAS dans Arrivages, ils vont dans Retours
-  const isReturn = parcel.wasReturned ||
-                   parcel.status === 'Retourné' ||
-                   parcel.status === 'En transit retour' ||
-                   parcel.status === 'Retourné à l\'expéditeur'
-
-  if (isReturn) return false
+  // On utilise wasReturned pour identifier les retours
+  if (parcel.wasReturned) return false
 
   return !!(
     parcel.visibleInDestinationAgency ||
@@ -401,10 +397,10 @@ export async function loadReturnedParcelOnTruck(parcel: any) {
 
   if (hasBeenSwapped) {
     await updateDoc(doc(db, 'parcels', parcel.id), {
-      status: 'En transit retour',
+      status: 'En transit',
       returnShippedAt: now,
       history: arrayUnion({
-        status: 'En transit retour',
+        status: 'En transit',
         timestamp: now,
         note: 'Chargé sur camion inter-villes — retour vers ' + parcel.returnToCity,
       }),
@@ -424,7 +420,7 @@ export async function loadReturnedParcelOnTruck(parcel: any) {
       arrivedNbColis:  deleteField(),
       returnShippedAt: now,
       history: arrayUnion({
-        status: 'En transit retour',
+        status: 'En transit',
         timestamp: now,
         note: 'Chargé sur camion inter-villes — retour vers ' + newDest,
       }),

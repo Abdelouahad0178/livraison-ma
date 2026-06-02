@@ -220,8 +220,8 @@ export default function DriverPage() {
         // Marquer collecté par le chauffeur — la caisse sera créditée au versement du chauffeur à l'agent
         await collectPortDu(parcel.id, name, uid || '')
       }
-      // Si c'est un colis retourné (wasReturned) et qu'on le livre, c'est "Retourné à l'expéditeur"
-      const finalStatus = (parcel.wasReturned && status === 'Livré') ? 'Retourné à l\'expéditeur' : status
+      // Si c'est un colis retourné (wasReturned) et qu'on le livre, c'est "Retourné"
+      const finalStatus = (parcel.wasReturned && status === 'Livré') ? 'Retourné' : status
       await updateParcelStatus(parcel.id, finalStatus, note ? { note } : {})
       const updateList = (ps: any) => ps.map((p: any) =>
         p.id === parcel.id

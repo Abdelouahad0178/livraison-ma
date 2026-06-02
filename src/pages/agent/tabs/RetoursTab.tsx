@@ -36,20 +36,25 @@ export default function RetoursTab({
 
     // Reçus (agence source - où le colis doit revenir)
     const received = allParcels.filter((p: any) => {
-      const isReturnStatus = p.status === 'En transit retour' ||
-                            (p.status === 'Retourné' && p.returnToCity) ||
-                            (p.wasReturned && p.status !== 'Retourné à l\'expéditeur')
+      // Colis retourné en transit ou arrivé à l'agence source
+      if (!p.wasReturned) return false
+
+      // Statuts intermédiaires (pas encore livré final)
+      const isInTransit = p.status === 'En transit' || p.status === 'Arrivé en agence'
+      if (!isInTransit) return false
 
       // Le colis doit revenir vers cette agence (agence source/origine)
       const isForThisAgency = p.returnToCity === profile?.city ||
-                             (p.originCity === profile?.city && p.wasReturned && !p.returnToCity)
+                             (p.originCity === profile?.city && p.wasReturned)
 
-      return isReturnStatus && isForThisAgency && p.status !== 'Retourné à l\'expéditeur'
+      return isForThisAgency
     })
 
     // Historique complet (tous les retours finalisés)
     const history = allParcels.filter((p: any) =>
-      (p.status === 'Retourné à l\'expéditeur' || p.wasReturned) &&
+      p.wasReturned &&
+      p.status === 'Retourné' &&
+      p.returnedAt && // A été retourné au moins une fois
       (p.originCity === profile?.city || p.destinationCity === profile?.city)
     )
 
@@ -283,8 +288,9 @@ export default function RetoursTab({
           >
             <option value="tous">Tous les statuts</option>
             <option value="Retourné">Retourné</option>
-            <option value="En transit retour">En transit retour</option>
-            <option value="Retourné à l'expéditeur">Retourné à l'expéditeur</option>
+            <option value="En transit">En transit</option>
+            <option value="Arrivé en agence">Arrivé en agence</option>
+            <option value="En cours de livraison">En cours de livraison</option>
           </select>
 
           <input

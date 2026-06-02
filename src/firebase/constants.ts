@@ -93,7 +93,7 @@ export function codCollectedLabel(paymentType: string): string {
 
 export const STATUSES = [
   'Initialisé', 'En transit', 'Arrivé en agence',
-  'En cours de livraison', 'Livré', 'Retourné', 'En transit retour', 'Retourné à l\'expéditeur',
+  'En cours de livraison', 'Livré', 'Retourné',
 ]
 
 export const COD_PAYMENT_TYPES = [
