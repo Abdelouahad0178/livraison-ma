@@ -701,20 +701,19 @@ export default function AdminPage() {
     let list = allParcels
     if (cityFilter !== 'Toutes') list = list.filter((p: any) => p.originCity === cityFilter || p.destinationCity === cityFilter || p.sender?.city === cityFilter || p.receiver?.city === cityFilter)
 
-    // Filtre statut multi-select avec logique spéciale
+    // Filtre statut multi-select
     if (statusFilter.length > 0) {
       list = list.filter((p: any) => {
-        // Logic spéciale : "Retourné à l'expéditeur" apparaît dans 3 filtres
-        if (p.status === 'Retourné à l\'expéditeur') {
-          return statusFilter.includes('Retourné à l\'expéditeur')
-              || statusFilter.includes('Retourné')
-              || statusFilter.includes('Livré')
-        }
-        // Pour "Retourné" : inclure aussi les colis qui ont wasReturned=true
+        // Logique : "Retourné" inclut tous les statuts de retour
         if (statusFilter.includes('Retourné')) {
-          if (p.wasReturned || p.status === 'Retourné' || p.status === 'En transit retour') return true
+          if (p.status === 'Retourné' ||
+              p.status === 'En transit retour' ||
+              p.status === 'Retourné à l\'expéditeur' ||
+              p.wasReturned) {
+            return true
+          }
         }
-        // Sinon, match exact
+        // Match exact pour les autres statuts
         return statusFilter.includes(p.status)
       })
     }
