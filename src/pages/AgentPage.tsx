@@ -1703,11 +1703,11 @@ export default function AgentPage() {
         <Suspense fallback={null}>
           <RetoursTab
             profile={profile}
-            allParcels={allParcels}
+            allParcels={parcels}
             drivers={users.filter((u: any) => u.role === 'livreur' || u.role === 'chauffeur')}
             onLoadReturnOnTruck={async (parcelIds: string[]) => {
               for (const id of parcelIds) {
-                const p = allParcels.find((x: any) => x.id === id)
+                const p = parcels.find((x: any) => x.id === id)
                 if (p) await loadReturnedParcelOnTruck(p)
               }
             }}
