@@ -26,6 +26,7 @@ import {
 } from '../firebase/clients'
 import { subscribeDirectorLogs, DIRECTOR_ACTION_ICONS } from '../firebase/directorLogs'
 import { subscribeAllBankDeposits, deleteBankDeposit } from '../firebase/bankDeposits'
+import { subscribeAllCentralCodDeposits, subscribeAllCentralSupplierPayments } from '../firebase/central'
 import { BACKUP_COLLECTIONS } from '../firebase/backupCollections'
 import { subscribeTariffConfig, saveTariffConfig } from '../firebase/tariffs'
 import { subscribeAllAgentNotes } from '../firebase/agentNotes'
@@ -292,6 +293,8 @@ export default function AdminPage() {
 
   // Section
   const [allBankDeposits,    setAllBankDeposits]    = useState<any[]>([])
+  const [centralCodDeposits, setCentralCodDeposits] = useState<any[]>([])
+  const [centralSupplierPayments, setCentralSupplierPayments] = useState<any[]>([])
   const [bankCityFilter,     setBankCityFilter]     = useState('Toutes')
   const [bankDatePreset,     setBankDatePreset]     = useState('all')
   const [bankDateFrom,       setBankDateFrom]       = useState('')
@@ -372,7 +375,11 @@ export default function AdminPage() {
     }
     // reglements/rapports: abonnés dès le montage (voir useEffect de base)
     if (mainTab === 'banque' && !started.banque) {
-      started.banque = [subscribeAllBankDeposits(setAllBankDeposits, err => console.error('bankDeps:', err))]
+      started.banque = [
+        subscribeAllBankDeposits(setAllBankDeposits, err => console.error('bankDeps:', err)),
+        subscribeAllCentralCodDeposits(setCentralCodDeposits, err => console.error('centralDeps:', err)),
+        subscribeAllCentralSupplierPayments(setCentralSupplierPayments, err => console.error('centralPayments:', err))
+      ]
     }
     if (mainTab === 'cod' && !started.cod) {
       started.cod = [subscribeAllAgentCodRequests(setAgentCodRequests)]
@@ -693,7 +700,14 @@ export default function AdminPage() {
     if (!Array.isArray(allParcels)) return []
     let list = allParcels
     if (cityFilter !== 'Toutes') list = list.filter((p: any) => p.originCity === cityFilter || p.destinationCity === cityFilter || p.sender?.city === cityFilter || p.receiver?.city === cityFilter)
-    if (statusFilter !== 'Tous') list = list.filter((p: any) => p.status === statusFilter)
+    // Si filtre "Retourné", inclure aussi "Retourné à l'expéditeur"
+    if (statusFilter !== 'Tous') {
+      if (statusFilter === 'Retourné') {
+        list = list.filter((p: any) => p.status === 'Retourné' || p.status === 'Retourné à l\'expéditeur')
+      } else {
+        list = list.filter((p: any) => p.status === statusFilter)
+      }
+    }
     if (search.trim()) {
       const q = search.trim().toLowerCase()
       list = list.filter((p: any) => (p.trackingId||'').toLowerCase().includes(q) || (p.sender?.name||'').toLowerCase().includes(q) || (p.receiver?.name||'').toLowerCase().includes(q) || (p.receiver?.tel||'').includes(q))
@@ -1228,6 +1242,8 @@ export default function AdminPage() {
           <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
             <AdminBanqueTab
               allBankDeposits={allBankDeposits}
+              centralCodDeposits={centralCodDeposits}
+              centralSupplierPayments={centralSupplierPayments}
               bankCityFilter={bankCityFilter}
               setBankCityFilter={setBankCityFilter}
               bankDatePreset={bankDatePreset}

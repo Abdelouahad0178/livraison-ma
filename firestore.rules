@@ -261,6 +261,13 @@ service cloud.firestore {
           'signatureConfirmedAt',
           'deliveryDriverId',
           'deliveryDriverName',
+          'deliverySectorId',
+          'deliverySectorCode',
+          'deliverySectorName',
+          'deliveryVehicleId',
+          'deliveryVehicleLabel',
+          'deliveryAssignedAt',
+          'deliveryAssignedBy',
           'deliveryRejectedAt',
           'deliveryRejectedById',
           'deliveryRejectedBy'
@@ -373,7 +380,19 @@ service cloud.firestore {
           'returnedAt',
           'returnReason',
           'arrivedNbColis',
-          'history'
+          'history',
+          'wasReturned',
+          'returnedByDriverId',
+          'returnedByDriverName',
+          'deliveryDriverId',
+          'deliveryDriverName',
+          'deliverySectorId',
+          'deliverySectorCode',
+          'deliverySectorName',
+          'deliveryVehicleId',
+          'deliveryVehicleLabel',
+          'deliveryAssignedAt',
+          'deliveryAssignedBy'
         ]);
       allow update: if isStaff() && keepsDeliveredStatus() && (
         isAdmin()

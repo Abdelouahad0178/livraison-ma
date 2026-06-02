@@ -5,11 +5,13 @@ import { auth, db } from '../firebase/config'
 import {
   createCentralSupplierPayment,
   markCentralSupplierPaymentPaid,
+  updateCentralSupplierPayment,
+  deleteCentralSupplierPayment,
   subscribeAllCentralCodDeposits,
   subscribeAllCentralSupplierPayments,
   subscribeAllParcels,
 } from '../firebase/firestore'
-import { Banknote, Building2, CheckCircle2, LogOut, Search, FileText, X, Save, Printer, Calendar, Filter } from 'lucide-react'
+import { Banknote, Building2, CheckCircle2, LogOut, Search, FileText, X, Save, Printer, Calendar, Filter, Edit, Trash2 } from 'lucide-react'
 
 const money = (n: any) => (parseFloat(n) || 0).toLocaleString('fr-MA')
 const asDate = (value: any) => {
@@ -77,6 +79,8 @@ export default function CentralCollectorPage() {
   const [modal, setModal] = useState<any>(null)
   const [selectedAgency, setSelectedAgency] = useState('')
   const [payingId, setPayingId] = useState('')
+  const [editPaymentModal, setEditPaymentModal] = useState<any>(null)
+  const [deletePaymentId, setDeletePaymentId] = useState('')
 
   useEffect(() => {
     const uid = auth.currentUser?.uid
@@ -362,6 +366,43 @@ export default function CentralCollectorPage() {
     }
   }
 
+  const handleEditPayment = async () => {
+    if (!editPaymentModal) return
+    try {
+      await updateCentralSupplierPayment(editPaymentModal.id, {
+        amount: editPaymentModal.amount,
+        senderName: editPaymentModal.senderName,
+        senderTel: editPaymentModal.senderTel,
+        chequeNum: editPaymentModal.chequeNum,
+        bankName: editPaymentModal.bankName,
+        chequeDate: editPaymentModal.chequeDate,
+        note: editPaymentModal.note,
+        updatedBy: profile?.name || 'Encaisseur central',
+        updatedById: auth.currentUser?.uid,
+      })
+      setEditPaymentModal(null)
+    } catch (err: any) {
+      alert(err?.message || 'Erreur lors de la modification.')
+    }
+  }
+
+  const handleDeletePayment = async (paymentId: string) => {
+    if (!paymentId) return
+    if (!window.confirm('Êtes-vous sûr de vouloir supprimer ce paiement ?\nCette action ne peut pas être annulée.')) return
+    setDeletePaymentId(paymentId)
+    try {
+      await deleteCentralSupplierPayment(
+        paymentId,
+        profile?.name || 'Encaisseur central',
+        auth.currentUser?.uid,
+      )
+    } catch (err: any) {
+      alert(err?.message || 'Erreur lors de la suppression.')
+    } finally {
+      setDeletePaymentId('')
+    }
+  }
+
   const printGroup = (group: any) => {
     const rows = group.parcels.map((p: any) => `
       <tr>
@@ -628,14 +669,34 @@ export default function CentralCollectorPage() {
                           </div>
                           <div className="text-right shrink-0">
                             <p className="font-black text-green-700">{money(pay.amount)} DH</p>
-                            {paymentStatus(pay) !== 'paid' && (
-                              <button
-                                onClick={() => confirmPaymentPaid(pay)}
-                                disabled={payingId === pay.id}
-                                className="mt-2 px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white text-xs font-black"
-                              >
-                                {payingId === pay.id ? '...' : 'Paye'}
-                              </button>
+                            {paymentStatus(pay) !== 'paid' ? (
+                              <div className="mt-2 flex gap-1">
+                                <button
+                                  onClick={() => setEditPaymentModal({ ...pay })}
+                                  disabled={payingId === pay.id || deletePaymentId === pay.id}
+                                  className="p-1.5 rounded-lg bg-blue-100 hover:bg-blue-200 disabled:opacity-60 text-blue-700"
+                                  title="Modifier"
+                                >
+                                  <Edit className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeletePayment(pay.id)}
+                                  disabled={payingId === pay.id || deletePaymentId === pay.id}
+                                  className="p-1.5 rounded-lg bg-red-100 hover:bg-red-200 disabled:opacity-60 text-red-700"
+                                  title="Supprimer"
+                                >
+                                  {deletePaymentId === pay.id ? '...' : <Trash2 className="w-3.5 h-3.5" />}
+                                </button>
+                                <button
+                                  onClick={() => confirmPaymentPaid(pay)}
+                                  disabled={payingId === pay.id || deletePaymentId === pay.id}
+                                  className="px-3 py-1.5 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white text-xs font-black"
+                                >
+                                  {payingId === pay.id ? '...' : 'Payé'}
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="inline-block mt-2 px-3 py-1.5 rounded-lg bg-green-100 text-green-700 text-xs font-black">✓ Payé</span>
                             )}
                           </div>
                         </div>
@@ -789,6 +850,102 @@ export default function CentralCollectorPage() {
               <button onClick={() => setModal(null)} disabled={modal.loading} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm">Annuler</button>
               <button onClick={submitPayment} disabled={modal.loading} className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm flex items-center gap-2">
                 <Save className="w-4 h-4" /> {modal.loading ? 'Enregistrement...' : 'Preparer cheque'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal de modification */}
+      {editPaymentModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4" onClick={() => setEditPaymentModal(null)}>
+          <div className="bg-white rounded-2xl max-w-2xl w-full max-h-[90vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+            <div className="sticky top-0 bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between">
+              <h2 className="text-xl font-black text-slate-900">Modifier le paiement</h2>
+              <button onClick={() => setEditPaymentModal(null)} className="p-2 hover:bg-slate-100 rounded-lg transition">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="p-6 space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Expéditeur *</label>
+                  <input
+                    type="text"
+                    value={editPaymentModal.senderName || ''}
+                    onChange={e => setEditPaymentModal({ ...editPaymentModal, senderName: e.target.value })}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Téléphone</label>
+                  <input
+                    type="text"
+                    value={editPaymentModal.senderTel || ''}
+                    onChange={e => setEditPaymentModal({ ...editPaymentModal, senderTel: e.target.value })}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">N° Chèque *</label>
+                  <input
+                    type="text"
+                    value={editPaymentModal.chequeNum || ''}
+                    onChange={e => setEditPaymentModal({ ...editPaymentModal, chequeNum: e.target.value })}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Banque *</label>
+                  <input
+                    type="text"
+                    value={editPaymentModal.bankName || ''}
+                    onChange={e => setEditPaymentModal({ ...editPaymentModal, bankName: e.target.value })}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Date d'échéance</label>
+                  <input
+                    type="date"
+                    value={editPaymentModal.chequeDate || ''}
+                    onChange={e => setEditPaymentModal({ ...editPaymentModal, chequeDate: e.target.value })}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-bold text-slate-700 mb-1">Montant (DH) *</label>
+                  <input
+                    type="number"
+                    value={editPaymentModal.amount || ''}
+                    onChange={e => setEditPaymentModal({ ...editPaymentModal, amount: parseFloat(e.target.value) || 0 })}
+                    className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="block text-sm font-bold text-slate-700 mb-1">Note</label>
+                <textarea
+                  value={editPaymentModal.note || ''}
+                  onChange={e => setEditPaymentModal({ ...editPaymentModal, note: e.target.value })}
+                  rows={2}
+                  className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none resize-none"
+                />
+              </div>
+              <div className="bg-amber-50 border border-amber-200 rounded-xl p-3">
+                <p className="text-xs text-amber-700">
+                  <strong>⚠️ Attention :</strong> Une fois ce paiement marqué comme payé, il ne pourra plus être modifié (sauf par l'admin).
+                </p>
+              </div>
+            </div>
+            <div className="border-t border-slate-200 px-6 py-4 flex justify-end gap-3">
+              <button onClick={() => setEditPaymentModal(null)} className="px-4 py-2 rounded-xl bg-slate-100 text-slate-700 font-bold text-sm">Annuler</button>
+              <button onClick={handleEditPayment} className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-sm flex items-center gap-2">
+                <Save className="w-4 h-4" /> Enregistrer
               </button>
             </div>
           </div>

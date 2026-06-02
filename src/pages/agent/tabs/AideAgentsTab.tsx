@@ -12,12 +12,9 @@ export default function AideAgentsTab() {
     aideLoading,
     aideError,
     aideParcelsFor,
-    agencyPendingAideParcels,
-    validatingEntryId,
     handleCreateAideAgent,
     handleDeleteAideAgent,
     handleToggleBlockAide,
-    handleValidateParcelEntry,
     createAideModal, setCreateAideModal,
     pointeurUsers,
     pointeurForm, setPointeurForm,
@@ -39,6 +36,9 @@ export default function AideAgentsTab() {
     returnParcelModal, setReturnParcelModal,
     submitReturnWithReason,
   } = useAgentCtx()
+
+  // NOUVELLE POLITIQUE : Plus de validation nécessaire
+  // Les colis sont directement visibles dans l'onglet Expéditions
 
   return (
     <>
@@ -104,47 +104,30 @@ export default function AideAgentsTab() {
                 </div>
                 <div className="mt-3 pt-3 border-t border-gray-100 flex items-center gap-4 text-xs text-gray-400">
                   <span>📦 {aideParcelsFor(aide.id).length} colis saisis</span>
-                  <span>⏳ {aideParcelsFor(aide.id).filter((p: any) => p.validatedByChef === false).length} en attente validation</span>
+                  <span className="text-green-600">✅ Enregistrement direct (pas de validation)</span>
                 </div>
               </div>
             ))}
           </div>
         )}
 
-        {/* Section colis à valider */}
-        {(() => {
-          const pendingParcels = agencyPendingAideParcels
-          if (pendingParcels.length === 0) return null
-          return (
-            <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <Clock className="w-4 h-4 text-amber-600" />
-                <p className="font-semibold text-amber-800 text-sm">{pendingParcels.length} saisie{pendingParcels.length > 1 ? 's' : ''} en attente de validation</p>
-              </div>
-              <div className="space-y-2">
-                {pendingParcels.slice(0, 5).map((p: any) => (
-                  <div key={p.id} className="bg-white rounded-xl border border-amber-100 p-3 flex items-center justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="font-mono text-xs text-blue-600 font-bold">{p.trackingId}</p>
-                      <p className="text-xs text-gray-500 truncate">{p.sender?.name} → {p.receiver?.name}</p>
-                      <p className="text-[10px] text-gray-400">Saisi par {p.agentName}</p>
-                    </div>
-                    <button
-                      onClick={() => handleValidateParcelEntry(p)}
-                      disabled={validatingEntryId === p.id}
-                      className="shrink-0 flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-bold px-3 py-2 rounded-lg transition"
-                    >
-                      {validatingEntryId === p.id ? '...' : '✅ Valider'}
-                    </button>
-                  </div>
-                ))}
-                {pendingParcels.length > 5 && (
-                  <p className="text-xs text-amber-600 text-center font-medium">+{pendingParcels.length - 5} autres — voir onglet Expéditions</p>
-                )}
-              </div>
+        {/* NOUVELLE POLITIQUE : Info enregistrement direct */}
+        <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-full bg-blue-500 flex items-center justify-center">
+              <Check className="w-6 h-6 text-white" />
             </div>
-          )
-        })()}
+            <div className="flex-1">
+              <p className="font-bold text-blue-900 text-sm">✨ Enregistrement direct activé</p>
+              <p className="text-xs text-blue-700 mt-1">
+                Les colis saisis par les aides-agents sont <strong>enregistrés directement</strong> et visibles dans l'onglet <strong>Expéditions</strong>.
+              </p>
+              <p className="text-xs text-blue-600 mt-2">
+                🔒 <strong>Note :</strong> Une fois qu'un colis est chargé sur un camion, seul le chef peut le modifier.
+              </p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* ── SECTION POINTEURS-ENCAISSEURS (chef_agence only) ── */}

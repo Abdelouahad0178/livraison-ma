@@ -1,7 +1,8 @@
 import { auth } from '../../../firebase/config'
 import { confirmBankDeposit } from '../../../firebase/bankDeposits'
-import { Search, Trash2 } from 'lucide-react'
+import { Search, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
 import { fmtFixed as fmtAmt } from '../../../utils/formatNumber'
+import { useState } from 'react'
 
 const filterByDate = (list: any, preset: any, from: any, to: any, getDate: any) => {
   if (preset === 'all') return list
@@ -20,13 +21,31 @@ const filterByDate = (list: any, preset: any, from: any, to: any, getDate: any) 
 }
 
 export default function AdminBanqueTab({
-  allBankDeposits, bankCityFilter, setBankCityFilter,
+  allBankDeposits, centralCodDeposits = [], centralSupplierPayments = [], bankCityFilter, setBankCityFilter,
   bankDatePreset, setBankDatePreset, bankDateFrom, setBankDateFrom, bankDateTo, setBankDateTo,
   bankSearch, setBankSearch, bankConfirmBusy, setBankConfirmBusy, setBankDeleteConfirm,
 }: any) {
-          
+
+          const [expandedDeposits, setExpandedDeposits] = useState<Set<string>>(new Set())
+
+          const toggleExpand = (id: string) => {
+            setExpandedDeposits(prev => {
+              const next = new Set(prev)
+              if (next.has(id)) next.delete(id)
+              else next.add(id)
+              return next
+            })
+          }
+
           const fmtD = (iso: any) => {
             try { return new Date(iso).toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: 'numeric' }) }
+            catch { return iso || '—' }
+          }
+          const fmtDT = (iso: any) => {
+            try {
+              const d = new Date(iso)
+              return d.toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: 'numeric' }) + ' ' + d.toLocaleTimeString('fr-MA', { hour: '2-digit', minute: '2-digit' })
+            }
             catch { return iso || '—' }
           }
           const depDate = (dep: any) => {
@@ -35,12 +54,50 @@ export default function AdminBanqueTab({
             return new Date(0)
           }
 
-          // Filtres
+          // Filtres pour versements centraux
+          const cityFilteredCentral = bankCityFilter === 'Toutes'
+            ? centralCodDeposits
+            : centralCodDeposits.filter((d: any) => d.city === bankCityFilter)
+          const dateFilteredCentral = filterByDate(cityFilteredCentral, bankDatePreset, bankDateFrom, bankDateTo, depDate)
+          const q = bankSearch.toLowerCase().trim()
+          const displayedCentral = q
+            ? dateFilteredCentral.filter((d: any) =>
+                [d.city, d.agentName, d.amount, d.note, ...(d.parcels || []).flatMap((p: any) => [
+                  p.trackingId, p.senderNic, p.senderName, p.senderTel, p.receiverName, p.receiverTel
+                ])].some(v => String(v||'').toLowerCase().includes(q))
+              )
+            : dateFilteredCentral
+
+          const totalCentral = displayedCentral.reduce((s: any, d: any) => s + Number(d.amount||0), 0)
+          const totalParcels = displayedCentral.reduce((s: any, d: any) => s + Number(d.parcelCount||0), 0)
+
+          // Calcul des paiements aux fournisseurs (sorties)
+          const cityFilteredPayments = bankCityFilter === 'Toutes'
+            ? centralSupplierPayments
+            : centralSupplierPayments.filter((p: any) =>
+                (p.parcels || []).some((pc: any) => pc.originCity === bankCityFilter || pc.destinationCity === bankCityFilter)
+              )
+          const dateFilteredPayments = filterByDate(cityFilteredPayments, bankDatePreset, bankDateFrom, bankDateTo, depDate)
+          const displayedPayments = q
+            ? dateFilteredPayments.filter((p: any) =>
+                [p.senderName, p.senderTel, p.senderNic, p.chequeNum, p.bankName, p.amount, p.note, ...(p.parcels || []).flatMap((pc: any) => [
+                  pc.trackingId, pc.senderNic, pc.receiverName, pc.receiverTel
+                ])].some(v => String(v||'').toLowerCase().includes(q))
+              )
+            : dateFilteredPayments
+          const totalPayments = displayedPayments.reduce((s: any, p: any) => s + Number(p.amount||0), 0)
+          const totalPaymentsParcels = displayedPayments.reduce((s: any, p: any) => s + Number(p.parcelCount||0), 0)
+
+          // Calcul du solde : Entrées - Sorties
+          const totalEntrees = totalCentral
+          const totalSorties = totalPayments
+          const solde = totalEntrees - totalSorties
+
+          // Filtres pour versements bancaires (ancien système)
           const cityFiltered = bankCityFilter === 'Toutes'
             ? allBankDeposits
             : allBankDeposits.filter((d: any) => d.city === bankCityFilter)
           const dateFiltered = filterByDate(cityFiltered, bankDatePreset, bankDateFrom, bankDateTo, depDate)
-          const q = bankSearch.toLowerCase().trim()
           const displayed = q
             ? dateFiltered.filter((d: any) =>
                 [d.trackingId, d.senderName, d.receiverName, d.bankName, d.refNum, d.city, d.agentName, d.note]
@@ -54,7 +111,10 @@ export default function AdminBanqueTab({
           const totalPend = pending.reduce((s: any,d: any) => s + Number(d.amount||0), 0)
           const totalConf = confirmed.reduce((s: any,d: any) => s + Number(d.amount||0), 0)
 
-          const allCities = [...new Set(allBankDeposits.map((d: any) => d.city).filter(Boolean))].sort()
+          const allCities = [...new Set([
+            ...allBankDeposits.map((d: any) => d.city),
+            ...centralCodDeposits.map((d: any) => d.city)
+          ].filter(Boolean))].sort()
 
           const handleConfirm = async (dep: any) => {
             setBankConfirmBusy(dep.id)
@@ -64,22 +124,18 @@ export default function AdminBanqueTab({
           }
 
           const handlePrint = () => {
-            const rows = displayed.map((dep: any) => `
+            const rows = displayedCentral.map((dep: any) => `
               <tr>
-                <td>${dep.trackingId||'—'}</td>
                 <td>${dep.city||'—'}</td>
-                <td>${dep.senderName||'—'}</td>
-                <td>${dep.receiverName||'—'}</td>
                 <td>${dep.agentName||'—'}</td>
-                <td>${dep.bankName||'—'}</td>
-                <td>${dep.refNum||'—'}</td>
-                <td>${dep.depositDate||'—'}</td>
+                <td>${dep.parcelCount||0}</td>
                 <td style="text-align:right;font-weight:bold">${Number(dep.amount||0).toLocaleString('fr-MA')} DH</td>
-                <td style="text-align:center">${dep.adminConfirmed ? '✓ Confirmé' : '⏳ En attente'}</td>
+                <td>${fmtD(dep.createdAt?.toDate?.()?.toISOString?.() || dep.createdAt)}</td>
+                <td>${dep.note||'—'}</td>
               </tr>`).join('')
             const html = `<!DOCTYPE html>
 <html lang="fr"><head><meta charset="UTF-8">
-<title>Banque RETOUR FOND — BG Express</title>
+<title>Banque RETOUR FOND — Versements espèces</title>
 <style>
   body{font-family:Arial,sans-serif;margin:20px;font-size:11px}
   h1{font-size:15px;margin-bottom:4px}
@@ -91,15 +147,15 @@ export default function AdminBanqueTab({
   .total{margin-top:10px;font-size:13px;font-weight:bold;text-align:right}
   @media print{@page{margin:12mm}}
 </style></head><body>
-<h1>🏦 Banque RETOUR FOND — BG Express</h1>
-<p class="sub">Imprimé le ${new Date().toLocaleDateString('fr-MA',{day:'2-digit',month:'long',year:'numeric'})} · ${displayed.length} versement(s)</p>
+<h1>🏦 Banque RETOUR FOND — Versements espèces des chefs d'agence</h1>
+<p class="sub">Imprimé le ${new Date().toLocaleDateString('fr-MA',{day:'2-digit',month:'long',year:'numeric'})} · ${displayedCentral.length} versement(s)</p>
 <table>
   <thead><tr>
-    <th>N° Tracking</th><th>Agence</th><th>Expéditeur</th><th>Destinataire</th><th>Agent</th><th>Banque</th><th>N° Bordereau</th><th>Date versement</th><th>Montant</th><th>Statut</th>
+    <th>Agence</th><th>Chef d'agence</th><th>Nb colis</th><th>Montant</th><th>Date versement</th><th>Note</th>
   </tr></thead>
   <tbody>${rows}</tbody>
 </table>
-<p class="total">Total : ${totalAll.toLocaleString('fr-MA')} DH · Confirmé : ${totalConf.toLocaleString('fr-MA')} DH · En attente : ${totalPend.toLocaleString('fr-MA')} DH</p>
+<p class="total">Total : ${totalCentral.toLocaleString('fr-MA')} DH · ${totalParcels} colis</p>
 </body></html>`
             const w = window.open('','_blank') as any
             w.document.write(html)
@@ -116,30 +172,39 @@ export default function AdminBanqueTab({
                 <div className="absolute inset-0 opacity-10" style={{backgroundImage:'radial-gradient(circle at 80% 20%,white 0%,transparent 50%)'}} />
                 <div className="relative flex items-start justify-between gap-4">
                   <div>
-                    <p className="text-blue-200 text-xs font-medium uppercase tracking-wider">Administration</p>
+                    <p className="text-blue-200 text-xs font-medium uppercase tracking-wider">Administration — Encaisseur Central</p>
                     <h2 className="font-black text-2xl mt-0.5">🏦 Banque RETOUR FOND</h2>
-                    <p className="text-blue-300 text-xs mt-1">Versements espèces des chefs d'agence</p>
+                    <p className="text-blue-300 text-xs mt-1">État de la caisse</p>
                   </div>
                   <button onClick={handlePrint}
                     className="shrink-0 flex items-center gap-1.5 bg-white/20 hover:bg-white/30 text-white text-xs font-semibold px-3 py-2 rounded-xl transition">
                     🖨️ Imprimer
                   </button>
                 </div>
-                <div className="relative mt-4 grid grid-cols-3 gap-3">
-                  <div className="bg-white/10 rounded-xl p-3 text-center">
-                    <p className="text-blue-200 text-[10px] font-medium">Total versé</p>
-                    <p className="font-black text-xl mt-0.5">{fmtAmt(totalAll)}</p>
-                    <p className="text-blue-300 text-[10px]">DH</p>
-                  </div>
-                  <div className="bg-amber-400/20 rounded-xl p-3 text-center border border-amber-300/30">
-                    <p className="text-amber-200 text-[10px] font-medium">En attente</p>
-                    <p className="font-black text-xl mt-0.5 text-amber-300">{fmtAmt(totalPend)}</p>
-                    <p className="text-amber-300 text-[10px]">{pending.length} versement(s)</p>
-                  </div>
-                  <div className="bg-green-400/20 rounded-xl p-3 text-center border border-green-300/30">
-                    <p className="text-green-200 text-[10px] font-medium">Confirmé</p>
-                    <p className="font-black text-xl mt-0.5 text-green-300">{fmtAmt(totalConf)}</p>
-                    <p className="text-green-300 text-[10px]">{confirmed.length} versement(s)</p>
+
+                {/* SOLDE EN GROS */}
+                <div className="relative mt-5 bg-white/15 backdrop-blur-sm rounded-2xl p-5 border-2 border-white/30">
+                  <p className="text-white/80 text-xs font-bold uppercase tracking-wider mb-2">💰 Solde Banque RETOUR FOND</p>
+                  <p className="font-black text-5xl text-white leading-none">
+                    {fmtAmt(solde)} <span className="text-2xl font-bold text-white/90">DH</span>
+                  </p>
+                  <div className="mt-4 grid grid-cols-2 gap-3">
+                    <div className="bg-green-400/30 rounded-xl p-3 border border-green-300/40">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-lg">📥</span>
+                        <p className="text-green-100 text-[10px] font-bold uppercase">Entrées</p>
+                      </div>
+                      <p className="font-black text-2xl text-green-100">{fmtAmt(totalEntrees)}</p>
+                      <p className="text-green-200 text-[10px] mt-1">{displayedCentral.length} versement(s) · {totalParcels} colis</p>
+                    </div>
+                    <div className="bg-red-400/30 rounded-xl p-3 border border-red-300/40">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-lg">📤</span>
+                        <p className="text-red-100 text-[10px] font-bold uppercase">Sorties</p>
+                      </div>
+                      <p className="font-black text-2xl text-red-100">{fmtAmt(totalSorties)}</p>
+                      <p className="text-red-200 text-[10px] mt-1">{displayedPayments.length} paiement(s) · {totalPaymentsParcels} colis</p>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -149,7 +214,7 @@ export default function AdminBanqueTab({
                 <div className="flex flex-wrap gap-2 items-center">
                   <Search className="w-4 h-4 text-gray-400 shrink-0" />
                   <input value={bankSearch} onChange={e => setBankSearch(e.target.value)}
-                    placeholder="Rechercher (tracking, expéditeur, banque, agent…)"
+                    placeholder="Rechercher (tracking, expéditeur, agence, agent…)"
                     className="flex-1 min-w-48 border border-gray-200 rounded-xl px-3 py-2 text-sm focus:border-blue-500 focus:outline-none" />
                   <select value={bankCityFilter} onChange={e => setBankCityFilter(e.target.value)}
                     className="border border-gray-200 rounded-xl px-3 py-2 text-sm focus:border-blue-500 focus:outline-none bg-white">
@@ -175,12 +240,158 @@ export default function AdminBanqueTab({
                 </div>
               </div>
 
+              {/* Versements centraux */}
+              {displayedCentral.length > 0 && (
+                <div className="bg-white rounded-2xl border border-emerald-100 shadow-sm overflow-hidden">
+                  <div className="px-4 py-3 border-b border-emerald-100 bg-emerald-50 flex items-center gap-2">
+                    <span className="text-base">💰</span>
+                    <h3 className="font-bold text-emerald-800 text-sm">Versements au compte société</h3>
+                    <span className="ml-auto text-xs bg-emerald-200 text-emerald-800 px-2 py-0.5 rounded-full font-semibold">{displayedCentral.length}</span>
+                    <span className="text-xs font-black text-emerald-700">{fmtAmt(totalCentral)} DH</span>
+                  </div>
+                  <div className="divide-y divide-emerald-50">
+                    {displayedCentral.map((dep: any) => {
+                      const isExpanded = expandedDeposits.has(dep.id)
+                      const parcels = dep.parcels || []
+                      return (
+                        <div key={dep.id} className="px-4 py-3">
+                          <div className="flex items-start gap-3 cursor-pointer hover:bg-emerald-50/40 rounded-lg px-2 py-1 -mx-2 transition" onClick={() => toggleExpand(dep.id)}>
+                            <div className="w-9 h-9 rounded-xl bg-emerald-50 flex items-center justify-center text-base shrink-0 mt-0.5">
+                              {isExpanded ? <ChevronDown className="w-4 h-4 text-emerald-600" /> : <ChevronRight className="w-4 h-4 text-emerald-600" />}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap mb-1">
+                                <span className="text-[10px] bg-blue-50 text-blue-600 px-2 py-0.5 rounded-full font-bold">{dep.city}</span>
+                                <span className="text-xs font-semibold text-gray-700">{dep.agentName || 'Chef agence'}</span>
+                              </div>
+                              <p className="text-xs text-gray-500">
+                                {dep.parcelCount || 0} colis · Versé le {fmtDT(dep.createdAt?.toDate?.()?.toISOString?.() || dep.createdAt)}
+                              </p>
+                              {dep.note && <p className="text-xs text-gray-400 italic mt-0.5">{dep.note}</p>}
+                              {dep.cashShortage > 0 && (
+                                <p className="text-xs text-red-600 font-semibold mt-1">
+                                  ⚠️ Manque en caisse : {fmtAmt(dep.cashShortage)} DH
+                                </p>
+                              )}
+                            </div>
+                            <div className="shrink-0 flex flex-col items-end gap-1">
+                              <p className="font-black text-emerald-700 text-base">{fmtAmt(dep.amount)} DH</p>
+                              <span className="text-[10px] text-emerald-600 font-semibold bg-emerald-100 px-2 py-0.5 rounded-full">✓ Versé</span>
+                            </div>
+                          </div>
+
+                          {/* Détail des colis */}
+                          {isExpanded && parcels.length > 0 && (
+                            <div className="mt-3 ml-11 mr-2 bg-gray-50 rounded-xl border border-gray-100 overflow-hidden">
+                              <div className="px-3 py-2 bg-gray-100 border-b border-gray-200">
+                                <p className="text-xs font-bold text-gray-700">📦 Détail des colis ({parcels.length})</p>
+                              </div>
+                              <div className="divide-y divide-gray-100 max-h-96 overflow-y-auto">
+                                {parcels.map((p: any, idx: number) => (
+                                  <div key={idx} className="px-3 py-2 flex items-center gap-2 text-xs hover:bg-white transition">
+                                    <span className="font-mono text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded">{p.trackingId || '—'}</span>
+                                    <span className="flex-1 min-w-0 truncate text-gray-700">
+                                      {p.senderName || '—'} → {p.receiverName || '—'}
+                                    </span>
+                                    <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{p.originCity || '—'} → {p.destinationCity || '—'}</span>
+                                    <span className="font-bold text-gray-700 shrink-0">{fmtAmt(p.amount)} DH</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Paiements aux expéditeurs (sorties) */}
+              {displayedPayments.length > 0 && (
+                <div className="bg-white rounded-2xl border border-red-100 shadow-sm overflow-hidden">
+                  <div className="px-4 py-3 border-b border-red-100 bg-red-50 flex items-center gap-2">
+                    <span className="text-base">📤</span>
+                    <h3 className="font-bold text-red-800 text-sm">Paiements aux expéditeurs (Sorties)</h3>
+                    <span className="ml-auto text-xs bg-red-200 text-red-800 px-2 py-0.5 rounded-full font-semibold">{displayedPayments.length}</span>
+                    <span className="text-xs font-black text-red-700">{fmtAmt(totalPayments)} DH</span>
+                  </div>
+                  <div className="divide-y divide-red-50">
+                    {displayedPayments.map((pay: any) => {
+                      const isExpanded = expandedDeposits.has(pay.id)
+                      const parcels = pay.parcels || []
+                      return (
+                        <div key={pay.id} className="px-4 py-3">
+                          <div className="flex items-start gap-3 cursor-pointer hover:bg-red-50/40 rounded-lg px-2 py-1 -mx-2 transition" onClick={() => toggleExpand(pay.id)}>
+                            <div className="w-9 h-9 rounded-xl bg-red-50 flex items-center justify-center text-base shrink-0 mt-0.5">
+                              {isExpanded ? <ChevronDown className="w-4 h-4 text-red-600" /> : <ChevronRight className="w-4 h-4 text-red-600" />}
+                            </div>
+                            <div className="flex-1 min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap mb-1">
+                                <span className="text-xs font-semibold text-gray-700">{pay.senderName || 'Expéditeur'}</span>
+                                {pay.senderTel && <span className="text-[10px] text-gray-500">· {pay.senderTel}</span>}
+                              </div>
+                              <p className="text-xs text-gray-500">
+                                {pay.parcelCount || 0} colis · Chèque N° {pay.chequeNum || '—'} · {pay.bankName || '—'}
+                              </p>
+                              <p className="text-xs text-gray-400">
+                                Préparé par {pay.preparedBy || 'Encaisseur'} · {fmtDT(pay.createdAt?.toDate?.()?.toISOString?.() || pay.createdAt)}
+                              </p>
+                              {pay.note && <p className="text-xs text-gray-400 italic mt-0.5">{pay.note}</p>}
+                            </div>
+                            <div className="shrink-0 flex flex-col items-end gap-1">
+                              <p className="font-black text-red-700 text-base">{fmtAmt(pay.amount)} DH</p>
+                              <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                                pay.status === 'paid'
+                                  ? 'bg-green-100 text-green-700'
+                                  : 'bg-amber-100 text-amber-700'
+                              }`}>
+                                {pay.status === 'paid' ? '✓ Payé' : '⏳ Préparé'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Détail des colis */}
+                          {isExpanded && parcels.length > 0 && (
+                            <div className="mt-3 ml-11 mr-2 bg-gray-50 rounded-xl border border-gray-100 overflow-hidden">
+                              <div className="px-3 py-2 bg-gray-100 border-b border-gray-200">
+                                <p className="text-xs font-bold text-gray-700">📦 Détail des colis ({parcels.length})</p>
+                              </div>
+                              <div className="divide-y divide-gray-100 max-h-96 overflow-y-auto">
+                                {parcels.map((p: any, idx: number) => (
+                                  <div key={idx} className="px-3 py-2 flex items-center gap-2 text-xs hover:bg-white transition">
+                                    <span className="font-mono text-blue-600 font-bold bg-blue-50 px-2 py-0.5 rounded">{p.trackingId || '—'}</span>
+                                    <span className="flex-1 min-w-0 truncate text-gray-700">
+                                      {p.receiverName || '—'} · {p.receiverTel || '—'}
+                                    </span>
+                                    <span className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">{p.originCity || '—'} → {p.destinationCity || '—'}</span>
+                                    <span className="font-bold text-gray-700 shrink-0">{fmtAmt(p.amount)} DH</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {/* Versements bancaires anciens (si existants) */}
+              {(pending.length > 0 || confirmed.length > 0) && (
+                <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
+                  <p className="text-sm font-bold text-amber-800 mb-2">⚠️ Ancien système de versement bancaire</p>
+                  <p className="text-xs text-amber-600">Ces versements utilisent l'ancien système. Préférez utiliser le système de versement au compte société.</p>
+                </div>
+              )}
+
               {/* Versements en attente de confirmation */}
               {pending.length > 0 && (
                 <div className="bg-white rounded-2xl border border-amber-100 shadow-sm overflow-hidden">
                   <div className="px-4 py-3 border-b border-amber-100 bg-amber-50 flex items-center gap-2">
                     <span className="text-base">⏳</span>
-                    <h3 className="font-bold text-amber-800 text-sm">En attente de confirmation admin</h3>
+                    <h3 className="font-bold text-amber-800 text-sm">En attente de confirmation admin (ancien système)</h3>
                     <span className="ml-auto text-xs bg-amber-200 text-amber-800 px-2 py-0.5 rounded-full font-semibold">{pending.length}</span>
                     <span className="text-xs font-black text-amber-700">{fmtAmt(totalPend)} DH</span>
                   </div>
@@ -225,7 +436,7 @@ export default function AdminBanqueTab({
                 <div className="bg-white rounded-2xl border border-green-100 shadow-sm overflow-hidden">
                   <div className="px-4 py-3 border-b border-green-100 bg-green-50 flex items-center gap-2">
                     <span className="text-base">✅</span>
-                    <h3 className="font-bold text-green-800 text-sm">Versements confirmés</h3>
+                    <h3 className="font-bold text-green-800 text-sm">Versements confirmés (ancien système)</h3>
                     <span className="ml-auto text-xs bg-green-200 text-green-800 px-2 py-0.5 rounded-full font-semibold">{confirmed.length}</span>
                     <span className="text-xs font-black text-green-700">{fmtAmt(totalConf)} DH</span>
                   </div>
@@ -252,10 +463,10 @@ export default function AdminBanqueTab({
                 </div>
               )}
 
-              {displayed.length === 0 && (
+              {displayedCentral.length === 0 && displayed.length === 0 && (
                 <div className="text-center py-20 text-gray-400">
                   <span className="text-5xl">🏦</span>
-                  <p className="text-sm mt-3 font-medium">Aucun versement bancaire</p>
+                  <p className="text-sm mt-3 font-medium">Aucun versement</p>
                   <p className="text-xs mt-1">Les chefs d'agence versent depuis l'onglet RETOUR FOND.</p>
                 </div>
               )}

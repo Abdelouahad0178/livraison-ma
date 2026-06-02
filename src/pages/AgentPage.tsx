@@ -457,38 +457,14 @@ export default function AgentPage() {
       }
     }
     if (profile.role === 'chef_agence' && profile.city) {
-      let agencyParcels: any[] = []
-      let pendingAideParcels: any[] = []
-      const chefCity = String(profile.city || '').trim().toLowerCase()
-      const isChefAgencyAideParcel = (p: any) => {
-        const originCity = String(p.originCity || p.sender?.city || '').trim().toLowerCase()
-        return (p.agentRole === 'aide_agent' || p.agentRole === 'client_portal')
-          && p.validatedByChef === false
-          && originCity === chefCity
-      }
-      const mergeChefParcels = () => {
-        const map = new Map()
-        agencyParcels.forEach(p => map.set(p.id, p))
-        pendingAideParcels.forEach(p => map.set(p.id, p))
-        const merged = [...map.values()]
-        setParcels(prev => {
-          if (prev.length !== merged.length) return merged
-          const prevIds = prev.map(p => p.id).sort().join(',')
-          const mergedIds = merged.map(p => p.id).sort().join(',')
-          return prevIds === mergedIds ? prev : merged
-        })
-        setLoadingParcels(false)
-      }
+      // NOUVELLE POLITIQUE : Le chef voit TOUS les colis de l'agence directement
+      // Plus besoin de pending validation
       const unsubAgency = subscribeAgencyParcels(profile.city, (data: any) => {
-        agencyParcels = data
-        mergeChefParcels()
+        setParcels(data)
+        setLoadingParcels(false)
       }, onError)
-      const unsubAide = subscribePendingAideAgentParcels((data: any) => {
-        pendingAideParcels = data.filter(isChefAgencyAideParcel)
-        setPendingAideParcels(data)
-        mergeChefParcels()
-      }, onError)
-      return () => { unsubAgency(); unsubAide() }
+      setPendingAideParcels([]) // Plus de pending
+      return () => { unsubAgency() }
     }
     setPendingAideParcels([])
     const unsub = subscribeAgentParcels(uid, (data: any) => { setParcels(data); setLoadingParcels(false) }, onError)
@@ -1101,6 +1077,13 @@ export default function AgentPage() {
   const canEditParcelDetails = (parcel: any) => {
     if (profile?.role === 'admin') return true
     if (!canActAsParcelOwner(parcel)) return false
+
+    // NOUVELLE POLITIQUE : Aide-agent ne peut éditer que si colis PAS chargé
+    if (profile?.role === 'aide_agent' && isAideParcelLockedForEdit(parcel)) {
+      return false // Verrouillé pour aide-agent
+    }
+
+    // Chef peut toujours éditer (sauf si livré/retourné)
     return !['Livré', 'Retourné', 'En transit retour'].includes(parcel?.status)
   }
   const canManageStatus = (parcel: any) =>
@@ -1117,11 +1100,14 @@ export default function AgentPage() {
   const canLoadTransportParcel = (parcel: any) =>
     (profile?.role === 'agent' || profile?.role === 'chef_agence' || profile?.role === 'admin') &&
     parcel?.status === 'Initialisé'
+  // NOUVELLE POLITIQUE : Plus de validation requise
+  // Un colis d'aide-agent est "verrouillé" seulement si chargé (transportAssignedAt existe)
+  const isAideParcelLockedForEdit = (p: any) => {
+    return !!p.transportAssignedAt // Verrouillé si chargé sur camion
+  }
+
   const isPendingAideParcelForAgency = (p: any) =>
-    (p.agentRole === 'aide_agent' || p.agentRole === 'client_portal') &&
-    p.validatedByChef === false &&
-    (p.originCity === profile?.city || p.sender?.city === profile?.city ||
-      allUsers.find((u: any) => u.id === p.agentId)?.city === profile?.city)
+    false // Plus de pending - deprecated mais gardé pour compatibilité
 
   // ── User filtered lists ────────────────────────────────────────────────────
   const aideAgents = allUsers.filter((u: any) =>
@@ -1262,6 +1248,7 @@ export default function AgentPage() {
     isParcelCreator, isChefAgencyAideParcel, canActAsParcelOwner, canEditParcelDetails,
     canManageStatus, canManageReturnDelivery, isReturnOriginCity, canManageDeliveryAssignment,
     isPointedForDelivery, canLoadTransportParcel, isPendingAideParcelForAgency,
+    isAideParcelLockedForEdit, // NOUVEAU : indique si colis verrouillé pour aide
     agencyPendingAideParcels, aideParcelsFor, RETURN_REASONS, f,
     arrNbColis, arrArrived, arrNexp, arrIsArrived, arrIsPartial, arrIsFull,
     arrArrivedParcels, arrMissingParcels, arrMissingColisDetail,
@@ -1363,6 +1350,7 @@ export default function AgentPage() {
     canManageStatus, canManageReturnDelivery,
     isReturnOriginCity, canManageDeliveryAssignment,
     isPointedForDelivery, canLoadTransportParcel,
+    isAideParcelLockedForEdit,
     isPendingAideParcelForAgency,
     agencyPendingAideParcels,
     aideParcelsFor,

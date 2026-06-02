@@ -261,8 +261,9 @@ export default function CodTab() {
 
   // ── Perspective AGENT SOURCE (j'ai créé le colis) ──
   const src = filteredCodParcels.filter(p => p.agentId === uid || isChefAgencyCodSource(p))
-  const src_enCours    = src.filter(p => ['pending','collected'].includes(p.codStatus || 'pending'))
-  const src_remisAgent = src.filter(p => p.codStatus === 'remis' && !p.codSentToSource && !p.codReceivedBySource && !p.codSenderPaid && !p.centralDeposited && !isCash(p))
+  const src_enCours    = src.filter(p => ['pending','collected'].includes(p.codStatus || 'pending') && !['Livré', 'Retourné à l\'expéditeur'].includes(p.status))
+  const src_collected  = src.filter(p => p.codStatus === 'collected' && ['Livré', 'Retourné à l\'expéditeur'].includes(p.status) && !p.codSentToSource && !p.codReceivedBySource && !p.codSenderPaid)
+  const src_remisAgent = src.filter(p => p.codStatus === 'remis' && !p.codSentToSource && !p.codReceivedBySource && !p.codSenderPaid && !p.centralDeposited && !isCash(p) && !['Livré', 'Retourné à l\'expéditeur'].includes(p.status))
   const src_enRoute    = src.filter(p => p.codSentToSource && !p.codReceivedBySource && !p.codSenderPaid)
   const src_aConfirmer = src.filter(p => p.codReceivedBySource && !p.codSenderPaid)
   const src_regle      = src.filter(p => p.codSenderPaid)
@@ -297,6 +298,7 @@ export default function CodTab() {
 
   // Totaux résumé
   const totSrcPending  = src_enCours.reduce((s,p) => s + parseFloat(p.codAmount||0), 0)
+  const totSrcCollected = src_collected.reduce((s,p) => s + parseFloat(p.codAmount||0), 0)
   const totSrcRemis    = src_remisAgent.reduce((s,p) => s + parseFloat(p.codAmount||0), 0)
   const totSrcEnRoute  = src_enRoute.reduce((s,p) => s + parseFloat(p.codAmount||0), 0)
   const totSrcAConf    = src_aConfirmer.reduce((s,p) => s + parseFloat(p.codAmount||0), 0)
@@ -398,6 +400,7 @@ export default function CodTab() {
               ] : []),
               ...(src.length > 0 ? [
                 { label: 'Collecte',   count: src_enCours.length,   bg: 'bg-yellow-500', dot: 'bg-yellow-400' },
+                { label: 'Collecté',   count: src_collected.length, bg: 'bg-lime-500',   dot: 'bg-lime-400'   },
                 { label: 'Chez dest.', count: src_remisAgent.length, bg: 'bg-orange-500', dot: 'bg-orange-400' },
                 { label: 'En route',   count: src_enRoute.length,   bg: 'bg-blue-500',   dot: 'bg-blue-400'   },
                 { label: 'À confirmer',count: src_aConfirmer.length, bg: 'bg-purple-500', dot: 'bg-purple-400' },
@@ -1001,6 +1004,15 @@ export default function CodTab() {
               />
             )
           })}
+        </SectionCard>
+
+        <SectionCard icon="✅" title="COD Collecté par livreur" count={src_collected.length} total={totSrcCollected} accent="border-l-lime-500">
+          {src_collected.map(p => (
+            <PRow key={p.id} p={p}
+              badge={<span className="text-[10px] px-2 py-0.5 rounded-full bg-lime-50 text-lime-700 font-semibold border border-lime-100">✓ Collecté</span>}
+              action={null}
+            />
+          ))}
         </SectionCard>
 
         <SectionCard icon="⏳" title="Chez agence destinataire" count={src_remisAgent.length} total={totSrcRemis} accent="border-l-orange-500">

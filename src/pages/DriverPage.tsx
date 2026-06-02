@@ -10,6 +10,7 @@ import {
   subscribeDriverOwnPortDuTransactions,
 } from '../firebase/firestore'
 import { findParcel } from '../firebase/parcelsRead'
+import { markParcelAsReturned } from '../firebase/parcels'
 import {
   confirmDeliveryAfterSignature,
   generateSignatureToken,
@@ -193,14 +194,16 @@ export default function DriverPage() {
 
     // RETOUR FOND et port dû : uniquement par le chauffeur de livraison assigné
     const isDeliveryDriver = parcel.deliveryDriverId === uid
+    // COD : uniquement pour les colis livrés (pas de COD pour retours)
     const needsCod = isDeliveryDriver
       && parcel.codAmount > 0
       && status === 'Livré'
       && (parcel.codStatus === 'pending' || !parcel.codStatus)
+    // Port dû : pour les colis livrés ET retournés (si non payé à l'expédition)
     const needsPortDu = isDeliveryDriver
       && parcel.portType === 'port_du'
       && parcel.portStatus !== 'collected'
-      && status === 'Livré'
+      && (status === 'Livré' || status === 'Retourné')
 
     // RETOUR FOND requires a payment type — warn and block only if RETOUR FOND needs action
     if (needsCod && !codPaymentType) {
@@ -217,11 +220,13 @@ export default function DriverPage() {
         // Marquer collecté par le chauffeur — la caisse sera créditée au versement du chauffeur à l'agent
         await collectPortDu(parcel.id, name, uid || '')
       }
-      await updateParcelStatus(parcel.id, status, note ? { note } : {})
+      // Si c'est un colis retourné (wasReturned) et qu'on le livre, c'est "Retourné à l'expéditeur"
+      const finalStatus = (parcel.wasReturned && status === 'Livré') ? 'Retourné à l\'expéditeur' : status
+      await updateParcelStatus(parcel.id, finalStatus, note ? { note } : {})
       const updateList = (ps: any) => ps.map((p: any) =>
         p.id === parcel.id
           ? {
-              ...p, status,
+              ...p, status: finalStatus,
               ...(needsCod   && { codStatus: 'collected', codPaymentType }),
               ...(needsPortDu && { portStatus: 'collected' }),
             }
@@ -241,16 +246,19 @@ export default function DriverPage() {
     const name = profile?.name || workerLabel
     setRejectModal((m: any) => ({ ...m, loading: true, error: '' }))
     try {
-      await rejectDeliveryAssignment(
-        parcel.id,
-        uid || '',
-        name,
-        note || `Livraison refusée par ${name}`
+      // CORRECTION : Marquer le colis comme "Retourné" au lieu de juste rejeter
+      const returnNote = note || `Non livré - retour par ${name}`
+      await markParcelAsReturned(parcel, { note: returnNote })
+
+      // Mettre à jour l'UI locale
+      const updateList = (ps: any) => ps.map((p: any) =>
+        p.id === parcel.id ? { ...p, status: 'Retourné' } : p
       )
-      setDeliveryParcels(ps => ps.filter(p => p.id !== parcel.id))
+      setParcels(updateList)
+      setDeliveryParcels(updateList)
       setRejectModal(null)
-    } catch {
-      setRejectModal((m: any) => ({ ...m, loading: false, error: 'Erreur lors du refus de la livraison.' }))
+    } catch (err: any) {
+      setRejectModal((m: any) => ({ ...m, loading: false, error: err?.message || 'Erreur lors du retour.' }))
     }
   }
 
@@ -301,9 +309,11 @@ export default function DriverPage() {
     if (!scannedParcel || !newStatus) return
     setScanLoading(true)
     try {
-      await updateParcelStatus(scannedParcel.id, newStatus)
-      setParcels(ps => ps.map(p => p.id === scannedParcel.id ? { ...p, status: newStatus } : p))
-      setMsg({ type: 'success', text: `✅ Statut mis à jour : "${newStatus}"` })
+      // Si c'est un colis retourné et qu'on le livre, c'est "Retourné à l'expéditeur"
+      const finalStatus = (scannedParcel.wasReturned && newStatus === 'Livré') ? 'Retourné à l\'expéditeur' : newStatus
+      await updateParcelStatus(scannedParcel.id, finalStatus)
+      setParcels(ps => ps.map(p => p.id === scannedParcel.id ? { ...p, status: finalStatus } : p))
+      setMsg({ type: 'success', text: `✅ Statut mis à jour : "${finalStatus}"` })
       setScannedParcel(null); setNewStatus('')
     } catch {
       setMsg({ type: 'error', text: 'Erreur lors de la mise à jour.' })
@@ -1101,7 +1111,15 @@ export default function DriverPage() {
                             )
                           })()}
                         </div>
-                        <span className={`font-mono text-xs ${isDeliveryView ? 'text-slate-700 font-bold' : 'text-gray-500'}`}>{parcel.trackingId}</span>
+                        <div className="flex items-center gap-2">
+                          {/* Badge RETOUR permanent pour les colis retournés */}
+                          {parcel.wasReturned && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-orange-100 text-orange-700 border border-orange-300">
+                              🔄 RETOUR
+                            </span>
+                          )}
+                          <span className={`font-mono text-xs ${isDeliveryView ? 'text-slate-700 font-bold' : 'text-gray-500'}`}>{parcel.trackingId}</span>
+                        </div>
                       </div>
 
                       {/* Destinataire */}
@@ -1153,7 +1171,8 @@ export default function DriverPage() {
                               )}
                             </div>
                           )}
-                          {parcel.codAmount > 0 && (() => {
+                          {/* COD : NE PAS afficher pour les colis retournés */}
+                          {parcel.codAmount > 0 && parcel.status !== 'Retourné' && (() => {
                             const cs  = COD_STATUS[parcel.codStatus || 'pending']
                             const cpt = COD_PAYMENT_TYPES.find(t => t.key === parcel.codPaymentType)
                             const isCollected = parcel.codStatus === 'collected'
@@ -1787,7 +1806,8 @@ export default function DriverPage() {
                         </div>
                       )
                     })()}
-                    {scannedParcel.codAmount > 0 && (
+                    {/* COD : NE PAS afficher pour les colis retournés */}
+                    {scannedParcel.codAmount > 0 && scannedParcel.status !== 'Retourné' && (
                       <div className="flex justify-between bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-2 mt-2">
                         <span className="text-yellow-400 font-semibold">💵 RETOUR FOND à collecter</span>
                         <span className="text-yellow-300 font-bold">{scannedParcel.codAmount} DH</span>
