@@ -352,7 +352,7 @@ export function subscribeArrivedParcelsByCity(city: any, callback: any, onError:
 }
 export function subscribeAllArrivages(callback: any, onError: (err?: any) => void = () => {}) {
   // Récupérer tous les arrivages sans filtre de date
-  const q = query(collection(db, 'arrivages'), orderBy('createdAt', 'desc'), limit(500))
+  const q = query(collection(db, 'arrivages'), orderBy('createdAt', 'desc'), limit(200))
   return onSnapshot(q, snap => {
     callback(sortArrivagesDocs(snap.docs.map(d => ({ id: d.id, ...d.data() }))))
   }, onError)

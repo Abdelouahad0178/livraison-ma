@@ -47,7 +47,7 @@ export async function createAgentCodRequest(data: Record<string, any>) {
 
 export function subscribeAllAgentCodRequests(callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
   // Récupérer toutes les demandes sans filtre de date
-  const q = query(collection(db, 'agentCodRequests'), orderBy('createdAt', 'desc'), limit(500))
+  const q = query(collection(db, 'agentCodRequests'), orderBy('createdAt', 'desc'), limit(200))
   return onSnapshot(q, snap => callback(snap.docs.map(rowFromDoc)), onError)
 }
 

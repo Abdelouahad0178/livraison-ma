@@ -151,7 +151,7 @@ export function subscribeClientMessages(clientId: string, callback: (rows: Fires
 
 export function subscribeAllClientMessages(callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
   // Récupérer tous les messages sans filtre de date
-  const q = query(collection(db, 'clientMessages'), orderBy('createdAt', 'desc'), limit(500))
+  const q = query(collection(db, 'clientMessages'), orderBy('createdAt', 'desc'), limit(200))
   return onSnapshot(q, snap => callback(snap.docs.map(rowFromDoc)), onError)
 }
 

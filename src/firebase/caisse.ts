@@ -187,7 +187,7 @@ export function subscribeCaissierRemarks(city: any, callback: any) {
 }
 export function subscribeAllCaissierRemarks(callback: any) {
   // Récupérer toutes les remarques sans filtre de date
-  const q = query(collection(db, 'caissierRemarks'), orderBy('createdAt', 'desc'), limit(500))
+  const q = query(collection(db, 'caissierRemarks'), orderBy('createdAt', 'desc'), limit(200))
   return onSnapshot(
     q,
     snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
@@ -842,7 +842,7 @@ export async function updateDriverPortDuTransaction(id: any, data: any) {
 }
 export function subscribeAllDriverPortDuTransactions(callback: any, onError: (err?: any) => void = () => {}) {
   // Récupérer toutes les transactions sans filtre de date
-  const q = query(collection(db, 'driverPortDuTransactions'), orderBy('createdAt', 'desc'), limit(500))
+  const q = query(collection(db, 'driverPortDuTransactions'), orderBy('createdAt', 'desc'), limit(200))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 export function subscribeDriverPortDuTransactionsByCity(city: any, callback: any, onError: (err?: any) => void = () => {}) {

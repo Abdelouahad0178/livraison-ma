@@ -88,8 +88,9 @@ export async function createCentralCodDeposit({ parcelIds = [], parcels = [] as 
   })
 }
 export function subscribeAllCentralCodDeposits(callback: any, onError: (err?: any) => void = () => {}) {
-  // Récupérer tous les versements sans filtre de date
-  const q = query(collection(db, 'centralCodDeposits'), orderBy('createdAt', 'desc'), limit(500))
+  // 180 jours pour éviter surcharge Firestore
+  const since = daysAgoTimestamp(180)
+  const q = query(collection(db, 'centralCodDeposits'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 export async function createCentralSupplierPayment({ parcelIds = [], parcels = [] as any[], amount, senderName, senderTel, chequeNum, bankName, chequeDate, preparedBy, preparedById, note }: any) {
@@ -281,7 +282,8 @@ export async function deleteCentralSupplierPayment(paymentId: any, deletedBy: an
 }
 
 export function subscribeAllCentralSupplierPayments(callback: any, onError: (err?: any) => void = () => {}) {
-  // Récupérer tous les paiements sans filtre de date
-  const q = query(collection(db, 'centralSupplierPayments'), orderBy('createdAt', 'desc'), limit(500))
+  // 180 jours pour éviter surcharge Firestore
+  const since = daysAgoTimestamp(180)
+  const q = query(collection(db, 'centralSupplierPayments'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((p: any) => p.status !== 'deleted')), onError)
 }

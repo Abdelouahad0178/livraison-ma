@@ -56,7 +56,7 @@ export function subscribeBankDepositsByCity(city: any, callback: any, onError: (
 
 export function subscribeAllBankDeposits(callback: any, onError: (err?: any) => void = () => {}) {
   // Récupérer tous les versements sans filtre de date
-  const q = query(collection(db, 'bankDeposits'), orderBy('createdAt', 'desc'), limit(500))
+  const q = query(collection(db, 'bankDeposits'), orderBy('createdAt', 'desc'), limit(200))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 
