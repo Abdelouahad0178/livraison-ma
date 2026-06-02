@@ -761,7 +761,7 @@ export default function AdminPage() {
       const delta = centralCashForm.operation === 'add' ? amount : -amount
       const data: any = {
         soldeDelta: delta,
-        lastUpdatedBy: profile?.name || 'Admin',
+        lastUpdatedBy: auth.currentUser?.displayName || auth.currentUser?.email || 'Admin',
         reason: centralCashForm.reason,
       }
 
