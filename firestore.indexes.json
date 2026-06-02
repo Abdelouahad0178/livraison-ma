@@ -267,6 +267,22 @@
         { "fieldPath": "destinationCity", "order": "ASCENDING"  },
         { "fieldPath": "createdAt",       "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "returnedByDriverId", "order": "ASCENDING"  },
+        { "fieldPath": "createdAt",          "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "agentNotes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agencyCity", "order": "ASCENDING"  },
+        { "fieldPath": "weekId",     "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

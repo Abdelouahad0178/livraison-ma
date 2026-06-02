@@ -8,6 +8,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "typecheck:strict": "tsc --project tsconfig.strict.json --noEmit",
+    "count-any": "grep -r ': any' src/ --include='*.ts' --include='*.tsx' | wc -l || echo 0",
+    "find-any": "grep -r ': any' src/ --include='*.ts' --include='*.tsx'",
     "test": "vitest run",
     "test:watch": "vitest"
   },
