@@ -125,8 +125,9 @@ export function subscribeCaisseByCity(city: any, callback: any, onError: (err?: 
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 export function subscribeAllCaisse(callback: any, onError: (err?: any) => void = () => {}) {
-  // Récupérer tous les mouvements sans filtre de date
-  const q = query(collection(db, 'caisseEntries'), orderBy('createdAt', 'desc'), limit(1000))
+  // 180 jours pour plus de données sans crasher Firestore
+  const since = daysAgoTimestamp(180)
+  const q = query(collection(db, 'caisseEntries'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(300))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 
