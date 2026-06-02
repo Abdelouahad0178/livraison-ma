@@ -8,7 +8,7 @@ export default function PWAUpdateBanner() {
     needRefresh: [needRefresh, setNeedRefresh],
     updateServiceWorker,
   } = useRegisterSW({
-    onRegisteredSW(_, reg) {
+    onRegisteredSW(_swUrl: string, reg: ServiceWorkerRegistration | undefined) {
       _registration = reg
     },
   })
