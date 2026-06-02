@@ -700,13 +700,9 @@ export default function AdminPage() {
     if (!Array.isArray(allParcels)) return []
     let list = allParcels
     if (cityFilter !== 'Toutes') list = list.filter((p: any) => p.originCity === cityFilter || p.destinationCity === cityFilter || p.sender?.city === cityFilter || p.receiver?.city === cityFilter)
-    // Si filtre "Retourné", inclure aussi "Retourné à l'expéditeur"
+    // Filtre statut : chaque statut est filtré séparément
     if (statusFilter !== 'Tous') {
-      if (statusFilter === 'Retourné') {
-        list = list.filter((p: any) => p.status === 'Retourné' || p.status === 'Retourné à l\'expéditeur')
-      } else {
-        list = list.filter((p: any) => p.status === statusFilter)
-      }
+      list = list.filter((p: any) => p.status === statusFilter)
     }
     if (search.trim()) {
       const q = search.trim().toLowerCase()
