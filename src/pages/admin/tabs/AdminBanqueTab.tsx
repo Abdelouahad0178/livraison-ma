@@ -1,6 +1,6 @@
 import { auth } from '../../../firebase/config'
 import { confirmBankDeposit } from '../../../firebase/bankDeposits'
-import { Search, Trash2, ChevronDown, ChevronRight } from 'lucide-react'
+import { Search, Trash2, ChevronDown, ChevronRight, Building2, Edit2 } from 'lucide-react'
 import { fmtFixed as fmtAmt } from '../../../utils/formatNumber'
 import { useState } from 'react'
 
@@ -24,6 +24,7 @@ export default function AdminBanqueTab({
   allBankDeposits, centralCodDeposits = [], centralSupplierPayments = [], bankCityFilter, setBankCityFilter,
   bankDatePreset, setBankDatePreset, bankDateFrom, setBankDateFrom, bankDateTo, setBankDateTo,
   bankSearch, setBankSearch, bankConfirmBusy, setBankConfirmBusy, setBankDeleteConfirm,
+  centralCash, onOpenCentralCashModal,
 }: any) {
 
           const [expandedDeposits, setExpandedDeposits] = useState<Set<string>>(new Set())
@@ -205,6 +206,59 @@ export default function AdminBanqueTab({
                       <p className="font-black text-2xl text-red-100">{fmtAmt(totalSorties)}</p>
                       <p className="text-red-200 text-[10px] mt-1">{displayedPayments.length} paiement(s) · {totalPaymentsParcels} colis</p>
                     </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* CAISSE CENTRALE - Encaisseur */}
+              <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border-2 border-emerald-200 rounded-2xl p-5 shadow-sm">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="bg-emerald-100 p-4 rounded-2xl shadow-sm">
+                      <Building2 className="w-8 h-8 text-emerald-600" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-emerald-900 text-xl flex items-center gap-2">
+                        🏦 Caisse Centrale
+                      </h3>
+                      <p className="text-sm text-emerald-600 mt-0.5">Solde de l'encaisseur central</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-6">
+                    <div className="text-right">
+                      <div className="text-xs text-emerald-600 font-semibold uppercase mb-1">Solde Total</div>
+                      <div className="text-3xl font-black text-emerald-900">
+                        {centralCash ? (parseFloat(centralCash.solde || 0) || 0).toLocaleString('fr-MA') : '—'}{' '}
+                        <span className="text-xl text-emerald-700">DH</span>
+                      </div>
+                      <div className="mt-2 flex items-center gap-4 text-sm">
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-emerald-600">💵</span>
+                          <span className="font-semibold text-emerald-800">
+                            {centralCash ? (parseFloat(centralCash.soldeEspeces || 0) || 0).toLocaleString('fr-MA') : '—'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-emerald-600">📋</span>
+                          <span className="font-semibold text-emerald-800">
+                            {centralCash ? (parseFloat(centralCash.soldeCheques || 0) || 0).toLocaleString('fr-MA') : '—'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-emerald-600">🏦</span>
+                          <span className="font-semibold text-emerald-800">
+                            {centralCash ? (parseFloat(centralCash.soldeVirement || 0) || 0).toLocaleString('fr-MA') : '—'}
+                          </span>
+                        </div>
+                      </div>
+                    </div>
+                    <button
+                      onClick={onOpenCentralCashModal}
+                      className="flex items-center gap-2 px-6 py-3 bg-emerald-600 text-white rounded-xl hover:bg-emerald-700 transition font-semibold text-sm shadow-lg hover:shadow-xl"
+                    >
+                      <Edit2 className="w-5 h-5" />
+                      Ajuster Solde
+                    </button>
                   </div>
                 </div>
               </div>

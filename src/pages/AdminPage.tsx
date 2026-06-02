@@ -969,44 +969,8 @@ export default function AdminPage() {
 
         {/* Section */}
         {mainTab === 'home' && (
-          <>
-            {/* CAISSE CENTRALE */}
-            <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-xl p-4 mb-6">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-3">
-                  <div className="bg-emerald-100 p-3 rounded-xl">
-                    <Building2 className="w-6 h-6 text-emerald-600" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-emerald-900 text-lg">🏦 Caisse Centrale</h3>
-                    <p className="text-xs text-emerald-600">Solde de l'encaisseur central</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-4">
-                  <div className="text-right">
-                    <div className="text-xs text-emerald-600 font-medium">Solde Total</div>
-                    <div className="text-2xl font-bold text-emerald-900">
-                      {centralCash ? (parseFloat(centralCash.solde || 0) || 0).toLocaleString('fr-MA') : '—'} DH
-                    </div>
-                    <div className="text-xs text-emerald-600 mt-1 space-x-2">
-                      <span>💵 {centralCash ? (parseFloat(centralCash.soldeEspeces || 0) || 0).toLocaleString('fr-MA') : '—'}</span>
-                      <span>📋 {centralCash ? (parseFloat(centralCash.soldeCheques || 0) || 0).toLocaleString('fr-MA') : '—'}</span>
-                      <span>🏦 {centralCash ? (parseFloat(centralCash.soldeVirement || 0) || 0).toLocaleString('fr-MA') : '—'}</span>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setCentralCashModal(true)}
-                    className="flex items-center gap-2 px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition font-medium text-sm"
-                  >
-                    <Edit2 className="w-4 h-4" />
-                    Ajuster
-                  </button>
-                </div>
-              </div>
-            </div>
-
-            <Suspense fallback={<div className="mt-6 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
-              <AdminHomeTab
+          <Suspense fallback={<div className="mt-6 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminHomeTab
               periodParcels={periodParcels}
               periodUsers={periodUsers}
               users={users}
@@ -1035,7 +999,6 @@ export default function AdminPage() {
               navigate={navigate}
             />
           </Suspense>
-          </>
         )}
 
         {/* TAB: EXPEDITIONS */}
@@ -1334,11 +1297,14 @@ export default function AdminPage() {
 
         {/* TAB: BANQUE */}
         {mainTab === 'banque' && (
-          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
-            <AdminBanqueTab
-              allBankDeposits={allBankDeposits}
-              centralCodDeposits={centralCodDeposits}
-              centralSupplierPayments={centralSupplierPayments}
+          <>
+            <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+              <AdminBanqueTab
+                allBankDeposits={allBankDeposits}
+                centralCodDeposits={centralCodDeposits}
+                centralSupplierPayments={centralSupplierPayments}
+                centralCash={centralCash}
+                onOpenCentralCashModal={() => setCentralCashModal(true)}
               bankCityFilter={bankCityFilter}
               setBankCityFilter={setBankCityFilter}
               bankDatePreset={bankDatePreset}
@@ -1352,8 +1318,9 @@ export default function AdminPage() {
               bankConfirmBusy={bankConfirmBusy}
               setBankConfirmBusy={setBankConfirmBusy}
               setBankDeleteConfirm={setBankDeleteConfirm}
-            />
-          </Suspense>
+              />
+            </Suspense>
+          </>
         )}
 
         {/* TAB: NOTES AGENTS */}
