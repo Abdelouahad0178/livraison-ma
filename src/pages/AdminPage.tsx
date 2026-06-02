@@ -12,6 +12,7 @@ import {
   subscribeAllDriverPortDuTransactions, addDriverPortDuTransaction, deleteDriverPortDuTransaction, updateDriverPortDuTransaction,
   confirmDriverVersement,
   createCaisseEntry,
+  adjustCentralCash, subscribeCentralCash,
   subscribeAllSectors,
   createReturnParcel,
   subscribeAllReglementsGlobal, subscribeAllRapportsGlobal,

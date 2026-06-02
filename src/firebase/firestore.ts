@@ -72,6 +72,7 @@ export {
   completeCaisseRequest, completeRhSalaryCaisseRequest,
   subscribeCaisseRequests, subscribeAllCaisseRequests,
   updateAgencyCash, adjustAgencyCash,
+  adjustCentralCash, subscribeCentralCash,
   createCaisseEntryAtomic, deleteCaisseEntryAtomic, updateCaisseEntryAtomic,
   depositAgentCashAtomic, directTransferAgentToCashierAtomic, approveRecoveryAtomic,
   subscribeAgencyCash, subscribeAllAgencyCashes,

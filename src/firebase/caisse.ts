@@ -491,6 +491,49 @@ export async function adjustAgencyCash(city: any, data: any) {
   })
 }
 
+// Ajuster le solde de la caisse centrale (Encaisseur central)
+export async function adjustCentralCash(data: any) {
+  const soldeDelta = parseFloat(data.soldeDelta || 0) || 0
+  const especesDelta = parseFloat(data.especesDelta ?? soldeDelta) || 0
+  const chequesDelta = parseFloat(data.chequesDelta || 0) || 0
+  const virementDelta = parseFloat(data.virementDelta || 0) || 0
+
+  await runTransaction(db, async tx => {
+    const ref = doc(db, 'centralCash', 'main')
+    const snap = await tx.get(ref)
+    const cash = snap.exists()
+      ? snap.data()
+      : { solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 }
+
+    const nextSolde = (parseFloat(cash.solde || 0) || 0) + soldeDelta
+    const nextEspeces = (parseFloat(cash.soldeEspeces || 0) || 0) + especesDelta
+    const nextCheques = (parseFloat(cash.soldeCheques || 0) || 0) + chequesDelta
+    const nextVirement = (parseFloat(cash.soldeVirement || 0) || 0) + virementDelta
+
+    if (nextSolde < 0 || nextEspeces < 0 || nextCheques < 0 || nextVirement < 0) {
+      throw new Error('Solde de caisse centrale insuffisant.')
+    }
+
+    tx.set(ref, {
+      solde: nextSolde,
+      soldeEspeces: nextEspeces,
+      soldeCheques: nextCheques,
+      soldeVirement: nextVirement,
+      lastUpdatedAt: serverTimestamp(),
+      lastUpdatedBy: data.lastUpdatedBy || 'Admin',
+      reason: data.reason || '',
+    }, { merge: true })
+  })
+}
+
+// Subscribe au solde de la caisse centrale
+export function subscribeCentralCash(callback: any, onError: (err?: any) => void = () => {}) {
+  const ref = doc(db, 'centralCash', 'main')
+  return onSnapshot(ref, snap => {
+    callback(snap.exists() ? { id: snap.id, ...snap.data() } : null)
+  }, onError)
+}
+
 // -- Helpers internes ----------------------------------------------------------
 
 export function buildCaisseEntryPayload(data: Record<string, any>) {
