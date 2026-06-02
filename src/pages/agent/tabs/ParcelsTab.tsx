@@ -676,7 +676,9 @@ export default function ParcelsTab() {
                         const cpt = COD_PAYMENT_TYPES.find(t => t.key === (parcel.codPaymentType || parcel.serviceType))
                         const st  = SERVICE_TYPES.find(t => t.key === parcel.serviceType)
                         const emoji = cpt?.emoji || st?.emoji || '💵'
-                        const isCollected = parcel.codStatus === 'collected'
+                        // Ne pas afficher "Livré" si c'est un retour
+                        const isReturn = parcel.wasReturned || parcel.status?.includes('Retourné')
+                        const isCollected = parcel.codStatus === 'collected' && !isReturn
                         const dispBg  = isCollected && cpt ? cpt.bg   : cs.bg
                         const dispTxt = isCollected && cpt ? cpt.text : cs.text
                         const lbl = isCollected
