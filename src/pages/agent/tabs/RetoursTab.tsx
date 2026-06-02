@@ -34,12 +34,18 @@ export default function RetoursTab({
       !p.returnToCity
     )
 
-    // Reçus (agence source)
-    const received = allParcels.filter((p: any) =>
-      (p.status === 'En transit retour' || p.status === 'Retourné') &&
-      p.returnToCity === profile?.city &&
-      p.status !== 'Retourné à l\'expéditeur'
-    )
+    // Reçus (agence source - où le colis doit revenir)
+    const received = allParcels.filter((p: any) => {
+      const isReturnStatus = p.status === 'En transit retour' ||
+                            (p.status === 'Retourné' && p.returnToCity) ||
+                            (p.wasReturned && p.status !== 'Retourné à l\'expéditeur')
+
+      // Le colis doit revenir vers cette agence (agence source/origine)
+      const isForThisAgency = p.returnToCity === profile?.city ||
+                             (p.originCity === profile?.city && p.wasReturned && !p.returnToCity)
+
+      return isReturnStatus && isForThisAgency && p.status !== 'Retourné à l\'expéditeur'
+    })
 
     // Historique complet (tous les retours finalisés)
     const history = allParcels.filter((p: any) =>

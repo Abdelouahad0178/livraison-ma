@@ -40,6 +40,14 @@ const LEGACY_DELIVERED_STATUS = 'Livr\u00c3\u00a9'
 const isDeliveredStatus = (status: any) => status === 'Livré' || status === LEGACY_DELIVERED_STATUS
 const DESTINATION_VISIBLE_STATUSES = ['En transit', 'Arrivé en agence', 'En cours de livraison', 'Livré', 'Retourné', 'En transit retour']
 export function isParcelVisibleInDestinationAgency(parcel: Partial<Parcel> = {}) {
+  // Les retours ne vont PAS dans Arrivages, ils vont dans Retours
+  const isReturn = parcel.wasReturned ||
+                   parcel.status === 'Retourné' ||
+                   parcel.status === 'En transit retour' ||
+                   parcel.status === 'Retourné à l\'expéditeur'
+
+  if (isReturn) return false
+
   return !!(
     parcel.visibleInDestinationAgency ||
     parcel.shipmentLoadedAt ||
