@@ -85,6 +85,7 @@ const DriversTab = lazy(() => import('./agent/tabs/DriversTab'))
 const DashboardTab = lazy(() => import('./agent/tabs/DashboardTab'))
 const AideAgentsTab = lazy(() => import('./agent/tabs/AideAgentsTab'))
 const ArrivageTab = lazy(() => import('./agent/tabs/ArrivageTab'))
+const RetoursTab = lazy(() => import('./agent/tabs/RetoursTab'))
 const NotesAgentsTab = lazy(() => import('./agent/tabs/NotesAgentsTab'))
 
 const MOD_STATUS = {
@@ -1694,6 +1695,33 @@ export default function AgentPage() {
       {tab === 'arrivage' && (
         <Suspense fallback={null}>
           <ArrivageTab />
+        </Suspense>
+      )}
+
+      {/* ── RETOURS TAB ── */}
+      {tab === 'retours' && (
+        <Suspense fallback={null}>
+          <RetoursTab
+            profile={profile}
+            allParcels={allParcels}
+            drivers={users.filter((u: any) => u.role === 'livreur' || u.role === 'chauffeur')}
+            onLoadReturnOnTruck={async (parcelIds: string[]) => {
+              for (const id of parcelIds) {
+                const p = allParcels.find((x: any) => x.id === id)
+                if (p) await loadReturnedParcelOnTruck(p)
+              }
+            }}
+            onAssignReturnDriver={async (parcelId: string, driver: any) => {
+              await assignDeliveryDriver(parcelId, driver.id, driver.name, {
+                deliveryAssignedBy: profile?.name || ''
+              })
+            }}
+            onMarkReturnedToSender={async (parcelId: string) => {
+              await updateParcelStatus(parcelId, 'Retourné à l\'expéditeur', {
+                note: `Retourné à l'expéditeur par ${profile?.name || 'chef d\'agence'}`
+              })
+            }}
+          />
         </Suspense>
       )}
 
