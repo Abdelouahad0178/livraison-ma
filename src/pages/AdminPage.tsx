@@ -197,7 +197,7 @@ export default function AdminPage() {
   const [loadingMore,  setLoadingMore]  = useState(false)
   const [loading,      setLoading]      = useState(true)
   const [cityFilter,    setCityFilter]    = useState('Toutes')
-  const [statusFilter,  setStatusFilter]  = useState('Tous')
+  const [statusFilter,  setStatusFilter]  = useState<string[]>([])
   const [search,        setSearch]        = useState('')
   const [statusModal,       setStatusModal]       = useState<any>(null)
   const [returnModal,       setReturnModal]       = useState<any>(null)
@@ -700,9 +700,23 @@ export default function AdminPage() {
     if (!Array.isArray(allParcels)) return []
     let list = allParcels
     if (cityFilter !== 'Toutes') list = list.filter((p: any) => p.originCity === cityFilter || p.destinationCity === cityFilter || p.sender?.city === cityFilter || p.receiver?.city === cityFilter)
-    // Filtre statut : chaque statut est filtré séparément
-    if (statusFilter !== 'Tous') {
-      list = list.filter((p: any) => p.status === statusFilter)
+
+    // Filtre statut multi-select avec logique spéciale
+    if (statusFilter.length > 0) {
+      list = list.filter((p: any) => {
+        // Logic spéciale : "Retourné à l'expéditeur" apparaît dans 3 filtres
+        if (p.status === 'Retourné à l\'expéditeur') {
+          return statusFilter.includes('Retourné à l\'expéditeur')
+              || statusFilter.includes('Retourné')
+              || statusFilter.includes('Livré')
+        }
+        // Pour "Retourné" : inclure aussi les colis qui ont wasReturned=true
+        if (statusFilter.includes('Retourné')) {
+          if (p.wasReturned || p.status === 'Retourné' || p.status === 'En transit retour') return true
+        }
+        // Sinon, match exact
+        return statusFilter.includes(p.status)
+      })
     }
     if (search.trim()) {
       const q = search.trim().toLowerCase()

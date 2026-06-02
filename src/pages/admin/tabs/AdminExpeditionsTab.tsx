@@ -90,28 +90,51 @@ export default function AdminExpeditionsTab({
           </select>
         </div>
 
-        <div className="flex flex-wrap gap-1.5 items-center border-t border-gray-100 pt-3">
-          <span className="text-[10px] text-gray-400 font-bold uppercase shrink-0 mr-1">Statut :</span>
-          <button
-            onClick={() => setStatusFilter('Tous')}
-            className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition border ${statusFilter === 'Tous' ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-100 text-gray-600 border-transparent hover:bg-gray-200'}`}
-          >
-            Tous
-          </button>
-          {STATUSES.map(s => {
-            const sc = STATUS_COLORS[s] || STATUS_COLORS['Initialisé']
-            const active = statusFilter === s
-            return (
+        <div className="border-t border-gray-100 pt-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] text-gray-400 font-bold uppercase">Statut (multi-select) :</span>
+            <div className="flex gap-2">
               <button
-                key={s}
-                onClick={() => setStatusFilter(s)}
-                className={`shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap border ${active ? `${sc.bg} ${sc.text} border-current` : 'bg-gray-100 text-gray-600 border-transparent hover:bg-gray-200'}`}
+                onClick={() => setStatusFilter([])}
+                className="text-[10px] text-gray-500 hover:text-gray-700 underline"
               >
-                <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
-                {s}
+                Tout désélectionner
               </button>
-            )
-          })}
+              <button
+                onClick={() => setStatusFilter([...STATUSES])}
+                className="text-[10px] text-blue-600 hover:text-blue-700 underline"
+              >
+                Tout sélectionner
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {STATUSES.map(s => {
+              const sc = STATUS_COLORS[s] || STATUS_COLORS['Initialisé']
+              const active = statusFilter.includes(s)
+              return (
+                <label
+                  key={s}
+                  className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition whitespace-nowrap border cursor-pointer ${active ? `${sc.bg} ${sc.text} border-current` : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={active}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setStatusFilter([...statusFilter, s])
+                      } else {
+                        setStatusFilter(statusFilter.filter(f => f !== s))
+                      }
+                    }}
+                    className="w-3 h-3 rounded"
+                  />
+                  <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
+                  {s}
+                </label>
+              )
+            })}
+          </div>
         </div>
 
         <div className="flex flex-wrap gap-2 items-center border-t border-gray-100 pt-3">
