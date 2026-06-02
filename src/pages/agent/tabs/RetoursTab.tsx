@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
-import { Package, Truck, User, MapPin, Calendar, RotateCcw, Send, Check, X, Search, Filter, Eye, Trash2, Edit2, BarChart3 } from 'lucide-react'
+import { Package, Truck, User, MapPin, Calendar, RotateCcw, Send, Check, X, Search, Filter, Eye, Trash2, Edit2, BarChart3, Printer } from 'lucide-react'
 import { STATUS_COLORS } from '../../../firebase/constants'
+import { printRetoursToLoad, printRetoursReceived, printRetoursHistory } from '../../../utils/printRetours'
 
 export default function RetoursTab({
   profile,
@@ -359,16 +360,26 @@ export default function RetoursTab({
             <h3 className="font-semibold text-orange-900">
               Retours à charger sur camion
             </h3>
-            {selectedParcels.length > 0 && (
+            <div className="flex items-center gap-2">
               <button
-                onClick={handleLoadOnTruck}
-                disabled={loading}
-                className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50"
+                onClick={() => printRetoursToLoad(returnedParcels.toLoad, profile?.city || 'Agence')}
+                disabled={returnedParcels.toLoad.length === 0}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50"
               >
-                <Truck className="w-4 h-4" />
-                Charger {selectedParcels.length} colis
+                <Printer className="w-4 h-4" />
+                Imprimer
               </button>
-            )}
+              {selectedParcels.length > 0 && (
+                <button
+                  onClick={handleLoadOnTruck}
+                  disabled={loading}
+                  className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 disabled:opacity-50"
+                >
+                  <Truck className="w-4 h-4" />
+                  Charger {selectedParcels.length} colis
+                </button>
+              )}
+            </div>
           </div>
           <div className="p-4">
             {returnedParcels.toLoad.length === 0 ? (
@@ -398,12 +409,24 @@ export default function RetoursTab({
       {activeSection === 'received' && (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200">
           <div className="bg-blue-50 border-b border-blue-100 px-4 py-3">
-            <h3 className="font-semibold text-blue-900">
-              Retours reçus à l'agence expéditeur
-            </h3>
-            <p className="text-xs text-blue-600 mt-1">
-              Assignez à un livreur ou marquez comme retourné à l'expéditeur
-            </p>
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="font-semibold text-blue-900">
+                  Retours reçus à l'agence expéditeur
+                </h3>
+                <p className="text-xs text-blue-600 mt-1">
+                  Assignez à un livreur ou marquez comme retourné à l'expéditeur
+                </p>
+              </div>
+              <button
+                onClick={() => printRetoursReceived(returnedParcels.received, profile?.city || 'Agence')}
+                disabled={returnedParcels.received.length === 0}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50"
+              >
+                <Printer className="w-4 h-4" />
+                Imprimer
+              </button>
+            </div>
           </div>
           <div className="p-4">
             {returnedParcels.received.length === 0 ? (
@@ -423,12 +446,24 @@ export default function RetoursTab({
       {activeSection === 'history' && (
         <div className="bg-white rounded-lg shadow-sm border border-gray-200">
           <div className="bg-green-50 border-b border-green-100 px-4 py-3">
-            <h3 className="font-semibold text-green-900">
-              Historique complet des retours
-            </h3>
-            <p className="text-xs text-green-600 mt-1">
-              Tous les colis retournés à l'expéditeur
-            </p>
+            <div className="flex items-start justify-between">
+              <div>
+                <h3 className="font-semibold text-green-900">
+                  Historique complet des retours
+                </h3>
+                <p className="text-xs text-green-600 mt-1">
+                  Tous les colis retournés à l'expéditeur
+                </p>
+              </div>
+              <button
+                onClick={() => printRetoursHistory(returnedParcels.history, profile?.city || 'Agence', { dateFrom, dateTo })}
+                disabled={returnedParcels.history.length === 0}
+                className="flex items-center gap-2 px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50"
+              >
+                <Printer className="w-4 h-4" />
+                Imprimer
+              </button>
+            </div>
           </div>
           <div className="p-4">
             {returnedParcels.history.length === 0 ? (
