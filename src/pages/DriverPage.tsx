@@ -425,8 +425,10 @@ export default function DriverPage() {
   })
   const quickSetStatus = async (parcel: any, status: any) => {
     try {
-      await updateParcelStatus(parcel.id, status, { note: `${status} par ${profile?.name || workerLabel}` })
-      const patchList = (list: any) => list.map((p: any) => p.id === parcel.id ? { ...p, status } : p)
+      // Si c'est un colis retourné et qu'on le livre, c'est "Retourné à l'expéditeur"
+      const finalStatus = (parcel.wasReturned && status === 'Livré') ? 'Retourné à l\'expéditeur' : status
+      await updateParcelStatus(parcel.id, finalStatus, { note: `${finalStatus} par ${profile?.name || workerLabel}` })
+      const patchList = (list: any) => list.map((p: any) => p.id === parcel.id ? { ...p, status: finalStatus } : p)
       setParcels(patchList)
       setDeliveryParcels(patchList)
     } catch {
@@ -457,16 +459,20 @@ export default function DriverPage() {
 
     setBulkBusy(true)
     try {
-      await Promise.all(selectedBulkParcels.map(parcel =>
-        updateParcelStatus(parcel.id, bulkStatus, {
+      await Promise.all(selectedBulkParcels.map(parcel => {
+        // Si c'est un colis retourné et qu'on le livre, c'est "Retourné à l'expéditeur"
+        const finalStatus = (parcel.wasReturned && bulkStatus === 'Livré') ? 'Retourné à l\'expéditeur' : bulkStatus
+        return updateParcelStatus(parcel.id, finalStatus, {
           note: `Mise à jour groupée par ${profile?.name || 'chauffeur'}`
         })
-      ))
-      const patchList = (list: any) => list.map((p: any) =>
-        selectedBulkParcels.some(sel => sel.id === p.id)
-          ? { ...p, status: bulkStatus }
-          : p
-      )
+      }))
+      const patchList = (list: any) => list.map((p: any) => {
+        const selected = selectedBulkParcels.find(sel => sel.id === p.id)
+        if (!selected) return p
+        // Appliquer le même logic finalStatus
+        const finalStatus = (selected.wasReturned && bulkStatus === 'Livré') ? 'Retourné à l\'expéditeur' : bulkStatus
+        return { ...p, status: finalStatus }
+      })
       setParcels(patchList)
       setDeliveryParcels(patchList)
       setBulkSelectedIds([])

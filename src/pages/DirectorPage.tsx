@@ -237,7 +237,9 @@ export default function DirectorPage() {
     setStatusModal((m: any) => ({ ...m, loading: true, error: '' }))
     try {
       const p = statusModal.parcel
-      await updateParcelStatus(p.id, statusModal.status, statusModal.note ? { note: statusModal.note } : {})
+      // Si c'est un colis retourné et qu'on le livre, c'est "Retourné à l'expéditeur"
+      const finalStatus = (p.wasReturned && statusModal.status === 'Livré') ? 'Retourné à l\'expéditeur' : statusModal.status
+      await updateParcelStatus(p.id, finalStatus, statusModal.note ? { note: statusModal.note } : {})
       _log('status_update', `Statut mis à jour : ${p.trackingId}`, {
         trackingId:   p.trackingId,
         senderName:   p.sender?.name  || '—',
