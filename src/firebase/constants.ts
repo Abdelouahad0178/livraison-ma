@@ -91,9 +91,24 @@ export function codCollectedLabel(paymentType: string): string {
   }
 }
 
+// Statuts séparés : Circuit Livraison vs Circuit Retour
 export const STATUSES = [
-  'Initialisé', 'En transit', 'Arrivé en agence',
-  'En cours de livraison', 'Livré', 'Retourné',
+  // Circuit Livraison Normal
+  'Initialisé', 'En transit', 'Arrivé en agence', 'En cours de livraison', 'Livré',
+  // Point de transition
+  'Retourné',
+  // Circuit Retour (après transition)
+  'Retour en transit', 'Retour arrivé', 'Retour finalisé',
+]
+
+// Statuts du circuit livraison uniquement
+export const DELIVERY_STATUSES = [
+  'Initialisé', 'En transit', 'Arrivé en agence', 'En cours de livraison', 'Livré',
+]
+
+// Statuts du circuit retour uniquement
+export const RETURN_STATUSES = [
+  'Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé',
 ]
 
 export const COD_PAYMENT_TYPES = [

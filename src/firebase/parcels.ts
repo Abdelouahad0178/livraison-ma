@@ -38,6 +38,15 @@ const cleanIdentity = (value: any) => String(value || '').trim()
 const sameText = (a: any, b: any) => cleanIdentity(a).toLowerCase() === cleanIdentity(b).toLowerCase()
 const LEGACY_DELIVERED_STATUS = 'Livr\u00c3\u00a9'
 const isDeliveredStatus = (status: any) => status === 'Livré' || status === LEGACY_DELIVERED_STATUS
+
+// Vérifie si un colis est dans le circuit retour
+const isInReturnCircuit = (parcel: any) => {
+  return parcel.wasReturned ||
+         parcel.status === 'Retourné' ||
+         parcel.status === 'Retour en transit' ||
+         parcel.status === 'Retour arrivé' ||
+         parcel.status === 'Retour finalisé'
+}
 const DESTINATION_VISIBLE_STATUSES = ['En transit', 'Arrivé en agence', 'En cours de livraison', 'Livré', 'Retourné']
 export function isParcelVisibleInDestinationAgency(parcel: Partial<Parcel> = {}) {
   // Les retours ne vont PAS dans Arrivages, ils vont dans Retours
@@ -219,8 +228,15 @@ export async function updateParcelStatus(parcelId: string, status: string, extra
   const parcelSnap = await getDoc(parcelRef)
   if (parcelSnap.exists()) {
     const current = parcelSnap.data() as any
+
+    // RÈGLE 1: Un colis livré est verrouillé
     if (isDeliveredStatus(current.status) && !isDeliveredStatus(status)) {
       throw new Error('Ce colis est livre : son statut est verrouille. Demandez une modification a l admin ou au chef d agence.')
+    }
+
+    // RÈGLE 2: Un colis dans le circuit retour ne peut JAMAIS être marqué "Livré"
+    if (isInReturnCircuit(current) && status === 'Livré') {
+      throw new Error('Un colis retourne ne peut pas etre marque comme Livre. Utilisez "Retour finalise" pour terminer le retour.')
     }
   }
   const historyEntry = {
@@ -395,12 +411,13 @@ export async function loadReturnedParcelOnTruck(parcel: any) {
   const now = new Date().toISOString()
   const hasBeenSwapped = !!parcel.returnToCity
 
+  // Utiliser "Retour en transit" pour le circuit retour
   if (hasBeenSwapped) {
     await updateDoc(doc(db, 'parcels', parcel.id), {
-      status: 'En transit',
+      status: 'Retour en transit',
       returnShippedAt: now,
       history: arrayUnion({
-        status: 'En transit',
+        status: 'Retour en transit',
         timestamp: now,
         note: 'Chargé sur camion inter-villes — retour vers ' + parcel.returnToCity,
       }),
@@ -411,7 +428,7 @@ export async function loadReturnedParcelOnTruck(parcel: any) {
     const newOrigin   = parcel.destinationCity || parcel.receiver?.city || ''
     const newDest     = parcel.originCity      || parcel.sender?.city   || ''
     await updateDoc(doc(db, 'parcels', parcel.id), {
-      status:          'En transit retour',
+      status:          'Retour en transit',
       sender:          newSender,
       receiver:        newReceiver,
       originCity:      newOrigin,
@@ -420,7 +437,7 @@ export async function loadReturnedParcelOnTruck(parcel: any) {
       arrivedNbColis:  deleteField(),
       returnShippedAt: now,
       history: arrayUnion({
-        status: 'En transit',
+        status: 'Retour en transit',
         timestamp: now,
         note: 'Chargé sur camion inter-villes — retour vers ' + newDest,
       }),

@@ -36,12 +36,9 @@ export default function RetoursTab({
 
     // Reçus (agence source - où le colis doit revenir)
     const received = allParcels.filter((p: any) => {
-      // Colis retourné en transit ou arrivé à l'agence source
-      if (!p.wasReturned) return false
-
-      // Statuts intermédiaires (pas encore livré final)
-      const isInTransit = p.status === 'En transit' || p.status === 'Arrivé en agence'
-      if (!isInTransit) return false
+      // Colis dans le circuit retour, en transit ou arrivé
+      const isReturnInProgress = p.status === 'Retour en transit' || p.status === 'Retour arrivé'
+      if (!isReturnInProgress) return false
 
       // Le colis doit revenir vers cette agence (agence source/origine)
       const isForThisAgency = p.returnToCity === profile?.city ||
@@ -52,9 +49,7 @@ export default function RetoursTab({
 
     // Historique complet (tous les retours finalisés)
     const history = allParcels.filter((p: any) =>
-      p.wasReturned &&
-      p.status === 'Retourné' &&
-      p.returnedAt && // A été retourné au moins une fois
+      p.status === 'Retour finalisé' &&
       (p.originCity === profile?.city || p.destinationCity === profile?.city)
     )
 
@@ -287,10 +282,10 @@ export default function RetoursTab({
             className="px-3 py-2 border rounded-lg text-sm"
           >
             <option value="tous">Tous les statuts</option>
-            <option value="Retourné">Retourné</option>
-            <option value="En transit">En transit</option>
-            <option value="Arrivé en agence">Arrivé en agence</option>
-            <option value="En cours de livraison">En cours de livraison</option>
+            <option value="Retourné">Retourné (initié)</option>
+            <option value="Retour en transit">Retour en transit</option>
+            <option value="Retour arrivé">Retour arrivé</option>
+            <option value="Retour finalisé">Retour finalisé</option>
           </select>
 
           <input

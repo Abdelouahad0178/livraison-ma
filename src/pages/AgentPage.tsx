@@ -1717,8 +1717,8 @@ export default function AgentPage() {
               })
             }}
             onMarkReturnedToSender={async (parcelId: string) => {
-              await updateParcelStatus(parcelId, 'Retourné', {
-                note: `Retourné par ${profile?.name || 'chef d\'agence'}`
+              await updateParcelStatus(parcelId, 'Retour finalisé', {
+                note: `Retour finalisé par ${profile?.name || 'chef d\'agence'}`
               })
             }}
           />

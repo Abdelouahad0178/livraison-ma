@@ -713,9 +713,10 @@ export default function AdminPage() {
     // Filtre statut multi-select
     if (statusFilter.length > 0) {
       list = list.filter((p: any) => {
-        // Logique : "Retourné" inclut tous les colis avec wasReturned
-        if (statusFilter.includes('Retourné') && p.wasReturned) {
-          return true
+        // Logique : "Retourné" inclut tous les statuts du circuit retour
+        if (statusFilter.includes('Retourné')) {
+          const returnStatuses = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
+          if (returnStatuses.includes(p.status)) return true
         }
         // Match exact pour les autres statuts
         return statusFilter.includes(p.status)
