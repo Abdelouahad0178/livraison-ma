@@ -177,6 +177,7 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     deliveryVehicleLabel: data.deliveryVehicleLabel || '',
     destinationCity:      receiver.city      || null,
     originCity:           sender.city        || null,
+    createdByCity:        sender.city        || null,  // Ne change JAMAIS (même après retour)
     shipmentLoadedAt:     loadedAt,
     destinationArrivedAt: null,
     visibleInDestinationAgency: !!data.chauffeurId || hasLocalDeliveryDriver,
@@ -764,7 +765,8 @@ export function subscribeAgencyInbox(city: any, callback: any, onError: (err?: a
 
 // Colis d'un chauffeur de transport
 export function subscribeAgencyParcels(city: any, callback: any, onError: (err?: any) => void = () => {}) {
-  let created: any[] = [], arrived: any[] = [], timer: ReturnType<typeof setTimeout> | undefined = undefined
+  let created: any[] = [], arrived: any[] = [], createdReturns: any[] = []
+  let timer: ReturnType<typeof setTimeout> | undefined = undefined
 
   const merge = () => {
     clearTimeout(timer)
@@ -772,6 +774,7 @@ export function subscribeAgencyParcels(city: any, callback: any, onError: (err?:
       const map = new Map()
       created.forEach(p => map.set(p.id, p))
       arrived.forEach(p => map.set(p.id, p))
+      createdReturns.forEach(p => map.set(p.id, p))  // Retours créés par cette agence
       callback(sortByCreatedDesc([...map.values()]))
     }, 50)
   }
@@ -779,6 +782,9 @@ export function subscribeAgencyParcels(city: any, callback: any, onError: (err?:
   const since = daysAgoTimestamp(60)
   const q1 = query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(50))
   const q2 = query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(50))
+  // Q3 : Retours créés par cette agence (createdByCity ne change jamais)
+  // Requête simple pour éviter index composite
+  const q3 = query(collection(db, 'parcels'), where('createdByCity', '==', city), orderBy('createdAt', 'desc'), limit(100))
 
   const unsub1 = onSnapshot(q1, snap => { created = snap.docs.map(d => ({ id: d.id, ...d.data() })); merge() }, onError)
   const unsub2 = onSnapshot(q2, snap => {
@@ -786,8 +792,13 @@ export function subscribeAgencyParcels(city: any, callback: any, onError: (err?:
     arrived = (snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[]).filter(isParcelVisibleInDestinationAgency)
     merge()
   }, onError)
+  const unsub3 = onSnapshot(q3, snap => {
+    // Filtrer seulement les retours en local
+    createdReturns = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((p: any) => p.wasReturned)
+    merge()
+  }, onError)
 
-  return () => { unsub1(); unsub2(); clearTimeout(timer) }
+  return () => { unsub1(); unsub2(); unsub3(); clearTimeout(timer) }
 }
 
 // Colis retournés pour une agence (à charger, reçus, historique)
