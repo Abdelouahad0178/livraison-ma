@@ -792,74 +792,37 @@ export function subscribeAgencyParcels(city: any, callback: any, onError: (err?:
 
 // Colis retournés pour une agence (à charger, reçus, historique)
 export function subscribeAgencyReturnParcels(city: any, callback: any, onError: (err?: any) => void = () => {}) {
-  let toLoad: any[] = [], received: any[] = [], history: any[] = []
-  let timer: ReturnType<typeof setTimeout> | undefined = undefined
+  let allReturns: any[] = []
 
-  const merge = () => {
-    clearTimeout(timer)
-    timer = setTimeout(() => {
-      const map = new Map()
-      toLoad.forEach(p => map.set(p.id, p))
-      received.forEach(p => map.set(p.id, p))
-      history.forEach(p => map.set(p.id, p))
-      callback([...map.values()])
-    }, 50)
-  }
-
-  const since = daysAgoTimestamp(60)
-
-  // À charger : colis retournés dans l'agence physique (originCity après swap)
-  const q1 = query(
+  // Requête simple : tous les colis avec wasReturned = true (index existant)
+  const q = query(
     collection(db, 'parcels'),
-    where('status', '==', 'Retourné'),
-    where('originCity', '==', city),
-    where('createdAt', '>=', since),
-    orderBy('createdAt', 'desc'),
-    limit(100)
-  )
-
-  // Reçus : colis en transit/arrivés vers cette agence (destinationCity après swap)
-  const q2 = query(
-    collection(db, 'parcels'),
-    where('destinationCity', '==', city),
     where('wasReturned', '==', true),
-    where('createdAt', '>=', since),
     orderBy('createdAt', 'desc'),
-    limit(100)
+    limit(200)
   )
 
-  // Historique : colis retournés finalisés (les deux agences)
-  const q3 = query(
-    collection(db, 'parcels'),
-    where('status', '==', 'Retour finalisé'),
-    where('createdAt', '>=', since),
-    orderBy('createdAt', 'desc'),
-    limit(100)
-  )
+  return onSnapshot(q, snap => {
+    allReturns = snap.docs.map(d => ({ id: d.id, ...d.data() }))
 
-  const unsub1 = onSnapshot(q1, snap => {
-    toLoad = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-    merge()
+    // Filtrer en local pour cette agence
+    const filtered = allReturns.filter((p: any) => {
+      // À charger : Retourné + originCity (agence physique)
+      if (p.status === 'Retourné' && p.originCity === city) return true
+
+      // Reçus : en transit/arrivé + destinationCity (agence de retour)
+      if ((p.status === 'Retour en transit' || p.status === 'Retour arrivé') &&
+          (p.destinationCity === city || p.returnToCity === city)) return true
+
+      // Historique : finalisé + une des deux agences
+      if (p.status === 'Retour finalisé' &&
+          (p.originCity === city || p.destinationCity === city)) return true
+
+      return false
+    })
+
+    callback(filtered)
   }, onError)
-
-  const unsub2 = onSnapshot(q2, snap => {
-    received = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      .filter((p: any) => p.status === 'Retour en transit' || p.status === 'Retour arrivé')
-    merge()
-  }, onError)
-
-  const unsub3 = onSnapshot(q3, snap => {
-    history = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      .filter((p: any) => p.originCity === city || p.destinationCity === city)
-    merge()
-  }, onError)
-
-  return () => {
-    unsub1()
-    unsub2()
-    unsub3()
-    clearTimeout(timer)
-  }
 }
 
 export function subscribePendingAideAgentParcels(callback: any, onError: (err?: any) => void = () => {}) {
