@@ -7,6 +7,7 @@ import {
 import {
   loadReturnedParcelOnTruck, validateReturnArrival, getMoreAgentParcels,
 } from '../../../firebase/firestore'
+import { isInReturnCircuit } from '../../../firebase/parcels'
 import {
   STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS, codCollectedLabel,
   CITIES,
@@ -562,6 +563,11 @@ export default function ParcelsTab() {
                           <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
                           {parcel.status}
                         </span>
+                        {isInReturnCircuit(parcel) && (
+                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold bg-orange-100 text-orange-700 border border-orange-300">
+                            🔄 RETOURNÉ
+                          </span>
+                        )}
                         {(() => {
                           const stDef = SERVICE_TYPES.find(t => t.key === parcel.serviceType)
                           if (!stDef) return null

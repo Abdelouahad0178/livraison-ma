@@ -40,7 +40,7 @@ const LEGACY_DELIVERED_STATUS = 'Livr\u00c3\u00a9'
 const isDeliveredStatus = (status: any) => status === 'Livré' || status === LEGACY_DELIVERED_STATUS
 
 // Vérifie si un colis est dans le circuit retour
-const isInReturnCircuit = (parcel: any) => {
+export const isInReturnCircuit = (parcel: any) => {
   return parcel.wasReturned ||
          parcel.status === 'Retourné' ||
          parcel.status === 'Retour en transit' ||

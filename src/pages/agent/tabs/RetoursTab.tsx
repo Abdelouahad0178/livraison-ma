@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { Package, Truck, User, MapPin, Calendar, RotateCcw, Send, Check, X, Search, Filter, Eye, Trash2, Edit2, BarChart3, Printer } from 'lucide-react'
 import { STATUS_COLORS } from '../../../firebase/constants'
 import { printRetoursToLoad, printRetoursReceived, printRetoursHistory } from '../../../utils/printRetours'
+import { isInReturnCircuit } from '../../../firebase/parcels'
 
 export default function RetoursTab({
   profile,
@@ -27,11 +28,11 @@ export default function RetoursTab({
   const { returnedParcels, stats } = useMemo(() => {
     if (!Array.isArray(allParcels)) return { returnedParcels: { toLoad: [], received: [], history: [] }, stats: {} }
 
-    // À charger (agence destination)
+    // À charger (agence destination - où le colis est physiquement)
+    // Après markParcelAsReturned, originCity = agence physique (destination d'origine)
     const toLoad = allParcels.filter((p: any) =>
       p.status === 'Retourné' &&
-      p.destinationCity === profile?.city &&
-      !p.returnToCity
+      p.originCity === profile?.city
     )
 
     // Reçus (agence source - où le colis doit revenir)
@@ -40,9 +41,10 @@ export default function RetoursTab({
       const isReturnInProgress = p.status === 'Retour en transit' || p.status === 'Retour arrivé'
       if (!isReturnInProgress) return false
 
-      // Le colis doit revenir vers cette agence (agence source/origine)
+      // Le colis doit revenir vers cette agence (agence source)
+      // Après swap : destinationCity = agence source, returnToCity = agence source
       const isForThisAgency = p.returnToCity === profile?.city ||
-                             (p.originCity === profile?.city && p.wasReturned)
+                             p.destinationCity === profile?.city
 
       return isForThisAgency
     })
@@ -175,6 +177,9 @@ export default function RetoursTab({
             <span className="font-bold text-blue-600">{p.trackingId}</span>
             <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${STATUS_COLORS[p.status]?.bg || 'bg-gray-100'} ${STATUS_COLORS[p.status]?.text || 'text-gray-700'}`}>
               {p.status}
+            </span>
+            <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold bg-orange-100 text-orange-700 border border-orange-300">
+              🔄 RETOURNÉ
             </span>
           </div>
           <div className="text-sm space-y-1">
