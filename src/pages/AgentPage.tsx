@@ -7,7 +7,7 @@ import {
   createParcel, subscribeAgentParcels, getMoreAgentParcels, getAccurateAgencyStats,
   updateParcel, deleteParcel, markParcelAsReturned, loadReturnedParcelOnTruck, validateReturnArrival, validateParcelEntry,
   updateParcelStatus, isParcelVisibleInDestinationAgency,
-  subscribeAgencyParcels, subscribePendingAideAgentParcels,
+  subscribeAgencyParcels, subscribeAgencyReturnParcels, subscribePendingAideAgentParcels,
   createReturnParcel, searchParcelByTrackingId,
 } from '../firebase/parcels'
 import { markPortDuReceivedByChef, markParcelChefPointed } from '../firebase/finance'
@@ -246,6 +246,7 @@ export default function AgentPage() {
   const [error, setError]               = useState('')
 
   const [parcels, setParcels]           = useState<any[]>([])
+  const [returnParcels, setReturnParcels] = useState<any[]>([])
   const [loadingParcels, setLoadingParcels] = useState(false)
   const [pendingAideParcels, setPendingAideParcels] = useState<any[]>([])
   const [search, setSearch]             = useState('')
@@ -464,8 +465,12 @@ export default function AgentPage() {
         setParcels(data)
         setLoadingParcels(false)
       }, onError)
+      // Souscrire aussi aux retours pour cette agence
+      const unsubReturns = subscribeAgencyReturnParcels(profile.city, (data: any) => {
+        setReturnParcels(data)
+      }, onError)
       setPendingAideParcels([]) // Plus de pending
-      return () => { unsubAgency() }
+      return () => { unsubAgency(); unsubReturns() }
     }
     setPendingAideParcels([])
     const unsub = subscribeAgentParcels(uid, (data: any) => { setParcels(data); setLoadingParcels(false) }, onError)
@@ -899,16 +904,16 @@ export default function AgentPage() {
   const ef = (field: any) => (e: any) => setEditForm((p: any) => ({ ...p, [field]: e.target.value }))
 
   const allDisplayParcels = useMemo(() => {
-    if (!extraParcels.length) return parcels
     const map = new Map()
     parcels.forEach(p => map.set(p.id, p))
+    returnParcels.forEach(p => map.set(p.id, p))
     extraParcels.forEach(p => map.set(p.id, p))
     return [...map.values()].sort((a, b) => {
       const ta = a.createdAt?.toDate?.() || new Date(0)
       const tb = b.createdAt?.toDate?.() || new Date(0)
       return tb - ta
     })
-  }, [parcels, extraParcels])
+  }, [parcels, returnParcels, extraParcels])
 
   const profileCity = profile?.city
   const profileRole = profile?.role

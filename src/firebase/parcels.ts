@@ -789,6 +789,79 @@ export function subscribeAgencyParcels(city: any, callback: any, onError: (err?:
 
   return () => { unsub1(); unsub2(); clearTimeout(timer) }
 }
+
+// Colis retournés pour une agence (à charger, reçus, historique)
+export function subscribeAgencyReturnParcels(city: any, callback: any, onError: (err?: any) => void = () => {}) {
+  let toLoad: any[] = [], received: any[] = [], history: any[] = []
+  let timer: ReturnType<typeof setTimeout> | undefined = undefined
+
+  const merge = () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      const map = new Map()
+      toLoad.forEach(p => map.set(p.id, p))
+      received.forEach(p => map.set(p.id, p))
+      history.forEach(p => map.set(p.id, p))
+      callback([...map.values()])
+    }, 50)
+  }
+
+  const since = daysAgoTimestamp(60)
+
+  // À charger : colis retournés dans l'agence physique (originCity après swap)
+  const q1 = query(
+    collection(db, 'parcels'),
+    where('status', '==', 'Retourné'),
+    where('originCity', '==', city),
+    where('createdAt', '>=', since),
+    orderBy('createdAt', 'desc'),
+    limit(100)
+  )
+
+  // Reçus : colis en transit/arrivés vers cette agence (destinationCity après swap)
+  const q2 = query(
+    collection(db, 'parcels'),
+    where('destinationCity', '==', city),
+    where('wasReturned', '==', true),
+    where('createdAt', '>=', since),
+    orderBy('createdAt', 'desc'),
+    limit(100)
+  )
+
+  // Historique : colis retournés finalisés (les deux agences)
+  const q3 = query(
+    collection(db, 'parcels'),
+    where('status', '==', 'Retour finalisé'),
+    where('createdAt', '>=', since),
+    orderBy('createdAt', 'desc'),
+    limit(100)
+  )
+
+  const unsub1 = onSnapshot(q1, snap => {
+    toLoad = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    merge()
+  }, onError)
+
+  const unsub2 = onSnapshot(q2, snap => {
+    received = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .filter((p: any) => p.status === 'Retour en transit' || p.status === 'Retour arrivé')
+    merge()
+  }, onError)
+
+  const unsub3 = onSnapshot(q3, snap => {
+    history = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      .filter((p: any) => p.originCity === city || p.destinationCity === city)
+    merge()
+  }, onError)
+
+  return () => {
+    unsub1()
+    unsub2()
+    unsub3()
+    clearTimeout(timer)
+  }
+}
+
 export function subscribePendingAideAgentParcels(callback: any, onError: (err?: any) => void = () => {}) {
   const q = query(collection(db, 'parcels'), where('validatedByChef', '==', false))
   return onSnapshot(q, snap => {
