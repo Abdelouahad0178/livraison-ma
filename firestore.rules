@@ -653,10 +653,11 @@ service cloud.firestore {
       allow get: if true;
       allow list: if isStaff();
       // Création publique : uniquement si le token correspond à celui stocké dans le colis
-      allow create: if request.resource.data.token != null
+      // Utiliser set au lieu de create pour permettre l'écrasement
+      allow create, update: if request.resource.data.token != null
         && exists(/databases/$(database)/documents/parcels/$(parcelId))
         && get(/databases/$(database)/documents/parcels/$(parcelId)).data.signatureToken == request.resource.data.token;
-      allow update, delete: if isStaff();
+      allow delete: if isStaff();
     }
 
     // â”€â”€ Remarques caissier
