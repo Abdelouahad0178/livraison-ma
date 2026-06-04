@@ -376,6 +376,7 @@ service cloud.firestore {
           'originCity',
           'destinationCity',
           'returnToCity',
+          'createdByCity',
           'codAmount',
           'returnedAt',
           'returnReason',
