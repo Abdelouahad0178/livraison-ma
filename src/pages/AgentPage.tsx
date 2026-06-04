@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react'
 import { signOut, createUserWithEmailAndPassword, signOut as fbSignOut, onIdTokenChanged } from 'firebase/auth'
 import { auth, authSecondary, db } from '../firebase/config'
+import { useBarcodeScanner } from '../hooks/useBarcodeScanner'
+import ParcelScanModal from '../components/ParcelScanModal'
 import { doc, onSnapshot, setDoc, collection, updateDoc, deleteDoc, getDoc, query, where } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -266,6 +268,7 @@ export default function AgentPage() {
   const [scanOpen, setScanOpen]             = useState(false)
   const [scanQuery, setScanQuery]           = useState('')
   const [scanResult, setScanResult]         = useState<any>(null)
+  const [globalScanModal, setGlobalScanModal] = useState<any>(null)
   const scanBufferRef = useRef('')
   const scanLastKeyRef = useRef(0)
   const searchLastChangeRef = useRef(0)
@@ -1265,6 +1268,54 @@ export default function AgentPage() {
     arrHistUniqueAgents, arrHistTotalBons, arrHistTotalManquants, arrHistTotalSansBon,
     needsAzertyFix, azertyFix, findScannedParcel, openScanModal, doScan,
   })
+
+  // Scan global automatique via douchette
+  const handleGlobalBarcodeScan = useCallback(async (barcode: string) => {
+    console.log('📦 Scan détecté:', barcode)
+
+    // Rechercher dans les colis chargés
+    const found = allDisplayParcels.find((p: any) =>
+      p.trackingId?.toLowerCase() === barcode.toLowerCase() ||
+      p.trackingId?.toLowerCase().includes(barcode.toLowerCase())
+    )
+
+    if (found) {
+      setGlobalScanModal(found)
+      return
+    }
+
+    // Si pas trouvé localement, rechercher dans la base
+    try {
+      const result = await searchParcelByTrackingId(barcode)
+      if (result) {
+        setGlobalScanModal(result)
+      } else {
+        alert(`❌ Aucune expédition trouvée : ${barcode}`)
+      }
+    } catch (err: any) {
+      console.error('Erreur recherche:', err)
+      alert(`❌ Erreur : ${err.message}`)
+    }
+  }, [allDisplayParcels])
+
+  // Hook scan automatique douchette
+  useBarcodeScanner({
+    onScan: handleGlobalBarcodeScan,
+    minLength: 5,
+    enabled: true
+  })
+
+  // ESC pour fermer le modal
+  useEffect(() => {
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && globalScanModal) {
+        setGlobalScanModal(null)
+      }
+    }
+    window.addEventListener('keydown', handleEsc)
+    return () => window.removeEventListener('keydown', handleEsc)
+  }, [globalScanModal])
+
   const ctxValue = {
     // ── Core
     profile, navigate,
@@ -1762,6 +1813,14 @@ export default function AgentPage() {
         setReturnParcelModal={setReturnParcelModal}
         handleCreateReturnParcel={handleCreateReturnParcel}
       />
+
+      {/* Modal scan global automatique (douchette) */}
+      {globalScanModal && (
+        <ParcelScanModal
+          parcel={globalScanModal}
+          onClose={() => setGlobalScanModal(null)}
+        />
+      )}
 
     </div>
     </AgentCtx.Provider>
