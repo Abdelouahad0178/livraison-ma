@@ -782,9 +782,9 @@ export function subscribeAgencyParcels(city: any, callback: any, onError: (err?:
   const since = daysAgoTimestamp(60)
   const q1 = query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(50))
   const q2 = query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(50))
-  // Q3 : Retours créés par cette agence (createdByCity ne change jamais)
-  // Requête simple pour éviter index composite
-  const q3 = query(collection(db, 'parcels'), where('createdByCity', '==', city), orderBy('createdAt', 'desc'), limit(100))
+  // Q3 : Retours qui reviennent vers cette agence (returnToCity = agence source)
+  // Utilise returnToCity qui existe pour TOUS les retours (anciens et nouveaux)
+  const q3 = query(collection(db, 'parcels'), where('returnToCity', '==', city), orderBy('createdAt', 'desc'), limit(100))
 
   const unsub1 = onSnapshot(q1, snap => { created = snap.docs.map(d => ({ id: d.id, ...d.data() })); merge() }, onError)
   const unsub2 = onSnapshot(q2, snap => {
@@ -793,8 +793,8 @@ export function subscribeAgencyParcels(city: any, callback: any, onError: (err?:
     merge()
   }, onError)
   const unsub3 = onSnapshot(q3, snap => {
-    // Filtrer seulement les retours en local
-    createdReturns = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((p: any) => p.wasReturned)
+    // Tous les retours qui reviennent vers cette ville
+    createdReturns = snap.docs.map(d => ({ id: d.id, ...d.data() }))
     merge()
   }, onError)
 
