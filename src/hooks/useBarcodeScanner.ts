@@ -5,6 +5,7 @@ interface BarcodeScannerOptions {
   minLength?: number
   maxDelay?: number
   enabled?: boolean
+  azertyFix?: boolean // Correction AZERTY/QWERTY
 }
 
 /**
@@ -16,15 +17,30 @@ interface BarcodeScannerOptions {
  *
  * Ce hook détecte cette séquence et appelle onScan()
  */
+// Correction AZERTY <-> QWERTY
+const azertyToQwerty: Record<string, string> = {
+  'a': 'q', 'q': 'a',
+  'z': 'w', 'w': 'z',
+  'm': ',', ',': 'm',
+  ';': 'm', '.': ';',
+}
+
+const normalizeAzerty = (text: string, enabled: boolean): string => {
+  if (!enabled) return text
+  return text.split('').map(c => azertyToQwerty[c.toLowerCase()] || c).join('')
+}
+
 export function useBarcodeScanner({
   onScan,
   minLength = 5,
   maxDelay = 100,
-  enabled = true
+  enabled = true,
+  azertyFix = true
 }: BarcodeScannerOptions) {
   const bufferRef = useRef('')
   const lastKeyTimeRef = useRef(0)
   const timeoutRef = useRef<NodeJS.Timeout>()
+  const scanCountRef = useRef(0)
 
   const handleKeyPress = useCallback((e: KeyboardEvent) => {
     if (!enabled) return
@@ -45,12 +61,36 @@ export function useBarcodeScanner({
 
     // Enter = fin du scan
     if (e.key === 'Enter') {
-      const barcode = bufferRef.current.trim()
+      const rawBarcode = bufferRef.current.trim()
 
-      if (barcode.length >= minLength) {
+      if (rawBarcode.length >= minLength) {
+        scanCountRef.current++
+        const scanNum = scanCountRef.current
+
+        // Essayer les deux versions
+        const qwertyBarcode = rawBarcode
+        const azertyBarcode = normalizeAzerty(rawBarcode, azertyFix)
+
+        console.log(`🔍 Scan #${scanNum}:`, {
+          raw: rawBarcode,
+          qwerty: qwertyBarcode,
+          azerty: azertyBarcode,
+          length: rawBarcode.length,
+          delay: now - lastKeyTimeRef.current
+        })
+
         e.preventDefault()
         e.stopPropagation()
-        onScan(barcode)
+
+        // Essayer d'abord QWERTY, puis AZERTY si nécessaire
+        onScan(qwertyBarcode)
+
+        // Si différent et azertyFix activé, proposer aussi la version AZERTY
+        if (azertyFix && azertyBarcode !== qwertyBarcode) {
+          setTimeout(() => {
+            console.log(`🔄 Essai AZERTY: ${azertyBarcode}`)
+          }, 100)
+        }
       }
 
       bufferRef.current = ''
@@ -67,6 +107,14 @@ export function useBarcodeScanner({
       }
 
       bufferRef.current += e.key
+
+      // Log en temps réel pour debug
+      if (bufferRef.current.length === 1) {
+        console.log('🎯 Début scan:', e.key, 'time:', now)
+      }
+    } else if (e.key.length === 1 && e.key !== 'Enter') {
+      // Capturer TOUS les caractères pour debug
+      console.log('⚠️ Caractère ignoré:', e.key, 'code:', e.code, 'keyCode:', e.keyCode)
     }
 
     // Auto-reset après maxDelay * 2

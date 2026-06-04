@@ -1271,26 +1271,41 @@ export default function AgentPage() {
 
   // Scan global automatique via douchette
   const handleGlobalBarcodeScan = useCallback(async (barcode: string) => {
-    console.log('📦 Scan détecté:', barcode)
+    console.log('📦 Scan détecté:', barcode, 'length:', barcode.length)
 
-    // Rechercher dans les colis chargés
-    const found = allDisplayParcels.find((p: any) =>
-      p.trackingId?.toLowerCase() === barcode.toLowerCase() ||
-      p.trackingId?.toLowerCase().includes(barcode.toLowerCase())
-    )
+    // Normaliser le code scanné
+    const normalized = barcode.toUpperCase().trim()
+
+    // Rechercher dans les colis chargés - avec plusieurs stratégies
+    let found = allDisplayParcels.find((p: any) => {
+      const tid = p.trackingId?.toUpperCase() || ''
+      // 1. Match exact
+      if (tid === normalized) return true
+      // 2. Contient le code scanné
+      if (tid.includes(normalized)) return true
+      // 3. Le code scanné contient le tracking (cas rare)
+      if (normalized.includes(tid)) return true
+      // 4. Match partiel fin (cas douchette qui rate le début)
+      if (tid.endsWith(normalized) || normalized.endsWith(tid.slice(-8))) return true
+      return false
+    })
 
     if (found) {
+      console.log('✅ Trouvé localement:', found.trackingId)
       setGlobalScanModal(found)
       return
     }
 
     // Si pas trouvé localement, rechercher dans la base
+    console.log('🔍 Recherche dans la base...')
     try {
       const result = await searchParcelByTrackingId(barcode)
       if (result) {
+        console.log('✅ Trouvé dans la base:', result.trackingId)
         setGlobalScanModal(result)
       } else {
-        alert(`❌ Aucune expédition trouvée : ${barcode}`)
+        console.error('❌ Introuvable:', barcode)
+        alert(`❌ Aucune expédition trouvée\n\nCode scanné : ${barcode}\n\nVérifiez que le code-barres est lisible.`)
       }
     } catch (err: any) {
       console.error('Erreur recherche:', err)
