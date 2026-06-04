@@ -169,12 +169,53 @@ export default function RetoursTab({
     return d.toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
   }
 
-  const ParcelCard = ({ p, showActions = true }: any) => (
+  const ParcelCard = ({ p, showActions = true }: any) => {
+    // Déterminer l'agence d'origine (avant swap) et l'agence de destination finale
+    const agenceSource = p.createdByCity || p.returnToCity || p.destinationCity
+    const agenceDestination = p.originCity
+
+    // Timeline des étapes
+    const timeline = [
+      {
+        label: `${agenceDestination}`,
+        status: 'Retourné',
+        icon: '📦',
+        completed: true,
+        date: p.returnedAt
+      },
+      {
+        label: 'En transit',
+        status: 'Retour en transit',
+        icon: '🚛',
+        completed: p.status === 'Retour en transit' || p.status === 'Retour arrivé' || p.status === 'Retour finalisé',
+        current: p.status === 'Retour en transit',
+        date: p.returnShippedAt
+      },
+      {
+        label: `${agenceSource}`,
+        status: 'Retour arrivé',
+        icon: '📥',
+        completed: p.status === 'Retour arrivé' || p.status === 'Retour finalisé',
+        current: p.status === 'Retour arrivé',
+        date: p.returnArrivedAt
+      },
+      {
+        label: 'Livré expéditeur',
+        status: 'Retour finalisé',
+        icon: '✅',
+        completed: p.status === 'Retour finalisé',
+        current: p.status === 'Retour finalisé',
+        date: p.returnFinalizedAt || p.deliveredAt
+      }
+    ]
+
+    return (
     <div className="border rounded-lg p-4 hover:bg-gray-50 transition">
+      {/* Header */}
       <div className="flex items-start justify-between mb-3">
         <div className="flex-1">
-          <div className="flex items-center gap-2 mb-1">
-            <span className="font-bold text-blue-600">{p.trackingId}</span>
+          <div className="flex items-center gap-2 mb-2">
+            <span className="font-bold text-blue-600 text-lg">{p.trackingId}</span>
             <span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${STATUS_COLORS[p.status]?.bg || 'bg-gray-100'} ${STATUS_COLORS[p.status]?.text || 'text-gray-700'}`}>
               {p.status}
             </span>
@@ -182,26 +223,91 @@ export default function RetoursTab({
               🔄 RETOURNÉ
             </span>
           </div>
-          <div className="text-sm space-y-1">
-            <div className="flex items-center gap-2">
-              <span className="text-gray-500">De:</span>
-              <span className="font-medium">{p.sender?.name}</span>
-              <span className="text-gray-400">({p.originCity})</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-gray-500">À:</span>
-              <span className="font-medium">{p.receiver?.name}</span>
-              <span className="text-gray-400">({p.destinationCity})</span>
-            </div>
-            {p.returnReason && (
-              <div className="text-xs text-orange-600 mt-1">
-                🔄 Raison: {p.returnReason}
-              </div>
-            )}
-            <div className="text-xs text-gray-400">
-              {formatDate(p.returnedAt || p.createdAt)}
+
+          {/* Timeline visuelle */}
+          <div className="bg-gradient-to-r from-orange-50 to-blue-50 rounded-lg p-3 mb-3">
+            <div className="flex items-center justify-between relative">
+              {timeline.map((step, idx) => (
+                <div key={idx} className="flex-1 flex flex-col items-center relative">
+                  {/* Ligne de connexion */}
+                  {idx < timeline.length - 1 && (
+                    <div className={`absolute top-5 left-1/2 w-full h-0.5 ${step.completed ? 'bg-orange-400' : 'bg-gray-300'}`} />
+                  )}
+
+                  {/* Icône */}
+                  <div className={`relative z-10 w-10 h-10 rounded-full flex items-center justify-center text-lg ${
+                    step.current ? 'bg-orange-500 text-white ring-4 ring-orange-200 animate-pulse' :
+                    step.completed ? 'bg-orange-400 text-white' :
+                    'bg-gray-200 text-gray-400'
+                  }`}>
+                    {step.icon}
+                  </div>
+
+                  {/* Label */}
+                  <div className={`mt-2 text-xs font-medium text-center ${
+                    step.current ? 'text-orange-700' :
+                    step.completed ? 'text-orange-600' :
+                    'text-gray-400'
+                  }`}>
+                    {step.label}
+                  </div>
+
+                  {/* Date */}
+                  {step.date && (
+                    <div className="text-[10px] text-gray-400 mt-0.5">
+                      {formatDate(step.date)}
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           </div>
+
+          {/* Informations détaillées */}
+          <div className="grid grid-cols-2 gap-3 text-sm mb-3">
+            <div className="bg-white rounded-lg p-2 border border-gray-200">
+              <div className="text-xs text-gray-500 mb-1">Expéditeur original</div>
+              <div className="font-medium">{p.sender?.name}</div>
+              <div className="text-xs text-gray-400">{agenceSource}</div>
+            </div>
+            <div className="bg-white rounded-lg p-2 border border-gray-200">
+              <div className="text-xs text-gray-500 mb-1">Destinataire original</div>
+              <div className="font-medium">{p.receiver?.name}</div>
+              <div className="text-xs text-gray-400">{agenceDestination}</div>
+            </div>
+          </div>
+
+          {/* Raison du retour */}
+          {p.returnReason && (
+            <div className="bg-orange-50 border border-orange-200 rounded-lg p-2 mb-3">
+              <div className="text-xs font-semibold text-orange-700 mb-1">📋 Raison du retour</div>
+              <div className="text-sm text-orange-600">{p.returnReason}</div>
+            </div>
+          )}
+
+          {/* Historique des opérations */}
+          {p.history && p.history.length > 0 && (
+            <details className="bg-gray-50 rounded-lg p-2 mt-2">
+              <summary className="text-xs font-semibold text-gray-700 cursor-pointer hover:text-gray-900">
+                📜 Historique complet ({p.history.length} opérations)
+              </summary>
+              <div className="mt-2 space-y-1 max-h-40 overflow-y-auto">
+                {[...p.history].reverse().map((h: any, idx: number) => (
+                  <div key={idx} className="flex items-start gap-2 text-xs p-1.5 bg-white rounded border border-gray-200">
+                    <div className="flex-shrink-0 w-16 text-gray-400">
+                      {new Date(h.timestamp).toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                    </div>
+                    <div className="flex-1">
+                      <span className={`font-medium ${STATUS_COLORS[h.status]?.text || 'text-gray-700'}`}>
+                        {h.status}
+                      </span>
+                      {h.note && <div className="text-gray-500 text-[11px] mt-0.5">{h.note}</div>}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </details>
+          )}
         </div>
       </div>
 
@@ -238,7 +344,7 @@ export default function RetoursTab({
         </div>
       )}
     </div>
-  )
+  )}
 
   return (
     <div className="p-4 space-y-4">
