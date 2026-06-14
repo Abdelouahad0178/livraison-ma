@@ -1,4 +1,4 @@
-﻿import { lazy, Suspense, useEffect, useRef, useState, useMemo } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, useMemo } from 'react'
 import { signOut, createUserWithEmailAndPassword, signOut as fbSignOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth'
 import { collection, doc, setDoc, getDoc } from 'firebase/firestore'
 import { auth, authSecondary, db } from '../firebase/config'
@@ -18,6 +18,7 @@ import {
   subscribeAllReglementsGlobal, subscribeAllRapportsGlobal,
   getParcelsPage,
 } from '../firebase/firestore'
+import { deleteParcel, getRealParcelsStats } from '../firebase/parcels'
 import {
   createAgentCodRequest, subscribeAllAgentCodRequests, addAgentCodRequestReply, resolveAgentCodRequest,
 } from '../firebase/agentCodRequests'
@@ -44,7 +45,7 @@ import {
   Banknote, Filter, ExternalLink, Edit2, X, Calendar, Users, Wallet,
   ChevronDown, Save, Search, UserPlus, Eye, EyeOff, Contact, Menu,
   BarChart2, Truck, MapPin, ArrowRight, Car, Ban, ShieldCheck, Trash2, TrendingUp, TrendingDown,
-  Building2, AlertTriangle, Download, Calculator, RotateCcw, Lock, CheckCircle2, FileText, Upload, Power, Copy, MessageCircle, Monitor, Star,
+  Building2, AlertTriangle, Download, Calculator, RotateCcw, Lock, CheckCircle2, FileText, Upload, Power, Copy, MessageCircle, Monitor, Star, Archive,
 } from 'lucide-react'
 import CompanyContact from '../components/CompanyContact'
 import SignatureViewerModal from '../components/SignatureViewerModal'
@@ -66,6 +67,8 @@ const AdminAlertsTab = lazy(() => import('./admin/tabs/AdminAlertsTab'))
 const AdminTariffsTab = lazy(() => import('./admin/tabs/AdminTariffsTab'))
 const AdminExportsTab = lazy(() => import('./admin/tabs/AdminExportsTab'))
 const AdminArchivageTab = lazy(() => import('./admin/tabs/AdminArchivageTab'))
+const AdminLostParcelsTab = lazy(() => import('./admin/tabs/AdminLostParcelsTab'))
+const AdminClientsTab = lazy(() => import('./admin/tabs/AdminClientsTab'))
 const EmployeeContractModal = lazy(() => import('./admin/components/EmployeeContractModal'))
 import { useAdminHandlers, downloadCsv, downloadJson, copyText } from './admin/hooks/useAdminHandlers'
 import UserEditModal from './admin/modals/UserEditModal'
@@ -166,18 +169,18 @@ const RETURN_REASONS = [
 ]
 const csvEscape = (value: any) => `"${String(value ?? '').replace(/"/g, '""')}"`
 const ROLES = [
-  { key: 'admin',       label: 'Admin',          emoji: '🖥',   badge: 'bg-red-100 text-red-700'         },
+  { key: 'admin',       label: 'Admin',          emoji: '🔐',   badge: 'bg-red-100 text-red-700'         },
   { key: 'directeur',   label: 'Directeur',       emoji: '👔',   badge: 'bg-purple-100 text-purple-700'   },
   { key: 'chef_agence', label: "Chef d'agence",   emoji: '🏢',   badge: 'bg-indigo-100 text-indigo-700'   },
-  { key: 'agent',       label: 'Agent',           emoji: '🧑‍💼', badge: 'bg-blue-100 text-blue-700'      },
-  { key: 'aide_agent',           label: 'Aide Agent',         emoji: '✏️',   badge: 'bg-violet-100 text-violet-700'  },
-  { key: 'pointeur_encaisseur', label: 'Pointeur-Encaisseur', emoji: '💼',   badge: 'bg-indigo-100 text-indigo-700'  },
+  { key: 'agent',       label: 'Agent',           emoji: '👤', badge: 'bg-blue-100 text-blue-700'      },
+  { key: 'aide_agent',           label: 'Aide Agent',         emoji: '🙋',   badge: 'bg-violet-100 text-violet-700'  },
+  { key: 'pointeur_encaisseur', label: 'Pointeur-Encaisseur', emoji: '💰',   badge: 'bg-indigo-100 text-indigo-700'  },
   { key: 'encaisseur_central',   label: 'Encaisseur central',  emoji: '🏦',   badge: 'bg-emerald-100 text-emerald-700' },
-  { key: 'chauffeur',            label: 'Chauffeur',           emoji: '🚚',   badge: 'bg-orange-100 text-orange-700'  },
-  { key: 'livreur',              label: 'Livreur',             emoji: '🛵',   badge: 'bg-amber-100 text-amber-700'    },
-  { key: 'caissier',             label: 'Caissier',            emoji: '🏦',   badge: 'bg-teal-100 text-teal-700'     },
-  { key: 'salarie',     label: 'Salarié',         emoji: '👤',   badge: 'bg-rose-100 text-rose-700'      },
-  { key: 'client',      label: 'Client',          emoji: '🧾',   badge: 'bg-sky-100 text-sky-700'        },
+  { key: 'chauffeur',            label: 'Chauffeur',           emoji: '🚗',   badge: 'bg-orange-100 text-orange-700'  },
+  { key: 'livreur',              label: 'Livreur',             emoji: '🚚',   badge: 'bg-amber-100 text-amber-700'    },
+  { key: 'caissier',             label: 'Caissier',            emoji: '💵',   badge: 'bg-teal-100 text-teal-700'     },
+  { key: 'salarie',     label: 'Salarié',         emoji: '👷',   badge: 'bg-rose-100 text-rose-700'      },
+  { key: 'client',      label: 'Client',          emoji: '🧑',   badge: 'bg-sky-100 text-sky-700'        },
 ]
 
 export default function AdminPage() {
@@ -197,14 +200,18 @@ export default function AdminPage() {
   const [hasMore,      setHasMore]      = useState(true)
   const [loadingMore,  setLoadingMore]  = useState(false)
   const [loading,      setLoading]      = useState(true)
+  const [realStats,    setRealStats]    = useState<any>(null)
   const [cityFilter,    setCityFilter]    = useState('Toutes')
   const [statusFilter,  setStatusFilter]  = useState<string[]>([])
+  const [driverFilter,  setDriverFilter]  = useState('Tous')
   const [search,        setSearch]        = useState('')
   const [statusModal,       setStatusModal]       = useState<any>(null)
   const [returnModal,       setReturnModal]       = useState<any>(null)
   const [returnParcelModal, setReturnParcelModal] = useState<any>(null) // { parcel, loading, result, error }
   const [viewSignature,     setViewSignature]     = useState<any>(null)
   const [archiveModal,      setArchiveModal]      = useState<any>(null)
+  const [deleteConfirm,     setDeleteConfirm]     = useState<string | null>(null) // parcelId en attente de confirmation
+  const [deleting,          setDeleting]          = useState<string | null>(null) // parcelId en cours de suppression
   const [archiveProgress,   setArchiveProgress]   = useState({ done: 0, total: 0 })
 
   // RETOUR FOND tab
@@ -353,7 +360,7 @@ export default function AdminPage() {
   const setActivityDateTo = setAdminDateTo
   const periodLabel = formatPeriod(adminDatePreset, adminDateFrom, adminDateTo)
 
-  // Subscriptions de base — démarrent au montage du composant
+  // Subscriptions de base � ddémarrent au montage du composant
   useEffect(() => {
     setLoading(true)
     const unsubParcels        = subscribeAllParcels((data: any, lastSnap: any) => { setParcels(data); setLoading(false); if (!lastPageDocRef.current) lastPageDocRef.current = lastSnap })
@@ -363,13 +370,22 @@ export default function AdminPage() {
     const unsubClientMessages = subscribeAllClientMessages(setClientMessages)
     const unsubSectors        = subscribeAllSectors(setAllSectors)
     const unsubCentralCash    = subscribeCentralCash(setCentralCash)
-    // Règlements + Rapports : chargés dès le montage (pas lazy) pour éviter le blank
+    // Règlements + Rapports : chargés d�s le montage (pas lazy) pour éviter le blank
     const unsubReglements     = subscribeAllReglementsGlobal(setAdminReglements, err => console.error('reglements:', err))
     const unsubRapports       = subscribeAllRapportsGlobal(setAdminRapports, err => console.error('rapports:', err))
     return () => { unsubParcels(); unsubUsers(); unsubLocks(); unsubTariffs(); unsubClientMessages(); unsubSectors(); unsubCentralCash(); unsubReglements(); unsubRapports() }
   }, [])
 
-  // Subscriptions lazy — démarrent seulement à la première visite de l'onglet
+  // Charger les vrais compteurs au montage uniquement (économie forfait gratuit)
+  const loadRealStats = async () => {
+    const stats = await getRealParcelsStats()
+    setRealStats(stats)
+  }
+  useEffect(() => {
+    loadRealStats()
+  }, [])
+
+  // Subscriptions lazy � ddémarrent seulement � la premi�re visite de l'onglet
   const _lazyStarted = useRef<any>({})
   useEffect(() => {
     const started = _lazyStarted.current
@@ -382,7 +398,7 @@ export default function AdminPage() {
         subscribeAllCaissierRemarks(setAllRemarks),
       ]
     }
-    // reglements/rapports: abonnés dès le montage (voir useEffect de base)
+    // reglements/rapports: abonnés d�s le montage (voir useEffect de base)
     if (mainTab === 'banque' && !started.banque) {
       started.banque = [
         subscribeAllBankDeposits(setAllBankDeposits, err => console.error('bankDeps:', err)),
@@ -430,11 +446,11 @@ export default function AdminPage() {
   }, [clientMessages])
 
   // Section
-  // ── State vars used by archive/return handlers ─────────────────────────────
+  // -- State vars used by archive/return handlers -----------------------------
   const [archiveDone,    setArchiveDone]    = useState<any>(null)
   const [archiving,      setArchiving]      = useState(false)
 
-  // ── Admin handlers hook ─────────────────────────────────────────────────────
+  // -- Admin handlers hook -----------------------------------------------------
   const _as = useRef<Record<string, any>>({})
   Object.assign(_as.current, {
     adminEditModal, setAdminEditModal, salaryModal, setSalaryModal,
@@ -482,7 +498,7 @@ export default function AdminPage() {
   const selectCls = "border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:border-blue-500 focus:outline-none"
   const inputCls  = "border border-gray-200 rounded-xl px-3 py-2 text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:outline-none w-full transition"
 
-  // ── Computed values (useMemo) ─────────────────────────────────────────────
+  // -- Computed values (useMemo) ---------------------------------------------
   const allParcels = useMemo(() => {
     if (!Array.isArray(parcels) || !Array.isArray(moreParcels)) return []
     const map = new Map()
@@ -490,6 +506,9 @@ export default function AdminPage() {
     moreParcels.forEach((p: any) => map.set(p.id, p))
     return [...map.values()]
   }, [parcels, moreParcels])
+
+  // Mise à jour de allParcels dans _as.current après sa définition
+  _as.current.allParcels = allParcels
 
   const periodParcels = useMemo(() =>
     filterByDate(allParcels, adminDatePreset, adminDateFrom, adminDateTo, (p: any) => {
@@ -710,6 +729,14 @@ export default function AdminPage() {
     let list = allParcels
     if (cityFilter !== 'Toutes') list = list.filter((p: any) => p.originCity === cityFilter || p.destinationCity === cityFilter || p.sender?.city === cityFilter || p.receiver?.city === cityFilter)
 
+    // Filtre par livreur/chauffeur
+    if (driverFilter !== 'Tous') {
+      list = list.filter((p: any) =>
+        p.deliveryDriverId === driverFilter ||
+        p.chauffeurId === driverFilter
+      )
+    }
+
     // Filtre statut multi-select
     if (statusFilter.length > 0) {
       list = list.filter((p: any) => {
@@ -727,7 +754,7 @@ export default function AdminPage() {
       list = list.filter((p: any) => (p.trackingId||'').toLowerCase().includes(q) || (p.sender?.name||'').toLowerCase().includes(q) || (p.receiver?.name||'').toLowerCase().includes(q) || (p.receiver?.tel||'').includes(q))
     }
     return list
-  }, [allParcels, cityFilter, statusFilter, search])
+  }, [allParcels, cityFilter, driverFilter, statusFilter, search])
 
   const loadMoreParcels = async () => {
     if (!hasMore || loadingMore) return
@@ -780,6 +807,28 @@ export default function AdminPage() {
     }
   }
 
+  const handleDeleteParcel = async (parcelId: string) => {
+    // Premi�re clique : demander confirmation
+    if (deleteConfirm !== parcelId) {
+      setDeleteConfirm(parcelId)
+      setTimeout(() => setDeleteConfirm(null), 3000) // Reset apr�s 3 secondes
+      return
+    }
+
+    // Deuxi�me clique : supprimer
+    setDeleting(parcelId)
+    try {
+      await deleteParcel(parcelId)
+      setDeleteConfirm(null)
+      alert('✅ Expédition supprimée avec succès')
+      // Les parcels seront automatiquement mis à jour par le listener
+    } catch (error: any) {
+      alert('❌ Erreur : ' + (error.message || 'Impossible de supprimer l\'expédition'))
+    } finally {
+      setDeleting(null)
+    }
+  }
+
   const activityFeed = useMemo(() => {
     // Protection: s'assurer que periodDirectorLogs est un tableau
     if (!Array.isArray(periodDirectorLogs)) return []
@@ -804,6 +853,7 @@ export default function AdminPage() {
   const getArchivePreviewCount = (modal: any) => {
     const days = getArchiveDays(modal)
     if (!days || !modal?.city) return 0
+    if (!Array.isArray(allParcels)) return 0
     const cutoff = new Date(); cutoff.setDate(cutoff.getDate() - days); cutoff.setHours(0,0,0,0)
     return allParcels.filter((p: any) => {
       if (modal.city !== 'Toutes' && p.originCity !== modal.city) return false
@@ -814,7 +864,7 @@ export default function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 overflow-x-hidden">
       <CompanyContact />
 
       {/* Section */}
@@ -854,7 +904,7 @@ export default function AdminPage() {
               </button>
               <span className="text-gray-200 font-light">/</span>
               <span className="text-sm font-bold text-blue-600">
-                {{ expeditions:'Expéditions', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', exports:'Exports', caisse:'Caisse', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents' }[mainTab] || mainTab}
+                {{ expeditions:'Expéditions', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', clients:'Clients', exports:'Exports', caisse:'Caisse', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents' }[mainTab] || mainTab}
               </span>
             </div>
           )}
@@ -864,17 +914,20 @@ export default function AdminPage() {
             <div className="md:hidden border-t border-gray-100 py-2 space-y-1">
               <button onClick={() => { setMainTab('home'); setMenuOpen(false) }}
                 className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">
-                🏠 <span>Accueil</span>
+                ?? <span>Accueil</span>
               </button>
               {[
                 { key: 'expeditions', label: 'Expéditions',         icon: Package   },
                 { key: 'cod',         label: 'RETOUR FOND / Remboursement', icon: Wallet    },
+                { key: 'archivage',   label: '🗄️ Archives',          icon: Archive   },
                 { key: 'users',       label: 'Utilisateurs',         icon: Users     },
                 { key: 'activity',    label: 'Activité',             icon: BarChart2 },
                 { key: 'agencies',    label: 'Agences',              icon: Building2 },
                 { key: 'alerts',      label: 'Alertes',              icon: AlertTriangle },
                 { key: 'tariffs',     label: 'Tarifs',               icon: Calculator },
                 { key: 'returns',     label: 'Retours',              icon: RotateCcw },
+                { key: 'lostparcels', label: 'Colis perdus',         icon: AlertTriangle },
+                { key: 'clients',     label: 'Clients',              icon: Users },
                 { key: 'exports',     label: 'Exports',              icon: Download },
                 { key: 'caisse',      label: 'Caisse',               icon: Wallet    },
                 { key: 'employees',   label: 'Dossiers RH',          icon: FileText  },
@@ -893,10 +946,6 @@ export default function AdminPage() {
                   )}
                 </button>
               ))}
-              <button onClick={() => { navigate('/clients'); setMenuOpen(false) }}
-                className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">
-                <Contact className="w-5 h-5" /> Clients
-              </button>
               <button onClick={() => { navigate('/fleet'); setMenuOpen(false) }}
                 className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">
                 <Car className="w-5 h-5" /> Parc véhicules
@@ -950,14 +999,14 @@ export default function AdminPage() {
                   <input type="date" value={adminDateFrom} onChange={e => setAdminDateFrom(e.target.value)}
                     className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
                   />
-                  <span className="text-gray-400 text-xs">→</span>
+                  <span className="text-gray-400 text-xs">?</span>
                   <input type="date" value={adminDateTo} onChange={e => setAdminDateTo(e.target.value)}
                     className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
                   />
                 </div>
               )}
               <span className="text-xs text-gray-400 bg-gray-100 rounded-lg px-2 py-1">
-                {periodParcels.length} colis · {periodUsers.length} utilisateurs
+                {periodParcels.length} colis à {periodUsers.length} utilisateurs
               </span>
             </div>
           </div>
@@ -984,6 +1033,8 @@ export default function AdminPage() {
               lockBusy={lockBusy}
               backupBusy={backupBusy}
               backupMessage={backupMessage}
+              realStats={realStats}
+              onRefreshStats={loadRealStats}
               importPreview={importPreview}
               setImportPreview={setImportPreview}
               handleExportBackup={handleExportBackup}
@@ -1006,8 +1057,11 @@ export default function AdminPage() {
               setSearch={setSearch}
               cityFilter={cityFilter}
               setCityFilter={setCityFilter}
+              driverFilter={driverFilter}
+              setDriverFilter={setDriverFilter}
               statusFilter={statusFilter}
               setStatusFilter={setStatusFilter}
+              users={users}
               datePreset={datePreset}
               setDatePreset={setDatePreset}
               dateFrom={dateFrom}
@@ -1025,6 +1079,9 @@ export default function AdminPage() {
               loadingMore={loadingMore}
               openArchiveModal={openArchiveModal}
               selectCls={selectCls}
+              handleDeleteParcel={handleDeleteParcel}
+              deleteConfirm={deleteConfirm}
+              deleting={deleting}
             />
           </Suspense>
         )}
@@ -1129,6 +1186,20 @@ export default function AdminPage() {
               downloadCsv={downloadCsv}
               setReturnModal={setReturnModal}
             />
+          </Suspense>
+        )}
+
+        {/* TAB: COLIS PERDUS */}
+        {mainTab === 'lostparcels' && (
+          <Suspense fallback={<div className="mt-4 h-72 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminLostParcelsTab />
+          </Suspense>
+        )}
+
+        {/* TAB: CLIENTS */}
+        {mainTab === 'clients' && (
+          <Suspense fallback={<div className="mt-4 h-72 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminClientsTab />
           </Suspense>
         )}
 
@@ -1373,7 +1444,7 @@ export default function AdminPage() {
                   {salaryModal.category === 'salaire' ? 'Paiement salaire' : 'Avance sur salaire'}
                 </h3>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  {salaryModal.employee.name} · {ROLES.find(r => r.key === salaryModal.employee.role)?.label || salaryModal.employee.role}
+                  {salaryModal.employee.name} ◆ {ROLES.find(r => r.key === salaryModal.employee.role)?.label || salaryModal.employee.role}
                 </p>
               </div>
               <button onClick={() => setSalaryModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
@@ -1393,11 +1464,11 @@ export default function AdminPage() {
                 </div>
                 <div className="bg-gray-50 rounded-xl p-3">
                   <p className="text-xs text-gray-400">Agence</p>
-                  <p className="font-bold text-gray-800">{salaryModal.employee.city || '—'}</p>
+                  <p className="font-bold text-gray-800">{salaryModal.employee.city || '�'}</p>
                 </div>
               </div>
               <div>
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Mois concerné</label>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">MOIS CONCERNÉ</label>
                 <input
                   type="month"
                   value={salaryModal.month}
@@ -1406,7 +1477,7 @@ export default function AdminPage() {
                 />
               </div>
               <div>
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Montant payé (DH)</label>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">MONTANT PAYÉ (DH)</label>
                 <input
                   type="number"
                   min="0"
@@ -1417,11 +1488,11 @@ export default function AdminPage() {
                 />
               </div>
               <div>
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Référence</label>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">RÉFÉRENCE</label>
                 <input
                   value={salaryModal.reference}
                   onChange={e => setSalaryModal((m: any) => ({ ...m, reference: e.target.value }))}
-                  placeholder="N° re?u, virement, bon de caisse..."
+                  placeholder="N° reçu, virement, bon de caisse..."
                   className={inputCls}
                 />
               </div>
@@ -1464,7 +1535,7 @@ export default function AdminPage() {
           { value: 60, label: '60 jours' },
           { value: 90, label: '90 jours' },
           { value: 180, label: '180 jours' },
-          { value: 'custom', label: 'Personnalise' },
+          { value: 'custom', label: 'Personnalisé' },
         ]
         return (
           <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
@@ -1628,7 +1699,7 @@ export default function AdminPage() {
               <div>
                 <h3 className="font-bold text-gray-800 flex items-center gap-2"><Banknote className="w-4 h-4 text-orange-500" /> Modifier le RETOUR FOND</h3>
                 <p className="text-xs font-mono text-blue-600 mt-0.5">{codEditModal.parcel.trackingId}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{codEditModal.parcel.receiver?.name} — {codEditModal.parcel.receiver?.city}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{codEditModal.parcel.receiver?.name} ◆ {codEditModal.parcel.receiver?.city}</p>
               </div>
               <button onClick={() => setCodEditModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
                 <X className="w-5 h-5 text-gray-500" />
@@ -1656,7 +1727,7 @@ export default function AdminPage() {
                 >Annuler</button>
                 <button onClick={handleSaveCodAmount} disabled={codEditModal.loading}
                   className="py-2.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white font-semibold transition text-sm disabled:opacity-50"
-                >{codEditModal.loading ? 'Sauvegarde…' : 'Enregistrer'}</button>
+                >{codEditModal.loading ? 'Sauvegarde...' : 'Enregistrer'}</button>
               </div>
             </div>
           </div>
@@ -1670,7 +1741,7 @@ export default function AdminPage() {
               <div>
                 <h3 className="font-bold text-gray-800">Changer le statut</h3>
                 <p className="text-xs font-mono text-blue-600 mt-0.5">{statusModal.parcel.trackingId}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{statusModal.parcel.receiver?.name} → {statusModal.parcel.receiver?.city}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{statusModal.parcel.receiver?.name} ◆ {statusModal.parcel.receiver?.city}</p>
               </div>
               <button onClick={() => setStatusModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
                 <X className="w-5 h-5 text-gray-500" />
@@ -1678,14 +1749,14 @@ export default function AdminPage() {
             </div>
             <div className="p-5 space-y-4">
               {statusModal.error && (
-                <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {statusModal.error}</div>
+                <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">?? {statusModal.error}</div>
               )}
               {statusModal.parcel.signatureConfirmedAt && (
                 <button
                   onClick={() => setViewSignature(statusModal.parcel)}
                   className="w-full flex items-center gap-2 bg-violet-50 hover:bg-violet-100 text-violet-700 border border-violet-200 px-4 py-2.5 rounded-xl text-sm font-semibold transition"
                 >
-                  ✍️ Voir la signature électronique du destinataire
+                  ?? Voir la signature �lectronique du destinataire
                 </button>
               )}
               <div className="grid grid-cols-2 gap-2">
@@ -1703,19 +1774,19 @@ export default function AdminPage() {
                   )
                 })}
               </div>
-              {/* Avertissement incohérences */}
+              {/* Avertissement incoh�rences */}
               {statusModal.status !== 'Livré' && (() => {
                 const p = statusModal.parcel
                 const items: any[] = []
-                if (p.portStatus === 'collected') items.push('Port dû encaissé → remis à "en attente"')
-                if (p.signatureConfirmedAt) items.push('Signature électronique → effacée')
-                if (p.codStatus === 'collected' && !p.codSentToSource && !p.codSenderPaid) items.push('RETOUR FOND encaissé → remis à "en attente"')
+                if (p.portStatus === 'collected') items.push('Port d� encaiss� ? remis � "en attente"')
+                if (p.signatureConfirmedAt) items.push('Signature �lectronique ? effac�e')
+                if (p.codStatus === 'collected' && !p.codSentToSource && !p.codSenderPaid) items.push('RETOUR FOND encaiss� ? remis � "en attente"')
                 if (!items.length) return null
                 return (
                   <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 space-y-1">
-                    <p className="text-xs font-bold text-amber-800 flex items-center gap-1">⚠️ Champs qui seront réinitialisés automatiquement :</p>
+                    <p className="text-xs font-bold text-amber-800 flex items-center gap-1">?? Champs qui seront r�initialis�s automatiquement :</p>
                     {items.map(item => (
-                      <p key={item} className="text-xs text-amber-700 flex items-center gap-1.5 pl-3">• {item}</p>
+                      <p key={item} className="text-xs text-amber-700 flex items-center gap-1.5 pl-3">� {item}</p>
                     ))}
                   </div>
                 )
@@ -1743,7 +1814,7 @@ export default function AdminPage() {
                   className="py-3 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-semibold transition flex items-center justify-center gap-2"
                 >
                   {statusModal.loading
-                    ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Mise à jour...</>
+                    ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Mise � jour...</>
                     : <><CheckCircle className="w-4 h-4" /> Confirmer</>
                   }
                 </button>
@@ -1812,7 +1883,7 @@ export default function AdminPage() {
                         type={createModal.showPwd ? 'text' : 'password'}
                         value={createModal.password}
                         onChange={e => setCreateModal((m: any) => ({ ...m, password: e.target.value }))}
-                        placeholder="••••••••" className={inputCls + ' pr-10'}
+                        placeholder="••••••" className={inputCls + ' pr-10'}
                       />
                       <button type="button"
                         onClick={() => setCreateModal((m: any) => ({ ...m, showPwd: !m.showPwd }))}
@@ -1860,7 +1931,7 @@ export default function AdminPage() {
                       onChange={e => setCreateModal((m: any) => ({ ...m, city: e.target.value }))}
                       className={inputCls + ' appearance-none'}
                     >
-                      <option value="">— Sélectionner une ville —</option>
+                      <option value="">🏙️ Sélectionner une ville 🏙️</option>
                       {CITIES.map(c => <option key={c}>{c}</option>)}
                     </select>
                     <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-gray-400 pointer-events-none" />
@@ -1873,12 +1944,12 @@ export default function AdminPage() {
                 <>
                   <div>
                     <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">
-                      🚛 Matricule du camion
+                      ?? Matricule du camion
                     </label>
                     <input
                       value={createModal.matricule || ''}
                       onChange={e => setCreateModal((m: any) => ({ ...m, matricule: e.target.value.toUpperCase() }))}
-                      placeholder="Ex: 12345 Ø£ 1"
+                      placeholder="Ex: 12345 أ 1"
                       className={inputCls}
                     />
                   </div>
@@ -1887,16 +1958,16 @@ export default function AdminPage() {
               {createModal.role === 'livreur' && (
                 <div className="col-span-2">
                     <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">
-                      📍 Secteur assigné
+                      🏘️ Secteur assigné
                     </label>
                     <div className="relative">
                       <select
                         value={createModal.sectorId || ''}
                         onChange={e => setCreateModal((m: any) => ({ ...m, sectorId: e.target.value }))}
                         className={`${inputCls} appearance-none`}>
-                        <option value="">— Aucun secteur —</option>
+                        <option value="">🚫 Aucun secteur 🚫</option>
                         {allSectors.filter(s => !createModal.city || s.city === createModal.city).map(s => (
-                          <option key={s.id} value={s.id}>{s.code}{s.name !== s.code ? ` – ${s.name}` : ''} ({s.city})</option>
+                          <option key={s.id} value={s.id}>{s.code}{s.name !== s.code ? ` • ${s.name}` : ''} ({s.city})</option>
                         ))}
                       </select>
                       <ChevronDown className="absolute right-3 top-3 w-4 h-4 text-gray-400 pointer-events-none" />
@@ -1914,7 +1985,7 @@ export default function AdminPage() {
                       ? <>Fiche salarié société, sans accès obligatoire à l'application</>
                       : <>Ce compte aura accès à l'interface <strong>{r?.label || createModal.role}</strong></>
                     }
-                    {createModal.city && <span> · Agence de <strong>{createModal.city}</strong></span>}
+                    {createModal.city && <span> • Agence de <strong>{createModal.city}</strong></span>}
                   </div>
                 )
               })()}
@@ -1923,7 +1994,7 @@ export default function AdminPage() {
               {createModal.role === 'directeur' && (
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-2">
-                    🔑 Permissions accordées
+                    🔐 Permissions accordées
                   </label>
                   <div className="grid grid-cols-2 gap-2">
                     {DIRECTOR_PERMISSIONS.map(p => {
@@ -2064,13 +2135,13 @@ export default function AdminPage() {
           <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6" onClick={e => e.stopPropagation()}>
             {returnParcelModal.result ? (
               <div className="text-center space-y-4">
-                <div className="w-16 h-16 mx-auto rounded-full bg-green-100 flex items-center justify-center text-3xl">↩️</div>
+                <div className="w-16 h-16 mx-auto rounded-full bg-green-100 flex items-center justify-center text-3xl">✅</div>
                 <h3 className="font-bold text-gray-900 text-lg">Colis retour créé !</h3>
                 <div className="bg-green-50 border border-green-200 rounded-xl p-4 space-y-1">
                   <p className="text-xs text-gray-500">Nouveau tracking ID</p>
                   <p className="font-mono font-bold text-green-700 text-base">{returnParcelModal.result.trackingId}</p>
                   <p className="text-xs text-gray-500 mt-2">
-                    {returnParcelModal.parcel.receiver?.city} → {returnParcelModal.parcel.sender?.city}
+                    {returnParcelModal.parcel.receiver?.city} ◆ {returnParcelModal.parcel.sender?.city}
                   </p>
                 </div>
                 <button onClick={() => setReturnParcelModal(null)} className="w-full py-3 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl transition">
@@ -2080,7 +2151,7 @@ export default function AdminPage() {
             ) : (
               <div className="space-y-4">
                 <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-xl">↩️</div>
+                  <div className="w-10 h-10 rounded-full bg-orange-100 flex items-center justify-center text-xl">🔄</div>
                   <div>
                     <h3 className="font-bold text-gray-900">Créer un colis retour ?</h3>
                     <p className="text-xs text-gray-500">Expédition inversée automatiquement</p>
@@ -2098,7 +2169,7 @@ export default function AdminPage() {
                   <div className="flex items-center gap-2 pt-1 border-t border-gray-200">
                     <span className="text-gray-400 text-xs w-20">Trajet</span>
                     <span className="font-semibold text-blue-700 text-xs">
-                      {returnParcelModal.parcel.destinationCity} → {returnParcelModal.parcel.originCity}
+                      {returnParcelModal.parcel.destinationCity} ? {returnParcelModal.parcel.originCity}
                     </span>
                   </div>
                 </div>
@@ -2115,7 +2186,7 @@ export default function AdminPage() {
                     disabled={returnParcelModal.loading}
                     className="flex-1 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white text-sm font-bold transition"
                   >
-                    {returnParcelModal.loading ? 'Création...' : 'Oui, créer'}
+                    {returnParcelModal.loading ? 'Cr�ation...' : 'Oui, cr�er'}
                   </button>
                 </div>
               </div>
@@ -2190,15 +2261,15 @@ export default function AdminPage() {
 
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Opération
+                  Op�ration
                 </label>
                 <select
                   value={centralCashForm.operation}
                   onChange={(e) => setCentralCashForm({ ...centralCashForm, operation: e.target.value })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
                 >
-                  <option value="add">⊕ Ajouter de l'argent</option>
-                  <option value="remove">⊖ Retirer de l'argent</option>
+                  <option value="add">? Ajouter de l'argent</option>
+                  <option value="remove">? Retirer de l'argent</option>
                 </select>
               </div>
 
@@ -2226,9 +2297,9 @@ export default function AdminPage() {
                   onChange={(e) => setCentralCashForm({ ...centralCashForm, type: e.target.value })}
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500"
                 >
-                  <option value="especes">💵 Espèces</option>
-                  <option value="cheques">📋 Chèques</option>
-                  <option value="virement">🏦 Virement</option>
+                  <option value="especes">?? Esp�ces</option>
+                  <option value="cheques">?? Ch�ques</option>
+                  <option value="virement">?? Virement</option>
                 </select>
               </div>
 
@@ -2239,7 +2310,7 @@ export default function AdminPage() {
                 <textarea
                   value={centralCashForm.reason}
                   onChange={(e) => setCentralCashForm({ ...centralCashForm, reason: e.target.value })}
-                  placeholder="Ex: Versement société, Ajustement inventaire..."
+                  placeholder="Ex: Versement soci�t�, Ajustement inventaire..."
                   className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 resize-none"
                   rows={3}
                 />
@@ -2247,10 +2318,10 @@ export default function AdminPage() {
 
               <div className="bg-emerald-50 border border-emerald-200 rounded-lg p-3">
                 <div className="text-sm text-emerald-700">
-                  <strong>Aperçu :</strong>
+                  <strong>Aper�u :</strong>
                   <div className="mt-2">
-                    {centralCashForm.operation === 'add' ? '➕' : '➖'} {centralCashForm.amount || '0'} DH
-                    {' '}({{'especes': '💵 Espèces', 'cheques': '📋 Chèques', 'virement': '🏦 Virement'}[centralCashForm.type]})
+                    {centralCashForm.operation === 'add' ? '?' : '?'} {centralCashForm.amount || '0'} DH
+                    {' '}({{'especes': '?? Esp�ces', 'cheques': '?? Ch�ques', 'virement': '?? Virement'}[centralCashForm.type]})
                   </div>
                 </div>
               </div>

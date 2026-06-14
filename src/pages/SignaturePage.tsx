@@ -29,8 +29,11 @@ export default function SignaturePage() {
       .then(snap => {
         if (!snap.exists()) { setPageStatus('invalid'); return }
         const data = snap.data()
-        if (data.signatureToken !== token) { setPageStatus('invalid'); return }
-        if (data.status === 'Livré') { setPageStatus('already_delivered'); return }
+        // Vérifier les deux types de tokens (normal et retour)
+        const isValidToken = data.signatureToken === token || data.returnSignatureToken === token
+        if (!isValidToken) { setPageStatus('invalid'); return }
+        // Vérifier si déjà livré (normal) ou retour finalisé
+        if (data.status === 'Livré' || data.status === 'Retour finalisé') { setPageStatus('already_delivered'); return }
         setParcel({ id: snap.id, ...data })
         setPageStatus('ready')
       })
@@ -371,7 +374,7 @@ export default function SignaturePage() {
 
   // ── Page de signature principale ────────────────────────────────────────────
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 overflow-x-hidden">
       {/* Header */}
       <header className="bg-white border-b border-gray-200 shadow-sm sticky top-0 z-10">
         <div className="max-w-xl mx-auto px-4 py-3 flex items-center gap-3">

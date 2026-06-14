@@ -1,4 +1,4 @@
-import { Building2, Wallet, Users, BarChart2, Contact, Car, TrendingUp, AlertTriangle, Calculator, RotateCcw, Download, FileText, Banknote, ShieldCheck, Power, ChevronDown, Upload, Package, Monitor, Star } from 'lucide-react'
+import { Building2, Wallet, Users, BarChart2, Contact, Car, TrendingUp, AlertTriangle, Calculator, RotateCcw, Download, FileText, Banknote, ShieldCheck, Power, ChevronDown, Upload, Package, Monitor, Star, Archive } from 'lucide-react'
 import { CITIES } from '../../../firebase/constants'
 import { BACKUP_COLLECTIONS } from '../../../firebase/backupCollections'
 import { fmt } from '../../../utils/formatNumber'
@@ -23,6 +23,8 @@ interface AdminHomeTabProps {
   lockBusy: string
   backupBusy: boolean
   backupMessage: any
+  realStats: any
+  onRefreshStats: () => void
   importPreview: any
   setImportPreview: (v: any) => void
   handleExportBackup: () => void
@@ -52,6 +54,8 @@ export default function AdminHomeTab({
   lockBusy,
   backupBusy,
   backupMessage,
+  realStats,
+  onRefreshStats,
   importPreview,
   setImportPreview,
   handleExportBackup,
@@ -63,9 +67,10 @@ export default function AdminHomeTab({
   navigate,
   users,
 }: AdminHomeTabProps) {
-  const total    = periodParcels.length
-  const enCours  = periodParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status)).length
-  const livres   = periodParcels.filter((p: any) => p.status === 'Livré').length
+  // Utiliser les vrais stats si disponibles, sinon fallback sur les colis chargés
+  const total    = realStats?.total ?? periodParcels.length
+  const enCours  = realStats?.enCours ?? periodParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status)).length
+  const livres   = realStats?.livres ?? periodParcels.filter((p: any) => p.status === 'Livré').length
   const codPend  = periodParcels.filter((p: any) => p.codAmount > 0 && (!p.codStatus || p.codStatus === 'pending')).reduce((s: any,p: any) => s+(p.codAmount||0), 0)
   const agents   = periodUsers.filter((u: any) => u.role === 'agent').length
   const drivers  = periodUsers.filter((u: any) => u.role === 'chauffeur').length
@@ -90,6 +95,12 @@ export default function AdminHomeTab({
       glow: 'bg-orange-50/80', stat: `${fmt(codPend)} DH en attente`,
       badge: codStats.collectedDH > 0 ? `${fmt(codStats.collectedDH)} DH` : null,
       action: () => setMainTab('cod'),
+    },
+    {
+      key: 'archivage', label: '🗄️ Archives', desc: 'Archivage cloud automatique et manuel',
+      icon: Archive, grad: 'from-slate-500 via-gray-600 to-slate-700',
+      glow: 'bg-slate-50/80', stat: 'Optimisation base de données',
+      action: () => setMainTab('archivage'),
     },
     {
       key: 'users', label: 'Utilisateurs', desc: 'Gérer agents, chauffeurs, livreurs, caissiers, directeurs & salariés',
@@ -196,17 +207,26 @@ export default function AdminHomeTab({
             </h1>
             <p className="text-blue-200 text-sm mt-1">Temps réel · BG Express Maroc</p>
           </div>
-          <div className="hidden sm:grid grid-cols-3 gap-3">
-            {[
-              { label: 'Total',    value: fmt(total),   color: 'text-white'       },
-              { label: 'En cours', value: fmt(enCours), color: 'text-orange-300'  },
-              { label: 'Livrés',   value: fmt(livres),  color: 'text-green-300'   },
-            ].map(s => (
-              <div key={s.label} className="bg-white/15 backdrop-blur-sm rounded-2xl px-4 py-3 text-center">
-                <p className={`text-2xl font-black ${s.color}`}>{s.value}</p>
-                <p className="text-blue-200 text-xs font-medium mt-0.5">{s.label}</p>
-              </div>
-            ))}
+          <div className="hidden sm:flex items-center gap-3">
+            <div className="grid grid-cols-3 gap-3">
+              {[
+                { label: 'Total',    value: fmt(total),   color: 'text-white'       },
+                { label: 'En cours', value: fmt(enCours), color: 'text-orange-300'  },
+                { label: 'Livrés',   value: fmt(livres),  color: 'text-green-300'   },
+              ].map(s => (
+                <div key={s.label} className="bg-white/15 backdrop-blur-sm rounded-2xl px-4 py-3 text-center">
+                  <p className={`text-2xl font-black ${s.color}`}>{s.value}</p>
+                  <p className="text-blue-200 text-xs font-medium mt-0.5">{s.label}</p>
+                </div>
+              ))}
+            </div>
+            <button
+              onClick={onRefreshStats}
+              className="bg-white/20 hover:bg-white/30 backdrop-blur-sm rounded-2xl px-3 py-3 transition-all duration-200 hover:scale-105 active:scale-95"
+              title="Rafraîchir les compteurs"
+            >
+              <RotateCcw className="w-5 h-5 text-white" />
+            </button>
           </div>
         </div>
       </div>

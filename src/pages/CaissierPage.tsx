@@ -637,7 +637,7 @@ export default function CaissierPage() {
   const openEntry = (type: any) => setEntryModal({ ...EMPTY_MODAL, open: true, type })
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 overflow-x-hidden">
       <CompanyContact />
 
       {/* ---- Header ---- */}

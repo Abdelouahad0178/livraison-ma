@@ -28,32 +28,49 @@ export default function RetoursTab({
   const { returnedParcels, stats } = useMemo(() => {
     if (!Array.isArray(allParcels)) return { returnedParcels: { toLoad: [], received: [], history: [] }, stats: {} }
 
-    // À charger (agence destination - où le colis est physiquement)
-    // Après markParcelAsReturned, originCity = agence physique (destination d'origine)
-    const toLoad = allParcels.filter((p: any) =>
-      p.status === 'Retourné' &&
-      p.originCity === profile?.city
-    )
+    // À charger : colis retournés qui attendent chargement sur camion
+    const toLoad = allParcels.filter((p: any) => {
+      // Statut doit être exactement "Retourné" (pas en transit, pas finalisé)
+      if (p.status !== 'Retourné') return false
 
-    // Reçus (agence source - où le colis doit revenir)
+      // Visible par l'agence d'origine (où le retour doit aller) OU l'agence de destination (qui doit le charger)
+      const isOriginAgency = p.originCity === profile?.city
+      const isDestinationAgency = p.destinationCity === profile?.city
+      const isReturnToAgency = p.returnToCity === profile?.city
+      const isCreatedByAgency = p.createdByCity === profile?.city
+
+      return isOriginAgency || isDestinationAgency || isReturnToAgency || isCreatedByAgency
+    })
+
+    // Reçus : colis en transit retour ou arrivés (agence d'origine)
     const received = allParcels.filter((p: any) => {
-      // Colis dans le circuit retour, en transit ou arrivé
+      // Statut doit être en transit ou arrivé (pas "Retourné", pas finalisé)
       const isReturnInProgress = p.status === 'Retour en transit' || p.status === 'Retour arrivé'
       if (!isReturnInProgress) return false
 
-      // Le colis doit revenir vers cette agence (agence source)
-      // Après swap : destinationCity = agence source, returnToCity = agence source
-      const isForThisAgency = p.returnToCity === profile?.city ||
-                             p.destinationCity === profile?.city
+      // Le colis doit revenir vers cette agence (agence d'origine)
+      const isOriginAgency = p.originCity === profile?.city
+      const isReturnToAgency = p.returnToCity === profile?.city
+      const isCreatedByAgency = p.createdByCity === profile?.city
 
-      return isForThisAgency
+      return isOriginAgency || isReturnToAgency || isCreatedByAgency
     })
 
-    // Historique complet (tous les retours finalisés)
-    const history = allParcels.filter((p: any) =>
-      p.status === 'Retour finalisé' &&
-      (p.originCity === profile?.city || p.destinationCity === profile?.city)
-    )
+    // Historique : TOUS les colis retournés (historique complet)
+    const history = allParcels.filter((p: any) => {
+      // Tous les statuts de retour OU colis marqué comme retourné
+      const isReturnStatus = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
+      const hasReturnFlag = p.wasReturned === true || !!p.returnedAt
+
+      if (!isReturnStatus && !hasReturnFlag) return false
+
+      // Doit concerner cette agence d'origine
+      const isOriginAgency = p.originCity === profile?.city
+      const isReturnToAgency = p.returnToCity === profile?.city
+      const isCreatedByAgency = p.createdByCity === profile?.city
+
+      return isOriginAgency || isReturnToAgency || isCreatedByAgency
+    })
 
     // Appliquer les filtres
     const applyFilters = (list: any[]) => {
@@ -74,21 +91,23 @@ export default function RetoursTab({
         filtered = filtered.filter((p: any) => p.status === statusFilter)
       }
 
-      // Filtre date
+      // Filtre date (avec gestion correcte du passage de minuit)
       if (dateFrom) {
         filtered = filtered.filter((p: any) => {
           const date = p.returnedAt || p.createdAt
           if (!date) return false
-          const ts = typeof date === 'string' ? date : date.toDate?.() || new Date(date.seconds * 1000)
-          return new Date(ts) >= new Date(dateFrom)
+          const ts = typeof date === 'string' ? new Date(date) : (date.toDate?.() || new Date(date.seconds * 1000))
+          const fromDate = new Date(dateFrom + 'T00:00:00')
+          return ts >= fromDate
         })
       }
       if (dateTo) {
         filtered = filtered.filter((p: any) => {
           const date = p.returnedAt || p.createdAt
           if (!date) return false
-          const ts = typeof date === 'string' ? date : date.toDate?.() || new Date(date.seconds * 1000)
-          return new Date(ts) <= new Date(dateTo + 'T23:59:59')
+          const ts = typeof date === 'string' ? new Date(date) : (date.toDate?.() || new Date(date.seconds * 1000))
+          const toDate = new Date(dateTo + 'T23:59:59.999')
+          return ts <= toDate
         })
       }
 

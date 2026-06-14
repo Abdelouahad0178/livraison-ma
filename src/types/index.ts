@@ -9,7 +9,9 @@ export type ParcelStatus =
   | 'En cours de livraison'
   | 'Livré'
   | 'Retourné'
-  | 'En transit retour'
+  | 'Retour en transit'
+  | 'Retour arrivé'
+  | 'Retour finalisé'
 
 export type CodStatus = 'pending' | 'collected' | 'remis'
 
@@ -128,12 +130,28 @@ export interface Parcel {
   returnShippedAt?: string
   returnedAt?: string
   returnReason?: string
+  wasReturned?: boolean
   validatedAt?: string
   validatedById?: string
   validatedByName?: string
   portalDebitCreated?: boolean
   lastLocation?: LastLocation
   arrivedNbColis?: number
+  // Champs pour le livreur de retour (séparés du livreur initial)
+  returnDeliveryDriverId?: string | null
+  returnDeliveryDriverName?: string | null
+  returnDeliverySectorId?: string | null
+  returnDeliverySectorCode?: string | null
+  returnDeliverySectorName?: string | null
+  returnDeliveryAssignedAt?: string | null
+  returnDeliveryAssignedBy?: string | null
+  // Signatures électroniques (double signature pour retours)
+  signatureToken?: string | null
+  signatureTokenCreatedAt?: string | null
+  signatureConfirmedAt?: string | null
+  returnSignatureToken?: string | null
+  returnSignatureTokenCreatedAt?: string | null
+  returnSignatureConfirmedAt?: string | null
 }
 
 // ── CaisseEntry ────────────────────────────────────────────────────────────

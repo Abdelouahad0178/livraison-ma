@@ -105,7 +105,7 @@ export default function HomeTab() {
         </div>
 
         {/* Stats agence */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[
             { label: "Aujourd'hui", value: todayCount, color: 'text-blue-600',   bg: 'bg-blue-50',   border: 'border-blue-100'   },
             { label: 'En cours',    value: enCours,   color: 'text-orange-600', bg: 'bg-orange-50', border: 'border-orange-100' },
@@ -125,7 +125,7 @@ export default function HomeTab() {
         )}
 
         {/* Actions rapides */}
-        <div className="grid grid-cols-2 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <button onClick={() => { setCreatedParcel(null); setForm({...EMPTY_FORM, senderCity: profile?.city||'', operationDate: todayStr()}); setTab('new') }}
             className="group relative overflow-hidden rounded-3xl shadow-xl hover:scale-[1.02] transition-all duration-300"
             style={{ minHeight: 150 }}>
@@ -147,7 +147,7 @@ export default function HomeTab() {
         </div>
 
         {/* Équipe */}
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <button onClick={() => setTab('secteurs')} className="bg-indigo-50 border border-indigo-100 rounded-2xl p-4 text-center hover:bg-indigo-100 transition">
             <p className="text-3xl font-black text-indigo-600">{sectors.length}</p>
             <p className="text-xs text-gray-500 font-medium mt-1">Secteurs</p>
@@ -159,7 +159,7 @@ export default function HomeTab() {
         </div>
 
         {/* Liens rapides */}
-        <div className="grid grid-cols-2 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {[
             { label: 'Feuille de charge', sub: 'Planning chauffeurs', icon: <Printer className="w-4 h-4 text-blue-600" />, bg: 'bg-blue-100', tab: 'charge' },
             { label: 'Secteurs & Bons',   sub: 'Équipes · Ramassage',  icon: <LayoutGrid className="w-4 h-4 text-indigo-600" />, bg: 'bg-indigo-100', tab: 'secteurs' },
@@ -243,7 +243,7 @@ export default function HomeTab() {
       </div>
 
       {/* Stats rapides */}
-      <div className="grid grid-cols-3 gap-3">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {[
           { label: "Aujourd'hui", value: todayCount, color: 'text-blue-600',  bg: 'bg-blue-50'  },
           { label: 'En cours',    value: enCours,    color: 'text-orange-600', bg: 'bg-orange-50' },

@@ -1,23 +1,37 @@
-﻿import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { signOut } from 'firebase/auth'
-import { doc, getDoc, onSnapshot } from 'firebase/firestore'
+import { doc, getDoc, onSnapshot, collection, query, where, orderBy } from 'firebase/firestore'
 import { useParams } from 'react-router-dom'
 import { auth, db } from '../firebase/config'
 import {
   createModificationRequest, subscribeClientModificationRequests, deleteModificationRequest,
-  subscribeClientParcels, subscribeClientPayments,
+  subscribeClientParcels, subscribeClientPayments, subscribeDestinataireDeliveries,
 } from '../firebase/clients'
 import { createClientPortalParcel } from '../firebase/firestore'
+import {
+  updatePortalParcel, cancelPortalParcel, updateModificationRequest,
+  replyToModificationRequest, confirmDeliveryReceipt, reportDeliveryIssue,
+  requestPreDeliveryChange
+} from '../firebase/clientPortalActions'
+import {
+  approveModificationRequest, rejectModificationRequest
+} from '../firebase/applyModification'
 import {
   CITIES, COD_PAYMENT_TYPES, COD_STATUS, STATUS_COLORS, calculateTariff,
   MOD_TYPES, COD_TYPE_OPTIONS,
 } from '../firebase/constants'
 import CompanyContact from '../components/CompanyContact'
 import SignatureViewerModal from '../components/SignatureViewerModal'
+import ParcelDetailsModal from '../components/ParcelDetailsModal'
+import {
+  EditParcelModal, CancelParcelModal, EditModRequestModal,
+  ConfirmDeliveryModal, ReportIssueModal
+} from '../components/ClientPortalModals'
 import {
   ArrowRight, CheckCircle2, ClipboardList, FileText, Home, KeyRound, Lock,
   LogOut, Mail, MessageCircle, Package, PackagePlus, PenLine, Phone, Search,
-  Send, ShieldCheck, Truck, Wallet, X,
+  Send, ShieldCheck, Truck, Wallet, X, Edit3, Trash2, AlertTriangle, Star,
+  ThumbsUp, MessageSquare, Clock, Eye,
 } from 'lucide-react'
 import { fmt } from '../utils/formatNumber'
 
@@ -53,6 +67,7 @@ export default function ClientPortalPage() {
   const [parcels, setParcels] = useState<any[]>([])
   const [payments, setPayments] = useState<any[]>([])
   const [modRequests, setModRequests] = useState<any[]>([])
+  const [receivedRequests, setReceivedRequests] = useState<any[]>([])
   const [tab, setTab] = useState('overview')
   const [search, setSearch] = useState('')
   const [modForm, setModForm] = useState({ parcelId: '', modificationType: '', newValue: '', note: '' })
@@ -77,6 +92,16 @@ export default function ClientPortalPage() {
   const [loading, setLoading] = useState(true)
   const [viewSig, setViewSig] = useState<any>(null)
 
+  // Nouveaux états CRUD
+  const [viewingParcel, setViewingParcel] = useState<any>(null)
+  const [editingParcel, setEditingParcel] = useState<any>(null)
+  const [deletingParcel, setDeletingParcel] = useState<any>(null)
+  const [editingModRequest, setEditingModRequest] = useState<any>(null)
+  const [replyingToRequest, setReplyingToRequest] = useState<any>(null)
+  const [confirmingDelivery, setConfirmingDelivery] = useState<any>(null)
+  const [reportingIssue, setReportingIssue] = useState<any>(null)
+  const [requestingChange, setRequestingChange] = useState<any>(null)
+
   useEffect(() => {
     const uid = auth.currentUser?.uid
     if (!routeClientId) return
@@ -84,40 +109,122 @@ export default function ClientPortalPage() {
       setLoading(false)
       return
     }
+
     let unsubClient: any = null
-    getDoc(doc(db, 'users', uid)).then(snap => {
+
+    // Charger l'utilisateur
+    getDoc(doc(db, 'users', uid)).then(async (snap) => {
       const data = snap.exists() ? snap.data() : null
-      unsubClient = onSnapshot(doc(db, 'clients', routeClientId), clientSnap => {
-        if (!clientSnap.exists()) {
-          setProfile(data)
-          setClient(null)
-          setLoading(false)
-          return
+
+      // Redirection automatique si l'URL ne correspond pas
+      if (data?.clientId && data.clientId !== routeClientId) {
+        window.location.href = `/clients/${data.clientId}`
+        return
+      }
+
+      // Définir le profil
+      setProfile({ ...(data || {}), clientId: routeClientId })
+
+      // Essayer de charger le client avec getDoc (au lieu de onSnapshot)
+      try {
+        const clientSnap = await getDoc(doc(db, 'clients', routeClientId))
+
+        if (clientSnap.exists()) {
+          const clientData: any = { id: clientSnap.id, ...clientSnap.data() }
+          const allowedByUser = data?.clientId === routeClientId
+          const allowedByClient = clientData.portalUid === uid
+
+          if (allowedByUser || allowedByClient) {
+            setClient(clientData)
+          } else {
+            console.warn('⚠️ Accès refusé au client')
+          }
         }
-        const clientData: any = { id: clientSnap.id, ...clientSnap.data() }
-        const allowedByUser = data?.clientId === routeClientId
-        const allowedByClient = clientData.portalUid === uid
-        if (!allowedByUser && !allowedByClient) {
-          setProfile(data)
-          setClient(null)
-          setLoading(false)
-          return
-        }
-        setProfile({ ...(data || {}), clientId: routeClientId })
-        setClient(clientData)
-        setLoading(false)
-      })
+      } catch (error: any) {
+        // Pas grave, on continuera avec les données du user
+      }
+
+      setLoading(false)
     }).catch(() => setLoading(false))
+
     return () => { if (unsubClient) unsubClient() }
   }, [routeClientId])
 
   useEffect(() => {
     if (!profile?.clientId || profile.clientId !== routeClientId) return
-    const unsubParcels = subscribeClientParcels(profile.clientId, setParcels)
-    const unsubPayments = subscribeClientPayments(profile.clientId, setPayments)
-    const unsubMod = subscribeClientModificationRequests(profile.clientId, setModRequests)
-    return () => { unsubParcels(); unsubPayments(); unsubMod() }
-  }, [profile?.clientId, routeClientId])
+
+    // Handler d'erreur silencieux pour les destinataires qui n'ont pas de colis en tant qu'expéditeur
+    const handleError = (err?: any) => {
+      if (err?.code && err.code !== 'permission-denied') {
+        console.warn('Erreur chargement données client:', err.code)
+      }
+    }
+
+    // Si client pas chargé, considérer comme expéditeur par défaut
+    const isDestinataire = client?.isDestinataire === true
+    const isExpediteur = !client || client.isExpediteur !== false
+    const unsubs: Array<() => void> = []
+
+    if (isExpediteur) {
+      console.log('🔍 Chargement colis pour clientId:', profile.clientId)
+      unsubs.push(subscribeClientParcels(profile.clientId, (parcels) => {
+        console.log('📦 Colis reçus:', parcels.length)
+        if (parcels.length > 0) {
+          console.log('   Exemples:', parcels.slice(0, 3).map(p => ({
+            trackingId: p.trackingId,
+            clientId: p.clientId,
+            status: p.status
+          })))
+        }
+        setParcels(parcels)
+      }, handleError))
+      unsubs.push(subscribeClientPayments(profile.clientId, setPayments, handleError))
+    } else {
+      setPayments([])
+    }
+
+    unsubs.push(subscribeClientModificationRequests(profile.clientId, setModRequests, handleError))
+
+    // Si client chargé ET destinataire, charger AUSSI les livraisons
+    if (isDestinataire && client) {
+      unsubs.push(subscribeDestinataireDeliveries(client, (deliveries) => {
+        // Fusionner avec les colis existants (éviter doublons)
+        setParcels(prev => {
+          const allParcels = [...prev, ...deliveries]
+          const uniqueMap = new Map()
+          allParcels.forEach(p => uniqueMap.set(p.id, p))
+          return Array.from(uniqueMap.values())
+        })
+      }, handleError))
+    }
+
+    return () => unsubs.forEach(unsub => unsub())
+  }, [profile?.clientId, routeClientId, client])
+
+  // Charger les demandes reçues (pour expéditeurs)
+  useEffect(() => {
+    if (!client?.id) return
+
+    // Si ce n'est pas un expéditeur, pas besoin de charger les demandes reçues
+    const isExpediteur = !client || client.isExpediteur !== false
+    if (!isExpediteur) return
+
+    // Charger les demandes où requestedBy = "destinataire" ET targetClientId = client.id
+    const q = query(
+      collection(db, 'modificationRequests'),
+      where('targetClientId', '==', client.id),
+      where('requestedBy', '==', 'destinataire'),
+      orderBy('createdAt', 'desc')
+    )
+
+    return onSnapshot(q, (snap) => {
+      setReceivedRequests(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+    }, (error) => {
+      if (error.code !== 'permission-denied') {
+        console.warn('Erreur chargement demandes reçues:', error)
+      }
+    })
+  }, [client?.id])
 
   const filteredParcels = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -240,10 +347,36 @@ export default function ClientPortalPage() {
     }
     setModSending(true)
     try {
+      // Vérifier que client existe
+      if (!client || !client.id) {
+        setModError('Erreur: Informations client manquantes')
+        setModSending(false)
+        return
+      }
+
+      // Pour les destinataires, utiliser le clientId de l'expéditeur (parcel.clientId)
+      // Pour les expéditeurs, utiliser leur propre clientId (client.id)
+      const targetClientId = isDestinataire && !client.isExpediteur
+        ? parcel.clientId  // Demande envoyée au client expéditeur
+        : client.id        // Demande du client expéditeur lui-même
+
+      // Déterminer le type de workflow
+      const workflowType = isDestinataire && !client.isExpediteur
+        ? 'destinataire_to_expediteur'
+        : 'expediteur_to_transporteur'
+
+      console.log('🔍 Création demande:', {
+        workflowType,
+        clientId: targetClientId,
+        requestedByClientId: client.id,
+        isDestinataire,
+        client: client.name
+      })
+
       await createModificationRequest({
         parcelId:         parcel.id,
         trackingId:       parcel.trackingId || '',
-        clientId:         client.id,
+        clientId:         targetClientId,
         clientUid:        auth.currentUser?.uid || '',
         clientName:       client.name || profile?.name || '',
         clientEmail:      auth.currentUser?.email || '',
@@ -254,6 +387,14 @@ export default function ClientPortalPage() {
         currentValue,
         newValue:         modForm.newValue.trim(),
         note:             modForm.note.trim(),
+        // Type de workflow
+        type:             workflowType,
+        // Indiquer qui a fait la demande
+        requestedBy:      isDestinataire && !client.isExpediteur ? 'destinataire' : 'expediteur',
+        requestedByName:  client.name || profile?.name || '',
+        requestedByClientId: client.id,
+        // Pour les demandes destinataire → expéditeur
+        targetClientId:   workflowType === 'destinataire_to_expediteur' ? targetClientId : undefined,
       })
       setModForm({ parcelId: '', modificationType: '', newValue: '', note: '' })
       setModSuccess('Votre demande a ete envoyee au chef d\'agence.')
@@ -270,6 +411,43 @@ export default function ClientPortalPage() {
     try { await deleteModificationRequest(id) } catch (e: any) { alert(e?.message || 'Erreur') }
   }
 
+  // Approuver une demande reçue
+  const handleApproveRequest = async (requestId: string, requestType: string) => {
+    const note = prompt('Note (optionnel) :')
+    if (note === null) return // Annulé
+
+    try {
+      await approveModificationRequest(requestId, {
+        role: 'expediteur',
+        name: client.name || profile?.name || '',
+        note: note || undefined
+      })
+      alert('✅ Demande acceptée et appliquée automatiquement !')
+    } catch (error: any) {
+      alert('❌ Erreur : ' + (error.message || 'Impossible d\'approuver'))
+    }
+  }
+
+  // Refuser une demande reçue
+  const handleRejectRequest = async (requestId: string) => {
+    const reason = prompt('Raison du refus * :')
+    if (!reason || !reason.trim()) {
+      alert('Vous devez indiquer une raison')
+      return
+    }
+
+    try {
+      await rejectModificationRequest(requestId, {
+        role: 'expediteur',
+        name: client.name || profile?.name || '',
+        reason: reason.trim()
+      })
+      alert('✅ Demande refusée')
+    } catch (error: any) {
+      alert('❌ Erreur : ' + (error.message || 'Impossible de refuser'))
+    }
+  }
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -281,7 +459,7 @@ export default function ClientPortalPage() {
   if (!profile?.clientId || profile.clientId !== routeClientId || !client) {
     const wrongPortalLink = profile?.clientId && profile.clientId !== routeClientId
     return (
-      <div className="min-h-screen bg-gray-50">
+      <div className="min-h-screen bg-gray-50 overflow-x-hidden">
         <CompanyContact />
         <div className="max-w-xl mx-auto px-4 py-16 text-center">
           <img src="/LOGO.jpg" alt="BG Express" className="h-16 object-contain mx-auto mb-6" />
@@ -304,15 +482,28 @@ export default function ClientPortalPage() {
     )
   }
 
-  const NAV_ITEMS = [
-    { key: 'overview',         label: 'Accueil',         Icon: Home },
-    { key: 'new',              label: 'Nouveau colis',   Icon: PackagePlus },
-    { key: 'parcels',          label: 'Expéditions',     Icon: Truck },
-    { key: 'cod',              label: 'Retour Fond',     Icon: Wallet },
-    { key: 'invoices',         label: 'Factures',        Icon: FileText },
-    { key: 'nouvelle-demande', label: 'Demande modif.',  Icon: PenLine },
-    { key: 'modifications',    label: 'Mes demandes',    Icon: ClipboardList, badge: stats.pendingMods },
-  ]
+  // Navigation différente pour destinataires vs expéditeurs
+  const isDestinataire = client?.isDestinataire && !client?.isExpediteur
+
+  const NAV_ITEMS = isDestinataire
+    ? [
+        // Vue simplifiée pour destinataires
+        { key: 'overview',         label: 'Accueil',              Icon: Home },
+        { key: 'parcels',          label: 'Mes livraisons',       Icon: Truck },
+        { key: 'nouvelle-demande', label: 'Demande modif.',       Icon: PenLine },
+        { key: 'modifications',    label: 'Mes demandes',         Icon: ClipboardList, badge: stats.pendingMods },
+      ]
+    : [
+        // Vue complète pour expéditeurs
+        { key: 'overview',          label: 'Accueil',         Icon: Home },
+        { key: 'new',               label: 'Nouveau colis',   Icon: PackagePlus },
+        { key: 'parcels',           label: 'Expéditions',     Icon: Truck },
+        { key: 'cod',               label: 'Retour Fond',     Icon: Wallet },
+        { key: 'invoices',          label: 'Factures',        Icon: FileText },
+        { key: 'nouvelle-demande',  label: 'Demande modif.',  Icon: PenLine },
+        { key: 'modifications',     label: 'Mes demandes',    Icon: ClipboardList, badge: stats.pendingMods },
+        { key: 'received-requests', label: 'Demandes reçues', Icon: MessageCircle, badge: receivedRequests.filter(r => r.status === 'pending').length },
+      ]
 
   const inputCls = "w-full border border-gray-200 rounded-xl px-3.5 py-3 text-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-50 bg-white transition"
   const selectCls = inputCls
@@ -349,12 +540,20 @@ export default function ClientPortalPage() {
               <p className="text-blue-300 text-xs mt-1">{client.city}{client.address ? ` - ${client.address}` : ''}</p>
             </div>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3">
-              {[
-                { label: 'Total colis', value: stats.parcels,              sub: `${stats.active} en cours` },
-                { label: 'Solde',       value: `${fmt(Math.abs(stats.balance))} DH`, sub: stats.balance > 0 ? 'À régler' : 'OK', subColor: stats.balance > 0 ? 'text-red-200' : 'text-green-200' },
-                { label: 'Retour Fond', value: `${fmt(stats.codTotal)} DH`, sub: `${stats.codCount} colis` },
-                { label: 'Demandes',    value: stats.pendingMods,           sub: 'en attente' },
-              ].map(k => (
+              {(isDestinataire
+                ? [
+                    // Stats pour destinataires
+                    { label: 'Livraisons', value: stats.parcels,              sub: `${stats.active} en cours` },
+                    { label: 'Demandes',   value: stats.pendingMods,          sub: 'en attente' },
+                  ]
+                : [
+                    // Stats pour expéditeurs
+                    { label: 'Total colis', value: stats.parcels,              sub: `${stats.active} en cours` },
+                    { label: 'Solde',       value: `${fmt(Math.abs(stats.balance))} DH`, sub: stats.balance > 0 ? 'à régler' : 'OK', subColor: stats.balance > 0 ? 'text-red-200' : 'text-green-200' },
+                    { label: 'Retour Fond', value: `${fmt(stats.codTotal)} DH`, sub: `${stats.codCount} colis` },
+                    { label: 'Demandes',    value: stats.pendingMods,           sub: 'en attente' },
+                  ]
+              ).map(k => (
                 <div key={k.label} className="bg-white/15 backdrop-blur-sm rounded-2xl px-3 py-2.5 min-w-[90px]">
                   <p className="text-blue-200 text-[9px] font-bold uppercase tracking-widest">{k.label}</p>
                   <p className="text-white font-black text-lg sm:text-xl leading-tight mt-0.5">{k.value}</p>
@@ -435,11 +634,20 @@ export default function ClientPortalPage() {
             {tab === 'overview' && (
               <div className="space-y-4">
                 <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-3">
-                  {[
-                    { Icon: Lock, title: 'Accès limité',    text: 'Vous voyez uniquement les données liées à votre fiche client.' },
-                    { Icon: KeyRound, title: 'Confidentialité', text: 'Vos identifiants sont personnels. Ne les partagez jamais.' },
-                    { Icon: PenLine, title: 'Demande modif.',  text: "Pour toute correction (adresse, téléphone...), utilisez l'onglet Demande modif." },
-                  ].map(({ Icon, title, text }) => (
+                  {(isDestinataire
+                    ? [
+                        // Infos pour destinataires
+                        { Icon: Truck, title: 'Mes livraisons',    text: 'Suivez en temps réel les colis qui vous sont destinés.' },
+                        { Icon: KeyRound, title: 'Confidentialité', text: 'Vos identifiants sont personnels. Ne les partagez jamais.' },
+                        { Icon: PenLine, title: 'Demande modif.',   text: "Pour toute correction (adresse, téléphone...), utilisez l'onglet Demande modif." },
+                      ]
+                    : [
+                        // Infos pour expéditeurs
+                        { Icon: Lock, title: 'Accès limité',    text: 'Vous voyez uniquement les données liées à votre fiche client.' },
+                        { Icon: KeyRound, title: 'Confidentialité', text: 'Vos identifiants sont personnels. Ne les partagez jamais.' },
+                        { Icon: PenLine, title: 'Demande modif.',  text: "Pour toute correction (adresse, téléphone...), utilisez l'onglet Demande modif." },
+                      ]
+                  ).map(({ Icon, title, text }) => (
                     <div key={title} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
                       <Icon className="w-6 h-6 mb-3 text-blue-600" />
                       <p className="font-bold text-gray-900">{title}</p>
@@ -586,8 +794,8 @@ export default function ClientPortalPage() {
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex-1 min-w-0">
                               <span className="font-mono text-sm font-black text-blue-600 block">{p.trackingId}</span>
-                              <p className="text-sm font-bold text-gray-800 mt-0.5 truncate">{p.receiver?.name || '-'}</p>
-                              <p className="text-[11px] text-gray-400 truncate">{p.receiver?.city || ''}</p>
+                              <p className="text-sm font-bold text-gray-800 mt-0.5 truncate">{p.sender?.name || '-'}</p>
+                              <p className="text-[11px] text-gray-400 truncate">{p.sender?.city || ''}</p>
                             </div>
                             <div className="text-right shrink-0">
                               <p className="text-base font-black text-gray-800">{fmt(p.price)} DH</p>
@@ -602,12 +810,54 @@ export default function ClientPortalPage() {
                             {p.codAmount > 0 && (
                               <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${codState.color}`}>RF {fmt(p.codAmount)} DH - {codState.label}</span>
                             )}
+                            {p.hasRetourBL && (
+                              <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">🧾 Retour BL</span>
+                            )}
                           </div>
-                          <div className="flex items-center gap-2 pt-2 border-t border-gray-50">
-                            <button onClick={() => { setModForm(f => ({ ...f, parcelId: p.id })); setTab('nouvelle-demande') }}
-                              className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-xl transition">
-                              <PenLine className="w-3 h-3" /> Modif.
+                          <div className="flex items-center gap-2 pt-2 border-t border-gray-50 flex-wrap">
+                            {/* Bouton Voir détails (toujours visible) */}
+                            <button onClick={() => setViewingParcel(p)}
+                              className="inline-flex items-center gap-1 text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 px-3 py-1.5 rounded-xl transition">
+                              <Eye className="w-3 h-3" /> Voir
                             </button>
+
+                            {/* Boutons Edit/Delete pour colis portail non validés */}
+                            {p.agentRole === 'client_portal' && p.validatedByChef !== true && !['Livré','Retourné','Annulé'].includes(p.status) && (
+                              <>
+                                <button onClick={() => setEditingParcel(p)}
+                                  className="inline-flex items-center gap-1 text-xs font-bold text-green-600 bg-green-50 hover:bg-green-100 px-3 py-1.5 rounded-xl transition">
+                                  <Edit3 className="w-3 h-3" /> Modifier
+                                </button>
+                                <button onClick={() => setDeletingParcel(p)}
+                                  className="inline-flex items-center gap-1 text-xs font-bold text-red-600 bg-red-50 hover:bg-red-100 px-3 py-1.5 rounded-xl transition">
+                                  <Trash2 className="w-3 h-3" /> Annuler
+                                </button>
+                              </>
+                            )}
+
+                            {/* Bouton demande modif pour colis validés */}
+                            {p.agentRole !== 'client_portal' || p.validatedByChef === true ? (
+                              <button onClick={() => { setModForm(f => ({ ...f, parcelId: p.id })); setTab('nouvelle-demande') }}
+                                className="inline-flex items-center gap-1 text-xs font-bold text-blue-600 bg-blue-50 hover:bg-blue-100 px-3 py-1.5 rounded-xl transition">
+                                <PenLine className="w-3 h-3" /> Demande modif
+                              </button>
+                            ) : null}
+
+                            {/* Boutons destinataire */}
+                            {isDestinataire && p.status === 'Livré' && !p.receiverConfirmedAt && (
+                              <button onClick={() => setConfirmingDelivery(p)}
+                                className="inline-flex items-center gap-1 text-xs font-bold text-green-600 bg-green-50 hover:bg-green-100 px-3 py-1.5 rounded-xl transition">
+                                <ThumbsUp className="w-3 h-3" /> Confirmer réception
+                              </button>
+                            )}
+                            {isDestinataire && p.status === 'Livré' && !p.hasDeliveryIssue && (
+                              <button onClick={() => setReportingIssue(p)}
+                                className="inline-flex items-center gap-1 text-xs font-bold text-orange-600 bg-orange-50 hover:bg-orange-100 px-3 py-1.5 rounded-xl transition">
+                                <AlertTriangle className="w-3 h-3" /> Signaler problème
+                              </button>
+                            )}
+
+                            {/* Signature */}
                             {p.signatureConfirmedAt && (
                               <button onClick={() => setViewSig(p)}
                                 className="flex items-center gap-1 text-xs font-bold text-violet-600 bg-violet-50 hover:bg-violet-100 px-3 py-1.5 rounded-xl transition">
@@ -862,12 +1112,153 @@ export default function ClientPortalPage() {
                               )}
                               <p className="text-[10px] text-gray-400 mt-1.5">{fmtDate(req.createdAt)}</p>
                             </div>
-                            {req.status === 'pending' && (
+                            <div className="flex gap-1">
+                              {req.status === 'pending' && (
+                                <button onClick={() => setEditingModRequest(req)}
+                                  className="text-gray-300 hover:text-blue-500 shrink-0 p-1.5 rounded-lg hover:bg-blue-50 transition">
+                                  <Edit3 className="w-4 h-4" />
+                                </button>
+                              )}
                               <button onClick={() => handleDeleteModRequest(req.id)}
-                                className="text-gray-300 hover:text-red-400 shrink-0 p-1.5 rounded-lg hover:bg-red-50 transition">
+                                className="text-gray-300 hover:text-red-400 shrink-0 p-1.5 rounded-lg hover:bg-red-50 transition"
+                                title="Supprimer">
                                 <X className="w-4 h-4" />
                               </button>
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* DEMANDES REÇUES (Pour expéditeurs) */}
+            {tab === 'received-requests' && (
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-black text-gray-900 text-lg">Demandes reçues de destinataires</h3>
+                  {receivedRequests.filter(r => r.status === 'pending').length > 0 && (
+                    <span className="text-xs bg-amber-100 text-amber-700 px-3 py-1 rounded-full font-bold">
+                      {receivedRequests.filter(r => r.status === 'pending').length} en attente
+                    </span>
+                  )}
+                </div>
+
+                {receivedRequests.length === 0 ? (
+                  <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-16 text-center text-gray-400">
+                    <MessageCircle className="w-10 h-10 mx-auto mb-3 opacity-30" />
+                    <p className="font-semibold text-sm">Aucune demande reçue</p>
+                    <p className="text-xs mt-1">Les demandes de vos destinataires apparaîtront ici.</p>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
+                    {receivedRequests.map(req => {
+                      const st = req.status === 'approved' || req.status === 'completed'
+                        ? { label: 'Acceptée', bg: 'bg-green-100', text: 'text-green-700' }
+                        : req.status === 'rejected'
+                        ? { label: 'Refusée', bg: 'bg-red-100', text: 'text-red-700' }
+                        : { label: 'En attente', bg: 'bg-amber-100', text: 'text-amber-700' }
+
+                      const modType = MOD_TYPES.find(t => t.key === req.modificationType)
+
+                      return (
+                        <div key={req.id} className={`bg-white rounded-2xl border border-gray-100 shadow-sm p-4 border-l-4 ${
+                          req.status === 'approved' || req.status === 'completed' ? 'border-l-green-500'
+                          : req.status === 'rejected' ? 'border-l-red-400'
+                          : 'border-l-amber-400'
+                        }`}>
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex-1 min-w-0">
+                              {/* Header */}
+                              <div className="flex items-center gap-2 flex-wrap mb-2">
+                                <span className="font-mono text-xs font-black text-blue-600">{req.trackingId || '-'}</span>
+                                <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${st.bg} ${st.text}`}>
+                                  {st.label}
+                                </span>
+                              </div>
+
+                            {/* Qui demande */}
+                            <div className="bg-blue-50 rounded-lg px-2 py-1.5 mb-2">
+                              <p className="text-[10px] text-blue-600 font-semibold">
+                                📥 De: {req.requestedByName}
+                              </p>
+                            </div>
+
+                            {/* Type de modification */}
+                            <p className="text-xs font-bold text-gray-600 mb-1">
+                              {req.typeLabel || modType?.label || req.modificationType}
+                            </p>
+
+                            {/* Valeurs */}
+                            <div className="flex items-center gap-1.5 text-xs text-gray-500 mb-2">
+                              <span className="line-through text-gray-400 truncate max-w-[80px]">
+                                {req.currentValue || '-'}
+                              </span>
+                              <ArrowRight className="w-3 h-3 text-blue-500 shrink-0" />
+                              <span className="font-semibold text-gray-800 truncate">
+                                {req.newValue}
+                              </span>
+                            </div>
+
+                            {/* Note */}
+                            {req.note && (
+                              <p className="text-[10px] text-gray-600 mt-1 italic bg-gray-50 rounded px-2 py-1">
+                                "{req.note}"
+                              </p>
                             )}
+
+                            {/* Réponse expéditeur */}
+                            {req.expediteurNote && (
+                              <div className={`mt-2 rounded-xl px-3 py-2 text-xs font-semibold ${st.bg} ${st.text}`}>
+                                <MessageCircle className="w-3 h-3 inline mr-1" /> {req.expediteurNote}
+                              </div>
+                            )}
+
+                            {/* Date */}
+                            <p className="text-[10px] text-gray-400 mt-1.5">
+                              {fmtDate(req.createdAt)}
+                            </p>
+
+                            {/* Boutons Accepter/Refuser */}
+                            {req.status === 'pending' && (
+                              <div className="flex gap-2 mt-3 pt-3 border-t border-gray-100">
+                                <button
+                                  onClick={() => handleApproveRequest(req.id, req.modificationType)}
+                                  className="flex-1 bg-green-600 hover:bg-green-700 text-white rounded-xl px-3 py-2 text-xs font-bold transition flex items-center justify-center gap-1"
+                                >
+                                  <CheckCircle2 className="w-3.5 h-3.5" />
+                                  Accepter
+                                </button>
+                                <button
+                                  onClick={() => handleRejectRequest(req.id)}
+                                  className="flex-1 bg-red-600 hover:bg-red-700 text-white rounded-xl px-3 py-2 text-xs font-bold transition flex items-center justify-center gap-1"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                  Refuser
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Si appliqué */}
+                            {req.autoApplied && (
+                              <div className="mt-2 bg-green-50 border border-green-200 rounded-lg px-2 py-1.5">
+                                <p className="text-[10px] text-green-700 font-semibold flex items-center gap-1">
+                                  <CheckCircle2 className="w-3 h-3" />
+                                  Appliqué automatiquement
+                                </p>
+                              </div>
+                            )}
+                            </div>
+                            {/* Bouton suppression */}
+                            <button
+                              onClick={() => handleDeleteModRequest(req.id)}
+                              className="text-gray-300 hover:text-red-400 shrink-0 p-1.5 rounded-lg hover:bg-red-50 transition"
+                              title="Supprimer"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
                           </div>
                         </div>
                       )
@@ -888,6 +1279,70 @@ export default function ClientPortalPage() {
           recipientName={viewSig.receiver?.name}
           onClose={() => setViewSig(null)}
           canEdit={false}
+        />
+      )}
+
+      {/* Modal Voir détails */}
+      {viewingParcel && (
+        <ParcelDetailsModal
+          parcel={viewingParcel}
+          onClose={() => setViewingParcel(null)}
+        />
+      )}
+
+      {/* Modals CRUD */}
+      {editingParcel && (
+        <EditParcelModal
+          parcel={editingParcel}
+          onClose={() => setEditingParcel(null)}
+          onSuccess={() => {
+            setEditingParcel(null)
+            // Les données seront automatiquement mises à jour via les souscriptions
+          }}
+        />
+      )}
+
+      {deletingParcel && (
+        <CancelParcelModal
+          parcel={deletingParcel}
+          onClose={() => setDeletingParcel(null)}
+          onSuccess={() => {
+            setDeletingParcel(null)
+            // Les données seront automatiquement mises à jour via les souscriptions
+          }}
+        />
+      )}
+
+      {editingModRequest && (
+        <EditModRequestModal
+          request={editingModRequest}
+          onClose={() => setEditingModRequest(null)}
+          onSuccess={() => {
+            setEditingModRequest(null)
+            // Les données seront automatiquement mises à jour via les souscriptions
+          }}
+        />
+      )}
+
+      {confirmingDelivery && (
+        <ConfirmDeliveryModal
+          parcel={confirmingDelivery}
+          onClose={() => setConfirmingDelivery(null)}
+          onSuccess={() => {
+            setConfirmingDelivery(null)
+            // Les données seront automatiquement mises à jour via les souscriptions
+          }}
+        />
+      )}
+
+      {reportingIssue && (
+        <ReportIssueModal
+          parcel={reportingIssue}
+          onClose={() => setReportingIssue(null)}
+          onSuccess={() => {
+            setReportingIssue(null)
+            // Les données seront automatiquement mises à jour via les souscriptions
+          }}
         />
       )}
     </div>

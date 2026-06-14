@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Générer données de test</title>
+  <style>
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      max-width: 700px;
+      margin: 50px auto;
+      padding: 20px;
+      background: #1f2937;
+      color: white;
+    }
+    .container {
+      background: #374151;
+      padding: 30px;
+      border-radius: 12px;
+      box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+    }
+    h1 { color: #3b82f6; margin-top: 0; }
+    .info {
+      background: #1e3a8a;
+      padding: 15px;
+      border-radius: 8px;
+      margin: 20px 0;
+    }
+    .info ul { margin: 10px 0; padding-left: 20px; }
+    input, select {
+      width: 100%;
+      padding: 12px;
+      margin: 10px 0;
+      border: 2px solid #4b5563;
+      border-radius: 6px;
+      font-size: 16px;
+      background: #1f2937;
+      color: white;
+    }
+    label {
+      display: block;
+      margin: 15px 0 5px;
+      font-weight: bold;
+      color: #9ca3af;
+    }
+    button {
+      width: 100%;
+      padding: 15px;
+      margin: 20px 0 10px;
+      border: none;
+      border-radius: 6px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+    .btn-primary {
+      background: #3b82f6;
+      color: white;
+    }
+    .btn-primary:hover {
+      background: #2563eb;
+    }
+    .btn-primary:disabled {
+      background: #6b7280;
+      cursor: not-allowed;
+    }
+    #status {
+      margin-top: 20px;
+      padding: 15px;
+      border-radius: 6px;
+      display: none;
+    }
+    .success { background: #065f46; display: block; }
+    .error { background: #7c2d12; display: block; }
+    .info-status { background: #1e3a8a; display: block; }
+    .progress {
+      width: 100%;
+      height: 30px;
+      background: #1f2937;
+      border-radius: 6px;
+      overflow: hidden;
+      margin: 15px 0;
+      display: none;
+    }
+    .progress-bar {
+      height: 100%;
+      background: linear-gradient(90deg, #3b82f6, #60a5fa);
+      width: 0%;
+      transition: width 0.3s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-weight: bold;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>📦 Générer des données de test</h1>
+
+    <div class="info">
+      <strong>ℹ️ Ce script va créer des expéditions de test avec:</strong>
+      <ul>
+        <li>Différents statuts (Initialisé, En transit, Livré, Retourné...)</li>
+        <li>Différentes villes (10 villes marocaines)</li>
+        <li>Différents types de service (Simple, Espèces, Chèque...)</li>
+        <li>Dates réparties sur les 90 derniers jours</li>
+        <li>Montants COD variés</li>
+        <li>Port payé et port dû</li>
+      </ul>
+    </div>
+
+    <div id="loginForm">
+      <label>Email admin</label>
+      <input type="email" id="email" placeholder="admin@example.com">
+
+      <label>Mot de passe</label>
+      <input type="password" id="password" placeholder="Mot de passe">
+
+      <label>Nombre d'expéditions à générer</label>
+      <select id="count">
+        <option value="100">100 expéditions (rapide)</option>
+        <option value="500">500 expéditions</option>
+        <option value="1000" selected>1 000 expéditions</option>
+        <option value="5000">5 000 expéditions</option>
+        <option value="10000">10 000 expéditions (~3-5 min)</option>
+      </select>
+
+      <button class="btn-primary" onclick="generate()">🚀 Générer les données</button>
+    </div>
+
+    <div class="progress" id="progress">
+      <div class="progress-bar" id="progressBar">0%</div>
+    </div>
+
+    <div id="status"></div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js';
+    import { getAuth, signInWithEmailAndPassword } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js';
+    import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/10.14.1/firebase-functions.js';
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyA4bRe4N7ZeHalEIfv7SaT95m32o9ruPoM",
+      authDomain: "arelanc.firebaseapp.com",
+      projectId: "arelanc",
+      storageBucket: "arelanc.firebasestorage.app",
+      messagingSenderId: "1037931380099",
+      appId: "1:1037931380099:web:123c2164cb867ea6ef8ab6"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const auth = getAuth(app);
+    const functions = getFunctions(app);
+
+    window.generate = async function() {
+      const email = document.getElementById('email').value;
+      const password = document.getElementById('password').value;
+      const count = parseInt(document.getElementById('count').value);
+      const statusEl = document.getElementById('status');
+      const progressEl = document.getElementById('progress');
+      const progressBar = document.getElementById('progressBar');
+      const button = document.querySelector('button');
+
+      if (!email || !password) {
+        statusEl.className = 'error';
+        statusEl.textContent = '❌ Veuillez remplir tous les champs';
+        statusEl.style.display = 'block';
+        return;
+      }
+
+      button.disabled = true;
+      progressEl.style.display = 'block';
+      progressBar.style.width = '10%';
+      progressBar.textContent = 'Connexion...';
+
+      statusEl.className = 'info-status';
+      statusEl.textContent = '🔐 Connexion en cours...';
+      statusEl.style.display = 'block';
+
+      try {
+        await signInWithEmailAndPassword(auth, email, password);
+
+        progressBar.style.width = '30%';
+        progressBar.textContent = 'Connecté';
+        statusEl.textContent = `✅ Connecté! Génération de ${count.toLocaleString()} expéditions...`;
+
+        const generateData = httpsCallable(functions, 'generateTestData');
+
+        progressBar.style.width = '50%';
+        progressBar.textContent = 'Génération en cours...';
+
+        const startTime = Date.now();
+        const result = await generateData({ count });
+        const duration = ((Date.now() - startTime) / 1000).toFixed(2);
+
+        progressBar.style.width = '100%';
+        progressBar.textContent = 'Terminé!';
+
+        statusEl.className = 'success';
+        statusEl.innerHTML = `
+          <strong>✅ Génération terminée!</strong>
+          <p>📊 ${result.data.created.toLocaleString()} expéditions créées en ${duration}s</p>
+          <p>💡 Rafraîchissez votre tableau de bord pour voir les données</p>
+        `;
+
+        setTimeout(() => {
+          window.location.href = '/';
+        }, 3000);
+
+      } catch (error) {
+        progressEl.style.display = 'none';
+        statusEl.className = 'error';
+
+        if (error.code === 'auth/invalid-credential') {
+          statusEl.innerHTML = `<strong>❌ Email ou mot de passe incorrect</strong>`;
+        } else if (error.message.includes('Permission refusée')) {
+          statusEl.innerHTML = `<strong>❌ Vous devez être admin</strong>`;
+        } else {
+          statusEl.innerHTML = `<strong>❌ Erreur:</strong> ${error.message}`;
+        }
+
+        button.disabled = false;
+      }
+    };
+
+    // Enter key support
+    document.getElementById('password').addEventListener('keypress', (e) => {
+      if (e.key === 'Enter') generate();
+    });
+  </script>
+</body>
+</html>

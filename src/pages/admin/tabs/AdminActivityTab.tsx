@@ -154,7 +154,7 @@ export default function AdminActivityTab({
                   Aucune activite detaillee trouvee pour cette periode.
                 </div>
               ) : (
-                <div className="max-h-[520px] overflow-y-auto">
+                <div className="max-h-[520px] overflow-y-auto overflow-x-auto">
                   <table className="min-w-full divide-y divide-gray-100">
                     <thead className="bg-gray-50 sticky top-0 z-10">
                       <tr>

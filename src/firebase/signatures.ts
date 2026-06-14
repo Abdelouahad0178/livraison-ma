@@ -1,18 +1,41 @@
 import { arrayUnion, deleteDoc, doc, getDoc, onSnapshot, setDoc, updateDoc } from 'firebase/firestore'
 import { db } from './db'
 
-export async function generateSignatureToken(parcelId: any) {
+/**
+ * Génère un token de signature pour un colis
+ * @param parcelId ID du colis
+ * @param isReturn true si c'est pour une signature de retour (expéditeur), false pour livraison normale (destinataire)
+ */
+export async function generateSignatureToken(parcelId: any, isReturn = false) {
   const token = Math.random().toString(36).slice(2) + Math.random().toString(36).slice(2) + Date.now().toString(36)
-  await updateDoc(doc(db, 'parcels', parcelId), {
-    signatureToken: token,
-    signatureTokenCreatedAt: new Date().toISOString(),
-  })
+
+  if (isReturn) {
+    // Signature de retour (expéditeur récupère son colis)
+    await updateDoc(doc(db, 'parcels', parcelId), {
+      returnSignatureToken: token,
+      returnSignatureTokenCreatedAt: new Date().toISOString(),
+    })
+  } else {
+    // Signature normale (destinataire reçoit le colis)
+    await updateDoc(doc(db, 'parcels', parcelId), {
+      signatureToken: token,
+      signatureTokenCreatedAt: new Date().toISOString(),
+    })
+  }
+
   return token
 }
 
-export function subscribeDeliverySignature(parcelId: any, callback: any) {
+/**
+ * S'abonne aux mises à jour d'une signature de livraison
+ * @param parcelId ID du colis
+ * @param callback Fonction appelée avec la signature
+ * @param isReturn true pour signature de retour, false pour signature normale
+ */
+export function subscribeDeliverySignature(parcelId: any, callback: any, isReturn = false) {
+  const docId = isReturn ? `${parcelId}_return` : parcelId
   return onSnapshot(
-    doc(db, 'deliverySignatures', parcelId),
+    doc(db, 'deliverySignatures', docId),
     snap => {
       callback(snap.exists() ? { id: snap.id, ...snap.data() } : null)
     },
@@ -23,49 +46,96 @@ export function subscribeDeliverySignature(parcelId: any, callback: any) {
   )
 }
 
+/**
+ * Soumet une signature électronique
+ * Détecte automatiquement si c'est une signature de retour ou normale
+ */
 export async function submitDeliverySignature(parcelId: any, token: any, signatureDataUrl: any, { signatureType = 'personal', companyName = '' } = {}) {
   const parcelSnap = await getDoc(doc(db, 'parcels', parcelId))
   if (!parcelSnap.exists()) throw new Error('Colis introuvable.')
 
   const parcelData = parcelSnap.data()
-  if (parcelData.signatureToken !== token) throw new Error('Lien de signature invalide ou expire.')
-  if (parcelData.status === 'Livré' || parcelData.status === 'Livr\u00c3\u00a9') throw new Error('Ce colis a deja ete livre.')
 
-  await setDoc(doc(db, 'deliverySignatures', parcelId), {
+  // Détecter si c'est une signature de retour ou normale
+  const isReturn = parcelData.returnSignatureToken === token
+  const isNormal = parcelData.signatureToken === token
+
+  if (!isReturn && !isNormal) {
+    throw new Error('Lien de signature invalide ou expiré.')
+  }
+
+  if (parcelData.status === 'Livré' || parcelData.status === 'LivrÃ©') {
+    throw new Error('Ce colis a déjà été livré.')
+  }
+
+  // ID du document de signature
+  const signatureDocId = isReturn ? `${parcelId}_return` : parcelId
+
+  await setDoc(doc(db, 'deliverySignatures', signatureDocId), {
     token,
     signatureDataUrl,
     signatureType,
     companyName: companyName || '',
     signedAt: new Date().toISOString(),
     parcelId,
+    isReturn, // Marquer si c'est une signature de retour
     trackingId: parcelData.trackingId || '',
-    recipientName: parcelData.receiver?.name || '',
+    recipientName: isReturn ? parcelData.sender?.name || '' : parcelData.receiver?.name || '',
     originCity: parcelData.originCity || '',
     destinationCity: parcelData.destinationCity || '',
   })
 }
 
-export async function confirmDeliveryAfterSignature(parcelId: any, driverName: any) {
+/**
+ * Confirme la livraison après signature
+ * @param parcelId ID du colis
+ * @param driverName Nom du livreur
+ * @param isReturn true si c'est une signature de retour
+ */
+export async function confirmDeliveryAfterSignature(parcelId: any, driverName: any, isReturn = false) {
   const now = new Date().toISOString()
-  await updateDoc(doc(db, 'parcels', parcelId), {
-    status: 'Livré',
-    signatureToken: null,
-    signatureConfirmedAt: now,
-    history: arrayUnion({
+
+  if (isReturn) {
+    // Signature de retour : le colis retourne à l'expéditeur
+    await updateDoc(doc(db, 'parcels', parcelId), {
+      status: 'Retour finalisé',
+      returnSignatureToken: null,
+      returnSignatureConfirmedAt: now,
+      history: arrayUnion({
+        status: 'Retour finalisé',
+        timestamp: now,
+        note: `Colis retourné et remis à l'expéditeur (signature électronique) - livreur : ${driverName}`,
+      }),
+    })
+  } else {
+    // Signature normale : livraison au destinataire
+    await updateDoc(doc(db, 'parcels', parcelId), {
       status: 'Livré',
-      timestamp: now,
-      note: `Livraison confirmee par signature electronique du destinataire - chauffeur : ${driverName}`,
-    }),
-  })
+      signatureToken: null,
+      signatureConfirmedAt: now,
+      history: arrayUnion({
+        status: 'Livré',
+        timestamp: now,
+        note: `Livraison confirmée par signature électronique du destinataire - chauffeur : ${driverName}`,
+      }),
+    })
+  }
 }
 
-export async function deleteDeliverySignature(parcelId: any) {
-  await deleteDoc(doc(db, 'deliverySignatures', parcelId))
-  await updateDoc(doc(db, 'parcels', parcelId), { signatureConfirmedAt: null })
+export async function deleteDeliverySignature(parcelId: any, isReturn = false) {
+  const signatureDocId = isReturn ? `${parcelId}_return` : parcelId
+  await deleteDoc(doc(db, 'deliverySignatures', signatureDocId))
+
+  if (isReturn) {
+    await updateDoc(doc(db, 'parcels', parcelId), { returnSignatureConfirmedAt: null })
+  } else {
+    await updateDoc(doc(db, 'parcels', parcelId), { signatureConfirmedAt: null })
+  }
 }
 
-export async function updateDeliverySignature(parcelId: any, signatureDataUrl: any, updatedBy: any) {
-  await updateDoc(doc(db, 'deliverySignatures', parcelId), {
+export async function updateDeliverySignature(parcelId: any, signatureDataUrl: any, updatedBy: any, isReturn = false) {
+  const signatureDocId = isReturn ? `${parcelId}_return` : parcelId
+  await updateDoc(doc(db, 'deliverySignatures', signatureDocId), {
     signatureDataUrl,
     signedAt: new Date().toISOString(),
     updatedBy: updatedBy || 'Administrateur',

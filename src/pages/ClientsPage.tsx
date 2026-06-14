@@ -205,7 +205,7 @@ export default function ClientsPage() {
   const typeInfo = (c: any) => ACCOUNT_TYPES.find(t => t.key === c.accountType) || ACCOUNT_TYPES[0]
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 overflow-x-hidden">
       <CompanyContact />
       <style>{`
         @media print {

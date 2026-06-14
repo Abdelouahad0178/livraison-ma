@@ -1,11 +1,14 @@
+import { useState } from 'react'
 import {
   Search, AlertTriangle, Filter, ChevronDown, ChevronRight, X,
   CheckSquare, Square, Truck, Minus, Plus, CheckCircle2, Package,
-  Save, RotateCcw, Edit2, Clock,
+  Save, RotateCcw, Edit2, Clock, Eye, Printer, Trash2,
 } from 'lucide-react'
 import { CITIES } from '../../../firebase/constants'
 import DateFilter from '../DateFilter'
 import { useAgentCtx } from '../AgentCtx'
+import { db } from '../../../firebase/db'
+import { collection, deleteDoc, doc, getDocs } from 'firebase/firestore'
 
 const SERVICE_TYPES = [
   { key: 'simple',    label: 'Simple',    emoji: '📦' },
@@ -93,6 +96,10 @@ export default function ArrivageTab() {
     histSavePointage,
   } = useAgentCtx()
 
+  const [showTableView, setShowTableView] = useState(false)
+  const [deletingArrivage, setDeletingArrivage] = useState<string | null>(null)
+  const [deletingAll, setDeletingAll] = useState(false)
+
   const typeConf = ARR_TYPE_CONFIG[arrComputedType]
   const fmtDate = (d: any) => {
     if (!d) return '—'
@@ -100,6 +107,50 @@ export default function ArrivageTab() {
     return dt.toLocaleDateString('fr-MA', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
   }
   const hasActiveFilters = arrivageSearch || arrivageDriverFilter !== 'all' || arrivageOriginFilter !== 'all' || arrivageStatusFilter !== 'all' || arrivageServiceFilter !== 'all' || arrivageDatePreset !== 'all'
+
+  const handlePrint = () => {
+    // Afficher le tableau avant d'imprimer
+    if (!showTableView) {
+      setShowTableView(true)
+      // Attendre que le DOM se mette à jour avant d'imprimer
+      setTimeout(() => window.print(), 100)
+    } else {
+      window.print()
+    }
+  }
+
+  const handleDeleteArrivage = async (arrivageId: string) => {
+    if (!confirm('Supprimer cet arrivage ?\n\nCette action est irréversible.')) return
+
+    setDeletingArrivage(arrivageId)
+    try {
+      await deleteDoc(doc(db, 'arrivages', arrivageId))
+      alert('✅ Arrivage supprimé')
+    } catch (err: any) {
+      console.error('Erreur suppression:', err)
+      alert('❌ Erreur: ' + (err.message || err))
+    } finally {
+      setDeletingArrivage(null)
+    }
+  }
+
+  const handleDeleteAllArrivages = async () => {
+    if (!confirm('⚠️ SUPPRIMER TOUS LES ARRIVAGES ?\n\nCette action est IRRÉVERSIBLE et supprimera TOUS les arrivages de la base de données.\n\nÊtes-vous absolument sûr ?')) return
+    if (!confirm('DERNIÈRE CONFIRMATION\n\nVous allez supprimer TOUS les arrivages. Continuer ?')) return
+
+    setDeletingAll(true)
+    try {
+      const snapshot = await getDocs(collection(db, 'arrivages'))
+      const deletePromises = snapshot.docs.map(doc => deleteDoc(doc.ref))
+      await Promise.all(deletePromises)
+      alert(`✅ ${snapshot.size} arrivages supprimés`)
+    } catch (err: any) {
+      console.error('Erreur suppression:', err)
+      alert('❌ Erreur: ' + (err.message || err))
+    } finally {
+      setDeletingAll(false)
+    }
+  }
 
   return (
     <div className="mt-4 space-y-3">
@@ -210,7 +261,7 @@ export default function ArrivageTab() {
                 </select>
               </div>
               <div className="flex gap-2 overflow-x-auto pb-1">
-                {[{ key: 'all', label: 'Tous' }, { key: 'En transit', label: 'Transit' }, { key: 'En transit retour', label: '↩️ Retours' }].map(f => (
+                {[{ key: 'all', label: 'Tous' }, { key: 'En transit', label: 'Transit' }, { key: 'Retour en transit', label: '↩️ Retours' }].map(f => (
                   <button key={f.key} onClick={() => setArrivageStatusFilter(f.key)}
                     className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-semibold transition ${arrivageStatusFilter === f.key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
                     {f.label}
@@ -281,9 +332,10 @@ export default function ArrivageTab() {
                       const checked  = rcvd > 0
                       const partial  = arrIsPartial(parcel)
                       const multi    = total > 1
-                      const isReturn = !!parcel.returnedAt || parcel.status === 'En transit retour'
+                      const isReturn = !!parcel.returnedAt || parcel.status === 'Retour en transit'
+                      const isFull   = rcvd === total && total > 0
                       return (
-                        <div key={parcel.id} className={`flex items-center gap-3 px-3 py-3 pl-10 border-t border-gray-50 transition ${
+                        <div key={parcel.id} className={`flex items-center gap-2 px-3 py-2.5 pl-10 border-t border-gray-50 transition ${
                           checked ? (partial ? 'bg-orange-50' : 'bg-green-50') : ''
                         }`}>
                           <button onClick={() => arrToggle(parcel)} className="shrink-0">
@@ -302,25 +354,51 @@ export default function ArrivageTab() {
                               {arrNexp(parcel) && <span className="font-mono text-blue-600 font-bold"> · {arrNexp(parcel)}</span>}
                             </p>
                           </div>
-                          {multi ? (
-                            <div className="flex items-center gap-1 shrink-0">
-                              <button onClick={() => arrSetBoxes(parcel.id, rcvd - 1, total)} disabled={rcvd === 0}
-                                className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-30 flex items-center justify-center">
-                                <Minus className="w-3 h-3" />
-                              </button>
-                              <span className={`text-xs font-bold px-2 py-1 rounded-lg min-w-[40px] text-center ${
-                                rcvd === 0 ? 'bg-red-100 text-red-700' : rcvd < total ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'
-                              }`}>{rcvd}/{total}</span>
-                              <button onClick={() => arrSetBoxes(parcel.id, rcvd + 1, total)} disabled={rcvd === total}
-                                className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-30 flex items-center justify-center">
-                                <Plus className="w-3 h-3" />
-                              </button>
-                            </div>
-                          ) : (
-                            <span className={`text-[10px] px-2 py-0.5 rounded-full shrink-0 font-bold ${checked ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>
-                              {checked ? '✓ Reçu' : 'Manquant'}
-                            </span>
-                          )}
+
+                          {/* Boutons rapides simplifiés */}
+                          <div className="flex items-center gap-1 shrink-0">
+                            {multi && !isFull && (
+                              <>
+                                <button
+                                  onClick={() => arrSetBoxes(parcel.id, total, total)}
+                                  className="px-2 py-1 rounded-lg bg-green-500 hover:bg-green-600 text-white text-[10px] font-bold transition flex items-center gap-1"
+                                  title="Marquer complet"
+                                >
+                                  ✅ Complet
+                                </button>
+                                <button
+                                  onClick={() => arrSetBoxes(parcel.id, total - 1, total)}
+                                  className="px-2 py-1 rounded-lg bg-orange-500 hover:bg-orange-600 text-white text-[10px] font-bold transition flex items-center gap-1"
+                                  title="Marquer partiel (manque 1)"
+                                >
+                                  ⚠️ -1
+                                </button>
+                              </>
+                            )}
+
+                            {/* Compteur détaillé */}
+                            {multi && (
+                              <div className="flex items-center gap-1">
+                                <button onClick={() => arrSetBoxes(parcel.id, Math.max(0, rcvd - 1), total)} disabled={rcvd === 0}
+                                  className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-20 flex items-center justify-center transition">
+                                  <Minus className="w-3 h-3" />
+                                </button>
+                                <span className={`text-xs font-bold px-2 py-1 rounded-lg min-w-[40px] text-center ${
+                                  rcvd === 0 ? 'bg-red-100 text-red-700' : rcvd < total ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'
+                                }`}>{rcvd}/{total}</span>
+                                <button onClick={() => arrSetBoxes(parcel.id, Math.min(total, rcvd + 1), total)} disabled={rcvd === total}
+                                  className="w-6 h-6 rounded-lg bg-gray-100 hover:bg-gray-200 disabled:opacity-20 flex items-center justify-center transition">
+                                  <Plus className="w-3 h-3" />
+                                </button>
+                              </div>
+                            )}
+
+                            {!multi && (
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold ${checked ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>
+                                {checked ? '✓ Reçu' : 'Manquant'}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       )
                     })}
@@ -451,15 +529,44 @@ export default function ArrivageTab() {
                   {f.label}
                 </button>
               ))}
-              {[
-                { key: 'complete', label: '✅ Sans manquants' },
-                { key: 'missing',  label: '⚠️ Avec manquants' },
-              ].map(f => (
-                <button key={f.key} onClick={() => setArrivageStatusFilter((prev: any) => prev === f.key ? 'all' : f.key)}
-                  className={`px-3 py-1.5 rounded-full text-xs font-semibold transition ${arrivageStatusFilter === f.key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}>
-                  {f.label}
+
+              {/* Boutons Voir tableau, Imprimer et Supprimer */}
+              <div className="ml-auto flex gap-2">
+                <button
+                  onClick={() => setShowTableView(!showTableView)}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold transition ${showTableView ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'}`}
+                  title="Voir le tableau"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  {showTableView ? 'Masquer' : 'Tableau'}
                 </button>
-              ))}
+                <button
+                  onClick={handlePrint}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-gray-100 text-gray-600 hover:bg-gray-200 transition"
+                  title="Imprimer"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  Imprimer
+                </button>
+                <button
+                  onClick={handleDeleteAllArrivages}
+                  disabled={deletingAll}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-red-500 text-white hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                  title="Supprimer TOUS les arrivages"
+                >
+                  {deletingAll ? (
+                    <>
+                      <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Suppression...
+                    </>
+                  ) : (
+                    <>
+                      <Trash2 className="w-3.5 h-3.5" />
+                      Supprimer tout
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
             <button onClick={() => setArrivageShowFilters((v: any) => !v)}
               className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-xs font-semibold border transition ${arrivageShowFilters ? 'bg-blue-50 border-blue-200 text-blue-600' : 'bg-gray-50 border-gray-200 text-gray-500 hover:bg-gray-100'}`}>
@@ -512,33 +619,216 @@ export default function ArrivageTab() {
                 ))}
               </div>
 
-              <div className="space-y-2">
-                {(filteredArrivages as any[]).map((arr: any) => {
-                  const tc = ARR_TYPE_CONFIG[arr.type] || ARR_TYPE_CONFIG.complet
+              {/* ── Vue Tableau ── */}
+              {showTableView && (
+                <div id="arrivages-print-table" className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden print:shadow-none">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-200">
+                          <th className="px-3 py-2 text-left font-bold text-gray-700">N° Arrivage</th>
+                          <th className="px-3 py-2 text-left font-bold text-gray-700">Date</th>
+                          <th className="px-3 py-2 text-left font-bold text-gray-700">Agent</th>
+                          <th className="px-3 py-2 text-left font-bold text-gray-700">Destinataires</th>
+                          <th className="px-3 py-2 text-center font-bold text-gray-700">Type</th>
+                          <th className="px-3 py-2 text-center font-bold text-gray-700">Bons</th>
+                          <th className="px-3 py-2 text-center font-bold text-gray-700">Colis</th>
+                          <th className="px-3 py-2 text-center font-bold text-gray-700">Manquants</th>
+                          <th className="px-3 py-2 text-center font-bold text-gray-700">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(filteredArrivages as any[]).map((arr: any, idx: number) => {
+                          // Calcul du type réel basé sur le pointage
+                          let actualType = arr.type
+                          if (arr.totalArrivedBoxes !== undefined && arr.totalExpectedBoxes !== undefined) {
+                            if (arr.totalArrivedBoxes === 0) {
+                              actualType = 'documents_seulement'
+                            } else if (arr.totalArrivedBoxes < arr.totalExpectedBoxes) {
+                              actualType = 'partiel'
+                            } else {
+                              actualType = 'complet'
+                            }
+                          }
+                          const tc = ARR_TYPE_CONFIG[actualType] || ARR_TYPE_CONFIG.complet
+
+                          // Extraction des destinataires
+                          const receivers = arr.arrivedColisDetail
+                            ? [...new Set(arr.arrivedColisDetail.map((c: any) => c.receiverName).filter(Boolean))]
+                            : []
+
+                          return (
+                            <tr key={arr.id} className={`border-b border-gray-100 hover:bg-gray-50 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`}>
+                              <td className="px-3 py-2">
+                                <span className="font-mono font-semibold text-blue-600">{arr.arrivageRef}</span>
+                              </td>
+                              <td className="px-3 py-2 text-gray-600">
+                                {fmtDate(arr.confirmedAt)}
+                              </td>
+                              <td className="px-3 py-2 text-gray-600">
+                                {arr.agentName}
+                              </td>
+                              <td className="px-3 py-2">
+                                {receivers.length > 0 ? (
+                                  <div className="text-xs text-gray-700">
+                                    {receivers.slice(0, 2).join(', ')}
+                                    {receivers.length > 2 && <span className="text-gray-500"> +{receivers.length - 2}</span>}
+                                  </div>
+                                ) : (
+                                  <span className="text-gray-400 text-xs">—</span>
+                                )}
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${tc.bg} ${tc.text}`}>
+                                  {tc.label}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-center font-semibold text-green-700">
+                                {arr.arrivedCount || 0}
+                              </td>
+                              <td className="px-3 py-2 text-center font-semibold text-blue-700">
+                                {arr.totalArrivedBoxes || 0}/{arr.totalExpectedBoxes || 0}
+                              </td>
+                              <td className="px-3 py-2 text-center font-semibold">
+                                <span className={arr.missingCount > 0 ? 'text-red-600' : 'text-gray-400'}>
+                                  {arr.missingCount || 0}
+                                </span>
+                              </td>
+                              <td className="px-3 py-2 text-center">
+                                <button
+                                  onClick={() => handleDeleteArrivage(arr.id)}
+                                  disabled={deletingArrivage === arr.id}
+                                  className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                                  title="Supprimer cet arrivage"
+                                >
+                                  {deletingArrivage === arr.id ? (
+                                    <div className="w-3 h-3 border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
+                                  ) : (
+                                    <Trash2 className="w-3 h-3" />
+                                  )}
+                                </button>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {/* ── Liste simplifiée des arrivages ── */}
+              <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden print:hidden">
+                {(filteredArrivages as any[]).map((arr: any, idx: number) => {
+                  // Calcul du type réel basé sur le pointage
+                  let actualType = arr.type
+                  if (arr.totalArrivedBoxes !== undefined && arr.totalExpectedBoxes !== undefined) {
+                    if (arr.totalArrivedBoxes === 0) {
+                      actualType = 'documents_seulement'
+                    } else if (arr.totalArrivedBoxes < arr.totalExpectedBoxes) {
+                      actualType = 'partiel'
+                    } else {
+                      actualType = 'complet'
+                    }
+                  }
+                  const tc = ARR_TYPE_CONFIG[actualType] || ARR_TYPE_CONFIG.complet
                   const isOpen = arrivageExpandedIds.has(arr.id)
-                  const toggleCard = () => setArrivageExpandedIds((prev: any) => {
-                    const next = new Set(prev); next.has(arr.id) ? next.delete(arr.id) : next.add(arr.id); return next
-                  })
+                  const toggleCard = () => {
+                    setArrivageExpandedIds((prev: any) => {
+                      const next = new Set(prev)
+                      if (next.has(arr.id)) {
+                        next.delete(arr.id)
+                      } else {
+                        next.add(arr.id)
+                        histInitEdit(arr)
+                      }
+                      return next
+                    })
+                  }
+
                   return (
-                    <div key={arr.id} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                      <button onClick={toggleCard} className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 transition">
-                        <span className="text-xl shrink-0">{tc.icon}</span>
+                    <div key={arr.id} className={`border-b border-gray-100 last:border-0 ${idx % 2 === 0 ? 'bg-white' : 'bg-gray-50/30'}`}>
+                      {/* ── En-tête cliquable ── */}
+                      <button onClick={toggleCard} className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-blue-50/30 transition group">
+                        {/* Icône type */}
+                        <div className={`w-10 h-10 rounded-lg ${tc.bg} flex items-center justify-center text-xl shrink-0 group-hover:scale-110 transition`}>
+                          {tc.icon}
+                        </div>
+
+                        {/* Info principale */}
                         <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-mono font-bold text-blue-600 text-sm">{arr.arrivageRef}</span>
-                            <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${tc.bg} ${tc.text}`}>{tc.label}</span>
-                            {arr.pointageStatus === 'done' && <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-purple-100 text-purple-700">Pointé ✓</span>}
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono font-bold text-blue-600">{arr.arrivageRef}</span>
+                            <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-bold ${tc.bg} ${tc.text}`}>{tc.label}</span>
+                            {arr.pointageStatus === 'done' && <CheckCircle2 className="w-3.5 h-3.5 text-purple-600" />}
                           </div>
-                          <div className="flex items-center gap-3 mt-0.5 text-xs text-gray-400">
+                          <div className="flex items-center gap-3 text-xs text-gray-500 mt-0.5">
                             <span>{fmtDate(arr.confirmedAt)}</span>
-                            <span>👤 {arr.agentName}</span>
+                            <span>•</span>
+                            <span>{arr.agentName}</span>
                           </div>
+                          {/* Destinataires */}
+                          {arr.arrivedColisDetail && arr.arrivedColisDetail.length > 0 && (() => {
+                            const receivers = [...new Set(arr.arrivedColisDetail.map((c: any) => c.receiverName).filter(Boolean))]
+                            const displayReceivers = receivers.slice(0, 2)
+                            const remaining = receivers.length - displayReceivers.length
+                            return (
+                              <div className="flex items-center gap-1 text-xs mt-1 flex-wrap">
+                                <span className="text-gray-400">👤</span>
+                                {displayReceivers.map((name: string, i: number) => (
+                                  <span key={i} className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded-full font-semibold">
+                                    {name}
+                                  </span>
+                                ))}
+                                {remaining > 0 && (
+                                  <span className="px-2 py-0.5 bg-gray-100 text-gray-600 rounded-full font-semibold">
+                                    +{remaining} autre{remaining > 1 ? 's' : ''}
+                                  </span>
+                                )}
+                              </div>
+                            )
+                          })()}
                         </div>
-                        <div className="flex flex-col items-end gap-1 shrink-0 text-xs">
-                          <span className="font-bold text-green-700">{arr.arrivedCount} bons</span>
-                          {arr.missingCount > 0 && <span className="font-bold text-red-600">{arr.missingCount} manq.</span>}
+
+                        {/* Stats rapides */}
+                        <div className="flex items-center gap-4 shrink-0 text-sm">
+                          <div className="text-center">
+                            <div className="font-bold text-green-600">{arr.arrivedCount}</div>
+                            <div className="text-[9px] text-gray-400">bons</div>
+                          </div>
+                          <div className="text-center">
+                            <div className="font-bold text-blue-600">{arr.totalArrivedBoxes || 0}/{arr.totalExpectedBoxes || 0}</div>
+                            <div className="text-[9px] text-gray-400">colis</div>
+                          </div>
+                          {arr.missingCount > 0 && (
+                            <div className="text-center">
+                              <div className="font-bold text-red-600">{arr.missingCount}</div>
+                              <div className="text-[9px] text-gray-400">manq</div>
+                            </div>
+                          )}
                         </div>
-                        {isOpen ? <ChevronDown className="w-4 h-4 text-gray-400 shrink-0" /> : <ChevronRight className="w-4 h-4 text-gray-400 shrink-0" />}
+
+                        {/* Bouton suppression */}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleDeleteArrivage(arr.id)
+                          }}
+                          disabled={deletingArrivage === arr.id}
+                          className="p-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 disabled:opacity-50 disabled:cursor-not-allowed transition"
+                          title="Supprimer cet arrivage"
+                        >
+                          {deletingArrivage === arr.id ? (
+                            <div className="w-4 h-4 border-2 border-red-600 border-t-transparent rounded-full animate-spin" />
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
+                        </button>
+
+                        {/* Icône dérouler */}
+                        <div className={`p-1.5 rounded-lg transition ${isOpen ? 'bg-blue-100 text-blue-600' : 'text-gray-400'}`}>
+                          {isOpen ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                        </div>
                       </button>
 
                       {isOpen && (
@@ -562,70 +852,120 @@ export default function ArrivageTab() {
                           </div>
                           {arr.notes && <p className="text-xs text-gray-400 italic px-4 pb-2">{arr.notes}</p>}
 
-                          <button
-                            onClick={() => {
-                              if (histExpandedPt === arr.id) { setHistExpandedPt(null) }
-                              else { setHistExpandedPt(arr.id); histInitEdit(arr); setHistSearchQ(''); setHistSearchRes(null); setHistSearchErr('') }
-                            }}
-                            className={`w-full flex items-center justify-between px-4 py-2.5 border-t border-gray-100 text-xs font-semibold hover:bg-gray-50 transition ${histExpandedPt === arr.id ? 'bg-gray-50 text-gray-600' : 'text-blue-600'}`}>
-                            <span>{histExpandedPt === arr.id ? '▲ Fermer le pointage' : '▼ Ouvrir le pointage'}</span>
-                            {histPointEdits[arr.id]?.dirty && <span className="text-orange-500 text-[10px]">● Non sauvegardé</span>}
-                          </button>
-
-                          {histExpandedPt === arr.id && (() => {
+                          {/* Historique en lecture seule - pointage supprimé */}
+                          {false && (() => {
                             const edit   = histGetEdit(arr.id)
                             const saving = histSaving[arr.id]
                             const pErr   = histPointErr[arr.id]
                             if (!edit) return null
                             const stMap = Object.fromEntries(SERVICE_TYPES.map(s => [s.key, s]))
                             return (
-                              <div className="p-4 space-y-4 bg-gray-50 border-t border-gray-100">
+                              <div className="p-4 space-y-4 bg-gradient-to-b from-gray-50 to-white border-t border-gray-100">
+                                {/* Actions rapides */}
+                                <div className="flex gap-2 pb-3 border-b border-gray-200">
+                                  <button
+                                    onClick={() => {
+                                      edit.arrived.forEach((d: any) => {
+                                        if (!d.pointed) histTogglePointed(arr.id, d.parcelId)
+                                      })
+                                    }}
+                                    className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-green-600 to-green-500 hover:from-green-700 hover:to-green-600 text-white font-bold rounded-xl shadow-lg shadow-green-900/30 transition"
+                                  >
+                                    <CheckSquare className="w-5 h-5" />
+                                    <span>Tout pointer</span>
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      edit.arrived.forEach((d: any) => {
+                                        if (d.pointed) histTogglePointed(arr.id, d.parcelId)
+                                      })
+                                    }}
+                                    className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-gray-600 to-gray-500 hover:from-gray-700 hover:to-gray-600 text-white font-bold rounded-xl shadow-lg transition"
+                                  >
+                                    <Square className="w-5 h-5" />
+                                    <span>Tout dépointer</span>
+                                  </button>
+                                </div>
+
                                 <div>
-                                  <p className="text-[10px] font-bold text-gray-500 uppercase tracking-wider mb-2 flex items-center gap-1.5">
-                                    <CheckCircle2 className="w-3.5 h-3.5 text-green-500" />
-                                    Colis arrivés ({edit.arrived.length})
-                                    <span className="ml-auto text-green-600 normal-case font-semibold">{edit.arrived.filter((d: any) => d.pointed).length} pointés</span>
-                                  </p>
-                                  {edit.arrived.length === 0 && <p className="text-xs text-gray-400 italic pl-2">Aucun colis.</p>}
-                                  <div className="space-y-1.5">
+                                  <div className="flex items-center justify-between mb-3">
+                                    <p className="text-sm font-bold text-gray-700 flex items-center gap-2">
+                                      <div className="w-8 h-8 rounded-lg bg-green-100 flex items-center justify-center">
+                                        <CheckCircle2 className="w-5 h-5 text-green-600" />
+                                      </div>
+                                      Colis arrivés ({edit.arrived.length})
+                                    </p>
+                                    <div className="px-3 py-1.5 rounded-full bg-green-100 border-2 border-green-200">
+                                      <span className="text-sm font-black text-green-700">{edit.arrived.filter((d: any) => d.pointed).length}/{edit.arrived.length}</span>
+                                      <span className="text-xs text-green-600 ml-1">pointés</span>
+                                    </div>
+                                  </div>
+                                  {edit.arrived.length === 0 && <p className="text-sm text-gray-400 italic text-center py-4">Aucun colis arrivé</p>}
+                                  <div className="space-y-2">
                                     {(edit.arrived as any[]).map((d: any) => {
                                       const total = d.total || d.nbColis || 1
                                       const st = stMap[d.serviceType]
                                       return (
-                                        <div key={d.parcelId} className={`flex items-center gap-2 rounded-xl px-3 py-2.5 border transition ${d.pointed ? 'bg-green-50 border-green-200' : 'bg-white border-gray-200'}`}>
-                                          <button onClick={() => histTogglePointed(arr.id, d.parcelId)} className="shrink-0">
-                                            {d.pointed ? <CheckSquare className="w-4 h-4 text-green-500" /> : <Square className="w-4 h-4 text-gray-400" />}
-                                          </button>
+                                        <div key={d.parcelId} className={`group flex items-center gap-3 rounded-xl px-4 py-3 border-2 transition-all cursor-pointer hover:shadow-md ${
+                                          d.pointed
+                                            ? 'bg-gradient-to-r from-green-50 to-emerald-50 border-green-300 shadow-sm'
+                                            : 'bg-white border-gray-200 hover:border-blue-300'
+                                        }`}
+                                        onClick={() => histTogglePointed(arr.id, d.parcelId)}>
+                                          {/* Checkbox géante */}
+                                          <div className={`w-12 h-12 rounded-xl flex items-center justify-center shrink-0 transition ${
+                                            d.pointed ? 'bg-green-500 shadow-lg shadow-green-500/30' : 'bg-gray-100 group-hover:bg-blue-100'
+                                          }`}>
+                                            {d.pointed
+                                              ? <CheckSquare className="w-7 h-7 text-white" />
+                                              : <Square className="w-7 h-7 text-gray-400 group-hover:text-blue-500" />
+                                            }
+                                          </div>
+
                                           <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-1.5 flex-wrap">
-                                              <span className="text-xs font-mono font-bold text-blue-600">{d.trackingId}</span>
-                                              {st && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 font-semibold">{st.emoji} {st.label}</span>}
-                                              {d.addedDuringPointage && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-purple-100 text-purple-600 font-semibold">+Ajouté</span>}
+                                            <div className="flex items-center gap-2 flex-wrap mb-1">
+                                              <span className="text-sm font-mono font-black text-blue-600">{d.trackingId}</span>
+                                              {st && <span className="text-xs px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-semibold">{st.emoji}</span>}
+                                              {d.addedDuringPointage && <span className="text-xs px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-bold">+Nouveau</span>}
                                             </div>
-                                            <p className="text-xs text-gray-700 font-medium truncate">{d.receiverName || '—'}</p>
-                                            <p className="text-[10px] text-gray-400">
-                                              {d.originCity} · {d.weight} kg
-                                              {(d.senderNic || d.nexp || d.nExp) && <span className="font-mono text-blue-600 font-bold"> · N EXP {d.senderNic || d.nexp || d.nExp}</span>}
+                                            <p className="text-sm text-gray-800 font-semibold truncate">{d.receiverName || '—'}</p>
+                                            <p className="text-xs text-gray-500 mt-0.5">
+                                              📍 {d.originCity} • ⚖️ {d.weight} kg
+                                              {(d.senderNic || d.nexp || d.nExp) && <span className="font-mono text-blue-600 font-bold"> • N° {d.senderNic || d.nexp || d.nExp}</span>}
                                             </p>
                                           </div>
+                                          {/* Compteur de colis si multi-colis */}
                                           {total > 1 && (
-                                            <div className="flex items-center gap-1 shrink-0">
-                                              <button onClick={() => histSetBoxes(arr.id, d.parcelId, (d.arrived || 0) - 1)} disabled={(d.arrived || 0) <= 0}
-                                                className="w-5 h-5 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-30 flex items-center justify-center">
-                                                <Minus className="w-2.5 h-2.5" />
+                                            <div className="flex items-center gap-2 shrink-0" onClick={e => e.stopPropagation()}>
+                                              <button
+                                                onClick={() => histSetBoxes(arr.id, d.parcelId, (d.arrived || 0) - 1)}
+                                                disabled={(d.arrived || 0) <= 0}
+                                                className="w-9 h-9 rounded-lg bg-red-100 hover:bg-red-200 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center transition shadow-sm"
+                                              >
+                                                <Minus className="w-4 h-4 text-red-700" />
                                               </button>
-                                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded min-w-[32px] text-center ${
-                                                (d.arrived || 0) === 0 ? 'bg-red-100 text-red-700' : (d.arrived || 0) < total ? 'bg-orange-100 text-orange-700' : 'bg-green-100 text-green-700'
-                                              }`}>{d.arrived || 0}/{total}</span>
-                                              <button onClick={() => histSetBoxes(arr.id, d.parcelId, (d.arrived || 0) + 1)} disabled={(d.arrived || 0) >= total}
-                                                className="w-5 h-5 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-30 flex items-center justify-center">
-                                                <Plus className="w-2.5 h-2.5" />
+                                              <div className={`px-3 py-2 rounded-lg font-black text-sm min-w-[60px] text-center ${
+                                                (d.arrived || 0) === 0 ? 'bg-red-100 text-red-700'
+                                                : (d.arrived || 0) < total ? 'bg-orange-100 text-orange-700'
+                                                : 'bg-green-100 text-green-700'
+                                              }`}>{d.arrived || 0}/{total}</div>
+                                              <button
+                                                onClick={() => histSetBoxes(arr.id, d.parcelId, (d.arrived || 0) + 1)}
+                                                disabled={(d.arrived || 0) >= total}
+                                                className="w-9 h-9 rounded-lg bg-green-100 hover:bg-green-200 disabled:opacity-30 disabled:cursor-not-allowed flex items-center justify-center transition shadow-sm"
+                                              >
+                                                <Plus className="w-4 h-4 text-green-700" />
                                               </button>
                                             </div>
                                           )}
-                                          <button onClick={() => histRemoveFromArrived(arr.id, d.parcelId)}
-                                            className="w-6 h-6 rounded-lg bg-red-50 hover:bg-red-100 flex items-center justify-center shrink-0">
-                                            <X className="w-3 h-3 text-red-500" />
+
+                                          {/* Bouton supprimer */}
+                                          <button
+                                            onClick={(e) => { e.stopPropagation(); histRemoveFromArrived(arr.id, d.parcelId) }}
+                                            className="w-10 h-10 rounded-lg bg-red-100 hover:bg-red-200 flex items-center justify-center shrink-0 transition opacity-0 group-hover:opacity-100"
+                                            title="Retirer de la liste"
+                                          >
+                                            <X className="w-5 h-5 text-red-600" />
                                           </button>
                                         </div>
                                       )

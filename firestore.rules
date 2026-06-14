@@ -50,7 +50,7 @@ service cloud.firestore {
     }
 
     function isDeliveryWorker() {
-      // Canonical roles only — normalize at write time in app code
+      // Canonical roles only â€” normalize at write time in app code
       return role() == 'chauffeur' || role() == 'livreur';
     }
 
@@ -169,10 +169,15 @@ service cloud.firestore {
     }
 
     function keepsDeliveredStatus() {
-      return !(
-        (resource.data.status == 'Livré' || resource.data.status == 'Livr\u00c3\u00a9')
+      // Autoriser la transition "Livré" → "Retourné" (retour de colis)
+      let isReturnTransition = request.resource.data.status == 'Retourné';
+      
+      // Bloquer autres changements de statut depuis "Livré"
+      let blocksOtherChanges = (resource.data.status == 'Livré' || resource.data.status == 'LivrÃ©')
         && request.resource.data.status != resource.data.status
-      );
+        && request.resource.data.status != 'Retourné';
+
+      return isReturnTransition || !blocksOtherChanges;
     }
 
     function ownsClient(clientId) {
@@ -184,8 +189,8 @@ service cloud.firestore {
         );
     }
 
-    // â”€â”€ Colis : lecture publique (tracking)
-    // codAmount modifiable uniquement par Admin (protection double : règle + code)
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Colis : lecture publique (tracking)
+    // codAmount modifiable uniquement par Admin (protection double : rÃ¨gle + code)
     match /parcels/{parcelId} {
       allow get:    if true;
       allow list:   if isStaff()
@@ -194,7 +199,7 @@ service cloud.firestore {
         || (request.query.limit != null && request.query.limit <= 1);
       allow create: if (signedIn() && request.resource.data.agentId == request.auth.uid)
         || (isStaff() && isNotBlocked());
-      allow delete: if ((resource.data.status != 'Livré' && resource.data.status != 'Livr\u00c3\u00a9') || isAdmin()) && (
+      allow delete: if ((resource.data.status != 'LivrÃ©' && resource.data.status != 'Livr\u00c3\u00a9') || isAdmin()) && (
         isAdmin()
         || isChefOfAideAgentParcelAgency()
         || (isAgentOrChef() && isParcelCreator())
@@ -203,9 +208,17 @@ service cloud.firestore {
       );
       // Correction du bon: poids/details uniquement, jamais COD/statut.
       // Autorisation volontairement limitee aux champs du bon pour eviter les rejets de role/token.
+      // ⭐ RÈGLE PRIORITAIRE : Retour de colis (depuis N'IMPORTE QUEL statut → Retourné)
+      // Autorise TOUTES les modifications nécessaires pour markParcelAsReturned()
+      allow update: if signedIn() && request.resource.data.status == 'Retourné';
+      // ⭐ RÈGLE : Réessayer livraison (Retourné → En livraison)
+      // Permet de remettre un colis retourné en circulation
+      allow update: if signedIn()
+        && resource.data.status == 'Retourné'
+        && request.resource.data.status == 'En livraison';
       allow update: if signedIn()
         && keepsDeliveredStatus()
-        && resource.data.status != 'Livré'
+        && resource.data.status != 'LivrÃ©'
         && resource.data.status != 'Livr\u00c3\u00a9'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(parcelCorrectionFields());
       allow update: if signedIn()
@@ -215,14 +228,24 @@ service cloud.firestore {
         && request.resource.data.validatedById == request.auth.uid
         && request.resource.data.agentId == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(aideAgentValidationFields());
-      // Chargement camion : seuls les champs transport sont modifiés
+      // Chargement camion : seuls les champs transport sont modifiÃ©s
       allow update: if signedIn()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'chauffeurName', 'chauffeurPhone', 'status',
           'shipmentLoadedAt', 'visibleInDestinationAgency', 'history'
         ]);
-      // Réception agence : prise en charge et arrivage de colis en transit
+      // ⭐ POINTAGE ARRIVAGE : autoriser sans vérifier keepsDeliveredStatus
+      // (car le pointage peut se faire même si le colis a un statut particulier)
+      allow update: if signedIn()
+        && isStaff()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'visibleInDestinationAgency', 'destinationArrivedAt',
+          'destinationAgentId', 'destinationAgentName', 'arrivedNbColis',
+          'chefPointedAt', 'chefPointedBy', 'chefPointedById', 'chefPointedSource',
+          'history'
+        ]);
+      // RÃ©ception agence : prise en charge et arrivage de colis en transit
       allow update: if signedIn()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -231,7 +254,7 @@ service cloud.firestore {
           'chefPointedAt', 'chefPointedBy', 'chefPointedById', 'chefPointedSource',
           'history'
         ]);
-      // Assignation livraison locale : seuls les champs livraison sont modifiés
+      // Assignation livraison locale : seuls les champs livraison sont modifiÃ©s
       allow update: if signedIn()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -240,7 +263,37 @@ service cloud.firestore {
           'deliveryVehicleId', 'deliveryVehicleLabel',
           'deliveryAssignedAt', 'deliveryAssignedBy'
         ]);
-      // Livreur local assigné : statut, encaissement, refus et signature uniquement sur ses colis
+      // ⭐ Staff : générer token de signature (agents, chauffeurs, etc.)
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'signatureToken',
+          'signatureTokenCreatedAt'
+        ]);
+      // ⭐ Staff : générer token de signature de retour
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'returnSignatureToken',
+          'returnSignatureTokenCreatedAt'
+        ]);
+      // ⭐ Staff : confirmer signature normale (Livré)
+      allow update: if signedIn()
+        && request.resource.data.status == 'Livré'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'signatureToken',
+          'signatureConfirmedAt',
+          'history'
+        ]);
+      // ⭐ Staff : confirmer signature de retour (Retour finalisé)
+      allow update: if signedIn()
+        && request.resource.data.status == 'Retour finalisé'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'returnSignatureToken',
+          'returnSignatureConfirmedAt',
+          'history'
+        ]);
+      // Livreur local assignÃ© : statut, encaissement, refus et signature uniquement sur ses colis
       allow update: if isAssignedDeliveryWorker()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -259,6 +312,9 @@ service cloud.firestore {
           'signatureToken',
           'signatureTokenCreatedAt',
           'signatureConfirmedAt',
+          'returnSignatureToken',
+          'returnSignatureTokenCreatedAt',
+          'returnSignatureConfirmedAt',
           'deliveryDriverId',
           'deliveryDriverName',
           'deliverySectorId',
@@ -272,19 +328,19 @@ service cloud.firestore {
           'deliveryRejectedById',
           'deliveryRejectedBy'
         ]);
-      // Pointeur-Encaisseur : réception port dû versé par un livreur
+      // Pointeur-Encaisseur : rÃ©ception port dÃ» versÃ© par un livreur
       allow update: if isPointeurEncaisseur()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'portPointeurId', 'portPointeurName', 'portPointeurAt'
         ]);
-      // Pointeur-Encaisseur : remise COD après pointage (règlement créé)
+      // Pointeur-Encaisseur : remise COD aprÃ¨s pointage (rÃ¨glement crÃ©Ã©)
       allow update: if isPointeurEncaisseur()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'codStatus', 'codRemisAt', 'codRemisBy'
         ]);
-      // Pointeur-Encaisseur : remboursement RETOUR FOND sur colis retourné
+      // Pointeur-Encaisseur : remboursement RETOUR FOND sur colis retournÃ©
       allow update: if isPointeurEncaisseur()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -302,14 +358,14 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'codValidatedByChef', 'codValidatedByChefAt', 'codValidatedByChefBy', 'codValidatedByChefById'
         ]);
-      // Chef d'agence : envoi COD à l'agence source (avec/sans validation)
+      // Chef d'agence : envoi COD Ã  l'agence source (avec/sans validation)
       allow update: if isChefAgence()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'codSentToSource', 'codSentToSourceAt', 'codSentToSourceBy', 'codSentToSourceById', 'codSentWithValidation'
         ]);
-      // Agent/Chef d'agence : suivi COD (réception, envoi, confirmation, règlement)
-      // Permet de mettre à jour les champs de traçage COD sans toucher aux données sensibles du bon.
+      // Agent/Chef d'agence : suivi COD (rÃ©ception, envoi, confirmation, rÃ¨glement)
+      // Permet de mettre Ã  jour les champs de traÃ§age COD sans toucher aux donnÃ©es sensibles du bon.
       allow update: if isAgentOrChef()
         && keepsDeliveredStatus()
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['codAmount'])
@@ -335,12 +391,12 @@ service cloud.firestore {
           'centralSupplierPaidAt', 'centralSupplierPaidBy', 'centralSupplierPaidById',
           'centralChequeNum', 'centralChequeBank', 'centralChequeDate'
         ]);
-      // Retour camion : l'agence qui a physiquement le colis retourné peut l'expédier
-      // vers l'agence d'origine, sans toucher aux données sensibles du bon.
+      // Retour camion : l'agence qui a physiquement le colis retournÃ© peut l'expÃ©dier
+      // vers l'agence d'origine, sans toucher aux donnÃ©es sensibles du bon.
       allow update: if signedIn()
         && keepsDeliveredStatus()
-        && request.resource.data.status == 'En transit retour'
-        && (resource.data.status == 'Retourné' || resource.data.status == 'Retourné')
+        && request.resource.data.status == 'Retour en transit'
+        && (resource.data.status == 'RetournÃ©' || resource.data.status == 'RetournÃ©')
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status',
           'returnShippedAt',
@@ -352,12 +408,12 @@ service cloud.firestore {
           'returnToCity',
           'arrivedNbColis'
         ]);
-      // Retour direct depuis l'agence destination ou le livreur assigné.
-      // Le bon est inversé pour repartir vers l'expéditeur, sans modifier les champs sensibles hors retour.
+      // Retour direct depuis l'agence destination ou le livreur assignÃ©.
+      // Le bon est inversÃ© pour repartir vers l'expÃ©diteur, sans modifier les champs sensibles hors retour.
       allow update: if signedIn()
         && keepsDeliveredStatus()
-        && request.resource.data.status == 'Retourné'
-        && resource.data.status != 'Retourné'
+        && request.resource.data.status == 'RetournÃ©'
+        && resource.data.status != 'RetournÃ©'
         && (
           resource.data.destinationAgentId == request.auth.uid
           || resource.data.deliveryDriverId == request.auth.uid
@@ -399,19 +455,19 @@ service cloud.firestore {
         isAdmin()
         || isChefOfAideAgentParcelAgency()
         || (
-          // Retour : tout le staff peut inverser expéditeur/destinataire
-          request.resource.data.status == 'Retourné'
-          && resource.data.status != 'Retourné'
+          // Retour : tout le staff peut inverser expÃ©diteur/destinataire
+          request.resource.data.status == 'RetournÃ©'
+          && resource.data.status != 'RetournÃ©'
           && !isAideAgent()
         )
         || (
           // Chargement retour sur camion inter-villes
-          request.resource.data.status == 'En transit retour'
-          && resource.data.status == 'Retourné'
+          request.resource.data.status == 'Retour en transit'
+          && resource.data.status == 'RetournÃ©'
           && !isAideAgent()
         )
         || (
-          // Aide agent : modification de ses propres saisies non validées
+          // Aide agent : modification de ses propres saisies non validÃ©es
           isAideAgent()
           && isParcelCreator()
           && (resource.data.validatedByChef != true || resource.data.aideEditUnlocked == true)
@@ -435,29 +491,31 @@ service cloud.firestore {
           )
         )
       );
+      // REGLE RETOUR COLIS
+      allow update: if signedIn() && request.resource.data.status == "Retourné";
     }
 
-    // â”€â”€ Villes
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Villes
     match /cities/{cityId} {
       allow read:  if true;
       allow write: if isStaff();
     }
 
-    // â”€â”€ Paramètres globaux
+    // Ã¢â€â‚¬Ã¢â€â‚¬ ParamÃ¨tres globaux
     match /settings/{settingId} {
       // adminSetup lisible publiquement pour la page de login
       allow read:  if settingId == 'adminSetup' ? true : signedIn();
       allow write: if settingId == 'tariffs' ? isAdmin() : isStaff();
-      // Création du document adminSetup lors de la première inscription admin
+      // CrÃ©ation du document adminSetup lors de la premiÃ¨re inscription admin
       allow create: if settingId == 'adminSetup'
         && !exists(/databases/$(database)/documents/settings/adminSetup);
     }
 
-    // â”€â”€ Utilisateurs
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Utilisateurs
     match /users/{userId} {
       allow read:   if isStaff() || (signedIn() && request.auth.uid == userId);
-      // Première inscription admin : uniquement l'email hassan@gmail.com,
-      // vérifié à la fois dans le token Firebase Auth ET dans le document,
+      // PremiÃ¨re inscription admin : uniquement l'email hassan@gmail.com,
+      // vÃ©rifiÃ© Ã  la fois dans le token Firebase Auth ET dans le document,
       // et seulement si adminSetup n'existe pas encore.
       allow create: if signedIn()
         && request.auth.uid == userId
@@ -465,12 +523,20 @@ service cloud.firestore {
         && request.auth.token.email == 'hassan@gmail.com'
         && request.resource.data.email == 'hassan@gmail.com'
         && !exists(/databases/$(database)/documents/settings/adminSetup);
-      // Admin crée les autres comptes (sauf un autre admin)
+      // Admin crÃ©e les autres comptes (sauf un autre admin)
       allow create: if isAdmin() && request.resource.data.role != 'admin';
-      // Chef d'agence crée des livreurs locaux, aides agents et pointeurs-encaisseurs dans sa propre ville
+      // Chef d'agence crÃ©e des livreurs locaux, aides agents et pointeurs-encaisseurs dans sa propre ville
       allow create: if role() == 'chef_agence'
         && request.resource.data.role in ['livreur', 'aide_agent', 'pointeur_encaisseur']
         && request.resource.data.city == userDoc().city;
+      // Création de comptes portail clients (expéditeurs/destinataires)
+      // Par l'utilisateur lui-même OU par le staff
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role in ['client-expediteur', 'client-destinataire'];
+      // Staff peut créer des comptes portail pour les clients
+      allow create: if isStaff()
+        && request.resource.data.role in ['client-expediteur', 'client-destinataire'];
       allow update: if isStaff();
       // Suppression : admin ou chef pour aide_agent/livreur/pointeur de sa ville
       allow delete: if isAdmin()
@@ -479,24 +545,24 @@ service cloud.firestore {
           && resource.data.city == userDoc().city);
     }
 
-    // â”€â”€ Clients
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Clients
     match /clients/{clientId} {
       allow read:  if isStaff() || (signedIn() && resource.data.portalUid == request.auth.uid);
       allow write: if isStaff();
     }
 
-    // â”€â”€ Portails clients
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Portails clients
     match /clientPortals/{token} {
       allow read, write: if isStaff();
     }
 
-    // â”€â”€ Paiements
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Paiements
     match /payments/{paymentId} {
       allow read:  if isStaff() || ownsClient(resource.data.clientId);
       allow write: if isStaff();
     }
 
-    // â”€â”€ Messages clients
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Messages clients
     match /clientMessages/{messageId} {
       allow read: if isStaff() || ownsClient(resource.data.clientId);
       allow create: if ownsClient(request.resource.data.clientId)
@@ -507,7 +573,7 @@ service cloud.firestore {
         && request.resource.data.clientUid == resource.data.clientUid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readByClientAt','readByClientUid'])
         && request.resource.data.readByClientUid == request.auth.uid;
-      // Réponse client dans le fil de conversation
+      // RÃ©ponse client dans le fil de conversation
       allow update: if ownsClient(resource.data.clientId)
         && request.resource.data.clientId == resource.data.clientId
         && request.resource.data.clientUid == resource.data.clientUid
@@ -522,7 +588,7 @@ service cloud.firestore {
       allow delete: if isStaff() || ownsClient(resource.data.clientId);
     }
 
-    // â”€â”€ Demandes de modification colis (client → chef_agence)
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Demandes de modification colis (client â†’ chef_agence)
     match /modificationRequests/{reqId} {
       allow read: if isStaff() || ownsClient(resource.data.clientId);
       allow create: if ownsClient(request.resource.data.clientId)
@@ -531,7 +597,7 @@ service cloud.firestore {
       allow delete: if isStaff() || ownsClient(resource.data.clientId);
     }
 
-    // â”€â”€ Caisse
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Caisse
     match /caisseEntries/{entryId} {
       allow read: if isAdmin()
         || (isStaff() && isNotBlocked() && (
@@ -541,15 +607,15 @@ service cloud.firestore {
           || resource.data.sourceAgentId == request.auth.uid
         ));
       allow create, update: if isStaff();
-      // Protection: les versements livreurs ne peuvent être supprimés que par leur créateur ou un admin
+      // Protection: les versements livreurs ne peuvent Ãªtre supprimÃ©s que par leur crÃ©ateur ou un admin
       allow delete: if isAdmin()
         || isAdminOrDirecteur()
-        // Chef d'agence peut supprimer les entrées de sa ville
+        // Chef d'agence peut supprimer les entrÃ©es de sa ville
         || (isChefAgence() && resource.data.city == userCity())
         || (isStaff() && (
-          // Si createdById existe, vérifier que c'est le créateur
+          // Si createdById existe, vÃ©rifier que c'est le crÃ©ateur
           (resource.data.createdById is string && resource.data.createdById == request.auth.uid)
-          // Sinon utiliser cashierId ou agentId pour anciennes entrées
+          // Sinon utiliser cashierId ou agentId pour anciennes entrÃ©es
           || (!('createdById' in resource.data) && (
             resource.data.cashierId == request.auth.uid
             || resource.data.agentId == request.auth.uid
@@ -598,7 +664,7 @@ service cloud.firestore {
       allow read, write: if isStaff();
     }
 
-    // â”€â”€ Port dû chauffeurs (legacy â€” no longer used by UI)
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Port dÃ» chauffeurs (legacy Ã¢â‚¬â€ no longer used by UI)
     match /driverPortDuTransactions/{id} {
       allow read: if isStaff() || (signedIn() && request.auth.uid != null && resource.data.driverId == request.auth.uid);
       allow create:        if role() == 'admin' || role() == 'agent'
@@ -609,7 +675,7 @@ service cloud.firestore {
       allow update, delete: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence';
     }
 
-    // â”€â”€ Véhicules, logs directeur
+    // Ã¢â€â‚¬Ã¢â€â‚¬ VÃ©hicules, logs directeur
     match /vehicles/{id} {
       allow read: if isStaff();
       allow write: if isAdminOrDirecteur();
@@ -621,52 +687,61 @@ service cloud.firestore {
       allow update, delete: if isAdminOrDirecteur();
     }
 
-    // â”€â”€ Secteurs
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Secteurs
     match /sectors/{sectorId} {
       allow read:  if isStaff();
       allow write: if role() == 'admin' || role() == 'chef_agence';
     }
 
-    // â”€â”€ Bons de ramassage (lots pré-imprimés)
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Bons de ramassage (lots prÃ©-imprimÃ©s)
     match /bonRamasageBatches/{batchId} {
       allow read:  if isStaff();
       allow write: if role() == 'admin' || role() == 'chef_agence';
     }
 
-    // â”€â”€ Arrivages
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Arrivages
     match /arrivages/{arrivageId} {
       allow read:   if signedIn();
       allow create: if isStaff() || isDeliveryWorker();
-      allow update: if isStaff();
-      allow delete: if isAdmin();
+      // Autoriser la modification par tout le staff pour le pointage
+      allow update: if signedIn() && (isStaff() || isDeliveryWorker());
+      // TEMPORAIRE: Permettre au staff de supprimer (pour nettoyage)
+      // TODO: Remettre "allow delete: if isAdmin();" après nettoyage
+      allow delete: if isStaff();
     }
 
-    // â”€â”€ Transferts vers l'Admin
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Transferts vers l'Admin
     match /adminTransfers/{id} {
       allow read:   if isStaff();
       allow create: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || role() == 'caissier';
       allow update, delete: if isAdmin();
     }
 
-    // â”€â”€ Signatures de livraison (accès public pour le destinataire)
-    match /deliverySignatures/{parcelId} {
-      // Lecture publique : le chauffeur et l'agent voient la signature en temps réel
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Signatures de livraison (accÃ¨s public pour le destinataire)
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Signatures de livraison (accÃ¨s public pour le destinataire)
+    // Supporte signatures normales ({parcelId}) ET signatures de retour ({parcelId}_return)
+    match /deliverySignatures/{signatureId} {
+      // Lecture publique : le chauffeur et l'agent voient la signature en temps rÃ©el
       allow get: if true;
       allow list: if isStaff();
-      // Création publique : uniquement si le token correspond à celui stocké dans le colis
-      // Utiliser set au lieu de create pour permettre l'écrasement
+      // CrÃ©ation publique : uniquement si le token correspond Ã  celui stockÃ© dans le colis
+      // Le signatureId peut être {parcelId} OU {parcelId}_return
       allow create, update: if request.resource.data.token != null
-        && exists(/databases/$(database)/documents/parcels/$(parcelId))
-        && get(/databases/$(database)/documents/parcels/$(parcelId)).data.signatureToken == request.resource.data.token;
+        && request.resource.data.parcelId != null
+        && exists(/databases/$(database)/documents/parcels/$(request.resource.data.parcelId))
+        && (
+          get(/databases/$(database)/documents/parcels/$(request.resource.data.parcelId)).data.signatureToken == request.resource.data.token
+          || get(/databases/$(database)/documents/parcels/$(request.resource.data.parcelId)).data.returnSignatureToken == request.resource.data.token
+        );
       allow delete: if isStaff();
     }
 
-    // â”€â”€ Remarques caissier
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Remarques caissier
     match /caissierRemarks/{id} {
       allow read, write: if isStaff();
     }
 
-    // â”€â”€ Règlements (Pointeur-Encaisseur)
+    // Ã¢â€â‚¬Ã¢â€â‚¬ RÃ¨glements (Pointeur-Encaisseur)
     match /reglements/{reglementId} {
       allow read: if isAdmin()
         || (isStaff() && isNotBlocked() && (
@@ -705,7 +780,7 @@ service cloud.firestore {
         || (role() == 'chef_agence' && resource.data.agencyCity == userDoc().city);
     }
 
-    // â”€â”€ Rapports Règlements
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Rapports RÃ¨glements
     match /reglementsRapports/{rapportId} {
       allow read: if isAdmin()
         || (isStaff() && isNotBlocked() && (
@@ -727,7 +802,7 @@ service cloud.firestore {
           && resource.data.status == 'brouillon');
     }
 
-    // â”€â”€ Retour Documents (bordereaux de retour chèques/traites)
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Retour Documents (bordereaux de retour chÃ¨ques/traites)
     match /retourDocuments/{id} {
       allow read: if isStaff();
       allow create: if isAdmin()
@@ -743,20 +818,20 @@ service cloud.firestore {
           && resource.data.status == 'brouillon');
     }
 
-    // â”€â”€ Versements bancaires (RETOUR FOND)
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Versements bancaires (RETOUR FOND)
     match /bankDeposits/{depositId} {
       allow read:          if isStaff();
       allow create:        if isStaff();
       allow update, delete: if isAdmin();
     }
 
-    // â”€â”€ Notes agents
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Notes agents
     match /agentNotes/{noteId} {
       allow read: if isStaff();
       allow write: if isStaff();
     }
 
-    // â”€â”€ Stats agrégées (écrites par Cloud Functions, lues par admin)
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Stats agrÃ©gÃ©es (Ã©crites par Cloud Functions, lues par admin)
     match /stats/{statId} {
       allow read: if isAdmin();
       allow write: if false; // Cloud Functions only (service account bypasses rules)
@@ -766,8 +841,8 @@ service cloud.firestore {
       allow write: if false;
     }
 
-    // â”€â”€ Catch-all : lecture staff, écriture admin uniquement
-    // (protège les collections non listées explicitement)
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Catch-all : lecture staff, Ã©criture admin uniquement
+    // (protÃ¨ge les collections non listÃ©es explicitement)
     // Encaisseur central : versements societe et paiements fournisseurs
     match /centralCodDeposits/{depositId} {
       allow read: if isAdmin() || isCentralCollector() || role() == 'chef_agence';
@@ -779,6 +854,29 @@ service cloud.firestore {
     match /centralSupplierPayments/{paymentId} {
       allow read, create, update: if isAdmin() || isCentralCollector();
       allow delete: if isAdmin();
+    }
+
+    // Comptes portail (particuliers et clients)
+    match /portalAccounts/{accountId} {
+      allow read: if isStaff() || (signedIn() && request.auth.uid == accountId);
+      // Création : staff OU utilisateur créant son propre compte (accountId = uid)
+      allow create: if isStaff()
+        || (signedIn() && request.auth.uid == accountId && request.resource.data.uid == request.auth.uid);
+      allow update: if isStaff() || (signedIn() && request.auth.uid == accountId);
+      allow delete: if isStaff();
+    }
+
+    // Déclarations de colis perdus
+    match /lostParcels/{lostParcelId} {
+      allow read: if isStaff();
+      // Création : tout le staff peut déclarer un colis perdu
+      allow create: if isStaff() && signedIn();
+      // Mise à jour : réponses des agences, changements de statut
+      allow update: if isStaff();
+      // Suppression : admin, chef d'agence, ou déclarateur original
+      allow delete: if isAdmin()
+        || role() == 'chef_agence'
+        || (signedIn() && resource.data.declaredBy.uid == request.auth.uid);
     }
 
     match /{document=**} {

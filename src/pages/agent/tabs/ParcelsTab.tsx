@@ -4,10 +4,11 @@ import {
   LayoutGrid, Lock, Package, Printer, Search, Trash2, Truck,
   Unlock, User, X,
 } from 'lucide-react'
+import { deleteField } from 'firebase/firestore'
 import {
   loadReturnedParcelOnTruck, validateReturnArrival, getMoreAgentParcels,
 } from '../../../firebase/firestore'
-import { isInReturnCircuit } from '../../../firebase/parcels'
+import { isInReturnCircuit, updateParcel } from '../../../firebase/parcels'
 import {
   STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS, codCollectedLabel,
   CITIES,
@@ -151,14 +152,21 @@ export default function ParcelsTab() {
 
     // Returner
     returningParcelId,
+    RETURN_REASONS,
+    returnReasonModal, setReturnReasonModal,
+    submitReturnWithReason,
   } = useAgentCtx()
 
   const PAGE_SIZE = 25
 
+  // Sécurité : s'assurer que les tableaux ne sont jamais undefined
+  const safeParcels = filteredParcels || []
+
   // ⭐ Calculer les villes de destination disponibles
   const availableDestCities = (() => {
     const cities = new Set<string>()
-    allDisplayParcels.forEach((p: any) => {
+    const parcels = allDisplayParcels || []
+    parcels.forEach((p: any) => {
       const destCity = p.destinationCity || p.receiver?.city
       if (destCity) cities.add(destCity)
     })
@@ -881,21 +889,29 @@ export default function ParcelsTab() {
                     </div>
                   )}
 
-                  {/* Retour direct — pour l'agent de destination */}
-                  {canManageStatus(parcel) && !['Retourné','En transit retour','Livré'].includes(parcel.status) && (
-                    <div className="mt-3 pt-3 border-t border-red-100">
-                      <button
-                        onClick={() => handleReturnDirect(parcel)}
-                        disabled={returningParcelId === parcel.id}
-                        className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-700 text-xs font-semibold py-2.5 rounded-xl border border-red-200 transition"
-                      >
-                        {returningParcelId === parcel.id
-                          ? <><div className="w-3.5 h-3.5 border-2 border-red-400 border-t-transparent rounded-full animate-spin" /> Retour en cours...</>
-                          : <>↩️ Retourner ce colis</>
-                        }
-                      </button>
-                    </div>
-                  )}
+                  {/* Retour direct — UNIQUEMENT pour l'agence de DESTINATION sur colis Livré */}
+                  {(() => {
+                    const isInDestinationAgency = profile?.city && (
+                      profile.city === parcel.destinationCity ||
+                      profile.city === parcel.receiver?.city
+                    )
+                    const canReturn = isInDestinationAgency && parcel.status === 'Livré'
+
+                    return canReturn ? (
+                      <div className="mt-3 pt-3 border-t border-red-100">
+                        <button
+                          onClick={() => handleReturnDirect(parcel)}
+                          disabled={returningParcelId === parcel.id}
+                          className="w-full flex items-center justify-center gap-2 bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-700 text-xs font-semibold py-2.5 rounded-xl border border-red-200 transition"
+                        >
+                          {returningParcelId === parcel.id
+                            ? <><div className="w-3.5 h-3.5 border-2 border-red-400 border-t-transparent rounded-full animate-spin" /> Retour en cours...</>
+                            : <>↩️ Retourner ce colis</>
+                          }
+                        </button>
+                      </div>
+                    ) : null
+                  })()}
 
                   {/* Bandeau retour en transit — agence physique du colis (doit l'expédier vers l'expéditeur) */}
                   {parcel.status === 'Retourné' && isReturnOriginCity(parcel) && (
@@ -910,28 +926,70 @@ export default function ParcelsTab() {
                             </p>
                           </div>
                         </div>
-                        <button
-                          onClick={async () => {
-                            if (!window.confirm(`Confirmer le chargement de ce colis sur le camion vers ${parcel.returnToCity || parcel.originCity} ?\n${parcel.trackingId}`)) return
-                            setLoadingTruckId(parcel.id)
-                            try { await loadReturnedParcelOnTruck(parcel) }
-                            catch (e: any) { alert('Erreur : ' + (e?.message || e)) }
-                            finally { setLoadingTruckId(null) }
-                          }}
-                          disabled={loadingTruckId === parcel.id}
-                          className="w-full flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white text-xs font-bold py-2.5 rounded-xl transition"
-                        >
-                          {loadingTruckId === parcel.id
-                            ? <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Chargement...</>
-                            : <>🚚 Chargé sur camion → {parcel.returnToCity || parcel.originCity}</>
-                          }
-                        </button>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            onClick={async () => {
+                              if (!window.confirm(`Réessayer la livraison de ce colis ?\n${parcel.trackingId}\n\nLe colis sera remis en circulation pour une nouvelle tentative de livraison.`)) return
+                              setLoadingTruckId(parcel.id)
+                              try {
+                                console.log('🔄 Réessai livraison - AVANT:', {
+                                  status: parcel.status,
+                                  wasReturned: parcel.wasReturned,
+                                  returnToCity: parcel.returnToCity
+                                })
+                                await updateParcel(parcel.id, {
+                                  status: 'En livraison',
+                                  wasReturned: deleteField(),
+                                  returnedAt: deleteField(),
+                                  returnReason: deleteField(),
+                                  returnToCity: deleteField(),
+                                  loadedOnTruckAt: deleteField(),
+                                  loadedOnTruckBy: deleteField(),
+                                  returnLoadedAt: deleteField(),
+                                  returnLoadedBy: deleteField(),
+                                  retryDeliveryAt: new Date(),
+                                  retryDeliveryBy: profile?.name || profile?.email || 'Inconnu'
+                                })
+                                console.log('✅ Réessai livraison - Mise à jour réussie')
+                                alert('✅ Colis remis en livraison !\n\nRafraîchissez la page pour voir les changements.')
+                              }
+                              catch (e: any) {
+                                console.error('❌ Erreur réessai:', e)
+                                alert('Erreur : ' + (e?.message || e))
+                              }
+                              finally { setLoadingTruckId(null) }
+                            }}
+                            disabled={loadingTruckId === parcel.id}
+                            className="flex items-center justify-center gap-1.5 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-xs font-bold py-2.5 rounded-xl transition"
+                          >
+                            {loadingTruckId === parcel.id
+                              ? <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /></>
+                              : <>🔄 Réessayer</>
+                            }
+                          </button>
+                          <button
+                            onClick={async () => {
+                              if (!window.confirm(`Confirmer le chargement de ce colis sur le camion vers ${parcel.returnToCity || parcel.originCity} ?\n${parcel.trackingId}`)) return
+                              setLoadingTruckId(parcel.id)
+                              try { await loadReturnedParcelOnTruck(parcel) }
+                              catch (e: any) { alert('Erreur : ' + (e?.message || e)) }
+                              finally { setLoadingTruckId(null) }
+                            }}
+                            disabled={loadingTruckId === parcel.id}
+                            className="flex items-center justify-center gap-1.5 bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white text-xs font-bold py-2.5 rounded-xl transition"
+                          >
+                            {loadingTruckId === parcel.id
+                              ? <><div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /></>
+                              : <>🚚 Retour agence</>
+                            }
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
 
                   {/* Colis déjà en transit retour — info pour la ville physique (expéditeur) */}
-                  {parcel.status === 'En transit retour' && isReturnOriginCity(parcel) && (
+                  {parcel.status === 'Retour en transit' && isReturnOriginCity(parcel) && (
                     <div className="mt-3 pt-3 border-t border-orange-100">
                       <div className="bg-orange-50 border border-orange-200 rounded-xl px-3 py-2.5 flex items-start gap-2">
                         <span className="text-base shrink-0">🚛</span>
@@ -956,8 +1014,8 @@ export default function ParcelsTab() {
                     </div>
                   )}
 
-                  {/* En transit retour — bouton de validation à l'agence d'origine */}
-                  {parcel.status === 'En transit retour' && canManageReturnDelivery(parcel) && (
+                  {/* Retour en transit — bouton de validation à l'agence d'origine */}
+                  {parcel.status === 'Retour en transit' && canManageReturnDelivery(parcel) && (
                     <div className="mt-3 pt-3 border-t border-green-100">
                       <div className="bg-green-50 border border-green-200 rounded-xl px-3 py-2.5 space-y-2.5">
                         <div className="flex items-start gap-2">
@@ -1524,13 +1582,27 @@ export default function ParcelsTab() {
               <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm mb-4">⚠️ {deliveryModal.error}</div>
             )}
             {(() => {
-              // CORRECTION: Pour un colis "Arrivé en agence", utiliser la ville ACTUELLE (où se trouve le colis physiquement)
-              // et non la destination finale. Un colis à Casablanca doit avoir des livreurs de Casablanca.
               const parcel = deliveryModal.parcel
-              const isAtOrigin = parcel?.status === 'Arrivé en agence' && parcel?.originCity === profile?.city
-              const destCity = isAtOrigin
-                ? profile?.city  // Colis à l'agence d'origine → livreurs locaux
-                : (parcel?.destinationCity || parcel?.receiver?.city || profile?.city)
+
+              // Détection robuste des retours (y compris anciens colis)
+              const isReturn = parcel?.status?.includes('Retour')
+                || parcel?.wasReturned
+                || !!parcel?.returnedAt
+                || !!parcel?.returnReason
+                || !!parcel?.returnToCity
+                || parcel?.history?.some((h: any) => h.status?.includes('Retour'))
+
+              // Vérifier si le retour est arrivé à l'agence source
+              const isReturnArrived = parcel?.status === 'Retour arrivé' || parcel?.status === 'Retour finalisé'
+
+              // APRÈS swap des villes lors du retour:
+              // - receiver = expéditeur original (où le colis doit retourner)
+              // - destinationCity = ville de l'expéditeur original
+              // Donc pour RETOUR et LIVRAISON normale: utiliser receiver.city ou destinationCity
+
+              const finalDestinationCity = parcel?.receiver?.city || parcel?.destinationCity
+
+              const destCity = finalDestinationCity || profile?.city
               const citySectors = allSectors.filter((s: any) => s.city === destCity)
               const selectedSectorId = deliveryModal.sectorId
               const cityDrivers = drivers.filter((d: any) =>
@@ -1543,6 +1615,7 @@ export default function ParcelsTab() {
                 v.city === destCity ||
                 cityDrivers.some((d: any) => d.id === v.chauffeurId)
               )
+
               return cityDrivers.length === 0 ? (
               <div className="space-y-3 mb-4">
                 <div className="relative">
@@ -1621,6 +1694,57 @@ export default function ParcelsTab() {
                   ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Assignation...</>
                   : <><Truck className="w-4 h-4" /> Assigner</>
                 }
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal raison du retour */}
+      {returnReasonModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[80] p-4" onClick={() => !returnReasonModal.loading && setReturnReasonModal(null)}>
+          <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-6 space-y-4" onClick={e => e.stopPropagation()}>
+            <div className="flex items-start gap-3">
+              <div className="text-2xl">↩️</div>
+              <div>
+                <h3 className="font-bold text-gray-900 text-base">Retourner ce colis</h3>
+                <p className="text-xs text-gray-400 mt-0.5 font-mono">{returnReasonModal.parcel.trackingId}</p>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Raison du retour</p>
+              {RETURN_REASONS.map((r: any) => (
+                <button key={r} type="button"
+                  onClick={() => setReturnReasonModal((m: any) => ({ ...m, reason: r }))}
+                  className={`w-full text-left px-4 py-2.5 rounded-xl border text-sm font-medium transition ${
+                    returnReasonModal.reason === r
+                      ? 'bg-red-50 border-red-400 text-red-700'
+                      : 'border-gray-200 text-gray-600 hover:border-gray-300 hover:bg-gray-50'
+                  }`}>
+                  {returnReasonModal.reason === r ? '● ' : '○ '}{r}
+                </button>
+              ))}
+              {returnReasonModal.reason === 'Autre raison' && (
+                <input
+                  autoFocus
+                  type="text"
+                  placeholder="Précisez la raison…"
+                  value={returnReasonModal.customReason}
+                  onChange={e => setReturnReasonModal((m: any) => ({ ...m, customReason: e.target.value }))}
+                  className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm outline-none focus:border-red-400"
+                />
+              )}
+            </div>
+            <div className="flex gap-2 pt-1">
+              <button type="button" onClick={() => setReturnReasonModal(null)}
+                disabled={returnReasonModal.loading}
+                className="flex-1 py-2.5 rounded-xl border border-gray-200 text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">
+                Annuler
+              </button>
+              <button type="button" onClick={submitReturnWithReason}
+                disabled={returnReasonModal.loading || !returnReasonModal.reason}
+                className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-bold transition">
+                {returnReasonModal.loading ? 'En cours…' : 'Confirmer retour'}
               </button>
             </div>
           </div>

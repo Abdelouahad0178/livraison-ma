@@ -371,7 +371,7 @@ export default function CodTab() {
             <p className="text-2xl font-black">{fmt(totalAll)} DH</p>
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
           <div className="bg-white/15 rounded-2xl px-3 py-2.5 text-center">
             <p className="text-white/70 text-[10px] font-semibold uppercase tracking-wider">En cours</p>
             <p className="text-white font-black text-lg leading-tight">{fmt(totalPending)} DH</p>
@@ -391,7 +391,7 @@ export default function CodTab() {
       {(dstHasData || src.length > 0) && (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 overflow-x-auto">
           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mb-3">Pipeline</p>
-          <div className="flex items-center gap-1.5 min-w-max">
+          <div className="flex flex-wrap items-center gap-1.5">
             {[
               ...(dstHasData ? [
                 { label: 'À valider',  count: dst_collected.length, bg: 'bg-red-500',    dot: 'bg-red-400'    },

@@ -64,6 +64,20 @@ export function isParcelVisibleInDestinationAgency(parcel: Partial<Parcel> = {})
 }
 
 async function ensureReceiverClientForAgency(parcel: any, parcelId: any) {
+  if (parcel.receiverClientId) {
+    const receiver = parcel.receiver || {}
+    await updateDoc(doc(db, 'clients', parcel.receiverClientId), {
+      lastReceiverParcelId: parcelId,
+      lastReceiverTrackingId: parcel.trackingId,
+      lastReceiverSeenAt: serverTimestamp(),
+      ...(receiver.tel ? { tel: receiver.tel } : {}),
+      ...(receiver.address ? { address: receiver.address } : {}),
+      ...(receiver.name ? { name: receiver.name } : {}),
+      isDestinataire: true,
+    })
+    return parcel.receiverClientId
+  }
+
   const receiver = parcel.receiver || {}
   const city = cleanIdentity(receiver.city || parcel.destinationCity)
   const name = cleanIdentity(receiver.name)
@@ -88,6 +102,7 @@ async function ensureReceiverClientForAgency(parcel: any, parcelId: any) {
       lastReceiverParcelId: parcelId,
       lastReceiverTrackingId: parcel.trackingId,
       lastReceiverSeenAt: serverTimestamp(),
+      isDestinataire: true,
     }
     if (!existing.tel && tel) patch.tel = tel
     if (!existing.address && receiver.address) patch.address = receiver.address
@@ -115,6 +130,11 @@ async function ensureReceiverClientForAgency(parcel: any, parcelId: any) {
     portalEmail: '',
     autoCreated: true,
     autoCreatedFrom: 'receiver',
+    isExpediteur: false,
+    isDestinataire: true,
+    secteurId: '',
+    secteurName: '',
+    livreurIds: [],
     lastReceiverParcelId: parcelId,
     lastReceiverTrackingId: parcel.trackingId,
     lastReceiverSeenAt: serverTimestamp(),
@@ -194,6 +214,7 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     portType:             data.portType   || 'port_paye',
     clientId:             data.clientId   || null,
     clientName:           data.clientName || null,
+    receiverClientId:     data.receiverClientId || null,
     returnOf:             data.returnOf             || null,
     returnOfTrackingId:   data.returnOfTrackingId   || null,
     agentRole:            data.agentRole            || 'agent',
@@ -412,38 +433,16 @@ export async function loadReturnedParcelOnTruck(parcel: any) {
   const now = new Date().toISOString()
   const hasBeenSwapped = !!parcel.returnToCity
 
-  // Utiliser "Retour en transit" pour le circuit retour
-  if (hasBeenSwapped) {
-    await updateDoc(doc(db, 'parcels', parcel.id), {
+  // Modifier le statut pour marquer le colis comme en transit retour
+  await updateDoc(doc(db, 'parcels', parcel.id), {
+    status: 'Retour en transit',
+    returnShippedAt: now,
+    history: arrayUnion({
       status: 'Retour en transit',
-      returnShippedAt: now,
-      history: arrayUnion({
-        status: 'Retour en transit',
-        timestamp: now,
-        note: 'Chargé sur camion inter-villes — retour vers ' + parcel.returnToCity,
-      }),
-    })
-  } else {
-    const newSender   = parcel.receiver   || {}
-    const newReceiver = parcel.sender     || {}
-    const newOrigin   = parcel.destinationCity || parcel.receiver?.city || ''
-    const newDest     = parcel.originCity      || parcel.sender?.city   || ''
-    await updateDoc(doc(db, 'parcels', parcel.id), {
-      status:          'Retour en transit',
-      sender:          newSender,
-      receiver:        newReceiver,
-      originCity:      newOrigin,
-      destinationCity: newDest,
-      returnToCity:    newDest,
-      arrivedNbColis:  deleteField(),
-      returnShippedAt: now,
-      history: arrayUnion({
-        status: 'Retour en transit',
-        timestamp: now,
-        note: 'Chargé sur camion inter-villes — retour vers ' + newDest,
-      }),
-    })
-  }
+      timestamp: now,
+      note: 'Chargé sur camion pour retour vers agence source',
+    }),
+  })
 }
 
 // Validation d'une saisie aide agent par le chef d'agence
@@ -802,10 +801,10 @@ export function subscribeAgencyParcels(city: any, callback: any, onError: (err?:
 export function subscribeAgencyReturnParcels(city: any, callback: any, onError: (err?: any) => void = () => {}) {
   let allReturns: any[] = []
 
-  // Requête simple : tous les colis avec wasReturned = true (index existant)
+  // Requête : tous les colis avec status retour (pour inclure les anciens colis)
   const q = query(
     collection(db, 'parcels'),
-    where('wasReturned', '==', true),
+    where('status', 'in', ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']),
     orderBy('createdAt', 'desc'),
     limit(200)
   )
@@ -815,16 +814,16 @@ export function subscribeAgencyReturnParcels(city: any, callback: any, onError: 
 
     // Filtrer en local pour cette agence
     const filtered = allReturns.filter((p: any) => {
-      // À charger : Retourné + originCity (agence physique)
-      if (p.status === 'Retourné' && p.originCity === city) return true
+      // À charger : Retourné + destinationCity (car après swap, destinationCity = agence source)
+      if (p.status === 'Retourné' && (p.destinationCity === city || p.returnToCity === city || p.createdByCity === city)) return true
 
       // Reçus : en transit/arrivé + destinationCity (agence de retour)
       if ((p.status === 'Retour en transit' || p.status === 'Retour arrivé') &&
           (p.destinationCity === city || p.returnToCity === city)) return true
 
-      // Historique : finalisé + une des deux agences
+      // Historique : finalisé + returnToCity ou createdByCity (agence source)
       if (p.status === 'Retour finalisé' &&
-          (p.originCity === city || p.destinationCity === city)) return true
+          (p.returnToCity === city || p.createdByCity === city || p.destinationCity === city)) return true
 
       return false
     })
@@ -967,6 +966,52 @@ export async function createReturnParcel(originalParcel: any, agentId: any, agen
     returnOf:             originalParcel.id,
     returnOfTrackingId:   originalParcel.trackingId,
   })
+}
+
+// -- Compteurs en temps réel -----------------------------------------------
+export async function getRealParcelsCount() {
+  try {
+    const [activeSnapshot, archivedSnapshot] = await Promise.all([
+      getCountFromServer(collection(db, 'parcels')),
+      getCountFromServer(collection(db, 'parcels_archive'))
+    ])
+
+    return {
+      active: activeSnapshot.data().count,
+      archived: archivedSnapshot.data().count,
+      total: activeSnapshot.data().count + archivedSnapshot.data().count
+    }
+  } catch (error) {
+    console.error('Erreur comptage colis:', error)
+    return { active: 0, archived: 0, total: 0 }
+  }
+}
+
+export async function getRealParcelsStats() {
+  try {
+    const statuses = ['Livré', 'Retourné', 'Retour finalisé']
+    const [activeSnapshot, ...statusSnapshots] = await Promise.all([
+      getCountFromServer(collection(db, 'parcels')),
+      ...statuses.map(status =>
+        getCountFromServer(query(collection(db, 'parcels'), where('status', '==', status)))
+      )
+    ])
+
+    const livres = statusSnapshots[0].data().count
+    const retournes = statusSnapshots[1].data().count + statusSnapshots[2].data().count
+    const active = activeSnapshot.data().count
+    const enCours = active - livres - retournes
+
+    return {
+      total: active,
+      enCours,
+      livres,
+      retournes
+    }
+  } catch (error) {
+    console.error('Erreur stats colis:', error)
+    return { total: 0, enCours: 0, livres: 0, retournes: 0 }
+  }
 }
 
 // -- Règlements (Pointeur-Encaisseur) -------------------------------------

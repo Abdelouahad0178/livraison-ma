@@ -218,6 +218,23 @@
       ]
     },
     {
+      "collectionGroup": "modificationRequests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "targetClientId", "order": "ASCENDING"  },
+        { "fieldPath": "createdAt",      "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "modificationRequests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "targetClientId", "order": "ASCENDING"  },
+        { "fieldPath": "requestedBy",    "order": "ASCENDING"  },
+        { "fieldPath": "createdAt",      "order": "DESCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
@@ -282,6 +299,22 @@
       "fields": [
         { "fieldPath": "agencyCity", "order": "ASCENDING"  },
         { "fieldPath": "weekId",     "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "wasReturned", "order": "ASCENDING"  },
+        { "fieldPath": "createdAt",   "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status",    "order": "ASCENDING"  },
+        { "fieldPath": "createdAt", "order": "ASCENDING" }
       ]
     }
   ],

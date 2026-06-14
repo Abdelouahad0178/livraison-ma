@@ -34,8 +34,11 @@ export default function AdminExpeditionsTab({
   setSearch,
   cityFilter,
   setCityFilter,
+  driverFilter,
+  setDriverFilter,
   statusFilter,
   setStatusFilter,
+  users,
   datePreset,
   setDatePreset,
   dateFrom,
@@ -53,6 +56,9 @@ export default function AdminExpeditionsTab({
   loadingMore,
   openArchiveModal,
   selectCls,
+  handleDeleteParcel,
+  deleteConfirm,
+  deleting,
 }: any) {
   return (
     <>
@@ -87,6 +93,14 @@ export default function AdminExpeditionsTab({
           <select value={cityFilter} onChange={e => setCityFilter(e.target.value)} className={selectCls}>
             <option value="Toutes">Toutes les villes</option>
             {CITIES.map(c => <option key={c}>{c}</option>)}
+          </select>
+          <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)} className={selectCls}>
+            <option value="Tous">Tous les livreurs</option>
+            {users?.filter((u: any) => u.role === 'livreur' || u.role === 'chauffeur').map((u: any) => (
+              <option key={u.id} value={u.id}>
+                {u.role === 'livreur' ? '🚚' : '🚗'} {u.name} - {u.city}
+              </option>
+            ))}
           </select>
         </div>
 
@@ -281,13 +295,27 @@ export default function AdminExpeditionsTab({
                         </button>
                       </td>
                       <td className="px-4 py-3">
-                        <button
-                          onClick={() => openAdminEdit(p)}
-                          className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold bg-purple-50 text-purple-700 hover:bg-purple-100 transition border border-purple-200"
-                          title="Modifier tous les champs (Admin)"
-                        >
-                          <Edit2 className="w-3 h-3" /> Admin
-                        </button>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => openAdminEdit(p)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold bg-purple-50 text-purple-700 hover:bg-purple-100 transition border border-purple-200"
+                            title="Modifier tous les champs (Admin)"
+                          >
+                            <Edit2 className="w-3 h-3" /> Admin
+                          </button>
+                          <button
+                            onClick={() => handleDeleteParcel(p.id)}
+                            disabled={deleting === p.id}
+                            className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold transition border ${
+                              deleteConfirm === p.id
+                                ? 'bg-red-600 text-white border-red-600 hover:bg-red-700'
+                                : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'
+                            } ${deleting === p.id ? 'opacity-50 cursor-not-allowed' : ''}`}
+                            title={deleteConfirm === p.id ? 'Cliquer à nouveau pour confirmer' : 'Supprimer l\'expédition'}
+                          >
+                            {deleting === p.id ? '...' : deleteConfirm === p.id ? '⚠️ Confirmer ?' : '🗑️'}
+                          </button>
+                        </div>
                       </td>
                       <td className="px-4 py-3">
                         <a href={`/track?id=${p.trackingId}`} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700 transition">

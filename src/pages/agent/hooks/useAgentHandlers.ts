@@ -30,6 +30,7 @@ import {
   resolveModificationRequest, deleteModificationRequest,
 } from '../../../firebase/clients'
 import { createBankDeposit } from '../../../firebase/bankDeposits'
+import { createParticularPortalAccount } from '../../../firebase/portalAccounts'
 import { printCharge, printTable, printBonRamassage } from '../../../utils/agentPrintUtils'
 
 const SERVICE_TYPES = [
@@ -1357,6 +1358,35 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     } = s.current
     e.preventDefault()
     setError('')
+
+    // ⚠️ VALIDATION OBLIGATOIRE - Expéditeur et Destinataire
+    const errors: string[] = []
+
+    if (!form.senderName || form.senderName.trim() === '') {
+      errors.push('❌ Nom expéditeur')
+    }
+    if (!form.senderAddress || form.senderAddress.trim() === '') {
+      errors.push('❌ Adresse expéditeur')
+    }
+    if (!form.senderTel || form.senderTel.trim() === '') {
+      errors.push('❌ Téléphone expéditeur')
+    }
+
+    if (!form.receiverName || form.receiverName.trim() === '') {
+      errors.push('❌ Nom destinataire')
+    }
+    if (!form.receiverAddress || form.receiverAddress.trim() === '') {
+      errors.push('❌ Adresse destinataire')
+    }
+    if (!form.receiverTel || form.receiverTel.trim() === '') {
+      errors.push('❌ Téléphone destinataire')
+    }
+
+    if (errors.length > 0) {
+      setError('⚠️ CHAMPS OBLIGATOIRES MANQUANTS:\n\n' + errors.join('\n'))
+      return
+    }
+
     if (form.portType === 'port_en_compte' && !form.clientId) {
       setError('Sélectionnez ou créez un client en compte avant de valider.')
       return
@@ -1405,6 +1435,26 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         operationDate:        form.operationDate || null,
         agentRole:            profile?.role || 'agent',
       })
+
+      // Créer automatiquement un compte portail pour les particuliers
+      if (!form.clientId && form.senderName && form.senderTel) {
+        try {
+          const result = await createParticularPortalAccount({
+            name: form.senderName,
+            tel: form.senderTel,
+            city: form.senderCity || '',
+            address: form.senderAddress || '',
+            nic: form.senderNic || ''
+          })
+          if (result.success && !result.alreadyExists) {
+            console.log(`✅ Compte portail créé pour ${form.senderName}: ${result.email} / ${result.password}`)
+          }
+        } catch (err: any) {
+          console.error('❌ Erreur création compte portail particulier:', err)
+          // Ne pas bloquer la création du colis si la création du compte échoue
+        }
+      }
+
       if (form.autoDebit && form.clientId && (parcel.price as number) > 0) {
         try {
           await addPayment({
@@ -1518,10 +1568,16 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   }
 
   const handleDeleteClick = (parcel: any) => {
+    console.log('🗑️ handleDeleteClick appelé', { parcel })
     const { canEditParcelDetails, setDeleteConfirm } = s.current
+    console.log('🔍 canEditParcelDetails:', canEditParcelDetails)
+    console.log('🔍 setDeleteConfirm:', setDeleteConfirm)
+
     if (canEditParcelDetails(parcel)) {
+      console.log('✅ Autorisation OK - ouverture modal')
       setDeleteConfirm(parcel)
     } else {
+      console.log('❌ Pas autorisé')
       window.alert('Lecture seule : seul le createur de ce bon peut le supprimer.')
     }
   }
@@ -1666,9 +1722,17 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     setReturnReasonModal((m: any) => ({ ...m, loading: true }))
     setReturningParcelId(returnReasonModal.parcel.id)
     try {
+      console.log('🔥 TENTATIVE RETOUR:', {
+        parcelId: returnReasonModal.parcel.id,
+        trackingId: returnReasonModal.parcel.trackingId,
+        currentStatus: returnReasonModal.parcel.status,
+        note
+      })
       await markParcelAsReturned(returnReasonModal.parcel, { note })
+      console.log('✅ RETOUR RÉUSSI!')
       setReturnReasonModal(null)
     } catch (e: any) {
+      console.error('❌ ERREUR RETOUR:', e)
       alert(`Erreur : ${e?.message || e}`)
       setReturnReasonModal((m: any) => ({ ...m, loading: false }))
     } finally {
@@ -2108,8 +2172,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         pointedBy:   profile?.name || profile?.email || 'Agent',
       })
       setHistPointEdits((prev: any) => ({ ...prev, [arrivageId]: { ...prev[arrivageId], dirty: false } }))
-    } catch {
-      setHistPointErr((prev: any) => ({ ...prev, [arrivageId]: 'Erreur lors de la sauvegarde.' }))
+    } catch (error: any) {
+      console.error('❌ Erreur sauvegarde historique pointage:', error)
+      const errorMsg = error?.message || error?.toString() || 'Erreur inconnue'
+      setHistPointErr((prev: any) => ({ ...prev, [arrivageId]: `Erreur: ${errorMsg}` }))
     } finally {
       setHistSaving((prev: any) => ({ ...prev, [arrivageId]: false }))
     }

@@ -42,7 +42,7 @@ const STATUS_KEY_LABELS = {
   s_livre:             'Livré',
   s_retourne:          'Retourné',
   s_annule:            'Annulé',
-  s_en_transit_retour: 'En transit retour',
+  s_en_transit_retour: 'Retour en transit',
 }
 
 // ── Build time-series from daily stats docs ────────────────────────────────
@@ -269,7 +269,7 @@ export default function DashboardPage() {
   )
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 overflow-x-hidden">
       <CompanyContact />
 
       {/* Header */}

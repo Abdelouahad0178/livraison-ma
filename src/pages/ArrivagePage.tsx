@@ -67,6 +67,10 @@ export default function ArrivagePage() {
   const [assigningId,      setAssigningId]      = useState<any>(null)
   const [creatingArrivage, setCreatingArrivage] = useState(false)
 
+  // ── Filtres historique ────────────────────────────────────────────────────────
+  const [filterType,          setFilterType]          = useState('all')      // 'all' | 'complet' | 'partiel' | 'documents_seulement'
+  const [filterArrivageRef,   setFilterArrivageRef]   = useState('')        // Recherche par numéro d'arrivage
+
   useEffect(() => {
     const uid = auth.currentUser?.uid
     if (!uid) { navigate('/login'); return }
@@ -131,7 +135,12 @@ export default function ArrivagePage() {
 
   const toggleParcel = (p: any) => {
     const cur = arrived(p)
-    setArrivedBoxes((prev: any) => ({ ...prev, [p.id]: cur > 0 ? 0 : nbColis(p) }))
+    const total = nbColis(p)
+    // Simple toggle: coché → décocher (0), décoché → cocher tout (total)
+    setArrivedBoxes((prev: any) => ({
+      ...prev,
+      [p.id]: cur > 0 ? 0 : total
+    }))
   }
 
   const groups = transitParcels.reduce((acc, p) => {
@@ -150,7 +159,16 @@ export default function ArrivagePage() {
     const gParcels = groups[key].parcels
     const allFull  = gParcels.every((p: any) => isFullyArrived(p))
     const next     = { ...arrivedBoxes }
-    gParcels.forEach((p: any) => { next[p.id] = allFull ? 0 : nbColis(p) })
+
+    // Si tous complets → tout décocher
+    if (allFull) {
+      gParcels.forEach((p: any) => { next[p.id] = 0 })
+    }
+    // Si certains partiels ou à 0 → tout mettre au complet
+    else {
+      gParcels.forEach((p: any) => { next[p.id] = nbColis(p) })
+    }
+
     setArrivedBoxes(next)
   }
 
@@ -161,6 +179,18 @@ export default function ArrivagePage() {
   }
 
   const toggleExpand = (key: any) => setExpandedGroups((prev: any) => ({ ...prev, [key]: !prev[key] }))
+
+  const expandAll = () => {
+    const next: any = {}
+    Object.keys(groups).forEach(key => { next[key] = true })
+    setExpandedGroups(next)
+  }
+
+  const collapseAll = () => {
+    const next: any = {}
+    Object.keys(groups).forEach(key => { next[key] = false })
+    setExpandedGroups(next)
+  }
 
   // ── Calculs création ────────────────────────────────────────────────────────
   const arrivedParcels = transitParcels.filter(p => isArrived(p))
@@ -394,8 +424,10 @@ export default function ArrivagePage() {
         ...prev,
         [arrivageId]: { ...prev[arrivageId], dirty: false }
       }))
-    } catch {
-      setPointageError((prev: any) => ({ ...prev, [arrivageId]: 'Erreur lors de la sauvegarde.' }))
+    } catch (error: any) {
+      console.error('❌ Erreur sauvegarde pointage:', error)
+      const errorMsg = error?.message || error?.toString() || 'Erreur inconnue'
+      setPointageError((prev: any) => ({ ...prev, [arrivageId]: `Erreur: ${errorMsg}` }))
     } finally {
       setSavingPointage((prev: any) => ({ ...prev, [arrivageId]: false }))
     }
@@ -581,10 +613,14 @@ export default function ArrivagePage() {
                           return (
                             <div key={d.parcelId} className={`rounded-xl border transition ${d.pointed ? 'bg-green-900/20 border-green-700/40' : 'bg-gray-700/50 border-gray-600/50'}`}>
                               <div className="flex items-center gap-2 px-3 py-2.5">
-                                <button onClick={() => handleTogglePointed(todayArrivage.id, d.parcelId)} className="shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => handleTogglePointed(todayArrivage.id, d.parcelId)}
+                                  className="shrink-0 p-2 -ml-2 cursor-pointer hover:bg-gray-600/30 rounded transition"
+                                >
                                   {d.pointed
-                                    ? <CheckSquare className="w-4 h-4 text-green-400" />
-                                    : <Square className="w-4 h-4 text-gray-500" />}
+                                    ? <CheckSquare className="w-5 h-5 text-green-400" />
+                                    : <Square className="w-5 h-5 text-gray-500" />}
                                 </button>
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-1.5 flex-wrap">
@@ -862,27 +898,64 @@ export default function ArrivagePage() {
 
             {transitParcels.length > 0 && (
               <div className="bg-gray-800 rounded-2xl border border-gray-700 overflow-hidden">
-                <div className="flex items-center justify-between px-4 py-3 border-b border-gray-700">
-                  <div>
-                    <p className="text-sm font-bold text-gray-200">
-                      {arrivedParcels.length}/{transitParcels.length} bons reçus
-                    </p>
-                    <p className="text-xs text-gray-400">
-                      {totalArrivedBoxes}/{totalExpectedBoxes} colis physiques
-                    </p>
+                {/* En-tête avec stats et boutons de sélection globale */}
+                <div className="bg-gradient-to-r from-gray-800 to-gray-750 px-4 py-4 border-b border-gray-700">
+                  <div className="flex items-center justify-between mb-3">
+                    <div>
+                      <p className="text-sm font-bold text-gray-200">
+                        {arrivedParcels.length}/{transitParcels.length} bons reçus
+                      </p>
+                      <p className="text-xs text-gray-400">
+                        {totalArrivedBoxes}/{totalExpectedBoxes} colis physiques
+                      </p>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <button onClick={() => toggleAll(true)}
-                      className="text-xs px-3 py-1.5 bg-green-700 hover:bg-green-600 text-white font-semibold rounded-lg transition"
-                    >
-                      Tout cocher
-                    </button>
-                    <button onClick={() => toggleAll(false)}
-                      className="text-xs px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 font-semibold rounded-lg transition"
-                    >
-                      Tout décocher
-                    </button>
+
+                  {/* Boutons de sélection VISIBLES */}
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-3">
+                      <p className="text-xs text-gray-400 font-semibold">Sélection rapide:</p>
+                      <div className="flex gap-2 flex-1">
+                        <button onClick={() => toggleAll(true)}
+                          className="flex items-center gap-2 px-4 py-2 bg-green-600 hover:bg-green-500 text-white font-bold rounded-xl transition shadow-lg shadow-green-900/30 flex-1"
+                        >
+                          <CheckSquare className="w-4 h-4" />
+                          <span className="text-sm">Tout sélectionner</span>
+                        </button>
+                        <button onClick={() => toggleAll(false)}
+                          className="flex items-center gap-2 px-4 py-2 bg-gray-600 hover:bg-gray-500 text-white font-bold rounded-xl transition shadow-lg flex-1"
+                        >
+                          <Square className="w-4 h-4" />
+                          <span className="text-sm">Tout désélectionner</span>
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Boutons déplier/replier */}
+                    <div className="flex items-center gap-3">
+                      <p className="text-xs text-gray-400 font-semibold">Affichage:</p>
+                      <div className="flex gap-2 flex-1">
+                        <button onClick={expandAll}
+                          className="flex items-center gap-2 px-3 py-1.5 bg-blue-700 hover:bg-blue-600 text-white text-xs font-semibold rounded-lg transition"
+                        >
+                          <ChevronDown className="w-3 h-3" />
+                          Tout déplier (voir détails)
+                        </button>
+                        <button onClick={collapseAll}
+                          className="flex items-center gap-2 px-3 py-1.5 bg-gray-700 hover:bg-gray-600 text-gray-300 text-xs font-semibold rounded-lg transition"
+                        >
+                          <ChevronRight className="w-3 h-3" />
+                          Tout replier
+                        </button>
+                      </div>
+                    </div>
                   </div>
+
+                  {/* Info aide */}
+                  <p className="text-[11px] text-gray-500 mt-2 flex items-center gap-1">
+                    <AlertTriangle className="w-3 h-3" />
+                    💡 Dépliez un groupe pour voir les checkboxes individuelles et sélectionner expédition par expédition
+                  </p>
                 </div>
 
                 {Object.values(groups).map(group => {
@@ -927,10 +1000,14 @@ export default function ArrivagePage() {
                               checked ? (partial ? 'bg-orange-900/15' : 'bg-green-900/15') : 'bg-red-900/10'
                             }`}
                           >
-                            <button onClick={() => toggleParcel(parcel)} className="shrink-0">
+                            <button
+                              type="button"
+                              onClick={() => toggleParcel(parcel)}
+                              className="shrink-0 p-2 -ml-2 cursor-pointer hover:bg-gray-600/30 rounded transition"
+                            >
                               {checked
-                                ? <CheckSquare className={`w-4 h-4 ${partial ? 'text-orange-400' : 'text-green-400'}`} />
-                                : <Square className="w-4 h-4 text-gray-500" />
+                                ? <CheckSquare className={`w-5 h-5 ${partial ? 'text-orange-400' : 'text-green-400'}`} />
+                                : <Square className="w-5 h-5 text-gray-500" />
                               }
                             </button>
                             <div className="flex-1 min-w-0">
@@ -1016,16 +1093,143 @@ export default function ArrivagePage() {
         )}
 
         {/* ═══════════════ HISTORIQUE + POINTAGE ═══════════════ */}
-        {tab === 'historique' && (
+        {tab === 'historique' && (() => {
+          // ── Filtrage des arrivages ──
+          let filteredArrivages = [...arrivages]
+
+          // Filtre par type d'arrivage
+          if (filterType !== 'all') {
+            filteredArrivages = filteredArrivages.filter(arr => arr.type === filterType)
+          }
+
+          // Filtre par recherche de numéro d'arrivage
+          if (filterArrivageRef.trim()) {
+            const query = filterArrivageRef.trim().toLowerCase()
+            filteredArrivages = filteredArrivages.filter(arr =>
+              (arr.arrivageRef || '').toLowerCase().includes(query)
+            )
+          }
+
+          return (
           <>
+            {/* ── Barre de filtres ── */}
+            <div className="space-y-3 mb-4">
+              {/* Recherche par numéro */}
+              {filterArrivageRef.trim() && (
+                <div className="bg-gray-800 rounded-2xl border border-gray-700 p-3">
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={filterArrivageRef}
+                      onChange={e => setFilterArrivageRef(e.target.value)}
+                      placeholder="Rechercher par numéro d'arrivage..."
+                      className="w-full bg-gray-700 border border-gray-600 rounded-xl pl-9 pr-9 py-2 text-sm text-gray-100 placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                    />
+                    <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                    {filterArrivageRef && (
+                      <button
+                        onClick={() => setFilterArrivageRef('')}
+                        className="absolute right-2 top-1/2 -translate-y-1/2 p-1 hover:bg-gray-600 rounded-lg transition"
+                      >
+                        <X className="w-3 h-3 text-gray-400" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Filtres chips */}
+              <div className="space-y-2">
+                <p className="text-[10px] font-mono text-green-400 bg-green-900/20 px-2 py-1 rounded inline-block">
+                  🟢 Version simplifiée - 4 filtres
+                </p>
+                <div className="flex flex-wrap gap-2">
+                {/* Tous */}
+                <button
+                  onClick={() => setFilterType('all')}
+                  className={`px-4 py-2 rounded-full text-sm font-semibold transition ${
+                    filterType === 'all'
+                      ? 'bg-gray-700 text-white border-2 border-gray-500'
+                      : 'bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700'
+                  }`}
+                >
+                  Tous
+                </button>
+
+                {/* Complet */}
+                <button
+                  onClick={() => setFilterType('complet')}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-semibold transition ${
+                    filterType === 'complet'
+                      ? 'bg-green-600 text-white border-2 border-green-500'
+                      : 'bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700'
+                  }`}
+                >
+                  <CheckCircle2 className="w-4 h-4" />
+                  Complet
+                </button>
+
+                {/* Partiel */}
+                <button
+                  onClick={() => setFilterType('partiel')}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-semibold transition ${
+                    filterType === 'partiel'
+                      ? 'bg-orange-600 text-white border-2 border-orange-500'
+                      : 'bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700'
+                  }`}
+                >
+                  <AlertTriangle className="w-4 h-4" />
+                  Partiel
+                </button>
+
+                {/* Docs */}
+                <button
+                  onClick={() => setFilterType('documents_seulement')}
+                  className={`flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-semibold transition ${
+                    filterType === 'documents_seulement'
+                      ? 'bg-blue-600 text-white border-2 border-blue-500'
+                      : 'bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700'
+                  }`}
+                >
+                  📄 Docs
+                </button>
+
+                {/* Bouton recherche (toggle) */}
+                {!filterArrivageRef.trim() && (
+                  <button
+                    onClick={() => setFilterArrivageRef(' ')}
+                    className="flex items-center gap-1.5 px-4 py-2 rounded-full text-sm font-semibold bg-gray-800 text-gray-400 border border-gray-700 hover:bg-gray-700 transition"
+                  >
+                    <Search className="w-4 h-4" />
+                    Rechercher
+                  </button>
+                )}
+                </div>
+              </div>
+
+              {/* Compteur résultats */}
+              {filteredArrivages.length !== arrivages.length && (
+                <p className="text-xs text-gray-400 px-2">
+                  <span className="font-bold text-blue-400">{filteredArrivages.length}</span> arrivage{filteredArrivages.length > 1 ? 's' : ''} trouvé{filteredArrivages.length > 1 ? 's' : ''}
+                  <span className="text-gray-500"> sur {arrivages.length} au total</span>
+                </p>
+              )}
+            </div>
+
             {arrivages.length === 0 ? (
               <div className="bg-gray-800 rounded-2xl border border-gray-700 p-8 text-center text-gray-400">
                 <Clock className="w-12 h-12 mx-auto mb-3 opacity-30" />
                 <p className="font-semibold">Aucun arrivage enregistré</p>
               </div>
+            ) : filteredArrivages.length === 0 ? (
+              <div className="bg-gray-800 rounded-2xl border border-gray-700 p-8 text-center text-gray-400">
+                <Search className="w-12 h-12 mx-auto mb-3 opacity-30" />
+                <p className="font-semibold">Aucun arrivage ne correspond aux filtres sélectionnés</p>
+                <p className="text-xs text-gray-500 mt-2">Essayez de modifier ou réinitialiser les filtres</p>
+              </div>
             ) : (
               <div className="space-y-3">
-                {arrivages.map(arr => {
+                {filteredArrivages.map(arr => {
                   const tc = (TYPE_CONFIG as any)[arr.type] || TYPE_CONFIG.complet
                   const ps = (POINTAGE_STATUS as any)[arr.pointageStatus] || POINTAGE_STATUS.pending
                   const isOpen = expandedArrivage === arr.id
@@ -1292,7 +1496,7 @@ export default function ArrivagePage() {
               </div>
             )}
           </>
-        )}
+        )})()}
       </main>
     </div>
   )

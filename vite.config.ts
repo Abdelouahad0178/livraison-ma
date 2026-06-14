@@ -34,18 +34,7 @@ export default defineConfig({
     },
     // Optimisations de build
     chunkSizeWarningLimit: 500,
-    minify: 'terser',
-    terserOptions: {
-      compress: {
-        drop_console: true,
-        drop_debugger: true,
-        pure_funcs: ['console.log', 'console.info', 'console.debug'],
-        passes: 2,
-      },
-      mangle: {
-        safari10: true,
-      },
-    },
+    minify: 'esbuild',
     cssCodeSplit: true,
     sourcemap: false,
   },

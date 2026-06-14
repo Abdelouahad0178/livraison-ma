@@ -26,7 +26,7 @@ const azertyToQwerty: Record<string, string> = {
 }
 
 const normalizeAzerty = (text: string, enabled: boolean): string => {
-  if (!enabled) return text
+  if (!enabled || !text) return text || ''
   return text.split('').map(c => azertyToQwerty[c.toLowerCase()] || c).join('')
 }
 
@@ -61,7 +61,7 @@ export function useBarcodeScanner({
 
     // Enter = fin du scan
     if (e.key === 'Enter') {
-      const rawBarcode = bufferRef.current.trim()
+      const rawBarcode = (bufferRef.current || '').trim()
 
       if (rawBarcode.length >= minLength) {
         scanCountRef.current++

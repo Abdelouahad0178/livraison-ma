@@ -325,7 +325,7 @@ export default function DriverPage() {
   const activeList      = driverTab === 'transport' ? parcels : deliveryParcels
   const doneStatuses    = driverTab === 'transport'
     ? ['Arrivé en agence', 'Livré', 'Retourné']
-    : ['Livré', 'Retourné', 'En transit retour']
+    : ['Livré', 'Retourné', 'Retour en transit']
   const activeParcels   = activeList.filter(p => !doneStatuses.includes(p.status))
   const doneParcels     = activeList.filter(p =>  doneStatuses.includes(p.status))
   const byStatus        = filter === 'active' ? activeParcels
@@ -401,7 +401,7 @@ export default function DriverPage() {
   }
 
   const canBulkManageParcel = (parcel: any) => {
-    if (['Livré', 'Retourné', 'En transit retour'].includes(parcel.status)) return false
+    if (['Livré', 'Retourné', 'Retour en transit'].includes(parcel.status)) return false
     return driverTab === 'transport'
       ? parcel.chauffeurId === uid
       : parcel.deliveryDriverId === uid
@@ -488,10 +488,28 @@ export default function DriverPage() {
 
   const handleRequestSignature = useCallback(async (parcel: any) => {
     try {
-      const token = await generateSignatureToken(parcel.id)
+      // Détecter si c'est une livraison de retour (signature de l'expéditeur)
+      // On regarde UNIQUEMENT le statut actuel et wasReturned, PAS l'historique
+      // (car après un réessai, l'historique contient encore des traces du retour)
+      const isReturn = parcel?.status?.includes('Retour')
+        || parcel?.wasReturned === true
+
+      console.log('🔍 Demande signature:', {
+        parcelId: parcel.id,
+        status: parcel.status,
+        isReturn,
+        wasReturned: parcel.wasReturned,
+        returnedAt: parcel.returnedAt
+      })
+
+      const token = await generateSignatureToken(parcel.id, isReturn)
       const url   = `${window.location.origin}/sign/${parcel.id}/${token}`
-      setSignatureModal({ parcel, token, url, receivedSig: null, codPaymentType: '', confirming: false, done: false, error: '', stampMode: 'qr', driverStamp: null, driverCompanyName: '', stampSubmitting: false, handSubmitting: false, driverHandSignatureEmpty: true })
-    } catch {
+
+      console.log('✅ Token généré:', { token: token.slice(0, 10) + '...', isReturn })
+
+      setSignatureModal({ parcel, token, url, receivedSig: null, codPaymentType: '', confirming: false, done: false, error: '', stampMode: 'qr', driverStamp: null, driverCompanyName: '', stampSubmitting: false, handSubmitting: false, driverHandSignatureEmpty: true, isReturn })
+    } catch (err: any) {
+      console.error('❌ Erreur génération signature:', err)
       setMsg({ type: 'error', text: 'Impossible de générer le QR code. Réessayez.' })
     }
   }, [])
@@ -502,9 +520,9 @@ export default function DriverPage() {
     if (signatureUnsubRef.current) signatureUnsubRef.current()
     signatureUnsubRef.current = subscribeDeliverySignature(signatureModal.parcel.id, (sig: any) => {
       if (sig) setSignatureModal((m: any) => m ? { ...m, receivedSig: sig } : m)
-    })
+    }, signatureModal.isReturn) // Passer le flag isReturn pour écouter la bonne signature
     return () => { if (signatureUnsubRef.current) signatureUnsubRef.current() }
-  }, [signatureModal?.parcel?.id])
+  }, [signatureModal?.parcel?.id, signatureModal?.isReturn])
 
   useEffect(() => {
     if (signatureModal?.stampMode !== 'handwritten' || !handSignatureCanvasRef.current) return
@@ -604,7 +622,7 @@ export default function DriverPage() {
 
   const handleConfirmWithSignature = async () => {
     if (!signatureModal) return
-    const { parcel, codPaymentType } = signatureModal
+    const { parcel, codPaymentType, isReturn } = signatureModal
     const name = profile?.name || workerLabel
     const isDeliveryDriver = parcel.deliveryDriverId === uid
     const needsCod = isDeliveryDriver
@@ -617,14 +635,22 @@ export default function DriverPage() {
       setSignatureModal((m: any) => ({ ...m, error: 'Sélectionnez le mode de paiement RETOUR FOND avant de confirmer.' }))
       return
     }
+
+    console.log('📝 Confirmation signature:', {
+      parcelId: parcel.id,
+      isReturn,
+      finalStatus: isReturn ? 'Retour finalisé' : 'Livré'
+    })
+
     setSignatureModal((m: any) => ({ ...m, confirming: true, error: '' }))
     try {
       if (needsCod) await collectCod(parcel.id, codPaymentType, name)
       if (needsPortDu) await collectPortDu(parcel.id, name, uid || '')
-      await confirmDeliveryAfterSignature(parcel.id, name)
+      await confirmDeliveryAfterSignature(parcel.id, name, isReturn)
+      const finalStatus = isReturn ? 'Retour finalisé' : 'Livré'
       const patchList = (ps: any) => ps.map((p: any) =>
         p.id === parcel.id
-          ? { ...p, status: 'Livré', ...(needsCod && { codStatus: 'collected', codPaymentType }) }
+          ? { ...p, status: finalStatus, ...(needsCod && { codStatus: 'collected', codPaymentType }) }
           : p
       )
       setParcels(patchList)
@@ -632,7 +658,9 @@ export default function DriverPage() {
       if (signatureUnsubRef.current) signatureUnsubRef.current()
       setSignatureModal((m: any) => ({ ...m, confirming: false, done: true }))
       setTimeout(() => setSignatureModal(null), 2500)
-    } catch {
+      console.log('✅ Signature confirmée avec succès, statut:', finalStatus)
+    } catch (err: any) {
+      console.error('❌ Erreur confirmation signature:', err)
       setSignatureModal((m: any) => ({ ...m, confirming: false, error: 'Erreur lors de la confirmation. Réessayez.' }))
     }
   }

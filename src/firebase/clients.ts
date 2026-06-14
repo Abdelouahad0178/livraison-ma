@@ -24,6 +24,32 @@ const CLIENTS_PAGE_LIMIT = 500
 type FirestoreRow = Record<string, any> & { id: string; createdAt?: any }
 type DynamicData = Record<string, any>
 
+export interface Client {
+  id: string
+  name: string
+  tel: string
+  email?: string
+  address: string
+  city: string
+  nic?: string
+  accountType: 'cash' | 'compte'
+  remise: number
+  balance: number
+  notes?: string
+  createdAt: any
+  createdBy?: string | null
+  createdByName?: string
+  createdByRole?: string
+  portalUid?: string | null
+  portalEmail?: string
+  // Nouveaux champs
+  isExpediteur?: boolean
+  isDestinataire?: boolean
+  secteurId?: string
+  secteurName?: string
+  livreurIds?: string[]
+}
+
 const rowFromDoc = (d: { id: string; data: () => DynamicData }): FirestoreRow => ({ id: d.id, ...d.data() })
 
 export async function createClient(data: DynamicData) {
@@ -44,6 +70,12 @@ export async function createClient(data: DynamicData) {
     createdByRole: data.createdByRole || '',
     portalUid:   data.portalUid   || null,
     portalEmail: data.portalEmail || data.email || '',
+    // Nouveaux champs
+    isExpediteur: data.isExpediteur || false,
+    isDestinataire: data.isDestinataire || false,
+    secteurId: data.secteurId || '',
+    secteurName: data.secteurName || '',
+    livreurIds: data.livreurIds || [],
   })
   return ref.id
 }
@@ -91,12 +123,48 @@ export async function deletePayment(paymentId: string, clientId: string, amount:
   })
 }
 
-export function subscribeClientParcels(clientId: string, callback: (rows: FirestoreRow[]) => void) {
+export function subscribeClientParcels(clientId: string, callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
   const since = daysAgoTimestamp(60)
   const q = query(collection(db, 'parcels'), where('clientId', '==', clientId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(100))
   return onSnapshot(q, snap => {
     callback(snap.docs.map(rowFromDoc))
-  })
+  }, onError)
+}
+
+// Charge les colis destinés à un client destinataire
+export function subscribeDestinataireDeliveries(client: Client, callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
+  const since = daysAgoTimestamp(60)
+
+  // Filtrer par receiverClientId si disponible, sinon par ville + nom/tél
+  const q = query(
+    collection(db, 'parcels'),
+    where('destinationCity', '==', client.city),
+    where('createdAt', '>=', since),
+    orderBy('createdAt', 'desc'),
+    limit(200)
+  )
+
+  return onSnapshot(q, snap => {
+    const allParcels = snap.docs.map(rowFromDoc)
+
+    // Filtrer pour garder uniquement ceux où le destinataire correspond au client
+    const filtered = allParcels.filter((p: any) => {
+      // Priorité au receiverClientId si défini
+      if (p.receiverClientId) {
+        return p.receiverClientId === client.id
+      }
+
+      // Fallback : match par nom/téléphone (pour les anciens colis)
+      const receiverName = p.receiver?.name || p.receiverName || ''
+      const receiverTel = p.receiver?.tel || p.receiverTel || ''
+      const receiverNameMatch = receiverName.toLowerCase().trim() === client.name.toLowerCase().trim()
+      const receiverTelMatch = receiverTel.replace(/\s/g, '') === client.tel?.replace(/\s/g, '')
+
+      return receiverNameMatch || receiverTelMatch
+    })
+
+    callback(filtered)
+  }, onError)
 }
 
 export function subscribeClientPayments(clientId: string, callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
@@ -240,7 +308,7 @@ export async function addClientPortalReply(id: string, data: DynamicData) {
 }
 
 export async function createModificationRequest(data: DynamicData) {
-  await addDoc(collection(db, 'modificationRequests'), {
+  const docData: any = {
     parcelId:         data.parcelId || '',
     trackingId:       data.trackingId || '',
     clientId:         data.clientId || '',
@@ -259,7 +327,16 @@ export async function createModificationRequest(data: DynamicData) {
     resolvedAt:       null,
     resolvedBy:       '',
     agentNote:        '',
-  })
+  }
+
+  // Nouveaux champs pour le workflow destinataire→expéditeur→transporteur
+  if (data.type) docData.type = data.type
+  if (data.requestedBy) docData.requestedBy = data.requestedBy
+  if (data.requestedByName) docData.requestedByName = data.requestedByName
+  if (data.requestedByClientId) docData.requestedByClientId = data.requestedByClientId
+  if (data.targetClientId) docData.targetClientId = data.targetClientId
+
+  await addDoc(collection(db, 'modificationRequests'), docData)
 }
 
 export function subscribeClientModificationRequests(clientId: string, callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
@@ -410,4 +487,68 @@ export async function ensurePortalClient({ uid, email, name, tel, city, address,
     createdByName: name || cleanEmail || 'Client',
     createdByRole: 'client',
   })
+}
+
+// Recherche clients expéditeurs avec autocomplétion
+// Pour l'instant, tous les clients peuvent être expéditeurs
+export async function searchExpediteurs(searchTerm: string): Promise<Client[]> {
+  const normalizedSearch = searchTerm.toLowerCase().trim()
+  if (!normalizedSearch) return []
+
+  const q = query(collection(db, 'clients'), limit(200))
+  const snap = await getDocs(q)
+  const clients = snap.docs.map(d => ({ id: d.id, ...d.data() } as Client))
+
+  // Filtrer et trier côté client
+  const filtered = clients.filter(c =>
+    c.name.toLowerCase().includes(normalizedSearch) ||
+    c.tel?.includes(normalizedSearch) ||
+    c.address?.toLowerCase().includes(normalizedSearch)
+  )
+
+  filtered.sort((a, b) => a.name.localeCompare(b.name))
+  return filtered.slice(0, 20)
+}
+
+// Recherche clients destinataires avec autocomplétion
+// Pour l'instant, tous les clients peuvent être destinataires
+export async function searchDestinataires(searchTerm: string): Promise<Client[]> {
+  const normalizedSearch = searchTerm.toLowerCase().trim()
+  if (!normalizedSearch) return []
+
+  const q = query(collection(db, 'clients'), limit(200))
+  const snap = await getDocs(q)
+  const clients = snap.docs.map(d => ({ id: d.id, ...d.data() } as Client))
+
+  // Filtrer et trier côté client
+  const filtered = clients.filter(c =>
+    c.name.toLowerCase().includes(normalizedSearch) ||
+    c.tel?.includes(normalizedSearch) ||
+    c.address?.toLowerCase().includes(normalizedSearch)
+  )
+
+  filtered.sort((a, b) => a.name.localeCompare(b.name))
+  return filtered.slice(0, 20)
+}
+
+// Récupérer tous les expéditeurs
+export async function getAllExpediteurs(): Promise<Client[]> {
+  const q = query(
+    collection(db, 'clients'),
+    where('isExpediteur', '==', true),
+    orderBy('name')
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map(d => ({ id: d.id, ...d.data() } as Client))
+}
+
+// Récupérer tous les destinataires
+export async function getAllDestinataires(): Promise<Client[]> {
+  const q = query(
+    collection(db, 'clients'),
+    where('isDestinataire', '==', true),
+    orderBy('name')
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map(d => ({ id: d.id, ...d.data() } as Client))
 }

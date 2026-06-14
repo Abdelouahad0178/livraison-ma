@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Supprimer Arrivages</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .container {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+      padding: 40px;
+      max-width: 500px;
+      width: 100%;
+    }
+    h1 {
+      color: #1a202c;
+      margin-bottom: 10px;
+      font-size: 28px;
+    }
+    .warning {
+      background: #fff3cd;
+      border: 2px solid #ffc107;
+      border-radius: 8px;
+      padding: 16px;
+      margin: 20px 0;
+      color: #856404;
+    }
+    .warning strong {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 16px;
+    }
+    button {
+      width: 100%;
+      padding: 16px;
+      font-size: 16px;
+      font-weight: 600;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: all 0.3s;
+      margin-top: 16px;
+    }
+    #deleteBtn {
+      background: #dc3545;
+      color: white;
+    }
+    #deleteBtn:hover:not(:disabled) {
+      background: #c82333;
+      transform: translateY(-2px);
+      box-shadow: 0 8px 20px rgba(220, 53, 69, 0.3);
+    }
+    #deleteBtn:disabled {
+      background: #ccc;
+      cursor: not-allowed;
+    }
+    #status {
+      margin-top: 20px;
+      padding: 16px;
+      border-radius: 8px;
+      display: none;
+    }
+    #status.show {
+      display: block;
+    }
+    #status.loading {
+      background: #d1ecf1;
+      border: 2px solid #17a2b8;
+      color: #0c5460;
+    }
+    #status.success {
+      background: #d4edda;
+      border: 2px solid #28a745;
+      color: #155724;
+    }
+    #status.error {
+      background: #f8d7da;
+      border: 2px solid #dc3545;
+      color: #721c24;
+    }
+    .spinner {
+      display: inline-block;
+      width: 16px;
+      height: 16px;
+      border: 3px solid rgba(0,0,0,0.1);
+      border-top-color: #17a2b8;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-right: 8px;
+      vertical-align: middle;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🗑️ Supprimer Arrivages</h1>
+
+    <div class="warning">
+      <strong>⚠️ ATTENTION</strong>
+      Cette action va supprimer TOUS les arrivages de la base de données de manière DÉFINITIVE.
+    </div>
+
+    <button id="deleteBtn">Supprimer TOUS les arrivages</button>
+
+    <div id="status"></div>
+  </div>
+
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js'
+    import { getAuth, onAuthStateChanged } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js'
+    import { getFunctions, httpsCallable } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-functions.js'
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyALLWСела52znPBWpg3-Hpk0GOMwQPcQZEI",
+      authDomain: "arelanc.firebaseapp.com",
+      projectId: "arelanc",
+      storageBucket: "arelanc.firebasestorage.app",
+      messagingSenderId: "822628789129",
+      appId: "1:822628789129:web:5c79afb6f0d3a5c8a98329"
+    }
+
+    const app = initializeApp(firebaseConfig)
+    const auth = getAuth(app)
+    const functions = getFunctions(app, 'europe-west1')
+
+    const deleteBtn = document.getElementById('deleteBtn')
+    const status = document.getElementById('status')
+
+    function showStatus(type, message) {
+      status.className = `show ${type}`
+      status.innerHTML = message
+    }
+
+    onAuthStateChanged(auth, (user) => {
+      if (!user) {
+        showStatus('error', '❌ Vous devez être connecté pour utiliser cette fonctionnalité.')
+        deleteBtn.disabled = true
+      }
+    })
+
+    deleteBtn.addEventListener('click', async () => {
+      if (!confirm('⚠️ ÊTES-VOUS SÛR ?\n\nCette action va supprimer TOUS les arrivages de manière DÉFINITIVE.\n\nContinuer ?')) {
+        return
+      }
+
+      deleteBtn.disabled = true
+      showStatus('loading', '<span class="spinner"></span>Suppression en cours...')
+
+      try {
+        const deleteAllArrivages = httpsCallable(functions, 'deleteAllArrivages')
+        const result = await deleteAllArrivages()
+
+        showStatus('success', `✅ ${result.data.deletedCount} arrivages supprimés avec succès !`)
+
+        setTimeout(() => {
+          window.location.href = '/'
+        }, 3000)
+      } catch (error) {
+        console.error('Erreur:', error)
+        showStatus('error', `❌ Erreur: ${error.message}`)
+        deleteBtn.disabled = false
+      }
+    })
+  </script>
+</body>
+</html>

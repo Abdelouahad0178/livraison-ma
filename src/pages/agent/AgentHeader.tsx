@@ -127,6 +127,7 @@ export default function AgentHeader({
             { key: 'secteurs',      label: '🏢 Secteurs',               onClick: () => setTab('secteurs'),                                                                                                        hidden: profile?.role === 'aide_agent' },
             { key: 'arrivage',      label: '🚛 Arrivages',              onClick: () => { setTab('arrivage'); setArrivageTab('nouveau'); setArrivageSuccess(null) },                                               hidden: profile?.role === 'aide_agent' },
             { key: 'retours',       label: '↩️ Retours',                onClick: () => setTab('retours'),                                                                                                         hidden: profile?.role === 'aide_agent' },
+            { key: 'lostparcels',   label: '🚨 Colis perdus',           onClick: () => setTab('lostparcels'),                                                                                                     hidden: profile?.role === 'aide_agent' },
             { key: 'modifications', label: '📋 Modif. clients',         onClick: () => setTab('modifications'),                                                                                                   hidden: profile?.role !== 'chef_agence' },
             { key: 'aideagents',    label: '👤 Aide Agents',            onClick: () => setTab('aideagents'),                                                                                                      hidden: profile?.role !== 'chef_agence' && profile?.role !== 'admin' },
             { key: 'dashboard',     label: '📊 Dashboard',              onClick: () => setTab('dashboard'),                                                                                                       hidden: profile?.role !== 'chef_agence' },
@@ -164,7 +165,7 @@ export default function AgentHeader({
             </button>
             <span className="text-gray-300">/</span>
             <span className="text-sm font-semibold text-blue-600">
-              {tab === 'new' ? '+ Nouveau colis' : tab === 'caisse' ? (profile?.role === 'chef_agence' ? `Caisse Agence ${profile?.city || ''}` : 'Ma Caisse') : tab === 'cod' ? 'RETOUR FOND Clients' : tab === 'clients' ? 'Mes clients' : tab === 'charge' ? 'Feuille de charge' : tab === 'secteurs' ? 'Secteurs' : tab === 'drivers' ? 'Port dû' : tab === 'arrivage' ? 'Arrivages' : tab === 'modifications' ? 'Modif. clients' : tab === 'aideagents' ? 'Aide Agents' : tab === 'dashboard' ? 'Dashboard' : tab === 'notes' ? 'Notes agents' : 'Expéditions'}
+              {tab === 'new' ? '+ Nouveau colis' : tab === 'caisse' ? (profile?.role === 'chef_agence' ? `Caisse Agence ${profile?.city || ''}` : 'Ma Caisse') : tab === 'cod' ? 'RETOUR FOND Clients' : tab === 'clients' ? 'Mes clients' : tab === 'charge' ? 'Feuille de charge' : tab === 'secteurs' ? 'Secteurs' : tab === 'drivers' ? 'Port dû' : tab === 'arrivage' ? 'Arrivages' : tab === 'retours' ? '↩️ Retours' : tab === 'lostparcels' ? '🚨 Colis perdus' : tab === 'modifications' ? 'Modif. clients' : tab === 'aideagents' ? 'Aide Agents' : tab === 'dashboard' ? 'Dashboard' : tab === 'notes' ? 'Notes agents' : 'Expéditions'}
             </span>
           </div>
         )}
@@ -247,6 +248,22 @@ export default function AgentHeader({
                     {newArrivagesCount}
                   </span>
                 )}
+              </button>
+            )}
+            {profile?.role !== 'aide_agent' && (
+              <button
+                onClick={() => { setTab('retours'); setMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'retours' ? 'bg-red-50 text-red-600' : 'text-gray-600 hover:bg-gray-50'}`}
+              >
+                ↩️ Retours
+              </button>
+            )}
+            {profile?.role !== 'aide_agent' && (
+              <button
+                onClick={() => { setTab('lostparcels'); setMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'lostparcels' ? 'bg-red-50 text-red-700' : 'text-gray-600 hover:bg-gray-50'}`}
+              >
+                🚨 Colis perdus
               </button>
             )}
             {profile?.role === 'chef_agence' && (

@@ -10,11 +10,12 @@
     min-width: 0;
     width: 100%;
   }
-  body {
+  html, body {
     margin: 0;
     font-family: 'Segoe UI', system-ui, sans-serif;
     -webkit-font-smoothing: antialiased;
-    overflow-x: clip;
+    overflow-x: hidden;
+    max-width: 100vw;
   }
   img,
   svg,
@@ -78,5 +79,52 @@ button {
     margin: 0 auto;
     page-break-inside: avoid;
     break-inside: avoid;
+  }
+
+  /* Masquer tout sauf le tableau d'arrivages lors de l'impression */
+  body * {
+    visibility: hidden;
+  }
+
+  #arrivages-print-table,
+  #arrivages-print-table * {
+    visibility: visible;
+  }
+
+  #arrivages-print-table {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+  }
+
+  /* Optimiser le tableau pour l'impression */
+  table {
+    border-collapse: collapse;
+    width: 100%;
+  }
+
+  th, td {
+    border: 1px solid #e5e7eb !important;
+    padding: 8px !important;
+  }
+
+  thead {
+    background-color: #f3f4f6 !important;
+  }
+}
+
+/* Cacher les popups de debug en production */
+@layer utilities {
+  body > div:not(#root) {
+    display: none !important;
+  }
+
+  /* Cacher les éléments qui ressemblent à des outils de debug */
+  [class*="debug"],
+  [class*="devtools"],
+  [id*="debug"],
+  [id*="devtools"] {
+    display: none !important;
   }
 }

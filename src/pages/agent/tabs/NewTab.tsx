@@ -1,7 +1,10 @@
-import { lazy, Suspense } from 'react'
+import { lazy, Suspense, useState, useEffect } from 'react'
 import { Calendar, Search, X, Plus, MapPin, ChevronDown, Check, MessageCircle, Printer } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import { CITIES } from '../../../firebase/constants'
+import ClientAutocomplete from '../../../components/ClientAutocomplete'
+import { searchExpediteurs, searchDestinataires, Client } from '../../../firebase/clients'
+import VoiceInputAI from '../../../components/VoiceInputAI'
 
 const Barcode = lazy(() => import('react-barcode'))
 const QRCodeSVG = lazy(() => import('../../../components/QRCodeSvg'))
@@ -10,9 +13,9 @@ const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${Stri
 
 const EMPTY_FORM = {
   senderName: '', senderNic: '', senderAddress: '', senderTel: '', senderCity: '',
-  receiverName: '', receiverAddress: '', receiverTel: '', receiverCity: '',
+  receiverName: '', receiverAddress: '', receiverTel: '', receiverCity: '', receiverClientId: '',
   weight: '', nbColis: '1', natureOfGoods: '', natureOfGoodsCustomPrice: '', codAmount: '',
-  serviceType: 'simple', shipmentMode: 'personal',
+  serviceType: 'simple', hasRetourBL: false, shipmentMode: 'personal',
   portType: 'port_paye', portPayeMethod: '', portPayeMontant: '',
   portPrice: '',
   clientId: '', clientName: '', autoDebit: false,
@@ -20,13 +23,17 @@ const EMPTY_FORM = {
   operationDate: todayStr(),
 }
 
-const SERVICE_TYPES = [
+// Tous les types pour affichage (compatibilité anciens colis)
+const ALL_SERVICE_TYPES = [
   { key: 'simple',    label: 'Simple',    emoji: '📦' },
   { key: 'especes',   label: 'C/Espèces', emoji: '💵' },
   { key: 'cheque',    label: 'C/Chèque',  emoji: '📋' },
   { key: 'traite',    label: 'C/Traite',  emoji: '📝' },
   { key: 'retour_bl', label: 'Retour BL', emoji: '🧾' },
 ]
+
+// Types disponibles pour création (sans retour_bl)
+const SERVICE_TYPES = ALL_SERVICE_TYPES.filter(t => t.key !== 'retour_bl')
 
 export default function NewTab() {
   const {
@@ -43,6 +50,83 @@ export default function NewTab() {
     whatsappLink, whatsappMsg,
     handleCreateInlineClient,
   } = useAgentCtx()
+
+  // État pour la modal de confirmation/édition avant impression
+  const [showConfirmModal, setShowConfirmModal] = useState(false)
+  const [pendingParcel, setPendingParcel] = useState<any>(null)
+  const [editableParcel, setEditableParcel] = useState<any>(null)
+  const [isConfirmed, setIsConfirmed] = useState(false)
+
+  // Intercepter la création du colis pour afficher la modal de confirmation
+  useEffect(() => {
+    if (createdParcel && !showConfirmModal && !pendingParcel && !isConfirmed) {
+      // Un nouveau colis vient d'être créé
+      setPendingParcel(createdParcel)
+      setEditableParcel({ ...createdParcel })
+      setShowConfirmModal(true)
+      setIsConfirmed(false)
+      // Réinitialiser createdParcel pour éviter de réafficher le bon directement
+      setCreatedParcel(null)
+    }
+  }, [createdParcel, showConfirmModal, pendingParcel, isConfirmed, setCreatedParcel])
+
+  const handleVoiceResult = (field: string, value: string) => {
+    setForm((prev: any) => ({
+      ...prev,
+      [field]: value
+    }))
+  }
+
+  const handleClientFound = (client: Client, isSender: boolean) => {
+    console.log('🎉 Remplissage automatique du client:', client.name, isSender ? 'Expéditeur' : 'Destinataire')
+
+    if (isSender) {
+      // Remplir les champs expéditeur
+      setForm((prev: any) => ({
+        ...prev,
+        senderName: client.name,
+        senderTel: client.tel,
+        senderAddress: client.address || '',
+        senderCity: client.city || profile?.city || '',
+        senderNic: client.nic || '',
+      }))
+    } else {
+      // Remplir les champs destinataire
+      setForm((prev: any) => ({
+        ...prev,
+        receiverName: client.name,
+        receiverTel: client.tel,
+        receiverAddress: client.address || '',
+        receiverCity: client.city || '',
+        receiverClientId: client.id || '',
+        deliverySectorId: client.secteurId || '',
+        deliveryDriverId: client.livreurIds?.[0] || '',
+      }))
+    }
+  }
+
+  // 🤖 Remplissage en masse via IA
+  const handleBulkFill = (data: Record<string, any>) => {
+    console.log('🤖 Remplissage IA en masse:', data)
+
+    setForm((prev: any) => {
+      const updated = { ...prev }
+
+      // Mapper les données extraites par l'IA vers le formulaire
+      Object.entries(data).forEach(([key, value]) => {
+        if (value !== undefined && value !== null && value !== '') {
+          // Conversion des types si nécessaire
+          if (key === 'weight' || key === 'nbColis' || key === 'portPrice' || key === 'codAmount') {
+            updated[key] = String(value)
+          } else {
+            updated[key] = value
+          }
+        }
+      })
+
+      return updated
+    })
+  }
 
   const handlePrint = () => {
     const previousTitle = document.title
@@ -61,6 +145,260 @@ export default function NewTab() {
       document.title = previousTitle
       style.remove()
     }, 500)
+  }
+
+  // Valider et passer à l'impression
+  const handleConfirmPrint = () => {
+    if (editableParcel) {
+      // Marquer comme confirmé pour éviter que le modal se rouvre
+      setIsConfirmed(true)
+      // Afficher le bon avec les données éditées
+      setCreatedParcel(editableParcel)
+      setShowConfirmModal(false)
+      setPendingParcel(null)
+      setEditableParcel(null)
+    }
+  }
+
+  // Annuler et revenir au formulaire
+  const handleCancelConfirm = () => {
+    setShowConfirmModal(false)
+    setPendingParcel(null)
+    setEditableParcel(null)
+    setIsConfirmed(false)
+  }
+
+  // Modal de confirmation/édition avant impression
+  if (showConfirmModal && editableParcel) {
+    return (
+      <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto">
+        <div className="bg-white rounded-2xl shadow-2xl max-w-4xl w-full max-h-[90vh] overflow-y-auto">
+          {/* En-tête */}
+          <div className="bg-gradient-to-r from-blue-600 to-purple-600 text-white px-6 py-4 sticky top-0 z-10">
+            <h2 className="text-2xl font-bold">✅ Colis créé avec succès !</h2>
+            <p className="text-blue-100 text-sm mt-1">
+              Vérifiez et modifiez les informations avant d'imprimer le bon de ramassage
+            </p>
+            <p className="text-white font-mono text-lg mt-2 font-bold">{editableParcel.trackingId}</p>
+          </div>
+
+          {/* Contenu éditable */}
+          <div className="p-6 space-y-6">
+            {/* Message d'info */}
+            <div className="bg-yellow-50 border-2 border-yellow-300 rounded-xl p-4">
+              <div className="flex items-start gap-3">
+                <span className="text-2xl">⚠️</span>
+                <div>
+                  <p className="font-bold text-yellow-900 mb-1">Dernière vérification avant impression</p>
+                  <p className="text-sm text-yellow-800">
+                    Modifiez les champs ci-dessous si nécessaire, puis cliquez sur "Valider et Imprimer"
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* Expéditeur */}
+            <div className="bg-blue-50 border-2 border-blue-200 rounded-xl p-4">
+              <h3 className="text-lg font-bold text-blue-900 mb-3 flex items-center gap-2">
+                <span>📤</span> Expéditeur
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Nom</label>
+                  <input
+                    type="text"
+                    value={editableParcel.sender.name || ''}
+                    onChange={(e) => setEditableParcel({
+                      ...editableParcel,
+                      sender: { ...editableParcel.sender, name: e.target.value }
+                    })}
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">N° Expéditeur (NIC)</label>
+                  <input
+                    type="text"
+                    value={editableParcel.sender.nic || ''}
+                    onChange={(e) => setEditableParcel({
+                      ...editableParcel,
+                      sender: { ...editableParcel.sender, nic: e.target.value }
+                    })}
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Téléphone</label>
+                  <input
+                    type="text"
+                    value={editableParcel.sender.tel || ''}
+                    onChange={(e) => setEditableParcel({
+                      ...editableParcel,
+                      sender: { ...editableParcel.sender, tel: e.target.value }
+                    })}
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Ville</label>
+                  <input
+                    type="text"
+                    value={editableParcel.sender.city || ''}
+                    onChange={(e) => setEditableParcel({
+                      ...editableParcel,
+                      sender: { ...editableParcel.sender, city: e.target.value }
+                    })}
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div className="md:col-span-2">
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Adresse</label>
+                  <input
+                    type="text"
+                    value={editableParcel.sender.address || ''}
+                    onChange={(e) => setEditableParcel({
+                      ...editableParcel,
+                      sender: { ...editableParcel.sender, address: e.target.value }
+                    })}
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Destinataire */}
+            <div className="bg-green-50 border-2 border-green-200 rounded-xl p-4">
+              <h3 className="text-lg font-bold text-green-900 mb-3 flex items-center gap-2">
+                <span>📥</span> Destinataire
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Nom</label>
+                  <input
+                    type="text"
+                    value={editableParcel.receiver.name || ''}
+                    onChange={(e) => setEditableParcel({
+                      ...editableParcel,
+                      receiver: { ...editableParcel.receiver, name: e.target.value }
+                    })}
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Téléphone</label>
+                  <input
+                    type="text"
+                    value={editableParcel.receiver.tel || ''}
+                    onChange={(e) => setEditableParcel({
+                      ...editableParcel,
+                      receiver: { ...editableParcel.receiver, tel: e.target.value }
+                    })}
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Ville</label>
+                  <input
+                    type="text"
+                    value={editableParcel.receiver.city || ''}
+                    onChange={(e) => setEditableParcel({
+                      ...editableParcel,
+                      receiver: { ...editableParcel.receiver, city: e.target.value }
+                    })}
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Adresse</label>
+                  <input
+                    type="text"
+                    value={editableParcel.receiver.address || ''}
+                    onChange={(e) => setEditableParcel({
+                      ...editableParcel,
+                      receiver: { ...editableParcel.receiver, address: e.target.value }
+                    })}
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Détails du colis */}
+            <div className="bg-purple-50 border-2 border-purple-200 rounded-xl p-4">
+              <h3 className="text-lg font-bold text-purple-900 mb-3 flex items-center gap-2">
+                <span>📦</span> Détails du colis
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Poids (kg)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={editableParcel.weight || ''}
+                    onChange={(e) => setEditableParcel({ ...editableParcel, weight: e.target.value })}
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Nombre de colis</label>
+                  <input
+                    type="number"
+                    value={editableParcel.nbColis || 1}
+                    onChange={(e) => setEditableParcel({ ...editableParcel, nbColis: e.target.value })}
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Nature de marchandise</label>
+                  <input
+                    type="text"
+                    value={editableParcel.natureOfGoods || ''}
+                    onChange={(e) => setEditableParcel({ ...editableParcel, natureOfGoods: e.target.value })}
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Prix (DH)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={editableParcel.price || ''}
+                    onChange={(e) => setEditableParcel({ ...editableParcel, price: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-1">Retour fond (DH)</label>
+                  <input
+                    type="number"
+                    step="0.1"
+                    value={editableParcel.codAmount || 0}
+                    onChange={(e) => setEditableParcel({ ...editableParcel, codAmount: parseFloat(e.target.value) || 0 })}
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Boutons d'action */}
+          <div className="bg-gray-50 px-6 py-4 flex gap-3 sticky bottom-0">
+            <button
+              onClick={handleCancelConfirm}
+              className="flex-1 py-3 px-6 border-2 border-gray-300 rounded-xl text-gray-700 font-bold hover:bg-gray-100 transition flex items-center justify-center gap-2"
+            >
+              <X className="w-5 h-5" /> Annuler
+            </button>
+            <button
+              onClick={handleConfirmPrint}
+              className="flex-1 py-3 px-6 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl font-bold hover:shadow-xl transition flex items-center justify-center gap-2"
+            >
+              <Printer className="w-5 h-5" /> Valider et Imprimer
+            </button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (createdParcel) {
@@ -92,7 +430,7 @@ export default function NewTab() {
 
           {/* Type de service */}
           <div className="flex gap-4 px-3 py-1.5 border-b border-gray-200 bg-gray-50">
-            {SERVICE_TYPES.map(st => (
+            {ALL_SERVICE_TYPES.filter(t => t.key !== 'retour_bl').map(st => (
               <label key={st.key} className="flex items-center gap-1 text-[10px] font-semibold">
                 <span className={`w-3 h-3 border border-gray-400 rounded-sm flex items-center justify-center text-[8px] ${createdParcel.serviceType === st.key ? 'bg-blue-600 border-blue-600 text-white' : ''}`}>
                   {createdParcel.serviceType === st.key ? '✓' : ''}
@@ -100,6 +438,12 @@ export default function NewTab() {
                 {st.label}
               </label>
             ))}
+            <label className="flex items-center gap-1 text-[10px] font-semibold">
+              <span className={`w-3 h-3 border border-gray-400 rounded-sm flex items-center justify-center text-[8px] ${createdParcel.hasRetourBL ? 'bg-blue-600 border-blue-600 text-white' : ''}`}>
+                {createdParcel.hasRetourBL ? '✓' : ''}
+              </span>
+              Retour BL
+            </label>
           </div>
 
           {/* Expéditeur / Destinataire */}
@@ -203,23 +547,37 @@ export default function NewTab() {
   }
 
   return (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 overflow-hidden mt-4">
-      <div className="bg-blue-600 p-5">
-        <h2 className="text-white font-bold text-xl">Nouveau colis</h2>
-        <p className="text-blue-200 text-sm mt-0.5">Remplissez les informations d'expédition</p>
+    <div className="bg-gradient-to-br from-pink-50 via-purple-50 to-blue-50 rounded-3xl shadow-2xl overflow-hidden mt-4 border border-purple-200">
+      <div className="bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 p-6 relative overflow-hidden">
+        <div className="absolute inset-0 opacity-20">
+          <div className="absolute top-0 right-0 w-64 h-64 bg-white rounded-full blur-3xl transform translate-x-1/2 -translate-y-1/2"></div>
+          <div className="absolute bottom-0 left-0 w-48 h-48 bg-pink-300 rounded-full blur-2xl transform -translate-x-1/2 translate-y-1/2"></div>
+        </div>
+        <div className="relative z-10">
+          <div className="flex items-center gap-3 mb-2">
+            <div className="bg-white/20 backdrop-blur-sm p-2 rounded-xl">
+              <span className="text-3xl">✨</span>
+            </div>
+            <div>
+              <h2 className="text-white font-bold text-2xl">Nouvelle Expédition</h2>
+              <p className="text-pink-100 text-sm">Créez votre colis avec élégance</p>
+            </div>
+          </div>
+        </div>
       </div>
-      <form onSubmit={handleSubmit} className="p-5 space-y-5">
-        {/* Date d'opération */}
-        <section>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Date d'opération</h3>
-          <div className="flex items-center gap-3 bg-blue-50 border border-blue-200 rounded-xl px-4 py-3">
-            <Calendar className="w-4 h-4 text-blue-500 shrink-0" />
+      <form onSubmit={handleSubmit} className="p-6 space-y-6">
+        {/* Date d'opération + Micro - MODERNE */}
+        <section className="transform transition-all hover:scale-[1.02]">
+          <div className="flex items-center gap-3 bg-gradient-to-r from-purple-50 to-pink-50 border-2 border-purple-200 rounded-2xl px-4 py-3 shadow-sm hover:shadow-md transition-all">
+            <div className="bg-white p-2 rounded-xl shadow-sm">
+              <span className="text-2xl" title="Date d'opération">📅</span>
+            </div>
             <input
               type="date"
               value={form.operationDate}
               max={todayStr()}
               onChange={f('operationDate')}
-              className="flex-1 bg-transparent text-sm font-semibold text-blue-800 outline-none"
+              className="flex-1 bg-transparent text-sm font-bold text-purple-700 outline-none"
             />
             {form.operationDate !== todayStr() && (
               <button type="button" onClick={() => setForm((p: any) => ({ ...p, operationDate: todayStr() }))}
@@ -227,51 +585,21 @@ export default function NewTab() {
                 Aujourd'hui
               </button>
             )}
+            {/* 🤖 Micro IA - Mode vocal intelligent */}
+            <VoiceInputAI
+              onResult={handleVoiceResult}
+              onBulkFill={handleBulkFill}
+              onClientFound={handleClientFound}
+            />
           </div>
         </section>
 
-        <section>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Mode d'envoi</h3>
-          <div className="grid grid-cols-2 gap-2">
-            <button type="button"
-              onClick={() => {
-                setForm((p: any) => ({
-                  ...p,
-                  shipmentMode: 'personal',
-                  clientId: '',
-                  clientName: '',
-                  autoDebit: false,
-                  portType: p.portType === 'port_en_compte' ? 'port_paye' : p.portType,
-                }))
-                setClientSearch('')
-                setInlineNewClient(null)
-              }}
-              className={`rounded-xl border-2 px-3 py-3 text-left transition ${
-                form.shipmentMode === 'personal'
-                  ? 'bg-gray-900 border-gray-900 text-white'
-                  : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-gray-300'
-              }`}>
-              <span className="block text-sm font-black">Personnel</span>
-              <span className={`block text-xs mt-0.5 ${form.shipmentMode === 'personal' ? 'text-gray-200' : 'text-gray-400'}`}>Sans fiche client</span>
-            </button>
-            <button type="button"
-              onClick={() => setForm((p: any) => ({ ...p, shipmentMode: 'client' }))}
-              className={`rounded-xl border-2 px-3 py-3 text-left transition ${
-                form.shipmentMode === 'client'
-                  ? 'bg-blue-600 border-blue-600 text-white'
-                  : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-gray-300'
-              }`}>
-              <span className="block text-sm font-black">Client existant</span>
-              <span className={`block text-xs mt-0.5 ${form.shipmentMode === 'client' ? 'text-blue-100' : 'text-gray-400'}`}>Choisir dans la liste</span>
-            </button>
-          </div>
-        </section>
         {error && <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {error}</div>}
 
-        {/* Client lié */}
-        <section className={form.shipmentMode === 'client' ? '' : 'hidden'}>
+        {/* Client lié - CACHÉ pour gagner de l'espace */}
+        <section className="hidden">
           <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">
-            Client lie <span className="text-gray-300 font-normal normal-case">(obligatoire)</span>
+            Client expéditeur <span className="text-red-500 font-bold">*</span> <span className="text-green-600 font-normal normal-case">(compte portail créé automatiquement)</span>
           </h3>
           {form.clientId ? (
             <div className="flex items-center justify-between bg-blue-50 border border-blue-200 rounded-xl px-4 py-2.5">
@@ -326,49 +654,40 @@ export default function NewTab() {
 
         <div className="border-t border-dashed border-gray-200" />
 
-        <section>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Expéditeur</h3>
+        <section className="bg-white rounded-2xl p-5 shadow-lg border-2 border-pink-100 transform transition-all hover:shadow-xl">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="bg-gradient-to-br from-pink-400 to-rose-500 p-3 rounded-xl shadow-md">
+              <span className="text-2xl">📤</span>
+            </div>
+            <h3 className="text-lg font-bold bg-gradient-to-r from-pink-600 to-purple-600 bg-clip-text text-transparent">Expéditeur</h3>
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <input placeholder="N EXP" value={form.senderNic} onChange={f('senderNic')} className={`${inputCls} col-span-2`} />
-            {/* Nom avec recherche client */}
-            <div className="relative col-span-2">
-              <input
-                required
-                placeholder="Nom complet (ou chercher un client…)"
+
+            {/* Autocomplétion expéditeur */}
+            <div className="col-span-2">
+              <ClientAutocomplete
+                type="expediteur"
+                searchFunction={searchExpediteurs}
                 value={form.senderName}
-                onChange={e => { f('senderName')(e); setShowSenderDropdown(true) }}
-                onFocus={() => setShowSenderDropdown(true)}
-                onBlur={() => setTimeout(() => setShowSenderDropdown(false), 150)}
+                onChange={(value) => setForm((p: any) => ({ ...p, senderName: value }))}
+                onSelect={(client: Client | null) => {
+                  if (client) {
+                    setForm((p: any) => ({
+                      ...p,
+                      senderName: client.name,
+                      senderTel: client.tel,
+                      senderAddress: client.address,
+                      senderCity: client.city,
+                      deliverySectorId: client.secteurId || '',
+                    }))
+                  }
+                }}
+                placeholder="Nom complet (ou chercher un expéditeur…)"
                 className={inputCls}
               />
-              {showSenderDropdown && (() => {
-                const q = form.senderName.trim().toLowerCase()
-                const list = ((profile?.city
-                  ? (clients as any[]).filter((c: any) => c.city === profile.city)
-                  : (clients as any[])
-                ) as any[]).filter((c: any) => !q || c.name?.toLowerCase().includes(q) || c.tel?.includes(q))
-                return list.length > 0 ? (
-                  <div className="absolute top-full left-0 right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-lg z-20 overflow-hidden">
-                    {(list as any[]).slice(0, 6).map((c: any) => (
-                      <button type="button" key={c.id}
-                        onMouseDown={e => { e.preventDefault(); selectExistingClient(c) }}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-blue-50 text-left border-b border-gray-50 last:border-0 transition">
-                        <div className="w-7 h-7 bg-blue-100 rounded-full flex items-center justify-center text-blue-700 font-bold text-sm shrink-0">
-                          {c.name?.charAt(0)?.toUpperCase()}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <p className="text-sm font-medium text-gray-800 truncate">{c.name}</p>
-                          <p className="text-xs text-gray-400">{c.city}{c.tel && ` · ${c.tel}`}{c.address && ` · ${c.address}`}</p>
-                        </div>
-                        {c.accountType === 'compte' && (
-                          <span className="ml-auto text-xs bg-blue-100 text-blue-700 px-2 py-0.5 rounded-full shrink-0">En compte</span>
-                        )}
-                      </button>
-                    ))}
-                  </div>
-                ) : null
-              })()}
             </div>
+
             <input required placeholder="Téléphone" value={form.senderTel} onChange={f('senderTel')} className={inputCls} />
             <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl border border-gray-200 bg-gray-100 text-sm font-semibold text-gray-700">
               <MapPin className="w-4 h-4 text-gray-400 shrink-0" />
@@ -378,12 +697,48 @@ export default function NewTab() {
           </div>
         </section>
 
-        <div className="border-t border-dashed border-gray-200" />
+        <div className="relative py-4">
+          <div className="absolute inset-0 flex items-center">
+            <div className="w-full border-t-2 border-dashed border-purple-200"></div>
+          </div>
+          <div className="relative flex justify-center">
+            <span className="bg-gradient-to-r from-pink-50 via-purple-50 to-blue-50 px-4 text-2xl">💝</span>
+          </div>
+        </div>
 
-        <section>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Destinataire</h3>
+        <section className="bg-white rounded-2xl p-5 shadow-lg border-2 border-blue-100 transform transition-all hover:shadow-xl">
+          <div className="flex items-center gap-3 mb-4">
+            <div className="bg-gradient-to-br from-blue-400 to-indigo-500 p-3 rounded-xl shadow-md">
+              <span className="text-2xl">📥</span>
+            </div>
+            <h3 className="text-lg font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Destinataire</h3>
+          </div>
           <div className="grid grid-cols-2 gap-3">
-            <input required placeholder="Nom complet" value={form.receiverName} onChange={f('receiverName')} className={inputCls} />
+            {/* Autocomplétion destinataire */}
+            <div className="col-span-2">
+              <ClientAutocomplete
+                type="destinataire"
+                searchFunction={searchDestinataires}
+                value={form.receiverName}
+                onChange={(value) => setForm((p: any) => ({ ...p, receiverName: value, receiverClientId: '' }))}
+                onSelect={(client: Client | null) => {
+                  if (client) {
+                    setForm((p: any) => ({
+                      ...p,
+                      receiverName: client.name,
+                      receiverTel: client.tel,
+                      receiverAddress: client.address,
+                      receiverCity: client.city,
+                      receiverClientId: client.id, // Lien vers le client destinataire
+                      deliverySectorId: client.secteurId || '',
+                      deliveryDriverId: client.livreurIds?.[0] || '',
+                    }))
+                  }
+                }}
+                placeholder="Nom complet (ou chercher un destinataire…)"
+                className={inputCls}
+              />
+            </div>
             <input required placeholder="Téléphone" value={form.receiverTel} onChange={f('receiverTel')} className={inputCls} />
             <div className="relative col-span-2">
               <select
@@ -392,6 +747,7 @@ export default function NewTab() {
                 onChange={e => setForm((p: any) => ({
                   ...p,
                   receiverCity: e.target.value,
+                  receiverClientId: '',
                   deliverySectorId: '',
                   deliveryDriverId: '',
                 }))}
@@ -497,12 +853,12 @@ export default function NewTab() {
 
         <section>
           <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Type de port</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
             {SERVICE_TYPES.map(st => (
               <button
                 type="button"
                 key={st.key}
-                onClick={() => setForm((p: any) => ({ ...p, serviceType: st.key, codAmount: st.key === 'simple' || st.key === 'retour_bl' ? '' : p.codAmount }))}
+                onClick={() => setForm((p: any) => ({ ...p, serviceType: st.key, codAmount: st.key === 'simple' ? '' : p.codAmount }))}
                 className={`py-2.5 rounded-xl border-2 text-xs font-bold transition ${
                   form.serviceType === st.key
                     ? 'bg-blue-600 border-blue-500 text-white'
@@ -513,7 +869,19 @@ export default function NewTab() {
               </button>
             ))}
           </div>
-          {form.serviceType !== 'retour_bl' && form.serviceType !== 'simple' ? (
+
+          {/* Checkbox Retour BL */}
+          <label className="mt-3 flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={form.hasRetourBL}
+              onChange={e => setForm((p: any) => ({ ...p, hasRetourBL: e.target.checked }))}
+              className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+            />
+            <span>🧾 Retour BL (bon de livraison)</span>
+          </label>
+
+          {form.serviceType !== 'simple' ? (
             <div className="mt-3">
               <input
                 type="number" min="0"
@@ -525,7 +893,7 @@ export default function NewTab() {
             </div>
           ) : (
             <p className="mt-3 text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
-              {form.serviceType === 'simple' ? 'Simple : aucun RETOUR FOND à encaisser.' : 'Retour BL : aucun montant RETOUR FOND.'}
+              Simple : aucun RETOUR FOND à encaisser.
             </p>
           )}
         </section>
@@ -741,12 +1109,15 @@ export default function NewTab() {
         </section>
 
         <button type="submit" disabled={loading}
-          className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white py-4 rounded-xl font-bold text-base transition flex items-center justify-center gap-2"
+          className="w-full bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 hover:from-pink-600 hover:via-purple-600 hover:to-indigo-600 disabled:opacity-60 text-white py-5 rounded-2xl font-bold text-lg transition-all transform hover:scale-[1.02] hover:shadow-2xl flex items-center justify-center gap-3 relative overflow-hidden group"
         >
-          {loading
-            ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Enregistrement...</>
-            : '📦 Enregistrer le colis'
-          }
+          <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 transform -skew-x-12 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000"></div>
+          <span className="relative z-10 flex items-center gap-3">
+            {loading
+              ? <><div className="w-5 h-5 border-3 border-white border-t-transparent rounded-full animate-spin" /> <span className="text-lg">Création en cours...</span></>
+              : <><span className="text-2xl">✨</span> <span className="text-lg">Créer l'Expédition</span> <span className="text-2xl">📦</span></>
+            }
+          </span>
         </button>
       </form>
     </div>

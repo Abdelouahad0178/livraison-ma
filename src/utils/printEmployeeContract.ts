@@ -66,7 +66,12 @@ export function printEmployeeContract(employee: any, form: any) {
     <h2>Article 2 - Objet et lieu de travail</h2>
     <div class="art">
       <p>L'employeur engage le(la) salarie(e) en qualite de <strong>${form.poste}</strong>, au sein du departement <strong>${form.departement}</strong>, pour exercer ses fonctions dans l'agence de <strong>${form.lieuTravail || 'Casablanca'}</strong>.</p>
-      <p>Le(la) salarie(e) s'engage a executer les taches inherentes a son poste avec diligence, loyaute et professionnalisme, conformement aux directives de la hierarchie et au reglement interieur de la societe. Toute mutation pourra intervenir en accord entre les parties selon les necessites de service.</p>
+      <p>Le(la) salarie(e) s'engage a executer les taches inherentes a son poste avec diligence, loyaute et professionnalisme, conformement aux directives de la hierarchie et au reglement interieur de la societe.</p>
+    </div>
+    <h2>Article 2.1 - Clause de mobilite geographique</h2>
+    <div class="art">
+      <p>Le(la) salarie(e) accepte expressement que la societe BG EXPRESS puisse, en fonction des necessites du service et de l'organisation de l'entreprise, l'affecter dans toute agence ou site d'exploitation situe sur le territoire marocain. Cette mobilite geographique fait partie integrante des conditions d'execution du present contrat.</p>
+      <p>En cas de mutation definitive, l'employeur s'engage a en informer le(la) salarie(e) par ecrit avec un preavis raisonnable.</p>
     </div>
     <h2>Article 3 - Duree et prise d'effet</h2>
     <div class="art">

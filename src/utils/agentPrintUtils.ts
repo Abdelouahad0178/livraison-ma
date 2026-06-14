@@ -102,7 +102,7 @@ export function printCharge(groups: any[], profileData: any): void {
   }
 }
 
-export async function printTable(parcels: any[]): Promise<void> {
+export async function printTable(parcels: any[], driverName?: string): Promise<void> {
   if (!parcels.length) return
 
   // Charger les signatures depuis Firestore
@@ -185,8 +185,9 @@ export async function printTable(parcels: any[]): Promise<void> {
     .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; border-bottom: 2px solid #1e40af; padding-bottom: 6px; }
     .logo-text { font-size: 18pt; font-weight: 900; color: #1e40af; letter-spacing: 2px; }
     .logo-sub  { font-size: 8pt; color: #6b7280; }
-    .meta      { text-align: right; font-size: 8pt; color: #374151; }
-    .meta strong { color: #1e40af; }
+    .meta      { text-align: right; font-size: 8pt; color: #374151; min-width: 280px; padding-right: 8px; }
+    .meta div  { margin-bottom: 2px; white-space: nowrap; }
+    .meta strong { color: #1e40af; font-weight: 700; }
     table { border-collapse: collapse; width: 100%; margin-top: 4px; }
     th { border: 1px solid #1e40af; padding: 4px 5px; background: #1e40af; color: #fff; font-size: 7.5pt; white-space: nowrap; text-align: center; }
     td { border: 1px solid #d1d5db; padding: 3px 5px; font-size: 7.5pt; vertical-align: middle; }
@@ -202,6 +203,7 @@ export async function printTable(parcels: any[]): Promise<void> {
     </div>
     <div class="meta">
       <div>Date : <strong>${printDate}</strong></div>
+      ${driverName ? `<div>Livreur : <strong>${driverName}</strong></div>` : ''}
       <div>Nombre de colis : <strong>${parcels.length}</strong></div>
       <div>Total RETOUR FOND : <strong>${totalCod.toLocaleString('fr-MA')} DH</strong></div>
       <div>Total Port : <strong>${totalPort.toLocaleString('fr-MA')} DH</strong></div>

@@ -131,7 +131,9 @@ export const STATUS_COLORS: Record<string, { bg: string; text: string; dot: stri
   'En cours de livraison': { bg: 'bg-orange-100', text: 'text-orange-700', dot: 'bg-orange-500' },
   'Livré':                 { bg: 'bg-green-100',  text: 'text-green-700',  dot: 'bg-green-500'  },
   'Retourné':              { bg: 'bg-red-100',    text: 'text-red-700',    dot: 'bg-red-500'    },
-  'En transit retour':     { bg: 'bg-orange-100', text: 'text-orange-700', dot: 'bg-orange-500' },
+  'Retour en transit':     { bg: 'bg-orange-100', text: 'text-orange-700', dot: 'bg-orange-500' },
+  'Retour arrivé':         { bg: 'bg-purple-100', text: 'text-purple-700', dot: 'bg-purple-500' },
+  'Retour finalisé':       { bg: 'bg-green-100',  text: 'text-green-700',  dot: 'bg-green-500'  },
   'Retourné à l\'expéditeur': { bg: 'bg-teal-100', text: 'text-teal-700',  dot: 'bg-teal-500'   },
 }
 
@@ -148,7 +150,6 @@ export const COD_TYPE_OPTIONS = [
   { key: 'especes',   label: 'Contre espèces' },
   { key: 'cheque',    label: 'Contre chèque' },
   { key: 'traite',    label: 'Contre traite' },
-  { key: 'retour_bl', label: 'Retour bon de livraison' },
 ]
 
 export const DIRECTOR_PERMISSIONS = [

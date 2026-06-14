@@ -981,6 +981,7 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       if (!modal) return []
       const days = getArchiveDays(modal)
       if (!days || !modal.statuses?.length) return []
+      if (!Array.isArray(allParcels)) return []
       const cutoff = new Date()
       cutoff.setDate(cutoff.getDate() - days)
       return (allParcels as any[]).filter(p => {

@@ -59,7 +59,7 @@ export default function SectorsTab() {
                     {sector.name !== sector.code && <p className="text-xs text-indigo-600">{sector.name}</p>}
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <button onClick={() => setDriverModal({ mode: 'new', sectorId: sector.id, sectorCode: sector.code, name: '', email: '', password: '', tel: '', matricule: '', loading: false, error: '' })} className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-indigo-600 text-white text-[10px] font-bold hover:bg-indigo-700 transition">
+                    <button onClick={() => setDriverModal({ mode: 'new', sectorId: sector.id, sectorCode: sector.code, name: '', email: '', password: '', tel: '', matricule: '', existingDriverId: '', loading: false, error: '' })} className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-indigo-600 text-white text-[10px] font-bold hover:bg-indigo-700 transition">
                       <Plus className="w-3 h-3" /> Livreur
                     </button>
                     <button onClick={() => setSectorModal({ mode: 'edit', id: sector.id, code: sector.code, name: sector.name, loading: false, error: '' })} className="p-1.5 rounded-lg hover:bg-indigo-100 text-indigo-600 transition">
@@ -267,6 +267,56 @@ export default function SectorsTab() {
             </div>
 
             <div className="space-y-3">
+              {driverModal.mode === 'new' && (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-600 mb-1">🔍 Assigner un livreur existant (optionnel)</label>
+                  <select
+                    value={driverModal.existingDriverId || ''}
+                    onChange={e => {
+                      const selectedId = e.target.value
+                      if (selectedId) {
+                        const driver = drivers.find((d: any) => d.id === selectedId)
+                        if (driver) {
+                          setDriverModal?.({
+                            ...driverModal,
+                            existingDriverId: selectedId,
+                            name: driver.name,
+                            tel: driver.tel || '',
+                            matricule: driver.matricule || '',
+                            email: driver.email || '',
+                            password: ''
+                          })
+                        }
+                      } else {
+                        setDriverModal?.({
+                          ...driverModal,
+                          existingDriverId: '',
+                          name: '',
+                          tel: '',
+                          matricule: '',
+                          email: '',
+                          password: ''
+                        })
+                      }
+                    }}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                    disabled={driverModal.loading}
+                  >
+                    <option value="">➕ Créer un nouveau livreur</option>
+                    {drivers.filter((d: any) =>
+                      (d.role === 'livreur' || d.role === 'chauffeur') &&
+                      (!d.sectorId || d.sectorId === '') &&
+                      d.city === profile?.city
+                    ).map((d: any) => (
+                      <option key={d.id} value={d.id}>
+                        🚚 {d.name} {d.tel ? `(${d.tel})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">Livreurs sans secteur assigné</p>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold text-gray-600 mb-1">Nom complet *</label>
                 <input
@@ -275,11 +325,11 @@ export default function SectorsTab() {
                   onChange={e => setDriverModal?.({ ...driverModal, name: e.target.value })}
                   placeholder="Ex: Mohamed Ali"
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
-                  disabled={driverModal.loading}
+                  disabled={driverModal.loading || driverModal.existingDriverId}
                 />
               </div>
 
-              {driverModal.mode === 'new' && (
+              {driverModal.mode === 'new' && !driverModal.existingDriverId && (
                 <>
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1">Email *</label>
@@ -343,7 +393,7 @@ export default function SectorsTab() {
                       return
                     }
 
-                    if (driverModal.mode === 'new') {
+                    if (driverModal.mode === 'new' && !driverModal.existingDriverId) {
                       if (!driverModal.email.trim()) {
                         setDriverModal?.({ ...driverModal, error: 'Email requis' })
                         return
@@ -362,26 +412,35 @@ export default function SectorsTab() {
                     setDriverModal?.({ ...driverModal, loading: true, error: '' })
                     try {
                       if (driverModal.mode === 'new') {
-                        const cred = await createUserWithEmailAndPassword(
-                          authSecondary,
-                          driverModal.email.trim(),
-                          driverModal.password
-                        )
-                        await setDoc(doc(db, 'users', cred.user.uid), {
-                          name: driverModal.name.trim(),
-                          email: driverModal.email.trim().toLowerCase(),
-                          role: 'livreur',
-                          city: profile.city,
-                          code: '',
-                          tel: driverModal.tel || '',
-                          matricule: driverModal.matricule || '',
-                          sectorId: driverModal.sectorId || '',
-                          chauffeurType: 'livreur',
-                          directorPermissions: [],
-                          blockedByChef: false,
-                          createdAt: new Date().toISOString()
-                        })
-                        await authSecondary.signOut()
+                        // Si on assigne un livreur existant
+                        if (driverModal.existingDriverId) {
+                          await updateDoc(doc(db, 'users', driverModal.existingDriverId), {
+                            sectorId: driverModal.sectorId || '',
+                            city: profile.city, // Assigner la ville du chef
+                          })
+                        } else {
+                          // Créer un nouveau livreur
+                          const cred = await createUserWithEmailAndPassword(
+                            authSecondary,
+                            driverModal.email.trim(),
+                            driverModal.password
+                          )
+                          await setDoc(doc(db, 'users', cred.user.uid), {
+                            name: driverModal.name.trim(),
+                            email: driverModal.email.trim().toLowerCase(),
+                            role: 'livreur',
+                            city: profile.city,
+                            code: '',
+                            tel: driverModal.tel || '',
+                            matricule: driverModal.matricule || '',
+                            sectorId: driverModal.sectorId || '',
+                            chauffeurType: 'livreur',
+                            directorPermissions: [],
+                            blockedByChef: false,
+                            createdAt: new Date().toISOString()
+                          })
+                          await authSecondary.signOut()
+                        }
                       } else {
                         await updateDoc(doc(db, 'users', driverModal.id), {
                           name: driverModal.name.trim(),

@@ -3,7 +3,7 @@ import { signOut, createUserWithEmailAndPassword, signOut as fbSignOut, onIdToke
 import { auth, authSecondary, db } from '../firebase/config'
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner'
 import ParcelScanModal from '../components/ParcelScanModal'
-import { doc, onSnapshot, setDoc, collection, updateDoc, deleteDoc, getDoc, query, where } from 'firebase/firestore'
+import { doc, onSnapshot, setDoc, collection, updateDoc, deleteDoc, getDoc, query, where, arrayUnion } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
 import {
   createParcel, subscribeAgentParcels, getMoreAgentParcels, getAccurateAgencyStats,
@@ -79,7 +79,7 @@ const HomeTab = lazy(() => import('./agent/tabs/HomeTab'))
 const NewTab = lazy(() => import('./agent/tabs/NewTab'))
 const CaisseTab = lazy(() => import('./agent/tabs/CaisseTab'))
 const CodTab = lazy(() => import('./agent/tabs/CodTab'))
-const ClientsTab = lazy(() => import('./agent/tabs/ClientsTab'))
+const AgentClientsTab = lazy(() => import('./agent/tabs/AgentClientsTab'))
 const ModificationsTab = lazy(() => import('./agent/tabs/ModificationsTab'))
 const ChargeTab = lazy(() => import('./agent/tabs/ChargeTab'))
 const SectorsTab = lazy(() => import('./agent/tabs/SectorsTab'))
@@ -89,6 +89,7 @@ const AideAgentsTab = lazy(() => import('./agent/tabs/AideAgentsTab'))
 const ArrivageTab = lazy(() => import('./agent/tabs/ArrivageTab'))
 const RetoursTab = lazy(() => import('./agent/tabs/RetoursTab'))
 const NotesAgentsTab = lazy(() => import('./agent/tabs/NotesAgentsTab'))
+const LostParcelsTab = lazy(() => import('./agent/tabs/LostParcelsTab'))
 
 const MOD_STATUS = {
   pending:  { label: 'En attente', bg: 'bg-amber-100', text: 'text-amber-700' },
@@ -189,6 +190,7 @@ export default function AgentPage() {
   const [profile, setProfile]           = useState<any>(null)
   const [drivers, setDrivers]           = useState<any[]>([])
   const [tab, setTab]                   = useState('home')
+  const [msg, setMsg]                   = useState<{ type: string; text: string } | null>(null)
   const [subTab, setSubTab]             = useState('mine')
   const [viewSignature,     setViewSignature]     = useState<any>(null)
   const [returnParcelModal, setReturnParcelModal] = useState<any>(null)
@@ -260,6 +262,7 @@ export default function AgentPage() {
   const [parcelStatusFilter, setParcelStatusFilter] = useState('all')
   const [parcelEditorFilter, setParcelEditorFilter] = useState('all')
   const [destinationCityFilter, setDestinationCityFilter] = useState('all')  // ⭐ Filtre ville de destination
+  const [driverFilter, setDriverFilter] = useState('all')  // ⭐ Filtre par livreur/chauffeur
   const [extraParcels, setExtraParcels]             = useState<any[]>([])
   const [hasMoreParcels, setHasMoreParcels]         = useState(false)
   const [loadingMore, setLoadingMore]               = useState(false)
@@ -584,7 +587,7 @@ export default function AgentPage() {
       }
     })()
     const q1 = query(collection(db, 'parcels'), where('destinationCity', '==', profile.city), where('status', '==', 'En transit'))
-    const q2 = query(collection(db, 'parcels'), where('destinationCity', '==', profile.city), where('status', '==', 'En transit retour'))
+    const q2 = query(collection(db, 'parcels'), where('destinationCity', '==', profile.city), where('status', '==', 'Retour en transit'))
     unsubT1 = onSnapshot(q1, snap => mergeTransit.setNormal(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onErr('subscribeTransitNormal'))
     unsubT2 = onSnapshot(q2, snap => mergeTransit.setRetour(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onErr('subscribeTransitRetour'))
     return () => { unsubArrivages(); unsubBonBatch?.(); unsubT1?.(); unsubT2?.(); unsubNotes?.(); unsubUsers?.() }
@@ -908,9 +911,10 @@ export default function AgentPage() {
 
   const allDisplayParcels = useMemo(() => {
     const map = new Map()
-    parcels.forEach(p => map.set(p.id, p))
-    returnParcels.forEach(p => map.set(p.id, p))
-    extraParcels.forEach(p => map.set(p.id, p))
+    // Vérifications de sécurité pour éviter erreurs si undefined
+    ;(parcels || []).forEach(p => map.set(p.id, p))
+    ;(returnParcels || []).forEach(p => map.set(p.id, p))
+    ;(extraParcels || []).forEach(p => map.set(p.id, p))
     return [...map.values()].sort((a, b) => {
       const ta = a.createdAt?.toDate?.() || new Date(0)
       const tb = b.createdAt?.toDate?.() || new Date(0)
@@ -924,9 +928,11 @@ export default function AgentPage() {
   const filteredParcels = useMemo(() => {
     return filterByDate(allDisplayParcels, datePreset, dateFrom, dateTo).filter((p: any) => {
     if (profileCity) {
+      // Pour les retours, vérifier destinationCity directement (après swap, c'est la ville de retour)
+      const isReturnToThisCity = (p.status?.includes('Retour') || p.wasReturned) && p.destinationCity === profileCity
       const destinationVisible = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
         && isParcelVisibleInDestinationAgency(p)
-      const cityMatch = p.sender?.city === profileCity || p.originCity === profileCity || destinationVisible
+      const cityMatch = p.sender?.city === profileCity || p.originCity === profileCity || destinationVisible || isReturnToThisCity
       if (!cityMatch) return false
     }
     if (subTab === 'mine' && p.agentId !== uid && p.destinationAgentId !== uid) {
@@ -957,6 +963,11 @@ export default function AgentPage() {
       const parcelDestCity = p.destinationCity || p.receiver?.city
       if (parcelDestCity !== destinationCityFilter) return false
     }
+    // ⭐ Filtre par livreur/chauffeur
+    if (driverFilter !== 'all') {
+      const matchesDriver = p.deliveryDriverId === driverFilter || p.chauffeurId === driverFilter
+      if (!matchesDriver) return false
+    }
     if (debouncedSearch) {
       const matches = matchesSearch([
         p.id, p.trackingId, p.senderNic, p.sender?.nic, p.sender?.name, p.sender?.tel,
@@ -968,7 +979,7 @@ export default function AgentPage() {
       return true
     })
   }, [allDisplayParcels, datePreset, dateFrom, dateTo, profileCity, profileRole, subTab, uid, serviceFilter,
-       parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, debouncedSearch])
+       parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, debouncedSearch])
 
   // ── Phase 3: memoized stats — only recompute when Firestore sends new data ──
 
@@ -1093,7 +1104,7 @@ export default function AgentPage() {
     }
 
     // Chef peut toujours éditer (sauf si livré/retourné)
-    return !['Livré', 'Retourné', 'En transit retour'].includes(parcel?.status)
+    return !['Livré', 'Retourné', 'Retour en transit'].includes(parcel?.status)
   }
   const canManageStatus = (parcel: any) =>
     profile?.role === 'admin' || profile?.role === 'chef_agence' || isParcelCreator(parcel)
@@ -1217,6 +1228,18 @@ export default function AgentPage() {
   const arrUniqueDrivers = [...new Set(transitParcels.map((p: any) => (p.chauffeurName || '__none__').toLowerCase().trim()).filter(Boolean))]
   const arrUniqueOrigins = [...new Set(transitParcels.map((p: any) => p.originCity).filter(Boolean))]
   const filteredArrivages = arrivages.filter((a: any) => {
+    // Calcul du type réel basé sur le pointage
+    let actualType = a.type
+    if (a.totalArrivedBoxes !== undefined && a.totalExpectedBoxes !== undefined) {
+      if (a.totalArrivedBoxes === 0) {
+        actualType = 'documents_seulement'
+      } else if (a.totalArrivedBoxes < a.totalExpectedBoxes) {
+        actualType = 'partiel'
+      } else {
+        actualType = 'complet'
+      }
+    }
+    if (arrivageTypeFilter !== 'all' && actualType !== arrivageTypeFilter) return false
     if (arrivageStatusFilter !== 'all' && a.pointageStatus !== arrivageStatusFilter) return false
     if (arrivageAgentFilter !== 'all' && a.agentId !== arrivageAgentFilter) return false
     if (arrivageDateFrom && a.confirmedAt) {
@@ -1271,13 +1294,19 @@ export default function AgentPage() {
 
   // Scan global automatique via douchette
   const handleGlobalBarcodeScan = useCallback(async (barcode: string) => {
+    // Vérification sécurité
+    if (!barcode || typeof barcode !== 'string') {
+      console.warn('⚠️ Scan invalide:', barcode)
+      return
+    }
+
     console.log('📦 Scan détecté:', barcode, 'length:', barcode.length)
 
     // Normaliser le code scanné
     const normalized = barcode.toUpperCase().trim()
 
     // Rechercher dans les colis chargés - avec plusieurs stratégies
-    let found = allDisplayParcels.find((p: any) => {
+    let found = (allDisplayParcels || []).find((p: any) => {
       const tid = p.trackingId?.toUpperCase() || ''
       // 1. Match exact
       if (tid === normalized) return true
@@ -1386,6 +1415,7 @@ export default function AgentPage() {
     parcelStatusFilter, setParcelStatusFilter,
     parcelEditorFilter, setParcelEditorFilter,
     destinationCityFilter, setDestinationCityFilter,  // ⭐ Filtre ville de destination
+    driverFilter, setDriverFilter,  // ⭐ Filtre par livreur/chauffeur
     parcelPage, setParcelPage,
     scanOpen, setScanOpen,
     scanQuery, setScanQuery,
@@ -1660,7 +1690,7 @@ export default function AgentPage() {
 
   return (
     <AgentCtx.Provider value={ctxValue}>
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gray-50 overflow-x-hidden">
       <CompanyContact />
 
       {/* Header */}
@@ -1685,6 +1715,13 @@ export default function AgentPage() {
       />
 
       <main className="w-full max-w-2xl lg:max-w-5xl xl:max-w-7xl mx-auto px-3 sm:px-4 md:px-5 pb-16">
+
+        {/* Message notification */}
+        {msg && (
+          <div className={`mb-4 p-4 rounded-xl border-2 ${msg.type === 'success' ? 'bg-green-50 border-green-200 text-green-800' : 'bg-red-50 border-red-200 text-red-800'}`}>
+            {msg.text}
+          </div>
+        )}
 
         {/* ── ACCUEIL ── */}
         {tab === 'home' && (
@@ -1717,7 +1754,7 @@ export default function AgentPage() {
 
         {tab === 'clients' && (
           <Suspense fallback={null}>
-            <ClientsTab />
+            <AgentClientsTab agencyCity={profile?.city || ''} profile={profile} setMsg={setMsg} />
           </Suspense>
         )}
 
@@ -1783,8 +1820,24 @@ export default function AgentPage() {
               }
             }}
             onAssignReturnDriver={async (parcelId: string, driver: any) => {
-              await assignDeliveryDriver(parcelId, driver.id, driver.name, {
-                deliveryAssignedBy: profile?.name || ''
+              // Assigner le livreur de retour en utilisant des champs séparés
+              const parcel = parcels.find((p: any) => p.id === parcelId)
+              if (!parcel) return
+
+              await updateDoc(doc(db, 'parcels', parcelId), {
+                returnDeliveryDriverId: driver.id,
+                returnDeliveryDriverName: driver.name,
+                returnDeliverySectorId: driver.sectorId || null,
+                returnDeliverySectorCode: driver.sectorCode || '',
+                returnDeliverySectorName: driver.sectorName || '',
+                returnDeliveryAssignedAt: new Date().toISOString(),
+                returnDeliveryAssignedBy: profile?.name || '',
+                status: 'En cours de livraison',
+                history: arrayUnion({
+                  status: 'En cours de livraison',
+                  timestamp: new Date().toISOString(),
+                  note: `Retour assigné au livreur ${driver.name} pour livraison à l'expéditeur`
+                })
               })
             }}
             onMarkReturnedToSender={async (parcelId: string) => {
@@ -1792,6 +1845,17 @@ export default function AgentPage() {
                 note: `Retour finalisé par ${profile?.name || 'chef d\'agence'}`
               })
             }}
+          />
+        </Suspense>
+      )}
+
+      {/* ── COLIS PERDUS TAB ── */}
+      {tab === 'lostparcels' && profile?.role !== 'aide_agent' && (
+        <Suspense fallback={null}>
+          <LostParcelsTab
+            agencyCity={profile?.city || ''}
+            profile={profile}
+            setMsg={setMsg}
           />
         </Suspense>
       )}
@@ -1835,6 +1899,52 @@ export default function AgentPage() {
           parcel={globalScanModal}
           onClose={() => setGlobalScanModal(null)}
         />
+      )}
+
+      {/* Modal confirmation suppression */}
+      {deleteConfirm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-[9999]">
+          <div className="bg-white rounded-lg shadow-xl max-w-md w-full mx-4">
+            <div className="p-6">
+              <h3 className="text-xl font-bold text-red-600 mb-4">
+                ⚠️ Confirmer la suppression
+              </h3>
+              <p className="text-gray-700 mb-2">
+                Voulez-vous vraiment supprimer cette expédition ?
+              </p>
+              <div className="bg-gray-50 p-3 rounded mb-4 text-sm">
+                <p><strong>N° Expédition:</strong> {deleteConfirm.trackingRef || deleteConfirm.id}</p>
+                <p><strong>Expéditeur:</strong> {deleteConfirm.senderName}</p>
+                <p><strong>Destinataire:</strong> {deleteConfirm.receiverName}</p>
+                <p><strong>Ville:</strong> {deleteConfirm.receiverCity}</p>
+              </div>
+              <p className="text-sm text-red-600 mb-4">
+                ⚠️ Cette action est irréversible !
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setDeleteConfirm(null)}
+                  className="flex-1 px-4 py-2 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 font-medium"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={async () => {
+                    try {
+                      await handlers.confirmDelete(deleteConfirm)
+                      setMsg({ type: 'success', text: 'Expédition supprimée avec succès' })
+                    } catch (err: any) {
+                      setMsg({ type: 'error', text: err.message || 'Erreur lors de la suppression' })
+                    }
+                  }}
+                  className="flex-1 px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 font-medium"
+                >
+                  Supprimer
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
       )}
 
     </div>

@@ -893,7 +893,7 @@ export default function SeedPage() {
       if (n > 0) chunks.push(chunk)
       await Promise.all(chunks.map(b => b.commit()))
       setCleared(true)
-      alert(`? ${snap.size} colis de test supprimés. Vos vrais colis sont intacts.`)
+      alert(`✅ ${snap.size} colis de test supprimés. Vos vrais colis sont intacts.`)
     } catch(e: any) {
       alert('Erreur: ' + e.message)
     }
@@ -951,7 +951,7 @@ export default function SeedPage() {
       }
       if (n > 0) chunks.push(chunk)
       await Promise.all(chunks.map(b => b.commit()))
-      alert(`? ${snap.size} colis de test récents supprimés.`)
+      alert(`✅ ${snap.size} colis de test récents supprimés.`)
     } catch(e: any) { alert('Erreur: ' + e.message) }
     setClearing(false)
   }
@@ -1290,6 +1290,70 @@ export default function SeedPage() {
                 : `? ${archiveDone} colis archivés avec succès.`}
             </div>
           )}
+        </div>
+
+        {/* Diagnostic retours */}
+        <div className="bg-gray-900 rounded-2xl p-5 border border-blue-800/40">
+          <h2 className="font-bold text-blue-400 text-sm uppercase tracking-wider mb-1">🔍 Diagnostic Retours</h2>
+          <p className="text-gray-500 text-xs mb-4">
+            Vérifie les champs des colis retournés (status, wasReturned, returnedAt, etc.)
+          </p>
+          <button
+            onClick={async () => {
+              const q = query(collection(db, 'parcels'), where('status', 'in', ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']), limit(10))
+              const snapshot = await getDocs(q)
+              let report = '📊 DIAGNOSTIC RETOURS\n\n'
+              snapshot.forEach(docSnap => {
+                const p = docSnap.data()
+                report += `📦 ${p.trackingId}\n`
+                report += `  - status: ${p.status}\n`
+                report += `  - wasReturned: ${p.wasReturned || 'undefined'}\n`
+                report += `  - returnedAt: ${p.returnedAt ? 'OUI' : 'NON'}\n`
+                report += `  - originCity: ${p.originCity}\n`
+                report += `  - destinationCity: ${p.destinationCity}\n`
+                report += `  - returnToCity: ${p.returnToCity || 'undefined'}\n`
+                report += `  - createdByCity: ${p.createdByCity || 'undefined'}\n\n`
+              })
+              console.log(report)
+              alert(report + '\n(Voir console pour détails)')
+            }}
+            className="flex items-center gap-2 bg-blue-700 hover:bg-blue-600 text-white font-bold py-3 px-5 rounded-xl transition text-sm"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Diagnostic Retours (10 colis)
+          </button>
+        </div>
+
+        {/* Corriger anciens retours */}
+        <div className="bg-gray-900 rounded-2xl p-5 border border-red-800/40">
+          <h2 className="font-bold text-red-400 text-sm uppercase tracking-wider mb-1">🔧 Corriger les anciens retours</h2>
+          <p className="text-gray-500 text-xs mb-4">
+            Ajoute le champ <code className="text-red-300">returnToCity</code> aux colis retournés qui ne l'ont pas.
+            Nécessaire pour que les retours apparaissent dans l'agence source.
+          </p>
+          <button
+            onClick={async () => {
+              if (!window.confirm('Corriger tous les anciens colis retournés ?\n\nCela ajoutera le champ returnToCity manquant.')) return
+              const start = Date.now()
+              const q = query(collection(db, 'parcels'), where('status', 'in', ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']))
+              const snapshot = await getDocs(q)
+              const batch = writeBatch(db)
+              let count = 0
+              snapshot.forEach(docSnap => {
+                const p = docSnap.data()
+                if (!p.returnToCity && p.createdByCity) {
+                  batch.update(doc(db, 'parcels', docSnap.id), { returnToCity: p.createdByCity })
+                  count++
+                }
+              })
+              await batch.commit()
+              alert(`✅ ${count} colis corrigés en ${((Date.now() - start) / 1000).toFixed(1)}s`)
+            }}
+            className="flex items-center gap-2 bg-red-700 hover:bg-red-600 text-white font-bold py-3 px-5 rounded-xl transition text-sm"
+          >
+            <RefreshCw className="w-4 h-4" />
+            Corriger les anciens retours
+          </button>
         </div>
 
         {/* Quick seed: 10 Casa -> Marrakech */}
