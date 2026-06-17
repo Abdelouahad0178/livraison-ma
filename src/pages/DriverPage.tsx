@@ -16,6 +16,7 @@ import {
   generateSignatureToken,
   submitDeliverySignature,
   subscribeDeliverySignature,
+  confirmDeliveryWithPaperReceipt,
 } from '../firebase/signatures'
 import { STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS, codCollectedLabel } from '../firebase/constants'
 import {
@@ -122,6 +123,11 @@ export default function DriverPage() {
   const [signatureModal,   setSignatureModal]   = useState<any>(null)
   const [viewSignature,    setViewSignature]     = useState<any>(null)
   // signatureModal = { parcel, token, url, receivedSig, codPaymentType, confirming, done, error, stampMode, driverStamp, driverCompanyName, stampSubmitting, handSubmitting, driverHandSignatureEmpty }
+
+  // Bon papier (livraison sans signature électronique)
+  const [paperReceiptModal, setPaperReceiptModal] = useState<any>(null)
+  // paperReceiptModal = { parcel, note, confirming, error, isReturn }
+
   const signatureUnsubRef = useRef<any>(null)
   const stampInputRef     = useRef<any>(null)
   const handSignatureCanvasRef = useRef<any>(null)
@@ -662,6 +668,53 @@ export default function DriverPage() {
     } catch (err: any) {
       console.error('❌ Erreur confirmation signature:', err)
       setSignatureModal((m: any) => ({ ...m, confirming: false, error: 'Erreur lors de la confirmation. Réessayez.' }))
+    }
+  }
+
+  // ── Confirmation avec bon papier (sans signature électronique) ────────────────
+
+  const handleConfirmWithPaperReceipt = async () => {
+    if (!paperReceiptModal) return
+    const { parcel, note, isReturn, codPaymentType } = paperReceiptModal
+    const name = profile?.name || workerLabel
+    const isDeliveryDriver = parcel.deliveryDriverId === uid
+    const needsCod = isDeliveryDriver
+      && parcel.codAmount > 0
+      && (parcel.codStatus === 'pending' || !parcel.codStatus)
+    const needsPortDu = isDeliveryDriver
+      && parcel.portType === 'port_du'
+      && parcel.portStatus !== 'collected'
+
+    if (needsCod && !codPaymentType) {
+      setPaperReceiptModal((m: any) => ({ ...m, error: 'Sélectionnez le mode de paiement RETOUR FOND avant de confirmer.' }))
+      return
+    }
+
+    console.log('📄 Confirmation bon papier:', {
+      parcelId: parcel.id,
+      isReturn,
+      finalStatus: isReturn ? 'Retour finalisé' : 'Livré'
+    })
+
+    setPaperReceiptModal((m: any) => ({ ...m, confirming: true, error: '' }))
+    try {
+      if (needsCod) await collectCod(parcel.id, codPaymentType, name)
+      if (needsPortDu) await collectPortDu(parcel.id, name, uid || '')
+      await confirmDeliveryWithPaperReceipt(parcel.id, name, isReturn, note)
+      const finalStatus = isReturn ? 'Retour finalisé' : 'Livré'
+      const patchList = (ps: any) => ps.map((p: any) =>
+        p.id === parcel.id
+          ? { ...p, status: finalStatus, ...(needsCod && { codStatus: 'collected', codPaymentType }) }
+          : p
+      )
+      setParcels(patchList)
+      setDeliveryParcels(patchList)
+      setMsg({ type: 'success', text: `✅ ${isReturn ? 'Retour confirmé' : 'Livraison confirmée'} avec bon papier !` })
+      setPaperReceiptModal(null)
+      console.log('✅ Bon papier confirmé avec succès, statut:', finalStatus)
+    } catch (err: any) {
+      console.error('❌ Erreur confirmation bon papier:', err)
+      setPaperReceiptModal((m: any) => ({ ...m, confirming: false, error: 'Erreur lors de la confirmation. Réessayez.' }))
     }
   }
 
@@ -1258,9 +1311,25 @@ export default function DriverPage() {
                               <>
                                 <button
                                   onClick={() => handleRequestSignature(parcel)}
-                                  className="col-span-2 flex items-center justify-center gap-2 text-base font-black px-4 py-4 rounded-2xl text-white bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-900/20 transition"
+                                  className="flex items-center justify-center gap-2 text-base font-black px-4 py-4 rounded-2xl text-white bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-900/20 transition"
                                 >
-                                  <PenLine className="w-5 h-5" /> Livrer et faire signer
+                                  <PenLine className="w-5 h-5" /> Signature électronique
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
+                                    setPaperReceiptModal({
+                                      parcel,
+                                      note: '',
+                                      confirming: false,
+                                      error: '',
+                                      isReturn,
+                                      codPaymentType: ''
+                                    })
+                                  }}
+                                  className="flex items-center justify-center gap-2 text-base font-black px-4 py-4 rounded-2xl border-2 border-blue-500 text-blue-900 bg-blue-50 hover:bg-blue-100 shadow-lg shadow-blue-900/10 transition"
+                                >
+                                  📄 Bon papier signé
                                 </button>
                                 {parcel.status !== 'En cours de livraison' && (
                                   <button
@@ -1294,13 +1363,32 @@ export default function DriverPage() {
                                   </button>
                                 )}
                                 {driverTab === 'delivery' && !['Livré', 'Retourné'].includes(parcel.status) && parcel.deliveryDriverId === uid && (
-                                  <button
-                                    onClick={() => handleRequestSignature(parcel)}
-                                    className="flex items-center gap-1 text-xs font-semibold px-3 py-2 rounded-lg border border-violet-500/40 text-violet-300 bg-violet-950/30 hover:bg-violet-900/50 transition"
-                                    title="Générer le QR de signature"
-                                  >
-                                    <PenLine className="w-3.5 h-3.5" /> Signer
-                                  </button>
+                                  <>
+                                    <button
+                                      onClick={() => handleRequestSignature(parcel)}
+                                      className="flex items-center gap-1 text-xs font-semibold px-3 py-2 rounded-lg border border-violet-500/40 text-violet-300 bg-violet-950/30 hover:bg-violet-900/50 transition"
+                                      title="Signature électronique"
+                                    >
+                                      <PenLine className="w-3.5 h-3.5" /> Signature élec.
+                                    </button>
+                                    <button
+                                      onClick={() => {
+                                        const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
+                                        setPaperReceiptModal({
+                                          parcel,
+                                          note: '',
+                                          confirming: false,
+                                          error: '',
+                                          isReturn,
+                                          codPaymentType: ''
+                                        })
+                                      }}
+                                      className="flex items-center gap-1 text-xs font-semibold px-3 py-2 rounded-lg border border-blue-500/40 text-blue-300 bg-blue-950/30 hover:bg-blue-900/50 transition"
+                                      title="Bon papier signé manuellement"
+                                    >
+                                      📄 Bon papier
+                                    </button>
+                                  </>
                                 )}
                               </>
                             )}
@@ -2227,6 +2315,160 @@ export default function DriverPage() {
                 </div>
               )}
 
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL BON PAPIER (signature manuelle classique) ── */}
+      {paperReceiptModal && (
+        <div className="fixed inset-0 bg-black/80 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md shadow-2xl">
+
+            {/* Header */}
+            <div className="flex items-center justify-between p-5 border-b border-gray-200">
+              <div>
+                <h3 className="font-bold text-gray-900 flex items-center gap-2">
+                  📄 Livraison avec bon papier
+                </h3>
+                <p className="text-xs font-mono text-blue-600 mt-0.5">{paperReceiptModal.parcel.trackingId}</p>
+                <p className="text-xs text-gray-600 mt-0.5">
+                  {paperReceiptModal.isReturn
+                    ? `Retour à : ${paperReceiptModal.parcel.sender?.name || 'Expéditeur'}`
+                    : `${paperReceiptModal.parcel.receiver?.name} · ${paperReceiptModal.parcel.receiver?.city}`
+                  }
+                </p>
+              </div>
+              {!paperReceiptModal.confirming && (
+                <button
+                  onClick={() => setPaperReceiptModal(null)}
+                  className="p-2 hover:bg-gray-100 rounded-xl transition"
+                >
+                  <X className="w-5 h-5 text-gray-500" />
+                </button>
+              )}
+            </div>
+
+            <div className="p-5 space-y-4">
+
+              {/* Infos */}
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                <p className="text-sm text-blue-900 font-medium mb-2">
+                  ✍️ Signature papier (méthode classique)
+                </p>
+                <p className="text-xs text-blue-700 leading-relaxed">
+                  Le destinataire signe un bon de livraison papier. Assurez-vous de bien conserver ce document.
+                </p>
+              </div>
+
+              {/* RETOUR FOND + Port dû si nécessaire */}
+              {(() => {
+                const { parcel } = paperReceiptModal
+                const isDD = parcel.deliveryDriverId === uid
+                const hasCod = isDD && parcel.codAmount > 0 && (parcel.codStatus === 'pending' || !parcel.codStatus)
+                const hasPortDu = isDD && parcel.portType === 'port_du' && parcel.portStatus !== 'collected'
+                if (!hasCod && !hasPortDu) return null
+                const total = (hasCod ? parcel.codAmount : 0) + (hasPortDu ? (parcel.price || 0) : 0)
+                return (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 space-y-3">
+                    <p className="text-sm font-bold text-amber-900 flex items-center gap-2">
+                      <Banknote className="w-4 h-4" /> À encaisser du client
+                    </p>
+                    <div className="space-y-1">
+                      {hasCod && (
+                        <div className="space-y-1.5">
+                          {(() => {
+                            const st = (SERVICE_TYPE_DISPLAY as any)[parcel.serviceType]
+                            if (!st) return null
+                            return (
+                              <div className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-bold ${st.bg} ${st.text}`}>
+                                {st.emoji} {st.label}
+                              </div>
+                            )
+                          })()}
+                          <div className="flex justify-between text-sm">
+                            <span className="text-amber-700">💰 RETOUR FOND</span>
+                            <span className="text-amber-900 font-bold">{parcel.codAmount} DH</span>
+                          </div>
+                        </div>
+                      )}
+                      {hasPortDu && (
+                        <div className="flex justify-between text-sm">
+                          <span className="text-orange-700">📮 Port dû</span>
+                          <span className="text-orange-900 font-bold">{parcel.price || 0} DH</span>
+                        </div>
+                      )}
+                      {hasCod && hasPortDu && (
+                        <div className="flex justify-between text-sm border-t border-amber-300 pt-1 mt-1">
+                          <span className="text-gray-900 font-semibold">Total</span>
+                          <span className="text-gray-900 font-black">{total} DH</span>
+                        </div>
+                      )}
+                    </div>
+                    {hasCod && (
+                      <>
+                        <p className="text-xs text-amber-800 font-medium">Mode de paiement RETOUR FOND :</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          {COD_PAYMENT_TYPES.map(pt => (
+                            <button
+                              key={pt.key}
+                              onClick={() => setPaperReceiptModal((m: any) => ({ ...m, codPaymentType: pt.key, error: '' }))}
+                              className={`px-3 py-2.5 rounded-lg text-sm font-semibold transition border-2 ${
+                                paperReceiptModal.codPaymentType === pt.key
+                                  ? `${pt.bg} ${pt.text} border-current`
+                                  : 'bg-white text-gray-700 border-gray-200 hover:border-gray-300'
+                              }`}
+                            >
+                              {pt.emoji} {pt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )
+              })()}
+
+              {/* Note optionnelle */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Note (optionnelle)
+                </label>
+                <textarea
+                  value={paperReceiptModal.note}
+                  onChange={e => setPaperReceiptModal((m: any) => ({ ...m, note: e.target.value }))}
+                  placeholder="Ajoutez une note si nécessaire..."
+                  className="w-full bg-white border-2 border-gray-200 rounded-xl px-3 py-2.5 text-sm text-gray-900 placeholder-gray-400 focus:border-blue-500 focus:outline-none min-h-[80px] resize-none"
+                />
+              </div>
+
+              {/* Erreur */}
+              {paperReceiptModal.error && (
+                <div className="bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl text-sm font-medium">
+                  ⚠️ {paperReceiptModal.error}
+                </div>
+              )}
+
+              {/* Boutons */}
+              <div className="grid grid-cols-2 gap-3 pt-2">
+                <button
+                  onClick={() => setPaperReceiptModal(null)}
+                  disabled={paperReceiptModal.confirming}
+                  className="py-3.5 rounded-xl border-2 border-gray-300 text-gray-700 font-bold hover:bg-gray-50 transition disabled:opacity-50"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={handleConfirmWithPaperReceipt}
+                  disabled={paperReceiptModal.confirming}
+                  className="py-3.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold transition flex items-center justify-center gap-2"
+                >
+                  {paperReceiptModal.confirming
+                    ? <><div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Confirmation...</>
+                    : <><CheckCircle className="w-5 h-5" /> Confirmer livraison</>
+                  }
+                </button>
+              </div>
             </div>
           </div>
         </div>

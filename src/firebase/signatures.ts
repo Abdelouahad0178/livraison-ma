@@ -142,3 +142,47 @@ export async function updateDeliverySignature(parcelId: any, signatureDataUrl: a
     updatedAt: new Date().toISOString(),
   })
 }
+
+/**
+ * Confirme la livraison avec bon papier (signature manuelle classique)
+ * @param parcelId ID du colis
+ * @param driverName Nom du livreur
+ * @param isReturn true si c'est un retour
+ * @param note Note optionnelle
+ */
+export async function confirmDeliveryWithPaperReceipt(
+  parcelId: string,
+  driverName: string,
+  isReturn = false,
+  note = ''
+) {
+  const now = new Date().toISOString()
+
+  if (isReturn) {
+    // Retour avec bon papier
+    await updateDoc(doc(db, 'parcels', parcelId), {
+      status: 'Retour finalisé',
+      returnSignatureToken: null,
+      returnSignatureConfirmedAt: now,
+      signatureMethod: 'paper_receipt', // Nouveau champ pour identifier le type de signature
+      history: arrayUnion({
+        status: 'Retour finalisé',
+        timestamp: now,
+        note: `Colis retourné avec bon papier signé manuellement - livreur : ${driverName}${note ? ` - ${note}` : ''}`,
+      }),
+    })
+  } else {
+    // Livraison normale avec bon papier
+    await updateDoc(doc(db, 'parcels', parcelId), {
+      status: 'Livré',
+      signatureToken: null,
+      signatureConfirmedAt: now,
+      signatureMethod: 'paper_receipt', // Nouveau champ pour identifier le type de signature
+      history: arrayUnion({
+        status: 'Livré',
+        timestamp: now,
+        note: `Livré avec bon papier signé manuellement par le destinataire - chauffeur : ${driverName}${note ? ` - ${note}` : ''}`,
+      }),
+    })
+  }
+}
