@@ -1,0 +1,147 @@
+/**
+ * HERO AI - Styles globaux
+ * Applique le design Hero AI à tous les composants existants
+ */
+
+/* ========== CARTES ========== */
+
+/* Améliore toutes les cartes existantes */
+.bg-white[class*="rounded"] {
+  @apply shadow-md hover:shadow-lg transition-shadow duration-200;
+}
+
+/* Cartes avec bordures */
+.border-gray-100,
+.border-gray-200 {
+  @apply border-gray-100;
+}
+
+/* ========== BOUTONS ========== */
+
+/* Boutons primaires */
+button.bg-blue-600,
+button.bg-blue-500 {
+  @apply bg-blue-600 hover:bg-blue-700 shadow-md hover:shadow-lg transition-all duration-200;
+}
+
+button.bg-green-600,
+button.bg-green-500 {
+  @apply bg-green-600 hover:bg-green-700 shadow-md hover:shadow-lg transition-all duration-200;
+}
+
+button.bg-gradient-to-r {
+  @apply shadow-lg hover:shadow-xl transition-all duration-300;
+}
+
+/* ========== INPUTS ========== */
+
+/* Améliore tous les inputs */
+input[type="text"],
+input[type="email"],
+input[type="password"],
+input[type="number"],
+input[type="tel"],
+input[type="date"],
+textarea,
+select {
+  @apply focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all duration-200;
+}
+
+/* ========== BADGES ========== */
+
+/* Améliore les badges */
+.bg-blue-50.text-blue-600,
+.bg-blue-100.text-blue-600,
+.bg-blue-100.text-blue-700 {
+  @apply bg-blue-100 text-blue-700 shadow-sm;
+}
+
+.bg-green-50.text-green-600,
+.bg-green-100.text-green-600,
+.bg-green-100.text-green-700 {
+  @apply bg-green-100 text-green-700 shadow-sm;
+}
+
+.bg-orange-50.text-orange-600,
+.bg-orange-100.text-orange-600,
+.bg-orange-100.text-orange-700 {
+  @apply bg-orange-100 text-orange-700 shadow-sm;
+}
+
+.bg-red-50.text-red-600,
+.bg-red-100.text-red-600,
+.bg-red-100.text-red-700 {
+  @apply bg-red-100 text-red-700 shadow-sm;
+}
+
+/* ========== TABLES ========== */
+
+/* Améliore les tables */
+table tbody tr {
+  @apply hover:bg-gray-50 transition-colors duration-150;
+}
+
+/* ========== MODAL/DROPDOWN ========== */
+
+/* Améliore les modals */
+.fixed.inset-0.bg-black\/50,
+.fixed.inset-0.bg-black\/60 {
+  @apply backdrop-blur-sm;
+}
+
+/* ========== SCROLL SMOOTH ========== */
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-gray-100;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-gray-300 rounded-full hover:bg-gray-400 transition-colors;
+}
+
+/* ========== ANIMATIONS ========== */
+
+@keyframes slideInUp {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-slide-up {
+  animation: slideInUp 0.3s ease-out;
+}
+
+/* ========== FOCUS STATES ========== */
+
+button:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  @apply outline-none ring-2 ring-blue-500/50 ring-offset-2;
+}
+
+/* ========== TRANSITIONS ========== */
+
+* {
+  @apply transition-colors duration-200;
+}
+
+button,
+a[href] {
+  @apply transition-all duration-200;
+}
