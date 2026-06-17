@@ -1634,6 +1634,22 @@ export default function ParcelsTab() {
                   </select>
                   <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-gray-400 pointer-events-none" />
                 </div>
+
+                {deliveryModal.sectorId && (() => {
+                  const selectedSector = citySectors.find((s: any) => s.id === deliveryModal.sectorId)
+                  if (selectedSector) {
+                    return (
+                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                        <p className="text-sm font-semibold text-blue-900">📍 Secteur: {selectedSector.code}</p>
+                        {selectedSector.name && selectedSector.name !== selectedSector.code && (
+                          <p className="text-xs text-blue-700 mt-0.5">{selectedSector.name}</p>
+                        )}
+                      </div>
+                    )
+                  }
+                  return null
+                })()}
+
                 <p className="text-sm text-gray-400 bg-gray-50 rounded-xl p-3">Aucun livreur disponible pour ce secteur.</p>
               </div>
             ) : (
@@ -1649,12 +1665,28 @@ export default function ParcelsTab() {
                   </select>
                   <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-gray-400 pointer-events-none" />
                 </div>
+
+                {deliveryModal.sectorId && (() => {
+                  const selectedSector = citySectors.find((s: any) => s.id === deliveryModal.sectorId)
+                  if (selectedSector) {
+                    return (
+                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                        <p className="text-sm font-semibold text-blue-900">📍 Secteur: {selectedSector.code}</p>
+                        {selectedSector.name && selectedSector.name !== selectedSector.code && (
+                          <p className="text-xs text-blue-700 mt-0.5">{selectedSector.name}</p>
+                        )}
+                      </div>
+                    )
+                  }
+                  return null
+                })()}
+
                 <div className="grid grid-cols-1 gap-2">
                   {cityDrivers.map((d: any) => {
                     const sector = allSectors.find((s: any) => s.id === d.sectorId)
                     return (
                       <button key={d.id}
-                        onClick={() => setDeliveryModal((m: any) => ({ ...m, driverId: d.id, sectorId: m.sectorId || d.sectorId || '' }))}
+                        onClick={() => setDeliveryModal((m: any) => ({ ...m, driverId: d.id, sectorId: d.sectorId || m.sectorId || '' }))}
                         className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium border transition ${
                           deliveryModal.driverId === d.id
                             ? 'bg-blue-600 text-white border-blue-600'
