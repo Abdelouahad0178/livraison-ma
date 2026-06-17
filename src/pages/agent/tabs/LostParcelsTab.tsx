@@ -1,8 +1,9 @@
 import { useState, useEffect } from 'react'
-import { AlertTriangle, Search, CheckCircle, XCircle, Trash2, Plus, X } from 'lucide-react'
-import { getAllLostParcels, respondToLostParcel, deleteLostParcel, declareLostParcel, LostParcelDeclaration } from '../../../firebase/lostParcels'
+import { AlertTriangle, Search, CheckCircle, XCircle, Trash2, Plus, X, MessageSquare } from 'lucide-react'
+import { getAllLostParcels, respondToLostParcel, deleteLostParcel, declareLostParcel, LostParcelDeclaration, getLostParcelMessages } from '../../../firebase/lostParcels'
 import { searchParcelByTrackingId } from '../../../firebase/parcels'
 import { CITIES } from '../../../firebase/constants'
+import LostParcelConversationModal from '../../../components/LostParcelConversationModal'
 
 interface LostParcelsTabProps {
   agencyCity: string
@@ -22,6 +23,7 @@ export default function LostParcelsTab({ agencyCity, profile, setMsg }: LostParc
   const [declareLocation, setDeclareLocation] = useState(agencyCity)
   const [declareDetails, setDeclareDetails] = useState('')
   const [declaring, setDeclaring] = useState(false)
+  const [conversationParcel, setConversationParcel] = useState<LostParcelDeclaration | null>(null)
 
   useEffect(() => {
     loadLostParcels()
@@ -174,7 +176,7 @@ export default function LostParcelsTab({ agencyCity, profile, setMsg }: LostParc
         <div>
           <h3 className="font-bold mb-3">⏳ En attente ({pending.length})</h3>
           <div className="space-y-3">
-            {pending.map(lp => <Card key={lp.id} lp={lp} agencyCity={agencyCity} onRespond={handleRespond} onDelete={handleDelete} responding={responding === lp.id} deleting={deleting === lp.id} confirmDelete={confirmDelete === lp.id} />)}
+            {pending.map(lp => <Card key={lp.id} lp={lp} agencyCity={agencyCity} onRespond={handleRespond} onDelete={handleDelete} onOpenConversation={() => setConversationParcel(lp)} responding={responding === lp.id} deleting={deleting === lp.id} confirmDelete={confirmDelete === lp.id} />)}
           </div>
         </div>
       )}
@@ -183,12 +185,27 @@ export default function LostParcelsTab({ agencyCity, profile, setMsg }: LostParc
         <div>
           <h3 className="font-bold text-gray-600 mb-3">✅ Traités ({answered.length})</h3>
           <div className="space-y-3">
-            {answered.map(lp => <Card key={lp.id} lp={lp} agencyCity={agencyCity} onDelete={handleDelete} deleting={deleting === lp.id} confirmDelete={confirmDelete === lp.id} answered />)}
+            {answered.map(lp => <Card key={lp.id} lp={lp} agencyCity={agencyCity} onDelete={handleDelete} onOpenConversation={() => setConversationParcel(lp)} deleting={deleting === lp.id} confirmDelete={confirmDelete === lp.id} answered />)}
           </div>
         </div>
       )}
 
       {filtered.length === 0 && <div className="text-center py-12 bg-gray-50 rounded-xl"><p className="text-gray-500">Aucun colis perdu</p></div>}
+
+      {/* Modal Conversation */}
+      {conversationParcel && (
+        <LostParcelConversationModal
+          lostParcel={conversationParcel}
+          agencyCity={agencyCity}
+          userProfile={{
+            uid: profile?.uid || profile?.id || profile?.email || 'user-' + agencyCity,
+            name: profile?.name || 'Chef ' + agencyCity,
+            role: profile?.role || 'agent'
+          }}
+          onClose={() => setConversationParcel(null)}
+          onRefresh={loadLostParcels}
+        />
+      )}
 
       {/* Modal Déclaration */}
       {showDeclareModal && (
@@ -224,9 +241,11 @@ export default function LostParcelsTab({ agencyCity, profile, setMsg }: LostParc
   )
 }
 
-function Card({ lp, agencyCity, onRespond, onDelete, responding, deleting, confirmDelete, answered }: any) {
+function Card({ lp, agencyCity, onRespond, onDelete, onOpenConversation, responding, deleting, confirmDelete, answered }: any) {
   const [comment, setComment] = useState('')
   const response = lp.responses[agencyCity]
+  const messages = getLostParcelMessages(lp)
+  const messageCount = messages.length
 
   return (
     <div className="bg-white border-2 border-gray-200 rounded-xl p-4">
@@ -235,33 +254,58 @@ function Card({ lp, agencyCity, onRespond, onDelete, responding, deleting, confi
           <p className="font-mono font-bold text-lg text-red-700">{lp.trackingId}</p>
           <p className="text-sm text-gray-600">{lp.declaredAt.toDate().toLocaleDateString('fr-FR')}</p>
         </div>
+        {messageCount > 0 && (
+          <div className="flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-bold">
+            <MessageSquare className="w-3 h-3" />
+            {messageCount}
+          </div>
+        )}
       </div>
       <div className="space-y-1 mb-3 text-sm">
         <p><strong>Localisation :</strong> {lp.lastKnownLocation}</p>
         <p><strong>Détails :</strong> {lp.details}</p>
-        <p><strong>Par :</strong> {lp.declaredBy.name}</p>
+        <p><strong>Par :</strong> {lp.declaredBy.name} ({lp.declaredBy.city})</p>
       </div>
-      {!answered ? (
-        <div className="space-y-2">
-          <textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Commentaire..." className="w-full p-3 border-2 rounded-lg resize-none" rows={2} />
-          <div className="flex gap-2">
-            <button onClick={() => onRespond(lp, true, comment)} disabled={responding} className="flex-1 px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold">
-              {responding ? '...' : '✅ Trouvé'}
-            </button>
-            <button onClick={() => onRespond(lp, false, comment)} disabled={responding} className="flex-1 px-4 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg font-semibold">
-              {responding ? '...' : '❌ Non'}
-            </button>
+
+      {/* Bouton principal : Ouvrir la conversation */}
+      <button
+        onClick={onOpenConversation}
+        className="w-full px-4 py-3 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white rounded-xl font-bold transition flex items-center justify-center gap-2 mb-2"
+      >
+        <MessageSquare className="w-5 h-5" />
+        {messageCount === 0 ? '💬 Répondre (conversation)' : `💬 Voir conversation (${messageCount})`}
+      </button>
+
+      {/* Mode rapide (ancien système pour compatibilité) */}
+      {!answered && (
+        <details className="mt-2">
+          <summary className="cursor-pointer text-xs text-gray-500 hover:text-gray-700 py-1">
+            ⚡ Mode rapide (ancienne méthode)
+          </summary>
+          <div className="space-y-2 mt-2 pt-2 border-t border-gray-200">
+            <textarea value={comment} onChange={(e) => setComment(e.target.value)} placeholder="Commentaire rapide..." className="w-full p-2 border-2 rounded-lg resize-none text-sm" rows={2} />
+            <div className="flex gap-2">
+              <button onClick={() => onRespond(lp, true, comment)} disabled={responding} className="flex-1 px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg font-semibold text-sm">
+                {responding ? '...' : '✅ Trouvé'}
+              </button>
+              <button onClick={() => onRespond(lp, false, comment)} disabled={responding} className="flex-1 px-3 py-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg font-semibold text-sm">
+                {responding ? '...' : '❌ Non'}
+              </button>
+            </div>
           </div>
-        </div>
-      ) : (
-        <div className="bg-gray-50 rounded-lg p-3">
+        </details>
+      )}
+
+      {answered && response && (
+        <div className="bg-gray-50 rounded-lg p-3 text-sm">
           <div className="flex items-center gap-2">
-            {response.found ? <CheckCircle className="w-5 h-5 text-green-600" /> : <XCircle className="w-5 h-5 text-gray-500" />}
+            {response.found ? <CheckCircle className="w-4 h-4 text-green-600" /> : <XCircle className="w-4 h-4 text-gray-500" />}
             <span className="font-semibold">{response.found ? 'Trouvé' : 'Pas trouvé'}</span>
           </div>
-          {response.comment && <p className="text-sm text-gray-600 mt-2">"{response.comment}"</p>}
+          {response.comment && <p className="text-xs text-gray-600 mt-2">"{response.comment}"</p>}
         </div>
       )}
+
       <button onClick={() => onDelete(lp)} disabled={deleting} className={`w-full mt-2 px-4 py-2 rounded-lg text-sm font-semibold ${confirmDelete ? 'bg-red-600 text-white' : 'bg-red-50 text-red-600 border border-red-200'}`}>
         {deleting ? '...' : confirmDelete ? '⚠️ Confirmer ?' : '🗑️ Supprimer'}
       </button>

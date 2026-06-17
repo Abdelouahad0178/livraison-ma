@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Démo Améliorations UX - Arrivage</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @keyframes pulse-ring {
+      0%, 100% { transform: scale(1); opacity: 0.75; }
+      50% { transform: scale(1.5); opacity: 0; }
+    }
+    @keyframes pulse-dot {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+    .ping-indicator { animation: pulse-ring 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+    .pulse-dot { animation: pulse-dot 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+  </style>
+</head>
+<body class="bg-gray-50 p-4">
+  <div class="max-w-2xl mx-auto space-y-4">
+
+    <h1 class="text-3xl font-black text-gray-900 mb-6">✨ Améliorations UX - Interface d'Arrivage</h1>
+
+    <!-- Message d'aide -->
+    <div class="bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-2xl p-4">
+      <div class="flex items-start gap-3">
+        <div class="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center shrink-0">
+          <svg class="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+          </svg>
+        </div>
+        <div class="flex-1">
+          <h3 class="text-sm font-black text-blue-900 mb-1">📦 Comment pointer les colis arrivés ?</h3>
+          <ol class="text-xs text-blue-800 space-y-1 list-decimal list-inside">
+            <li><strong>Cochez les cases</strong> (☐) des colis physiquement reçus</li>
+            <li>Ou utilisez le bouton <strong class="bg-green-600 text-white px-2 py-0.5 rounded">Tout reçu</strong> si tout est arrivé</li>
+            <li>Les colis non cochés seront marqués comme <strong class="text-red-600">MANQUANTS</strong></li>
+          </ol>
+        </div>
+      </div>
+    </div>
+
+    <!-- Barre de progression -->
+    <div class="bg-white border-2 border-gray-200 rounded-2xl p-4">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs font-bold text-gray-500 uppercase tracking-wide">Progression du pointage</span>
+        <span class="text-2xl font-black text-blue-600">1/3</span>
+      </div>
+      <div class="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
+        <div class="h-full bg-gradient-to-r from-blue-500 to-indigo-500 transition-all duration-500" style="width: 33%"></div>
+      </div>
+      <div class="flex items-center justify-between mt-2 text-xs">
+        <span class="text-green-600 font-semibold">✓ 1 pointé</span>
+        <span class="text-red-600 font-semibold pulse-dot">⚠ 2 manquants</span>
+      </div>
+    </div>
+
+    <!-- Stats -->
+    <div class="grid grid-cols-3 gap-2">
+      <div class="bg-green-50 border-2 border-green-300 rounded-xl px-3 py-3 text-center">
+        <p class="text-2xl font-black text-green-700">1</p>
+        <p class="text-[10px] font-semibold text-green-600 uppercase">Pointés ✓</p>
+      </div>
+      <div class="bg-red-50 border-2 border-red-300 rounded-xl px-3 py-3 text-center pulse-dot">
+        <p class="text-2xl font-black text-red-700">2</p>
+        <p class="text-[10px] font-semibold text-red-600 uppercase">Manquants ✗</p>
+      </div>
+      <div class="bg-blue-50 border-2 border-blue-300 rounded-xl px-3 py-3 text-center">
+        <p class="text-2xl font-black text-blue-700">3</p>
+        <p class="text-[10px] font-semibold text-blue-600 uppercase">Total</p>
+      </div>
+    </div>
+
+    <!-- Boutons -->
+    <div class="flex items-center gap-2">
+      <button class="flex-1 flex items-center justify-center gap-2 py-3.5 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white text-sm font-black rounded-xl transition shadow-lg shadow-green-600/30 active:scale-95">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+        <span>✓ TOUT REÇU</span>
+      </button>
+      <button class="flex-1 flex items-center justify-center gap-2 py-3.5 bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-black rounded-xl transition active:scale-95">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <rect x="3" y="3" width="18" height="18" rx="2" stroke-width="2"></rect>
+        </svg>
+        <span>Effacer</span>
+      </button>
+    </div>
+
+    <!-- Exemples de colis -->
+    <div class="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+
+      <!-- Colis REÇU (coché) -->
+      <div class="flex items-center gap-2 px-3 py-3 bg-green-50 hover:bg-green-100 cursor-pointer group border-b border-gray-100">
+        <div class="relative shrink-0">
+          <button type="button" title="✓ Reçu - Cliquez pour décocher" class="p-2 -ml-2 rounded-lg hover:bg-green-200/50 transition-all">
+            <svg class="w-5 h-5 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+            </svg>
+          </button>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs font-mono font-bold text-blue-600">LMA-44SH6X283-3BF7</span>
+            <span class="text-[9px] px-1.5 py-0.5 rounded-full font-semibold bg-green-100 text-green-700">✅ Complet</span>
+          </div>
+          <p class="text-sm font-semibold text-gray-800 truncate">JAMAL SOUSA</p>
+          <p class="text-xs text-gray-400">HASSOUNI OMAR · 88 kg</p>
+        </div>
+      </div>
+
+      <!-- Colis MANQUANT (non coché) - AVANT amélioration -->
+      <div class="flex items-center gap-2 px-3 py-3 bg-white hover:bg-blue-50 cursor-pointer group border-b border-gray-100">
+        <div class="relative shrink-0">
+          <button type="button" title="⚠ Manquant - Cliquez pour pointer comme REÇU" class="p-2 -ml-2 rounded-lg hover:bg-blue-200 hover:scale-110 group-hover:ring-2 group-hover:ring-blue-400 group-hover:ring-offset-1 transition-all">
+            <svg class="w-5 h-5 text-gray-400 group-hover:text-blue-600 pulse-dot" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <rect x="3" y="3" width="18" height="18" rx="2" stroke-width="2"></rect>
+            </svg>
+          </button>
+          <!-- Point rouge clignotant -->
+          <span class="absolute top-0 right-0 flex h-2.5 w-2.5">
+            <span class="ping-indicator absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+          </span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs font-mono font-bold text-blue-600">LMA-44SH78SD6-FD9G</span>
+            <span class="text-[9px] px-1.5 py-0.5 rounded-full font-semibold bg-red-100 text-red-700">⚠ Manquant</span>
+          </div>
+          <p class="text-sm font-semibold text-gray-800 truncate">SALMANI ALI</p>
+          <p class="text-xs text-gray-400">JAMIL ABDOU · 33 kg</p>
+        </div>
+      </div>
+
+      <!-- Autre colis MANQUANT -->
+      <div class="flex items-center gap-2 px-3 py-3 bg-white hover:bg-blue-50 cursor-pointer group">
+        <div class="relative shrink-0">
+          <button type="button" title="⚠ Manquant - Cliquez pour pointer comme REÇU" class="p-2 -ml-2 rounded-lg hover:bg-blue-200 hover:scale-110 group-hover:ring-2 group-hover:ring-blue-400 group-hover:ring-offset-1 transition-all">
+            <svg class="w-5 h-5 text-gray-400 group-hover:text-blue-600 pulse-dot" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <rect x="3" y="3" width="18" height="18" rx="2" stroke-width="2"></rect>
+            </svg>
+          </button>
+          <span class="absolute top-0 right-0 flex h-2.5 w-2.5">
+            <span class="ping-indicator absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+            <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+          </span>
+        </div>
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-1.5">
+            <span class="text-xs font-mono font-bold text-blue-600">LMA-44SH90AB2-XYZ1</span>
+            <span class="text-[9px] px-1.5 py-0.5 rounded-full font-semibold bg-red-100 text-red-700">⚠ Manquant</span>
+          </div>
+          <p class="text-sm font-semibold text-gray-800 truncate">AHMED HASSAN</p>
+          <p class="text-xs text-gray-400">KARIM BENANI · 45 kg</p>
+        </div>
+      </div>
+    </div>
+
+    <!-- Légende -->
+    <div class="bg-yellow-50 border-2 border-yellow-200 rounded-xl p-4">
+      <h3 class="text-sm font-black text-yellow-900 mb-2">💡 Nouvelles fonctionnalités visuelles :</h3>
+      <ul class="text-xs text-yellow-800 space-y-1">
+        <li>✅ <strong>Points rouges clignotants</strong> sur les cases non cochées</li>
+        <li>✅ <strong>Anneau bleu au survol</strong> pour indiquer la cliquabilité</li>
+        <li>✅ <strong>Barre de progression animée</strong> en haut</li>
+        <li>✅ <strong>Bouton "TOUT REÇU" géant</strong> avec dégradé vert</li>
+        <li>✅ <strong>Toute la ligne cliquable</strong> (pas juste la case)</li>
+        <li>✅ <strong>Tooltips explicatifs</strong> au survol</li>
+        <li>✅ <strong>Message d'aide visible</strong> avec instructions</li>
+      </ul>
+    </div>
+
+  </div>
+</body>
+</html>

@@ -168,6 +168,25 @@ export default function ArrivageTab() {
       {/* ── NOUVEL ARRIVAGE ── */}
       {arrivageTab === 'nouveau' && !arrivageSuccess && (
         <>
+          {/* Message d'aide - Instructions claires */}
+          {arrFilteredTransitParcels.length > 0 && (
+            <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border-2 border-blue-200 rounded-2xl p-4">
+              <div className="flex items-start gap-3">
+                <div className="w-10 h-10 rounded-xl bg-blue-600 flex items-center justify-center shrink-0">
+                  <CheckSquare className="w-5 h-5 text-white" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <h3 className="text-sm font-black text-blue-900 mb-1">📦 Comment pointer les colis arrivés ?</h3>
+                  <ol className="text-xs text-blue-800 space-y-1 list-decimal list-inside">
+                    <li><strong>Cochez les cases</strong> (☐) des colis physiquement reçus</li>
+                    <li>Ou utilisez le bouton <strong className="bg-green-600 text-white px-2 py-0.5 rounded">Tout reçu</strong> si tout est arrivé</li>
+                    <li>Les colis non cochés seront marqués comme <strong className="text-red-600">MANQUANTS</strong></li>
+                  </ol>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Scanner principal */}
           <div className={`rounded-2xl border-2 p-4 transition-colors ${
             arrScanFlash === 'ok' ? 'bg-green-50 border-green-400' :
@@ -202,39 +221,70 @@ export default function ArrivageTab() {
             )}
           </div>
 
-          {/* Stats + actions rapides */}
+          {/* Stats + actions rapides - AMÉLIORATION VISUELLE */}
           {arrFilteredTransitParcels.length > 0 && (
-            <div className="grid grid-cols-3 gap-2">
-              <div className="bg-green-50 border border-green-200 rounded-xl px-3 py-3 text-center">
-                <p className="text-lg font-black text-green-700">{arrArrivedParcels.length}</p>
-                <p className="text-[10px] font-semibold text-green-600">pointés</p>
+            <>
+              {/* Badge de progression */}
+              <div className="bg-white border-2 border-gray-200 rounded-2xl p-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-bold text-gray-500 uppercase tracking-wide">Progression du pointage</span>
+                  <span className="text-2xl font-black text-blue-600">
+                    {arrArrivedParcels.length}/{arrFilteredTransitParcels.length}
+                  </span>
+                </div>
+                <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full transition-all duration-500 ${
+                      arrArrivedParcels.length === arrFilteredTransitParcels.length
+                        ? 'bg-gradient-to-r from-green-500 to-emerald-500'
+                        : 'bg-gradient-to-r from-blue-500 to-indigo-500'
+                    }`}
+                    style={{ width: `${arrFilteredTransitParcels.length > 0 ? (arrArrivedParcels.length / arrFilteredTransitParcels.length) * 100 : 0}%` }}
+                  />
+                </div>
+                <div className="flex items-center justify-between mt-2 text-xs">
+                  <span className="text-green-600 font-semibold">✓ {arrArrivedParcels.length} pointés</span>
+                  {arrMissingParcels.length > 0 && (
+                    <span className="text-red-600 font-semibold animate-pulse">⚠ {arrMissingParcels.length} manquants</span>
+                  )}
+                </div>
               </div>
-              <div className={`border rounded-xl px-3 py-3 text-center ${arrMissingParcels.length > 0 ? 'bg-red-50 border-red-200' : 'bg-gray-50 border-gray-200'}`}>
-                <p className={`text-lg font-black ${arrMissingParcels.length > 0 ? 'text-red-700' : 'text-gray-400'}`}>{arrMissingParcels.length}</p>
-                <p className={`text-[10px] font-semibold ${arrMissingParcels.length > 0 ? 'text-red-500' : 'text-gray-400'}`}>manquants</p>
+
+              {/* Stats détaillées */}
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-green-50 border-2 border-green-300 rounded-xl px-3 py-3 text-center">
+                  <p className="text-2xl font-black text-green-700">{arrArrivedParcels.length}</p>
+                  <p className="text-[10px] font-semibold text-green-600 uppercase">Pointés ✓</p>
+                </div>
+                <div className={`border-2 rounded-xl px-3 py-3 text-center ${arrMissingParcels.length > 0 ? 'bg-red-50 border-red-300 animate-pulse' : 'bg-gray-50 border-gray-200'}`}>
+                  <p className={`text-2xl font-black ${arrMissingParcels.length > 0 ? 'text-red-700' : 'text-gray-400'}`}>{arrMissingParcels.length}</p>
+                  <p className={`text-[10px] font-semibold uppercase ${arrMissingParcels.length > 0 ? 'text-red-600' : 'text-gray-400'}`}>Manquants ✗</p>
+                </div>
+                <div className="bg-blue-50 border-2 border-blue-300 rounded-xl px-3 py-3 text-center">
+                  <p className="text-2xl font-black text-blue-700">{arrFilteredTransitParcels.length}</p>
+                  <p className="text-[10px] font-semibold text-blue-600 uppercase">Total</p>
+                </div>
               </div>
-              <div className="bg-blue-50 border border-blue-200 rounded-xl px-3 py-3 text-center">
-                <p className="text-lg font-black text-blue-700">{arrFilteredTransitParcels.length}</p>
-                <p className="text-[10px] font-semibold text-blue-600">bons total</p>
-              </div>
-            </div>
+            </>
           )}
 
-          {/* Barre d'outils */}
+          {/* Barre d'outils - BOUTONS PLUS VISIBLES */}
           <div className="flex items-center gap-2">
             <button onClick={() => arrToggleAll(true)}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-green-600 hover:bg-green-700 text-white text-xs font-bold rounded-xl transition">
-              <CheckSquare className="w-3.5 h-3.5" /> Tout reçu
+              className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white text-sm font-black rounded-xl transition shadow-lg shadow-green-600/30 active:scale-95">
+              <CheckSquare className="w-5 h-5" />
+              <span>✓ TOUT REÇU</span>
             </button>
             <button onClick={() => arrToggleAll(false)}
-              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-gray-200 hover:bg-gray-300 text-gray-700 text-xs font-bold rounded-xl transition">
-              <Square className="w-3.5 h-3.5" /> Effacer
+              className="flex-1 flex items-center justify-center gap-2 py-3.5 bg-gray-300 hover:bg-gray-400 text-gray-800 text-sm font-black rounded-xl transition active:scale-95">
+              <Square className="w-5 h-5" />
+              <span>Effacer</span>
             </button>
             <button onClick={() => setArrivageShowFilters((f: any) => !f)}
-              className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold border transition ${arrivageShowFilters || hasActiveFilters ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
-              <Filter className="w-3.5 h-3.5" />
+              className={`flex items-center gap-1.5 px-4 py-3.5 rounded-xl text-sm font-bold border-2 transition ${arrivageShowFilters || hasActiveFilters ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-300 hover:bg-gray-50'}`}>
+              <Filter className="w-4 h-4" />
               Filtres
-              {hasActiveFilters && !arrivageShowFilters && <span className="w-1.5 h-1.5 rounded-full bg-orange-400 inline-block" />}
+              {hasActiveFilters && !arrivageShowFilters && <span className="w-2 h-2 rounded-full bg-orange-400 inline-block animate-pulse" />}
             </button>
           </div>
 
@@ -335,14 +385,28 @@ export default function ArrivageTab() {
                       const isReturn = !!parcel.returnedAt || parcel.status === 'Retour en transit'
                       const isFull   = rcvd === total && total > 0
                       return (
-                        <div key={parcel.id} className={`flex items-center gap-2 px-3 py-2.5 pl-10 border-t border-gray-50 transition ${
-                          checked ? (partial ? 'bg-orange-50' : 'bg-green-50') : ''
-                        }`}>
-                          <button onClick={() => arrToggle(parcel)} className="shrink-0">
-                            {checked
-                              ? <CheckSquare className={`w-4 h-4 ${partial ? 'text-orange-500' : 'text-green-500'}`} />
-                              : <Square className="w-4 h-4 text-gray-300" />}
-                          </button>
+                        <div key={parcel.id} className={`flex items-center gap-2 px-3 py-2.5 pl-10 border-t border-gray-50 transition group/row hover:bg-blue-50 cursor-pointer ${
+                          checked ? (partial ? 'bg-orange-50 hover:bg-orange-100' : 'bg-green-50 hover:bg-green-100') : 'bg-white'
+                        }`} onClick={() => arrToggle(parcel.id)}>
+                          <div className="relative shrink-0">
+                            <button type="button" onClick={(e) => { e.stopPropagation(); arrToggle(parcel.id) }}
+                              title={checked ? "✓ Reçu - Cliquez pour décocher" : "⚠ Manquant - Cliquez pour pointer comme REÇU"}
+                              className={`p-2 -ml-2 rounded-lg transition-all ${
+                                checked
+                                  ? 'hover:bg-green-200/50'
+                                  : 'hover:bg-blue-200 hover:scale-110 group-hover/row:ring-2 group-hover/row:ring-blue-400 group-hover/row:ring-offset-1'
+                              }`}>
+                              {checked
+                                ? <CheckSquare className={`w-5 h-5 ${partial ? 'text-orange-500' : 'text-green-600'}`} />
+                                : <Square className="w-5 h-5 text-gray-400 group-hover/row:text-blue-600 group-hover/row:animate-pulse" />}
+                            </button>
+                            {!checked && (
+                              <span className="absolute top-0 right-0 flex h-2.5 w-2.5">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-500"></span>
+                              </span>
+                            )}
+                          </div>
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-1.5 flex-wrap">
                               <span className="text-xs font-mono font-bold text-blue-600">{parcel.trackingId}</span>
@@ -356,8 +420,8 @@ export default function ArrivageTab() {
                           </div>
 
                           {/* Boutons rapides simplifiés */}
-                          <div className="flex items-center gap-1 shrink-0">
-                            {multi && !isFull && (
+                          <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                            {multi && rcvd > 0 && !isFull && (
                               <>
                                 <button
                                   onClick={() => arrSetBoxes(parcel.id, total, total)}

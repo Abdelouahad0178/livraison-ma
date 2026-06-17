@@ -868,9 +868,9 @@ service cloud.firestore {
 
     // Déclarations de colis perdus
     match /lostParcels/{lostParcelId} {
-      allow read: if isStaff();
-      // Création : tout le staff peut déclarer un colis perdu
-      allow create: if isStaff() && signedIn();
+      allow read: if isStaff() || isDeliveryWorker();
+      // Création : tout le staff ET les chauffeurs/livreurs peuvent déclarer un colis perdu
+      allow create: if (isStaff() || isDeliveryWorker()) && signedIn();
       // Mise à jour : réponses des agences, changements de statut
       allow update: if isStaff();
       // Suppression : admin, chef d'agence, ou déclarateur original

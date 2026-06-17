@@ -1,5 +1,19 @@
 import { db } from './db'
-import { collection, doc, setDoc, updateDoc, getDoc, getDocs, query, where, Timestamp, serverTimestamp } from 'firebase/firestore'
+import { collection, doc, setDoc, updateDoc, getDoc, getDocs, query, where, Timestamp, serverTimestamp, arrayUnion } from 'firebase/firestore'
+
+export interface LostParcelMessage {
+  id: string
+  agencyCity: string
+  sentBy: {
+    uid: string
+    name: string
+    role: string
+  }
+  sentAt: Timestamp
+  messageType: 'response' | 'update' | 'question' | 'found'
+  found?: boolean  // true si le colis est trouvé
+  text: string
+}
 
 export interface LostParcelDeclaration {
   id: string
@@ -17,6 +31,7 @@ export interface LostParcelDeclaration {
   status: 'declared' | 'searching' | 'found' | 'confirmed_lost'
   urgentAlert: boolean
   urgentAlertSentAt?: Timestamp
+  // Ancien système (conservé pour compatibilité)
   responses: {
     [agencyCity: string]: {
       responded: boolean
@@ -29,6 +44,8 @@ export interface LostParcelDeclaration {
       }
     }
   }
+  // NOUVEAU : système de messages bidirectionnels
+  messages?: LostParcelMessage[]
 }
 
 export interface AgencyResponse {
@@ -218,4 +235,101 @@ export async function deleteLostParcel(
     lostDeclarationId: null,
     updatedAt: serverTimestamp()
   })
+}
+
+/**
+ * NOUVEAU : Envoyer un message dans une conversation de colis perdu (système bidirectionnel)
+ */
+export async function sendLostParcelMessage(
+  lostParcelId: string,
+  message: {
+    agencyCity: string
+    sentBy: {
+      uid: string
+      name: string
+      role: string
+    }
+    messageType: 'response' | 'update' | 'question' | 'found'
+    found?: boolean
+    text: string
+  }
+): Promise<void> {
+  const lostParcelRef = doc(db, 'lostParcels', lostParcelId)
+  const lostParcelDoc = await getDoc(lostParcelRef)
+
+  if (!lostParcelDoc.exists()) {
+    throw new Error('Déclaration de perte introuvable')
+  }
+
+  // Créer le message en supprimant les valeurs undefined
+  const newMessage: any = {
+    id: `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    agencyCity: message.agencyCity,
+    sentBy: message.sentBy,
+    sentAt: Timestamp.now(),
+    messageType: message.messageType,
+    text: message.text
+  }
+
+  // Ajouter 'found' seulement si défini (pour éviter undefined dans Firestore)
+  if (message.found !== undefined) {
+    newMessage.found = message.found
+  }
+
+  const data = lostParcelDoc.data() as LostParcelDeclaration
+
+  // Mettre à jour le statut si le colis est trouvé
+  const updates: any = {
+    messages: arrayUnion(newMessage)
+  }
+
+  if (message.found && message.messageType === 'found') {
+    updates.status = 'found'
+
+    // Mettre à jour le colis aussi
+    await updateDoc(doc(db, 'parcels', data.parcelId), {
+      status: 'Retrouvé',
+      foundAt: serverTimestamp(),
+      foundBy: message.agencyCity
+    })
+  }
+
+  // Aussi mettre à jour l'ancien système de réponses pour compatibilité
+  if (message.messageType === 'response' || message.messageType === 'found') {
+    const updatedResponses = {
+      ...data.responses,
+      [message.agencyCity]: {
+        responded: true,
+        respondedAt: Timestamp.now(),
+        found: message.found || false,
+        comment: message.text,
+        respondedBy: {
+          uid: message.sentBy.uid,
+          name: message.sentBy.name
+        }
+      }
+    }
+    updates.responses = updatedResponses
+  }
+
+  await updateDoc(lostParcelRef, updates)
+}
+
+/**
+ * NOUVEAU : Récupérer tous les messages d'une conversation
+ */
+export function getLostParcelMessages(lostParcel: LostParcelDeclaration): LostParcelMessage[] {
+  return (lostParcel.messages || []).sort((a, b) => a.sentAt.toMillis() - b.sentAt.toMillis())
+}
+
+/**
+ * NOUVEAU : Vérifier si une agence a des messages non lus
+ */
+export function hasUnreadMessages(lostParcel: LostParcelDeclaration, agencyCity: string, lastReadAt?: number): boolean {
+  const messages = lostParcel.messages || []
+  if (!lastReadAt) return messages.length > 0
+
+  return messages.some(msg =>
+    msg.agencyCity !== agencyCity && msg.sentAt.toMillis() > lastReadAt
+  )
 }
