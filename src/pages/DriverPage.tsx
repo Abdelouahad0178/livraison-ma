@@ -1124,7 +1124,7 @@ export default function DriverPage() {
                 </p>
               </div>
             ) : (
-              <div className="space-y-1.5">
+              <div className="space-y-1">
                 {filteredParcels.map((parcel: any) => {
                   const sc   = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
                   const done = ['Livré', 'Retourné'].includes(parcel.status)
@@ -1132,12 +1132,12 @@ export default function DriverPage() {
                   const bulkSelected = bulkSelectedIds.includes(parcel.id)
                   return (
                     <div key={parcel.id}
-                      className={`${isDeliveryView ? 'bg-white text-slate-950 rounded-xl p-3 border border-orange-100 shadow-md' : 'bg-gray-800 rounded-lg p-3 border'} transition ${
+                      className={`${isDeliveryView ? 'bg-white text-slate-950 rounded-lg p-2 border border-orange-100 shadow-sm' : 'bg-gray-800 rounded-md p-2 border'} transition ${
                         done ? (isDeliveryView ? 'border-emerald-300' : 'border-gray-700 opacity-60') : (isDeliveryView ? 'border-orange-200' : 'border-gray-600')
                       }`}
                     >
                       {bulkManageable && !isLivreur && (
-                        <label className={`mb-2 flex items-center gap-2 rounded-lg border px-2.5 py-1.5 cursor-pointer transition ${
+                        <label className={`mb-1 flex items-center gap-1.5 rounded-md border px-2 py-1 cursor-pointer transition ${
                           bulkSelected
                             ? driverTab === 'transport'
                               ? 'bg-blue-600 border-blue-500 text-white'
@@ -1154,15 +1154,15 @@ export default function DriverPage() {
                                 : prev.filter(id => id !== parcel.id)
                               )
                             }}
-                            className="w-3.5 h-3.5 accent-blue-600"
+                            className="w-3 h-3 accent-blue-600"
                           />
-                          <span className="text-[11px] font-bold">Sélection globale</span>
+                          <span className="text-[10px] font-bold">Sél. globale</span>
                         </label>
                       )}
-                      {/* Statut + type */}
-                      <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-black ${
+                      {/* Statut + type + tracking sur une ligne */}
+                      <div className="flex items-center justify-between mb-1 gap-1.5 flex-wrap">
+                        <div className="flex items-center gap-1 flex-wrap">
+                          <span className={`inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-bold ${
                             isDeliveryView && parcel.status === 'Livré'
                               ? 'bg-emerald-100 text-emerald-900 border border-emerald-300'
                               : isDeliveryView && parcel.status === 'En cours de livraison'
@@ -1171,11 +1171,8 @@ export default function DriverPage() {
                                   ? 'bg-blue-100 text-blue-900 border border-blue-300'
                                   : `${sc.bg} ${sc.text}`
                           }`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
+                            <span className={`w-1 h-1 rounded-full ${sc.dot}`} />
                             {parcel.status}
-                          </span>
-                          <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold ${isDeliveryView ? 'bg-orange-100 text-orange-900 border border-orange-200' : driverTab === 'transport' ? 'bg-blue-600 text-white border border-blue-500' : 'bg-orange-600 text-white border border-orange-500'}`}>
-                            {driverTab === 'transport' ? <><Truck className="w-3 h-3" /> Transport</> : <><Home className="w-3 h-3" /> Livraison</>}
                           </span>
                           {(() => {
                             const st = (SERVICE_TYPE_DISPLAY as any)[parcel.serviceType]
@@ -1192,159 +1189,146 @@ export default function DriverPage() {
                                       : 'bg-amber-100 text-amber-900 border-amber-300'
                               : `${st.bg} ${st.text} border-current/20`
                             return (
-                              <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold border ${lightService}`}>
-                                {st.emoji} {st.label}
+                              <span className={`inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-md font-bold border ${lightService}`}>
+                                {st.emoji}
                               </span>
                             )
                           })()}
                         </div>
-                        <div className="flex items-center gap-2">
-                          {/* Badge RETOUR permanent pour les colis retournés */}
-                          {parcel.wasReturned && (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-bold bg-orange-100 text-orange-700 border border-orange-300">
-                              🔄 RETOUR
-                            </span>
-                          )}
-                          <span className={`font-mono text-xs ${isDeliveryView ? 'text-slate-700 font-bold' : 'text-gray-500'}`}>{parcel.trackingId}</span>
+                        <div className="flex items-center gap-1">
+                          {parcel.wasReturned && <span className="text-[10px]">🔄</span>}
+                          <span className={`font-mono text-[10px] ${isDeliveryView ? 'text-slate-700 font-bold' : 'text-gray-500'}`}>{parcel.trackingId}</span>
                         </div>
                       </div>
 
-                      {/* Destinataire */}
-                      <div className={`${isDeliveryView ? 'flex flex-col' : 'flex items-start justify-between'} gap-2`}>
-                        <div className="flex-1">
-                          <p className={`font-semibold ${isDeliveryView ? 'text-slate-950 text-lg font-black' : 'text-sm text-white'}`}>{parcel.receiver?.name}</p>
+                      {/* Destinataire + Téléphone + Infos sur UNE ligne */}
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <div className="flex-1 min-w-0">
+                          <p className={`font-semibold truncate ${isDeliveryView ? 'text-slate-950 text-base font-bold' : 'text-xs text-white'}`}>{parcel.receiver?.name}</p>
 
-                          {/* Téléphone cliquable */}
-                          <a href={`tel:${parcel.receiver?.tel}`}
-                            className={`inline-flex items-center gap-1 font-medium mt-0.5 ${isDeliveryView ? 'text-base text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-2.5 py-1.5' : 'text-xs text-blue-400 hover:text-blue-300'}`}
-                          >
-                            <Phone className="w-3 h-3" /> {parcel.receiver?.tel}
-                          </a>
-
-                          {/* Adresse complète */}
-                          {parcel.receiver?.address && (
-                            <div className={`flex items-start gap-1 mt-1.5 border rounded-lg px-2.5 py-1.5 ${isDeliveryView ? 'text-xs text-amber-950 bg-amber-50 border-amber-300 font-bold' : 'text-[11px] text-amber-300 bg-amber-900/30 border-amber-700/40'}`}>
-                              <MapPin className="w-3 h-3 shrink-0 mt-0.5" />
-                              <span>{parcel.receiver.address}, <span className="font-semibold">{parcel.receiver?.city}</span></span>
-                            </div>
-                          )}
-                          {!parcel.receiver?.address && (
-                            <div className={`flex items-center gap-1 mt-1 ${isDeliveryView ? 'text-xs text-slate-700 font-semibold' : 'text-[11px] text-gray-400'}`}>
-                              <MapPin className="w-2.5 h-2.5 shrink-0" />
-                              <span>{parcel.sender?.city}</span>
-                              <span className="text-gray-600">→</span>
-                              <span className="font-medium text-gray-300">{parcel.receiver?.city}</span>
-                            </div>
-                          )}
-
-                          <div className={`flex items-center gap-3 mt-2 ${isDeliveryView ? 'text-sm text-slate-700 font-bold' : 'text-xs text-gray-500'}`}>
-                            <span>{parcel.weight} kg</span>
-                            <span>{parcel.price} DH</span>
-                          </div>
-                          {(parcel.natureOfGoods || (parcel.arrivedNbColis ?? parcel.nbColis) > 1) && (
-                            <div className="flex items-center gap-2 mt-1.5">
-                              {parcel.natureOfGoods && (
-                                <span className="inline-flex items-center gap-1 text-xs bg-blue-600 text-white border border-blue-500 px-2 py-0.5 rounded-full font-medium">
-                                  📦 {parcel.natureOfGoods}
-                                </span>
-                              )}
-                              {(parcel.arrivedNbColis ?? parcel.nbColis) > 1 && (
-                                <span className="inline-flex items-center gap-1 text-xs bg-gray-700/40 text-gray-300 border border-gray-600/40 px-2 py-0.5 rounded-full font-medium">
-                                  × {parcel.arrivedNbColis ?? parcel.nbColis} colis
-                                  {parcel.arrivedNbColis != null && parcel.arrivedNbColis < parcel.nbColis && (
-                                    <span className="text-orange-400 font-bold">/{parcel.nbColis}</span>
-                                  )}
-                                </span>
-                              )}
-                            </div>
-                          )}
-                          {/* COD : NE PAS afficher pour les colis retournés */}
-                          {parcel.codAmount > 0 && parcel.status !== 'Retourné' && (() => {
-                            const cs  = COD_STATUS[parcel.codStatus || 'pending']
-                            const cpt = COD_PAYMENT_TYPES.find(t => t.key === parcel.codPaymentType)
-                            const isCollected = parcel.codStatus === 'collected'
-                            const bg   = isCollected && cpt ? cpt.darkBg   : cs.darkBg
-                            const txt  = isCollected && cpt ? cpt.darkText : cs.darkText
-                            const lbl  = isCollected
-                              ? codCollectedLabel(parcel.codPaymentType)
-                              : cs.label
-                            return (
-                              <div className={`mt-1.5 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold ${bg} ${txt} border border-current/20`}>
-                                <span>{cpt?.emoji || '💵'}</span>
-                                RETOUR FOND {parcel.codAmount} DH — {lbl}
-                              </div>
-                            )
-                          })()}
-                          {parcel.portType === 'port_du' && (
-                            <div className={`mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border ${
-                              parcel.portStatus === 'collected'
-                                ? 'bg-green-900/30 text-green-300 border-green-700/40'
-                                : 'bg-orange-900/30 text-orange-300 border-orange-700/40'
-                            }`}>
-                              📮 Port dû {parcel.price > 0 ? `${parcel.price} DH` : ''}
-                              {parcel.portStatus === 'collected' ? ' — Encaissé ✓' : ' — À encaisser'}
-                            </div>
-                          )}
-                          {parcel.portType === 'port_en_compte' && (
-                            <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border bg-purple-900/30 text-purple-300 border-purple-700/40">
-                              🗂️ En compte {parcel.price > 0 ? `${parcel.price} DH` : ''}
-                            </div>
-                          )}
                         </div>
+                        <a href={`tel:${parcel.receiver?.tel}`}
+                          className={`inline-flex items-center gap-0.5 font-medium shrink-0 ${isDeliveryView ? 'text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded-md px-2 py-1' : 'text-[10px] text-blue-400 hover:text-blue-300'}`}
+                        >
+                          <Phone className="w-2.5 h-2.5" /> {parcel.receiver?.tel}
+                        </a>
+                      </div>
 
-                        {/* Voir signature — colis livré par signature */}
-                        {done && driverTab === 'delivery' && parcel.signatureConfirmedAt && (
-                          <div className="shrink-0">
-                            <button
-                              onClick={() => setViewSignature(parcel)}
-                              className={`${isDeliveryView ? 'flex items-center justify-center gap-2 text-sm font-black px-4 py-3 rounded-2xl border border-violet-300 text-violet-900 bg-violet-50 hover:bg-violet-100' : 'flex items-center gap-1 text-xs font-semibold px-3 py-2 rounded-lg border border-violet-500/40 text-violet-300 bg-violet-950/30 hover:bg-violet-900/50'} transition`}
-                            >
-                              <PenLine className="w-3.5 h-3.5" /> Signature
-                            </button>
+                      {/* Adresse + Poids/Prix sur UNE ligne */}
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        {parcel.receiver?.address ? (
+                          <div className={`flex items-center gap-0.5 flex-1 min-w-0 border rounded-md px-1.5 py-0.5 ${isDeliveryView ? 'text-[10px] text-amber-950 bg-amber-50 border-amber-300 font-bold' : 'text-[10px] text-amber-300 bg-amber-900/30 border-amber-700/40'}`}>
+                            <MapPin className="w-2.5 h-2.5 shrink-0" />
+                            <span className="truncate">{parcel.receiver.address}</span>
+                          </div>
+                        ) : (
+                          <div className={`flex items-center gap-0.5 ${isDeliveryView ? 'text-[10px] text-slate-700 font-semibold' : 'text-[10px] text-gray-400'}`}>
+                            <MapPin className="w-2 h-2" />
+                            <span>{parcel.sender?.city} → {parcel.receiver?.city}</span>
                           </div>
                         )}
+                        <div className={`flex items-center gap-2 shrink-0 ${isDeliveryView ? 'text-xs text-slate-700 font-bold' : 'text-[10px] text-gray-500'}`}>
+                          <span>{parcel.weight}kg</span>
+                          <span>{parcel.price}DH</span>
+                        </div>
+                      </div>
 
-                        {/* Actions statut / refus */}
-                        {!done && (
-                          <div className={`${isLivreur ? 'w-full mt-2 grid grid-cols-2 gap-1.5' : 'shrink-0 flex flex-col gap-2'}`}>
-                            {isLivreur ? (
-                              <>
+                      {/* Badges compacts sur UNE ligne */}
+                      <div className="flex items-center gap-1 flex-wrap mb-1">
+                        {parcel.natureOfGoods && (
+                          <span className="inline-flex items-center text-[10px] bg-blue-600 text-white px-1.5 py-0.5 rounded-md font-medium">
+                            📦 {parcel.natureOfGoods}
+                          </span>
+                        )}
+                        {(parcel.arrivedNbColis ?? parcel.nbColis) > 1 && (
+                          <span className="inline-flex items-center text-[10px] bg-gray-700/40 text-gray-300 px-1.5 py-0.5 rounded-md font-medium">
+                            × {parcel.arrivedNbColis ?? parcel.nbColis}
+                            {parcel.arrivedNbColis != null && parcel.arrivedNbColis < parcel.nbColis && (
+                              <span className="text-orange-400 font-bold">/{parcel.nbColis}</span>
+                            )}
+                          </span>
+                        )}
+                        {parcel.codAmount > 0 && parcel.status !== 'Retourné' && (() => {
+                          const cs  = COD_STATUS[parcel.codStatus || 'pending']
+                          const cpt = COD_PAYMENT_TYPES.find(t => t.key === parcel.codPaymentType)
+                          const isCollected = parcel.codStatus === 'collected'
+                          const bg   = isCollected && cpt ? cpt.darkBg   : cs.darkBg
+                          const txt  = isCollected && cpt ? cpt.darkText : cs.darkText
+                          return (
+                            <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold ${bg} ${txt} border border-current/20`}>
+                              {cpt?.emoji || '💵'} {parcel.codAmount}DH {isCollected && '✓'}
+                            </span>
+                          )
+                        })()}
+                        {parcel.portType === 'port_du' && (
+                          <span className={`inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-md font-medium border ${
+                            parcel.portStatus === 'collected'
+                              ? 'bg-green-900/30 text-green-300 border-green-700/40'
+                              : 'bg-orange-900/30 text-orange-300 border-orange-700/40'
+                          }`}>
+                            📮 {parcel.price}DH {parcel.portStatus === 'collected' && '✓'}
+                          </span>
+                        )}
+                        {parcel.portType === 'port_en_compte' && (
+                          <span className="inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-md font-medium border bg-purple-900/30 text-purple-300 border-purple-700/40">
+                            🗂️ {parcel.price}DH
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Voir signature — colis livré par signature */}
+                      {done && driverTab === 'delivery' && parcel.signatureConfirmedAt && (
+                        <div className="mb-1">
+                          <button
+                            onClick={() => setViewSignature(parcel)}
+                            className={`${isDeliveryView ? 'flex items-center justify-center gap-2 text-sm font-black px-4 py-3 rounded-2xl border border-violet-300 text-violet-900 bg-violet-50 hover:bg-violet-100' : 'flex items-center gap-1 text-xs font-semibold px-3 py-2 rounded-lg border border-violet-500/40 text-violet-300 bg-violet-950/30 hover:bg-violet-900/50'} transition`}
+                          >
+                            <PenLine className="w-3.5 h-3.5" /> Signature
+                          </button>
+                        </div>
+                      )}
+
+                      {/* Actions statut / refus - ULTRA COMPACT */}
+                      {!done && (
+                        <div className={`${isLivreur ? 'grid grid-cols-2 gap-1' : 'shrink-0 flex flex-col gap-1.5'}`}>
+                          {isLivreur ? (
+                            <>
+                              <button
+                                onClick={() => handleRequestSignature(parcel)}
+                                className="flex items-center justify-center gap-1 text-[11px] font-bold px-2 py-1.5 rounded-lg text-white bg-emerald-600 hover:bg-emerald-700 transition"
+                              >
+                                <PenLine className="w-3 h-3" /> Élec.
+                              </button>
+                              <button
+                                onClick={() => {
+                                  const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
+                                  setPaperReceiptModal({
+                                    parcel,
+                                    note: '',
+                                    confirming: false,
+                                    error: '',
+                                    isReturn,
+                                    codPaymentType: ''
+                                  })
+                                }}
+                                className="flex items-center justify-center gap-1 text-[11px] font-bold px-2 py-1.5 rounded-lg border border-blue-500 text-blue-900 bg-blue-50 hover:bg-blue-100 transition"
+                              >
+                                📄 Papier
+                              </button>
+                              {parcel.status !== 'En cours de livraison' && (
                                 <button
-                                  onClick={() => handleRequestSignature(parcel)}
-                                  className="flex items-center justify-center gap-1.5 text-sm font-bold px-3 py-2.5 rounded-xl text-white bg-emerald-600 hover:bg-emerald-700 shadow-md shadow-emerald-900/20 transition"
+                                  onClick={() => quickSetStatus(parcel, 'En cours de livraison')}
+                                  className="flex items-center justify-center gap-0.5 text-[10px] font-bold px-2 py-1.5 rounded-lg text-orange-700 bg-orange-50 border border-orange-200 transition"
                                 >
-                                  <PenLine className="w-4 h-4" /> Signature élec.
+                                  <Truck className="w-3 h-3" /> Route
                                 </button>
-                                <button
-                                  onClick={() => {
-                                    const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
-                                    setPaperReceiptModal({
-                                      parcel,
-                                      note: '',
-                                      confirming: false,
-                                      error: '',
-                                      isReturn,
-                                      codPaymentType: ''
-                                    })
-                                  }}
-                                  className="flex items-center justify-center gap-1.5 text-sm font-bold px-3 py-2.5 rounded-xl border-2 border-blue-500 text-blue-900 bg-blue-50 hover:bg-blue-100 shadow-md shadow-blue-900/10 transition"
-                                >
-                                  📄 Bon papier
-                                </button>
-                                {parcel.status !== 'En cours de livraison' && (
-                                  <button
-                                    onClick={() => quickSetStatus(parcel, 'En cours de livraison')}
-                                    className="flex items-center justify-center gap-1 text-xs font-bold px-2.5 py-2 rounded-xl text-orange-700 bg-orange-50 border border-orange-200 transition"
-                                  >
-                                    <Truck className="w-3.5 h-3.5" /> En route
-                                  </button>
-                                )}
-                                <button
-                                  onClick={() => setRejectModal({ parcel, note: '', loading: false, error: '' })}
-                                  className={`${parcel.status !== 'En cours de livraison' ? '' : 'col-span-2'} text-xs font-bold px-2.5 py-2 rounded-xl border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 transition`}
-                                >
-                                  Pas livré
-                                </button>
+                              )}
+                              <button
+                                onClick={() => setRejectModal({ parcel, note: '', loading: false, error: '' })}
+                                className={`${parcel.status !== 'En cours de livraison' ? '' : 'col-span-2'} text-[10px] font-bold px-2 py-1.5 rounded-lg border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 transition`}
+                              >
+                                Refus
+                              </button>
                               </>
                             ) : (
                               <>
@@ -1394,7 +1378,6 @@ export default function DriverPage() {
                             )}
                           </div>
                         )}
-                      </div>
 
                       {/* Historique résumé */}
                       {parcel.history?.length > 0 && (
