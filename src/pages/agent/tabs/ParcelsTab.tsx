@@ -422,7 +422,12 @@ export default function ParcelsTab() {
               <div className="flex items-center justify-between px-1">
                 <p className="text-xs text-gray-400">{filteredParcels.length} expédition(s)</p>
                 <button
-                  onClick={() => handlePrintTable(filteredParcels)}
+                  onClick={() => {
+                    const selectedDriver = driverFilter !== 'all'
+                      ? availableDrivers.find((d: any) => d.id === driverFilter)
+                      : null
+                    handlePrintTable(filteredParcels, selectedDriver?.name)
+                  }}
                   disabled={filteredParcels.length === 0}
                   className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
                 >

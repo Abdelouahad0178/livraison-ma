@@ -1091,7 +1091,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 
   const handlePrintCharge = (groups: any, profileData: any) => printCharge(groups, profileData)
 
-  const handlePrintTable = async (parcelsArg: any) => printTable(parcelsArg)
+  const handlePrintTable = async (parcelsArg: any, driverName?: string) => printTable(parcelsArg, driverName)
 
   const handlePrintBonRamassage = async (nexpCodes: any, batchRef: any, sectorCode: any, chauffeurName: any) =>
     printBonRamassage(nexpCodes, batchRef, sectorCode, chauffeurName)

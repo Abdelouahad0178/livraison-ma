@@ -168,7 +168,6 @@ export async function printTable(parcels: any[], driverName?: string): Promise<v
         <td style="text-align:center">${portLabel}</td>
         <td style="text-align:center">${svcLabel}</td>
         <td style="text-align:center"><span style="background:${st.bg};color:${st.col};padding:2px 6px;border-radius:10px;font-size:7.5pt;font-weight:bold;white-space:nowrap">${p.status || '—'}</span></td>
-        <td>${p.chauffeurName || '—'}</td>
         <td style="text-align:center;width:95px;min-height:36px;vertical-align:middle">${sigUrl ? `<img src="${sigUrl}" style="max-width:88px;max-height:32px;object-fit:contain;display:block;margin:auto;" />` : ''}</td>
       </tr>`
   }).join('')
@@ -226,7 +225,6 @@ export async function printTable(parcels: any[], driverName?: string): Promise<v
         <th>Type port</th>
         <th>Encaiss.</th>
         <th>Statut</th>
-        <th>Chauffeur</th>
         <th>Signature</th>
       </tr>
     </thead>
@@ -236,7 +234,7 @@ export async function printTable(parcels: any[], driverName?: string): Promise<v
         <td colspan="9" style="text-align:right">TOTAUX</td>
         <td style="text-align:right">${totalCod.toLocaleString('fr-MA')} DH</td>
         <td style="text-align:right">${totalPort.toLocaleString('fr-MA')} DH</td>
-        <td colspan="5"></td>
+        <td colspan="4"></td>
       </tr>
     </tbody>
   </table>
