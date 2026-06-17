@@ -566,6 +566,11 @@ export default function ParcelsTab() {
                   <div className="flex items-start justify-between gap-2">
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
+                        {parcel.sender?.nic && (
+                          <span className="font-mono text-xs font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
+                            N EXP {parcel.sender.nic}
+                          </span>
+                        )}
                         <span className="font-mono text-xs font-bold text-gray-700">{parcel.trackingId}</span>
                         <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${sc.bg} ${sc.text}`}>
                           <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
