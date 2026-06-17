@@ -174,16 +174,22 @@ export default function ParcelsTab() {
     return Array.from(cities).sort()
   })()
 
-  // ⭐ Calculer les livreurs/chauffeurs disponibles (ceux qui ont des colis assignés)
+  // ⭐ Calculer les livreurs/chauffeurs disponibles (ceux qui ont des colis assignés dans la ville de l'agent)
   const availableDrivers = (() => {
     const driverIds = new Set<string>()
     const parcels = allDisplayParcels || []
+    const agentCity = profile?.city
+
     parcels.forEach((p: any) => {
       if (p.deliveryDriverId) driverIds.add(p.deliveryDriverId)
       if (p.chauffeurId) driverIds.add(p.chauffeurId)
     })
+
     return (drivers || [])
-      .filter((d: any) => driverIds.has(d.id))
+      .filter((d: any) =>
+        driverIds.has(d.id) &&
+        (!agentCity || d.city === agentCity)  // Filtrer par ville de l'agent
+      )
       .sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''))
   })()
 
