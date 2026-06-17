@@ -63,26 +63,34 @@ select {
 }
 
 /* Badges avec mauvais contraste - CORRECTION AUTOMATIQUE */
+
+/* Badges verts avec contraste insuffisant */
+.bg-green-50.text-green-500,
+.bg-green-100.text-green-500,
 .bg-green-200.text-green-500,
 .bg-green-200.text-green-600 {
   @apply !bg-green-600 !text-white shadow-md;
 }
 
-.bg-orange-50.text-orange-600,
-.bg-orange-100.text-orange-600,
-.bg-orange-100.text-orange-700 {
-  @apply bg-orange-100 text-orange-700 shadow-sm;
-}
-
+/* Badges orange avec contraste insuffisant */
+.bg-orange-50.text-orange-500,
+.bg-orange-100.text-orange-500,
 .bg-orange-200.text-orange-500,
 .bg-orange-200.text-orange-600 {
   @apply !bg-orange-600 !text-white shadow-md;
 }
 
+/* Badges amber/yellow avec contraste insuffisant */
+.bg-amber-50.text-amber-500,
+.bg-amber-100.text-amber-500,
 .bg-amber-200.text-amber-500,
 .bg-amber-200.text-amber-600,
+.bg-amber-50.text-yellow-500,
+.bg-amber-100.text-yellow-500,
 .bg-amber-200.text-yellow-500,
 .bg-amber-200.text-yellow-600,
+.bg-yellow-50.text-yellow-500,
+.bg-yellow-100.text-yellow-500,
 .bg-yellow-200.text-yellow-500,
 .bg-yellow-200.text-yellow-600 {
   @apply !bg-amber-600 !text-white shadow-md;
