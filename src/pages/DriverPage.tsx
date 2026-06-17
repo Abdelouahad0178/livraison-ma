@@ -1195,10 +1195,15 @@ export default function DriverPage() {
                             )
                           })()}
                         </div>
-                        <div className="flex items-center gap-1">
+                        <div className="flex items-center gap-1 flex-wrap">
                           {parcel.wasReturned && <span className="text-[10px]">🔄</span>}
-                          <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded ${isDeliveryView ? 'bg-slate-200 text-slate-900 font-bold' : 'bg-gray-700 text-gray-300 font-semibold'}`}>
-                            EXP {parcel.trackingId}
+                          {parcel.sender?.nic && (
+                            <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded ${isDeliveryView ? 'bg-purple-200 text-purple-900 font-bold' : 'bg-purple-700 text-purple-200 font-semibold'}`}>
+                              N EXP {parcel.sender.nic}
+                            </span>
+                          )}
+                          <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded ${isDeliveryView ? 'bg-blue-200 text-blue-900 font-bold' : 'bg-blue-700 text-blue-200 font-semibold'}`}>
+                            N° {parcel.trackingId}
                           </span>
                         </div>
                       </div>
