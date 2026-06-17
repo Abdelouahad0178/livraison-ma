@@ -1124,7 +1124,7 @@ export default function DriverPage() {
                 </p>
               </div>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 {filteredParcels.map((parcel: any) => {
                   const sc   = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
                   const done = ['Livré', 'Retourné'].includes(parcel.status)
@@ -1132,12 +1132,12 @@ export default function DriverPage() {
                   const bulkSelected = bulkSelectedIds.includes(parcel.id)
                   return (
                     <div key={parcel.id}
-                      className={`${isDeliveryView ? 'bg-white text-slate-950 rounded-2xl p-4 border border-orange-100 shadow-xl shadow-black/20' : 'bg-gray-800 rounded-xl p-4 border'} transition ${
+                      className={`${isDeliveryView ? 'bg-white text-slate-950 rounded-xl p-3 border border-orange-100 shadow-md' : 'bg-gray-800 rounded-lg p-3 border'} transition ${
                         done ? (isDeliveryView ? 'border-emerald-300' : 'border-gray-700 opacity-60') : (isDeliveryView ? 'border-orange-200' : 'border-gray-600')
                       }`}
                     >
                       {bulkManageable && !isLivreur && (
-                        <label className={`mb-3 flex items-center gap-2 rounded-xl border px-3 py-2 cursor-pointer transition ${
+                        <label className={`mb-2 flex items-center gap-2 rounded-lg border px-2.5 py-1.5 cursor-pointer transition ${
                           bulkSelected
                             ? driverTab === 'transport'
                               ? 'bg-blue-600 border-blue-500 text-white'
@@ -1154,13 +1154,13 @@ export default function DriverPage() {
                                 : prev.filter(id => id !== parcel.id)
                               )
                             }}
-                            className="w-4 h-4 accent-blue-600"
+                            className="w-3.5 h-3.5 accent-blue-600"
                           />
-                          <span className="text-xs font-bold">Sélection gestion globale</span>
+                          <span className="text-[11px] font-bold">Sélection globale</span>
                         </label>
                       )}
                       {/* Statut + type */}
-                      <div className="flex items-center justify-between mb-3 gap-2 flex-wrap">
+                      <div className="flex items-center justify-between mb-2 gap-2 flex-wrap">
                         <div className="flex items-center gap-2 flex-wrap">
                           <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-black ${
                             isDeliveryView && parcel.status === 'Livré'
@@ -1210,27 +1210,27 @@ export default function DriverPage() {
                       </div>
 
                       {/* Destinataire */}
-                      <div className={`${isDeliveryView ? 'flex flex-col' : 'flex items-start justify-between'} gap-3`}>
+                      <div className={`${isDeliveryView ? 'flex flex-col' : 'flex items-start justify-between'} gap-2`}>
                         <div className="flex-1">
-                          <p className={`font-semibold text-base ${isDeliveryView ? 'text-slate-950 text-xl font-black' : 'text-white'}`}>{parcel.receiver?.name}</p>
+                          <p className={`font-semibold ${isDeliveryView ? 'text-slate-950 text-lg font-black' : 'text-sm text-white'}`}>{parcel.receiver?.name}</p>
 
                           {/* Téléphone cliquable */}
                           <a href={`tel:${parcel.receiver?.tel}`}
-                            className={`inline-flex items-center gap-1.5 font-medium mt-1 ${isDeliveryView ? 'text-lg text-blue-800 bg-blue-50 border border-blue-200 rounded-xl px-3 py-2' : 'text-sm text-blue-400 hover:text-blue-300'}`}
+                            className={`inline-flex items-center gap-1 font-medium mt-0.5 ${isDeliveryView ? 'text-base text-blue-800 bg-blue-50 border border-blue-200 rounded-lg px-2.5 py-1.5' : 'text-xs text-blue-400 hover:text-blue-300'}`}
                           >
-                            <Phone className="w-3.5 h-3.5" /> {parcel.receiver?.tel}
+                            <Phone className="w-3 h-3" /> {parcel.receiver?.tel}
                           </a>
 
                           {/* Adresse complète */}
                           {parcel.receiver?.address && (
-                            <div className={`flex items-start gap-1.5 mt-2 border rounded-xl px-3 py-2 ${isDeliveryView ? 'text-sm text-amber-950 bg-amber-50 border-amber-300 font-black' : 'text-xs text-amber-300 bg-amber-900/30 border-amber-700/40'}`}>
-                              <MapPin className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                            <div className={`flex items-start gap-1 mt-1.5 border rounded-lg px-2.5 py-1.5 ${isDeliveryView ? 'text-xs text-amber-950 bg-amber-50 border-amber-300 font-bold' : 'text-[11px] text-amber-300 bg-amber-900/30 border-amber-700/40'}`}>
+                              <MapPin className="w-3 h-3 shrink-0 mt-0.5" />
                               <span>{parcel.receiver.address}, <span className="font-semibold">{parcel.receiver?.city}</span></span>
                             </div>
                           )}
                           {!parcel.receiver?.address && (
-                            <div className={`flex items-center gap-1 mt-1 ${isDeliveryView ? 'text-sm text-slate-700 font-semibold' : 'text-xs text-gray-400'}`}>
-                              <MapPin className="w-3 h-3 shrink-0" />
+                            <div className={`flex items-center gap-1 mt-1 ${isDeliveryView ? 'text-xs text-slate-700 font-semibold' : 'text-[11px] text-gray-400'}`}>
+                              <MapPin className="w-2.5 h-2.5 shrink-0" />
                               <span>{parcel.sender?.city}</span>
                               <span className="text-gray-600">→</span>
                               <span className="font-medium text-gray-300">{parcel.receiver?.city}</span>
@@ -1269,14 +1269,14 @@ export default function DriverPage() {
                               ? codCollectedLabel(parcel.codPaymentType)
                               : cs.label
                             return (
-                              <div className={`mt-2 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold ${bg} ${txt} border border-current/20`}>
+                              <div className={`mt-1.5 inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold ${bg} ${txt} border border-current/20`}>
                                 <span>{cpt?.emoji || '💵'}</span>
                                 RETOUR FOND {parcel.codAmount} DH — {lbl}
                               </div>
                             )
                           })()}
                           {parcel.portType === 'port_du' && (
-                            <div className={`mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border ${
+                            <div className={`mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border ${
                               parcel.portStatus === 'collected'
                                 ? 'bg-green-900/30 text-green-300 border-green-700/40'
                                 : 'bg-orange-900/30 text-orange-300 border-orange-700/40'
@@ -1286,7 +1286,7 @@ export default function DriverPage() {
                             </div>
                           )}
                           {parcel.portType === 'port_en_compte' && (
-                            <div className="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium border bg-purple-900/30 text-purple-300 border-purple-700/40">
+                            <div className="mt-1.5 inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-medium border bg-purple-900/30 text-purple-300 border-purple-700/40">
                               🗂️ En compte {parcel.price > 0 ? `${parcel.price} DH` : ''}
                             </div>
                           )}
@@ -1306,14 +1306,14 @@ export default function DriverPage() {
 
                         {/* Actions statut / refus */}
                         {!done && (
-                          <div className={`${isLivreur ? 'w-full mt-4 grid grid-cols-2 gap-2' : 'shrink-0 flex flex-col gap-2'}`}>
+                          <div className={`${isLivreur ? 'w-full mt-2 grid grid-cols-2 gap-1.5' : 'shrink-0 flex flex-col gap-2'}`}>
                             {isLivreur ? (
                               <>
                                 <button
                                   onClick={() => handleRequestSignature(parcel)}
-                                  className="flex items-center justify-center gap-2 text-base font-black px-4 py-4 rounded-2xl text-white bg-emerald-600 hover:bg-emerald-700 shadow-lg shadow-emerald-900/20 transition"
+                                  className="flex items-center justify-center gap-1.5 text-sm font-bold px-3 py-2.5 rounded-xl text-white bg-emerald-600 hover:bg-emerald-700 shadow-md shadow-emerald-900/20 transition"
                                 >
-                                  <PenLine className="w-5 h-5" /> Signature électronique
+                                  <PenLine className="w-4 h-4" /> Signature élec.
                                 </button>
                                 <button
                                   onClick={() => {
@@ -1327,21 +1327,21 @@ export default function DriverPage() {
                                       codPaymentType: ''
                                     })
                                   }}
-                                  className="flex items-center justify-center gap-2 text-base font-black px-4 py-4 rounded-2xl border-2 border-blue-500 text-blue-900 bg-blue-50 hover:bg-blue-100 shadow-lg shadow-blue-900/10 transition"
+                                  className="flex items-center justify-center gap-1.5 text-sm font-bold px-3 py-2.5 rounded-xl border-2 border-blue-500 text-blue-900 bg-blue-50 hover:bg-blue-100 shadow-md shadow-blue-900/10 transition"
                                 >
-                                  📄 Bon papier signé
+                                  📄 Bon papier
                                 </button>
                                 {parcel.status !== 'En cours de livraison' && (
                                   <button
                                     onClick={() => quickSetStatus(parcel, 'En cours de livraison')}
-                                    className="flex items-center justify-center gap-2 text-sm font-black px-3 py-3 rounded-2xl text-orange-700 bg-orange-50 border border-orange-200 transition"
+                                    className="flex items-center justify-center gap-1 text-xs font-bold px-2.5 py-2 rounded-xl text-orange-700 bg-orange-50 border border-orange-200 transition"
                                   >
-                                    <Truck className="w-4 h-4" /> En route
+                                    <Truck className="w-3.5 h-3.5" /> En route
                                   </button>
                                 )}
                                 <button
                                   onClick={() => setRejectModal({ parcel, note: '', loading: false, error: '' })}
-                                  className={`${parcel.status !== 'En cours de livraison' ? '' : 'col-span-2'} text-sm font-black px-3 py-3 rounded-2xl border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 transition`}
+                                  className={`${parcel.status !== 'En cours de livraison' ? '' : 'col-span-2'} text-xs font-bold px-2.5 py-2 rounded-xl border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 transition`}
                                 >
                                   Pas livré
                                 </button>
