@@ -282,6 +282,7 @@ service cloud.firestore {
           'status',
           'signatureToken',
           'signatureConfirmedAt',
+          'signatureMethod',
           'history'
         ]);
       // ⭐ Staff : confirmer signature de retour (Retour finalisé)
@@ -291,6 +292,7 @@ service cloud.firestore {
           'status',
           'returnSignatureToken',
           'returnSignatureConfirmedAt',
+          'signatureMethod',
           'history'
         ]);
       // Livreur local assignÃ© : statut, encaissement, refus et signature uniquement sur ses colis
