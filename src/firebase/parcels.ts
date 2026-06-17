@@ -508,8 +508,11 @@ export async function validateParcelEntry(parcelId: any, chefId: any, chefName: 
 
 // Validation de l'arrivée d'un colis en transit retour ? Arrivé en agence
 export async function validateReturnArrival(parcel: any) {
+  console.log('🔍 validateReturnArrival - Colis:', parcel.id)
+  console.log('📊 Statut actuel:', parcel.status)
+
   const now = new Date().toISOString()
-  await updateDoc(doc(db, 'parcels', parcel.id), {
+  const updateData = {
     status: 'Arrivé en agence',
     destinationArrivedAt: now,
     arrivedNbColis: deleteField(),
@@ -518,7 +521,19 @@ export async function validateReturnArrival(parcel: any) {
       timestamp: now,
       note: 'Colis retourné arrivé en agence — prêt pour livraison à l\'expéditeur d\'origine',
     }),
-  })
+  }
+
+  console.log('📝 Données de mise à jour:', updateData)
+
+  try {
+    await updateDoc(doc(db, 'parcels', parcel.id), updateData)
+    console.log('✅ Mise à jour réussie')
+  } catch (error: any) {
+    console.error('❌ Erreur Firestore:', error)
+    console.error('Code:', error.code)
+    console.error('Message:', error.message)
+    throw error
+  }
 }
 export async function deleteParcel(parcelId: string): Promise<void> {
   await deleteDoc(doc(db, 'parcels', parcelId))

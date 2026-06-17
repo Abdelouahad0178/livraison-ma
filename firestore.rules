@@ -245,15 +245,11 @@ service cloud.firestore {
           'chefPointedAt', 'chefPointedBy', 'chefPointedById', 'chefPointedSource',
           'history'
         ]);
-      // ⭐ VALIDATION ARRIVÉE RETOUR : Retour en transit → Arrivé en agence
-      // Permet de valider l'arrivée d'un colis retourné à l'agence d'origine
+      // ⭐ VALIDATION ARRIVÉE RETOUR : validation arrivée colis retourné
+      // Autorise la validation de l'arrivée d'un retour (Retour en transit → Arrivé en agence)
       allow update: if signedIn()
-        && isStaff()
-        && resource.data.status == 'Retour en transit'
-        && request.resource.data.status == 'Arrivé en agence'
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'status', 'destinationArrivedAt', 'arrivedNbColis', 'history'
-        ]);
+        && (resource.data.status == 'Retour en transit' || resource.data.status == 'RETOURNÉ')
+        && request.resource.data.status == 'Arrivé en agence';
       // RÃ©ception agence : prise en charge et arrivage de colis en transit
       allow update: if signedIn()
         && keepsDeliveredStatus()
