@@ -64,6 +64,7 @@ export default function ParcelsTab() {
     parcelStatusFilter, setParcelStatusFilter,
     parcelEditorFilter, setParcelEditorFilter,
     destinationCityFilter, setDestinationCityFilter,  // ⭐ Filtre ville de destination
+    driverFilter, setDriverFilter,  // ⭐ Filtre par livreur
     showFilters, setShowFilters,
     subTab, setSubTab,
     parcelPage, setParcelPage,
@@ -173,6 +174,19 @@ export default function ParcelsTab() {
     return Array.from(cities).sort()
   })()
 
+  // ⭐ Calculer les livreurs/chauffeurs disponibles (ceux qui ont des colis assignés)
+  const availableDrivers = (() => {
+    const driverIds = new Set<string>()
+    const parcels = allDisplayParcels || []
+    parcels.forEach((p: any) => {
+      if (p.deliveryDriverId) driverIds.add(p.deliveryDriverId)
+      if (p.chauffeurId) driverIds.add(p.chauffeurId)
+    })
+    return (drivers || [])
+      .filter((d: any) => driverIds.has(d.id))
+      .sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''))
+  })()
+
   return (
     <>
       <div className="mt-4 space-y-3">
@@ -220,6 +234,7 @@ export default function ParcelsTab() {
             serviceFilter !== 'all',
             parcelStatusFilter !== 'all',
             destinationCityFilter !== 'all',
+            driverFilter !== 'all',
             datePreset !== 'all',
           ].filter(Boolean).length
           return (
@@ -273,6 +288,25 @@ export default function ParcelsTab() {
                             destinationCityFilter === city ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                           }`}
                         >{city}</button>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* ⭐ Filtre par livreur/chauffeur */}
+                  {availableDrivers.length > 0 && (
+                    <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Livreur</span>
+                      <button onClick={() => setDriverFilter('all')}
+                        className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
+                          driverFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >Tous</button>
+                      {availableDrivers.map((driver: any) => (
+                        <button key={driver.id} onClick={() => setDriverFilter(driver.id)}
+                          className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
+                            driverFilter === driver.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                          }`}
+                        >{driver.name}</button>
                       ))}
                     </div>
                   )}
