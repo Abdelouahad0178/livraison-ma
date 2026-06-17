@@ -1197,7 +1197,9 @@ export default function DriverPage() {
                         </div>
                         <div className="flex items-center gap-1">
                           {parcel.wasReturned && <span className="text-[10px]">🔄</span>}
-                          <span className={`font-mono text-[10px] ${isDeliveryView ? 'text-slate-700 font-bold' : 'text-gray-500'}`}>{parcel.trackingId}</span>
+                          <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded ${isDeliveryView ? 'bg-slate-200 text-slate-900 font-bold' : 'bg-gray-700 text-gray-300 font-semibold'}`}>
+                            EXP {parcel.trackingId}
+                          </span>
                         </div>
                       </div>
 
@@ -1472,7 +1474,7 @@ export default function DriverPage() {
                       <div key={p.id} className="flex items-center justify-between px-4 py-2.5 gap-3">
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold text-white">{p.receiver?.name || '—'}</p>
-                          <p className="text-xs text-gray-400 font-mono">{p.trackingId}</p>
+                          <p className="text-xs text-gray-400 font-mono">EXP {p.trackingId}</p>
                           <p className="text-[10px] text-gray-500">{fmtDate(p.portCollectedAt || p.updatedAt)}</p>
                         </div>
                         <div className="text-right shrink-0 space-y-1">
@@ -1508,7 +1510,7 @@ export default function DriverPage() {
                       <div key={p.id} className="flex items-center justify-between px-4 py-2.5 gap-3">
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold text-green-300">{p.receiver?.name || '—'}</p>
-                          <p className="text-xs text-gray-400 font-mono">{p.trackingId}</p>
+                          <p className="text-xs text-gray-400 font-mono">EXP {p.trackingId}</p>
                           {p.portChefReceivedBy && <p className="text-[10px] text-gray-500">Reçu par {p.portChefReceivedBy}</p>}
                           <p className="text-[10px] text-gray-500">{fmtDate(p.portChefReceivedAt)}</p>
                         </div>
@@ -1748,7 +1750,7 @@ export default function DriverPage() {
                       {/* En-tête */}
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
-                          <p className="text-white font-bold text-sm truncate">{p.trackingId}</p>
+                          <p className="text-white font-bold text-sm truncate">EXP {p.trackingId}</p>
                           <p className="text-gray-400 text-xs truncate">{p.receiver?.name}</p>
                           {p.codCollectedAt && (
                             <p className="text-gray-500 text-xs">
@@ -1883,7 +1885,7 @@ export default function DriverPage() {
                     <p className={`text-sm font-semibold ${scanColors.text}`}>
                       Statut actuel : {scannedParcel.status}
                     </p>
-                    <p className="font-mono text-xs text-gray-400 mt-0.5">{scannedParcel.trackingId}</p>
+                    <p className="font-mono text-xs text-gray-400 mt-0.5">EXP {scannedParcel.trackingId}</p>
                   </div>
                   <div className="p-4 space-y-2 text-sm">
                     <div className="flex justify-between">
@@ -1980,7 +1982,7 @@ export default function DriverPage() {
                   <PenLine className="w-4 h-4 text-violet-400" />
                   Signature électronique
                 </h3>
-                <p className="text-xs font-mono text-violet-400 mt-0.5">{signatureModal.parcel.trackingId}</p>
+                <p className="text-xs font-mono text-violet-400 mt-0.5">EXP {signatureModal.parcel.trackingId}</p>
                 <p className="text-xs text-gray-400 mt-0.5">
                   {signatureModal.parcel.receiver?.name} · {signatureModal.parcel.receiver?.city}
                 </p>
@@ -2314,7 +2316,7 @@ export default function DriverPage() {
                 <h3 className="font-bold text-gray-900 flex items-center gap-2">
                   📄 Livraison avec bon papier
                 </h3>
-                <p className="text-xs font-mono text-blue-600 mt-0.5">{paperReceiptModal.parcel.trackingId}</p>
+                <p className="text-xs font-mono text-blue-600 mt-0.5">EXP {paperReceiptModal.parcel.trackingId}</p>
                 <p className="text-xs text-gray-600 mt-0.5">
                   {paperReceiptModal.isReturn
                     ? `Retour à : ${paperReceiptModal.parcel.sender?.name || 'Expéditeur'}`
@@ -2469,7 +2471,7 @@ export default function DriverPage() {
             <div className="flex items-center justify-between p-5 border-b border-gray-700">
               <div>
                 <h3 className="font-bold text-white">Refuser cette livraison</h3>
-                <p className="text-xs font-mono text-red-300 mt-0.5">{rejectModal.parcel.trackingId}</p>
+                <p className="text-xs font-mono text-red-300 mt-0.5">EXP {rejectModal.parcel.trackingId}</p>
                 <p className="text-xs text-gray-400 mt-0.5">
                   {rejectModal.parcel.receiver?.name} - {rejectModal.parcel.receiver?.city}
                 </p>
@@ -2523,7 +2525,7 @@ export default function DriverPage() {
             <div className="flex items-center justify-between p-5 border-b border-gray-700 shrink-0">
               <div>
                 <h3 className="font-bold text-white">Mettre à jour le statut</h3>
-                <p className="text-xs font-mono text-blue-400 mt-0.5">{statusModal.parcel.trackingId}</p>
+                <p className="text-xs font-mono text-blue-400 mt-0.5">EXP {statusModal.parcel.trackingId}</p>
                 <p className="text-xs text-gray-400 mt-0.5">
                   {statusModal.parcel.receiver.name} · {statusModal.parcel.receiver.city}
                 </p>
