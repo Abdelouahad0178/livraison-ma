@@ -32,11 +32,11 @@ import { fmt } from '../utils/formatNumber'
 const QRCodeSVG = lazy(() => import('../components/QRCodeSvg'))
 
 const SERVICE_TYPE_DISPLAY = {
-  simple:    { label: 'Simple',    emoji: '📦', bg: 'bg-gray-700/50',    text: 'text-gray-300'    },
-  especes:   { label: 'C/Espèces', emoji: '💵', bg: 'bg-green-900/40',   text: 'text-green-300'   },
-  cheque:    { label: 'C/Chèque',  emoji: '📋', bg: 'bg-blue-900/40',    text: 'text-blue-300'    },
-  traite:    { label: 'C/Traite',  emoji: '📝', bg: 'bg-indigo-900/40',  text: 'text-indigo-300'  },
-  retour_bl: { label: 'C/BL',      emoji: '🧾', bg: 'bg-amber-900/40',   text: 'text-amber-300'   },
+  simple:    { label: 'Simple',    emoji: '📦', bg: 'bg-gray-700',       text: 'text-white'       },
+  especes:   { label: 'C/Espèces', emoji: '💵', bg: 'bg-green-600',      text: 'text-white'       },
+  cheque:    { label: 'C/Chèque',  emoji: '📋', bg: 'bg-blue-600',       text: 'text-white'       },
+  traite:    { label: 'C/Traite',  emoji: '📝', bg: 'bg-indigo-600',     text: 'text-white'       },
+  retour_bl: { label: 'C/BL',      emoji: '🧾', bg: 'bg-amber-600',      text: 'text-white'       },
 }
 
 const parcelDate = (p: any) => {
@@ -869,7 +869,7 @@ export default function DriverPage() {
             )}
 
             {/* Info banner */}
-            {!isLivreur && <div className={`rounded-xl px-4 py-2.5 text-xs font-medium flex items-center gap-2 ${driverTab === 'transport' ? 'bg-blue-900/50 text-blue-300 border border-blue-800' : 'bg-orange-900/50 text-orange-300 border border-orange-800'}`}>
+            {!isLivreur && <div className={`rounded-xl px-4 py-2.5 text-xs font-medium flex items-center gap-2 ${driverTab === 'transport' ? 'bg-blue-600 text-white border border-blue-500' : 'bg-orange-600 text-white border border-orange-500'}`}>
               {driverTab === 'transport'
                 ? <><Truck className="w-3.5 h-3.5 shrink-0" /> Transport entre agences — remettez le colis à l'agence de destination</>
                 : <><Home className="w-3.5 h-3.5 shrink-0" /> Livraison au domicile du client — traitez ou refusez chaque colis séparément</>
@@ -1087,8 +1087,8 @@ export default function DriverPage() {
                         <label className={`mb-3 flex items-center gap-2 rounded-xl border px-3 py-2 cursor-pointer transition ${
                           bulkSelected
                             ? driverTab === 'transport'
-                              ? 'bg-blue-900/50 border-blue-600 text-blue-200'
-                              : 'bg-orange-900/50 border-orange-600 text-orange-200'
+                              ? 'bg-blue-600 border-blue-500 text-white'
+                              : 'bg-orange-600 border-orange-500 text-white'
                             : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-600'
                         }`}>
                           <input
@@ -1121,7 +1121,7 @@ export default function DriverPage() {
                             <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
                             {parcel.status}
                           </span>
-                          <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold ${isDeliveryView ? 'bg-orange-100 text-orange-900 border border-orange-200' : driverTab === 'transport' ? 'bg-blue-900 text-blue-300' : 'bg-orange-900 text-orange-300'}`}>
+                          <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold ${isDeliveryView ? 'bg-orange-100 text-orange-900 border border-orange-200' : driverTab === 'transport' ? 'bg-blue-600 text-white border border-blue-500' : 'bg-orange-600 text-white border border-orange-500'}`}>
                             {driverTab === 'transport' ? <><Truck className="w-3 h-3" /> Transport</> : <><Home className="w-3 h-3" /> Livraison</>}
                           </span>
                           {(() => {
@@ -1191,7 +1191,7 @@ export default function DriverPage() {
                           {(parcel.natureOfGoods || (parcel.arrivedNbColis ?? parcel.nbColis) > 1) && (
                             <div className="flex items-center gap-2 mt-1.5">
                               {parcel.natureOfGoods && (
-                                <span className="inline-flex items-center gap-1 text-xs bg-blue-900/40 text-blue-300 border border-blue-700/40 px-2 py-0.5 rounded-full font-medium">
+                                <span className="inline-flex items-center gap-1 text-xs bg-blue-600 text-white border border-blue-500 px-2 py-0.5 rounded-full font-medium">
                                   📦 {parcel.natureOfGoods}
                                 </span>
                               )}
@@ -1407,9 +1407,9 @@ export default function DriverPage() {
                         <div className="text-right shrink-0 space-y-1">
                           <p className="text-sm font-black text-orange-400">{fmt(p.price)} DH</p>
                           {p.portChefReceivedAt ? (
-                            <span className="text-[10px] bg-green-900/40 text-green-300 border border-green-700/40 px-2 py-0.5 rounded-full font-semibold">Reçu chef</span>
+                            <span className="text-[10px] bg-green-600 text-white border border-green-500 px-2 py-0.5 rounded-full font-semibold">Reçu chef</span>
                           ) : (
-                            <span className="text-[10px] bg-orange-900/40 text-orange-300 border border-orange-700/40 px-2 py-0.5 rounded-full font-semibold">À remettre</span>
+                            <span className="text-[10px] bg-orange-600 text-white border border-orange-500 px-2 py-0.5 rounded-full font-semibold">À remettre</span>
                           )}
                         </div>
                       </div>
@@ -1690,7 +1690,7 @@ export default function DriverPage() {
 
                       {/* Type */}
                       <div className="flex items-center gap-2">
-                        <span className="text-xs bg-blue-900/40 text-blue-300 px-2 py-1 rounded">
+                        <span className="text-xs bg-blue-600 text-white px-2 py-1 rounded">
                           {p.codPaymentType === 'especes' ? '💵 Espèces' :
                            p.codPaymentType === 'cheque' ? '📋 Chèque' :
                            p.codPaymentType === 'traite' ? '📝 Traite' :
