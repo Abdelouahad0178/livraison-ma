@@ -512,15 +512,19 @@ export async function validateReturnArrival(parcel: any) {
   console.log('📊 Statut actuel:', parcel.status)
 
   const now = new Date().toISOString()
-  const updateData = {
+  const updateData: any = {
     status: 'Arrivé en agence',
     destinationArrivedAt: now,
-    arrivedNbColis: deleteField(),
     history: arrayUnion({
       status: 'Arrivé en agence',
       timestamp: now,
       note: 'Colis retourné arrivé en agence — prêt pour livraison à l\'expéditeur d\'origine',
     }),
+  }
+
+  // Suppression du champ arrivedNbColis seulement s'il existe
+  if (parcel.arrivedNbColis !== undefined) {
+    updateData.arrivedNbColis = deleteField()
   }
 
   console.log('📝 Données de mise à jour:', updateData)

@@ -1205,6 +1205,11 @@ export default function DriverPage() {
                           <span className={`font-mono text-[10px] px-1.5 py-0.5 rounded ${isDeliveryView ? 'bg-blue-200 text-blue-900 font-bold' : 'bg-blue-700 text-blue-200 font-semibold'}`}>
                             N° {parcel.trackingId}
                           </span>
+                          {parcel.hasRetourBL && (
+                            <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${isDeliveryView ? 'bg-green-200 text-green-900 border border-green-300' : 'bg-green-700 text-green-100'}`}>
+                              🧾 Retour BL
+                            </span>
+                          )}
                         </div>
                       </div>
 

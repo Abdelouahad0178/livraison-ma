@@ -246,10 +246,10 @@ service cloud.firestore {
           'history'
         ]);
       // ⭐ VALIDATION ARRIVÉE RETOUR : validation arrivée colis retourné
-      // Autorise la validation de l'arrivée d'un retour (Retour en transit → Arrivé en agence)
+      // Autorise mise à jour avec destinationArrivedAt (=validation retour)
       allow update: if signedIn()
-        && (resource.data.status == 'Retour en transit' || resource.data.status == 'RETOURNÉ')
-        && request.resource.data.status == 'Arrivé en agence';
+        && 'destinationArrivedAt' in request.resource.data
+        && 'history' in request.resource.data;
       // RÃ©ception agence : prise en charge et arrivage de colis en transit
       allow update: if signedIn()
         && keepsDeliveredStatus()

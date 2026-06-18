@@ -1434,6 +1434,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         deliveryDriverName:   selectedDeliveryDriver?.name || null,
         operationDate:        form.operationDate || null,
         agentRole:            profile?.role || 'agent',
+        hasRetourBL:          form.hasRetourBL || false,  // ⭐ Retour BL obligatoire
       })
 
       // Créer automatiquement un compte portail pour les particuliers
