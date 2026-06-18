@@ -229,6 +229,7 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     // NOUVELLE POLITIQUE : Pas de validation nécessaire, enregistrement direct
     // Un colis est verrouillé pour aide-agent seulement si chargé (transportAssignedAt existe)
     aideEditUnlocked:     false,
+    hasRetourBL:          data.hasRetourBL === true,  // ⭐ Retour BL obligatoire
   }
   const ref = await addDoc(collection(db, 'parcels'), parcel)
   // NOUVELLE POLITIQUE : Toujours créer le client destinataire (pas d'attente de validation)
