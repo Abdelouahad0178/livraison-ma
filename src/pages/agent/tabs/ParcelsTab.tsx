@@ -662,7 +662,7 @@ export default function ParcelsTab() {
                         {parcel.receiver?.name} · {parcel.weight} kg · <span className="font-semibold text-gray-500">{parcel.price} DH</span>
                         {parcel.codAmount > 0 && <span className="text-orange-500 font-medium"> · RETOUR FOND {parcel.codAmount} DH</span>}
                       </div>
-                      {(parcel.natureOfGoods || (parcel.arrivedNbColis ?? parcel.nbColis) > 1) && (
+                      {(parcel.natureOfGoods || (parcel.arrivedNbColis ?? parcel.nbColis) > 1 || parcel.hasRetourBL) && (
                         <div className="mt-1 flex items-center gap-2">
                           {parcel.natureOfGoods && (
                             <span className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full font-medium">
@@ -675,6 +675,11 @@ export default function ParcelsTab() {
                               {parcel.arrivedNbColis != null && parcel.arrivedNbColis < parcel.nbColis && (
                                 <span className="text-orange-500 font-bold">/{parcel.nbColis}</span>
                               )}
+                            </span>
+                          )}
+                          {parcel.hasRetourBL && (
+                            <span className="inline-flex items-center gap-1 text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full font-medium">
+                              🧾 Retour BL
                             </span>
                           )}
                         </div>

@@ -513,7 +513,9 @@ export default function DriverPage() {
 
       console.log('✅ Token généré:', { token: token.slice(0, 10) + '...', isReturn })
 
-      setSignatureModal({ parcel, token, url, receivedSig: null, codPaymentType: '', confirming: false, done: false, error: '', stampMode: 'qr', driverStamp: null, driverCompanyName: '', stampSubmitting: false, handSubmitting: false, driverHandSignatureEmpty: true, isReturn })
+      // ⭐ Si Retour BL coché, présélectionner "Bon de livraison" comme mode de paiement
+      const defaultPaymentType = parcel.hasRetourBL ? 'bon_livraison' : ''
+      setSignatureModal({ parcel, token, url, receivedSig: null, codPaymentType: defaultPaymentType, confirming: false, done: false, error: '', stampMode: 'qr', driverStamp: null, driverCompanyName: '', stampSubmitting: false, handSubmitting: false, driverHandSignatureEmpty: true, isReturn })
     } catch (err: any) {
       console.error('❌ Erreur génération signature:', err)
       setMsg({ type: 'error', text: 'Impossible de générer le QR code. Réessayez.' })
