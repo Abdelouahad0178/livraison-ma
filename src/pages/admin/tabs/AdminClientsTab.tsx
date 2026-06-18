@@ -91,7 +91,37 @@ export default function AdminClientsTab() {
 
   const handleCreate = async () => {
     try {
-      await createClient(newForm)
+      // Créer le client
+      const clientId = await createClient(newForm)
+
+      // ⭐ Créer automatiquement un compte portail si email fourni
+      if (newForm.email && newForm.email.trim()) {
+        try {
+          const { db } = await import('../../../firebase/config')
+          const { doc, getDoc } = await import('firebase/firestore')
+
+          // Récupérer le client créé
+          const clientSnap = await getDoc(doc(db, 'clients', clientId))
+          if (clientSnap.exists()) {
+            const clientData = { id: clientSnap.id, ...clientSnap.data() }
+
+            // Créer le compte portail
+            const result = await createClientPortalAccount(clientData as Client, newForm.email)
+
+            if (result.success) {
+              alert(`✅ Client et compte portail créés !\n📧 Email: ${result.email}\n🔑 Mot de passe: ${result.password}`)
+            } else {
+              alert(`✅ Client créé\n⚠️ Compte portail: ${result.message}`)
+            }
+          }
+        } catch (portalError: any) {
+          console.error('Erreur création portail:', portalError)
+          alert(`✅ Client créé\n⚠️ Erreur création compte portail: ${portalError.message}`)
+        }
+      } else {
+        alert('✅ Client créé (sans compte portail - pas d\'email)')
+      }
+
       setShowNewModal(false)
       setNewForm({
         name: '',
@@ -108,7 +138,6 @@ export default function AdminClientsTab() {
         secteurName: '',
         livreurIds: [],
       })
-      alert('✅ Client créé')
     } catch (error: any) {
       alert('❌ ' + error.message)
     }
