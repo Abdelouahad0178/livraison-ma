@@ -1126,11 +1126,17 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const qrSvgStr = qrContainer.innerHTML
     qrRoot.unmount()
 
-    const checks = SERVICE_TYPES.map((st: any) => `
+    const checks = SERVICE_TYPES.map((st: any) => {
+      // Cas spécial: Retour BL se base sur hasRetourBL au lieu de serviceType
+      const isChecked = st.key === 'retour_bl'
+        ? (parcel.hasRetourBL === true)
+        : (parcel.serviceType === st.key)
+      return `
       <label style="display:flex;align-items:center;gap:4px;font-size:9pt;font-weight:600">
-        <span style="width:12px;height:12px;border:1px solid #9ca3af;border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:8px;${parcel.serviceType === st.key ? 'background:#2563eb;border-color:#2563eb;color:white' : ''}">${parcel.serviceType === st.key ? '✓' : ''}</span>
+        <span style="width:12px;height:12px;border:1px solid #9ca3af;border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:8px;${isChecked ? 'background:#2563eb;border-color:#2563eb;color:white' : ''}">${isChecked ? '✓' : ''}</span>
         ${st.label}
-      </label>`).join('')
+      </label>`
+    }).join('')
 
     const ticketHtml = `<!DOCTYPE html>
 <html lang="fr">
