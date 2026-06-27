@@ -749,7 +749,7 @@ export default function NewTab() {
               placeholder="Téléphone"
               value={form.senderTel}
               onChange={f('senderTel')}
-              onKeyDown={(e) => handleKeyNav(e, 'senderTel')}
+              onKeyDown={handleKeyNav}
               className={inputCls}
             />
             <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl border border-gray-200 bg-gray-100 text-sm font-semibold text-gray-700">
@@ -761,7 +761,7 @@ export default function NewTab() {
               placeholder="Adresse"
               value={form.senderAddress}
               onChange={f('senderAddress')}
-              onKeyDown={(e) => handleKeyNav(e, 'senderAddress')}
+              onKeyDown={handleKeyNav}
               className={`${inputCls} col-span-2`}
             />
           </div>
@@ -800,7 +800,7 @@ export default function NewTab() {
                   deliverySectorId: '',
                   deliveryDriverId: '',
                 }))}
-                onKeyDown={(e) => handleKeyNav(e, 'receiverCity')}
+                onKeyDown={handleKeyNav}
                 className={selectCls}
               >
                 <option value="">Ville de destination</option>
@@ -840,7 +840,7 @@ export default function NewTab() {
               placeholder="Téléphone"
               value={form.receiverTel}
               onChange={f('receiverTel')}
-              onKeyDown={(e) => handleKeyNav(e, 'receiverTel')}
+              onKeyDown={handleKeyNav}
               className={inputCls}
             />
             <input
@@ -849,7 +849,7 @@ export default function NewTab() {
               placeholder={form.deliveryDriverId || form.deliverySectorId ? "Adresse (optionnel)" : "Adresse"}
               value={form.receiverAddress}
               onChange={f('receiverAddress')}
-              onKeyDown={(e) => handleKeyNav(e, 'receiverAddress')}
+              onKeyDown={handleKeyNav}
               className={inputCls}
             />
             {form.receiverCity && (
@@ -913,7 +913,7 @@ export default function NewTab() {
               placeholder="Poids (kg) — optionnel"
               value={form.weight}
               onChange={f('weight')}
-              onKeyDown={(e) => handleKeyNav(e, 'weight')}
+              onKeyDown={handleKeyNav}
               className={inputCls}
             />
             <input
@@ -925,7 +925,7 @@ export default function NewTab() {
               placeholder="Nb de colis"
               value={form.nbColis}
               onChange={f('nbColis')}
-              onKeyDown={(e) => handleKeyNav(e, 'nbColis')}
+              onKeyDown={handleKeyNav}
               className={inputCls}
             />
             <div className="col-span-2">
@@ -1004,7 +1004,7 @@ export default function NewTab() {
                 placeholder="RETOUR FOND (DH)"
                 value={form.codAmount}
                 onChange={f('codAmount')}
-                onKeyDown={(e) => handleKeyNav(e, 'codAmount')}
+                onKeyDown={handleKeyNav}
                 className={inputCls}
               />
             </div>
