@@ -1514,14 +1514,13 @@ export default function DriverPage() {
                                 </button>
                               )}
                               */}
-                              {/* Bouton "Refus" désactivé - seul l'admin peut changer le statut
+                              {/* ✅ Bouton "Refus" ACTIVÉ - le livreur peut signaler un refus de réception */}
                               <button
                                 onClick={() => setRejectModal({ parcel, note: '', loading: false, error: '' })}
                                 className={`${parcel.status !== 'En cours de livraison' ? '' : 'col-span-2'} text-[10px] font-bold px-2 py-1.5 rounded-lg border border-red-200 text-red-700 bg-red-50 hover:bg-red-100 transition`}
                               >
                                 Refus
                               </button>
-                              */}
                               </>
                             ) : (
                               <>
@@ -1536,8 +1535,8 @@ export default function DriverPage() {
                                 <div className="text-xs text-gray-400 italic px-3 py-2">
                                   Seul l'admin peut modifier le statut
                                 </div>
-                                {/* Bouton "Refuser" désactivé - seul l'admin peut changer le statut
-                                {driverTab === 'delivery' && (
+                                {/* ✅ Bouton "Refuser" ACTIVÉ - le chauffeur peut signaler un refus de réception */}
+                                {driverTab === 'delivery' && !['Livré', 'Retourné'].includes(parcel.status) && (
                                   <button
                                     onClick={() => setRejectModal({ parcel, note: '', loading: false, error: '' })}
                                     className="text-xs font-semibold px-3 py-2 rounded-lg border border-red-500/40 text-red-300 bg-red-950/30 hover:bg-red-900/50 transition"
@@ -1545,7 +1544,6 @@ export default function DriverPage() {
                                     Refuser
                                   </button>
                                 )}
-                                */}
                                 {/* ✅ Boutons de signature ACTIVÉS pour deliveryDriver - le livreur peut compléter la livraison */}
                                 {driverTab === 'delivery' && !['Livré', 'Retourné'].includes(parcel.status) && parcel.deliveryDriverId === uid && (
                                   <>
