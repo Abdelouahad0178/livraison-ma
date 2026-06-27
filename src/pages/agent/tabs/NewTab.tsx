@@ -58,32 +58,39 @@ export default function NewTab() {
   const [isConfirmed, setIsConfirmed] = useState(false)
 
   // Navigation clavier pour le formulaire
-  const fieldOrder = [
-    'senderNic', 'senderName', 'senderTel', 'senderAddress',
-    'receiverCity', 'receiverName', 'receiverTel', 'receiverAddress',
-    'weight', 'nbColis', 'codAmount'
-  ]
-
-  const handleKeyNav = (e: React.KeyboardEvent, currentId: string) => {
-    const currentIndex = fieldOrder.indexOf(currentId)
-
+  const handleKeyNav = (e: React.KeyboardEvent) => {
     // Entrée = champ suivant
-    if (e.key === 'Enter' && !e.ctrlKey && currentIndex >= 0) {
+    if (e.key === 'Enter' && !e.ctrlKey) {
       e.preventDefault()
-      const nextId = fieldOrder[currentIndex + 1]
-      if (nextId) {
-        const nextField = document.getElementById(nextId)
-        if (nextField) nextField.focus()
+      const target = e.target as HTMLElement
+      const form = target.closest('form')
+      if (!form) return
+
+      // Récupérer tous les inputs/selects/textareas du formulaire
+      const inputs = Array.from(form.querySelectorAll('input:not([type="hidden"]), select, textarea'))
+        .filter((el: any) => !el.disabled && el.type !== 'submit' && el.type !== 'button')
+
+      const currentIndex = inputs.indexOf(target)
+      if (currentIndex >= 0 && currentIndex < inputs.length - 1) {
+        const nextInput = inputs[currentIndex + 1] as HTMLElement
+        nextInput.focus()
       }
     }
 
     // Ctrl+Entrée = champ précédent
-    if (e.key === 'Enter' && e.ctrlKey && currentIndex > 0) {
+    if (e.key === 'Enter' && e.ctrlKey) {
       e.preventDefault()
-      const prevId = fieldOrder[currentIndex - 1]
-      if (prevId) {
-        const prevField = document.getElementById(prevId)
-        if (prevField) prevField.focus()
+      const target = e.target as HTMLElement
+      const form = target.closest('form')
+      if (!form) return
+
+      const inputs = Array.from(form.querySelectorAll('input:not([type="hidden"]), select, textarea'))
+        .filter((el: any) => !el.disabled && el.type !== 'submit' && el.type !== 'button')
+
+      const currentIndex = inputs.indexOf(target)
+      if (currentIndex > 0) {
+        const prevInput = inputs[currentIndex - 1] as HTMLElement
+        prevInput.focus()
       }
     }
   }
@@ -707,7 +714,7 @@ export default function NewTab() {
               placeholder="N EXP"
               value={form.senderNic}
               onChange={f('senderNic')}
-              onKeyDown={(e) => handleKeyNav(e, 'senderNic')}
+              onKeyDown={handleKeyNav}
               className={`${inputCls} col-span-2`}
             />
 
