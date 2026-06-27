@@ -715,6 +715,28 @@ export default function NewTab() {
             <h3 className="text-lg font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Destinataire</h3>
           </div>
           <div className="grid grid-cols-2 gap-3">
+            {/* Ville de destination - PREMIER CHAMP */}
+            <div className="relative col-span-2">
+              <select
+                required
+                value={form.receiverCity}
+                onChange={e => setForm((p: any) => ({
+                  ...p,
+                  receiverCity: e.target.value,
+                  receiverClientId: '',
+                  receiverName: '',
+                  receiverTel: '',
+                  receiverAddress: '',
+                  deliverySectorId: '',
+                  deliveryDriverId: '',
+                }))}
+                className={selectCls}
+              >
+                <option value="">Ville de destination</option>
+                {CITIES.map(c => <option key={c}>{c}</option>)}
+              </select>
+              <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-gray-400 pointer-events-none" />
+            </div>
             {/* Autocomplétion destinataire */}
             <div className="col-span-2">
               <ClientAutocomplete
@@ -742,25 +764,7 @@ export default function NewTab() {
               />
             </div>
             <input required placeholder="Téléphone" value={form.receiverTel} onChange={f('receiverTel')} className={inputCls} />
-            <div className="relative col-span-2">
-              <select
-                required
-                value={form.receiverCity}
-                onChange={e => setForm((p: any) => ({
-                  ...p,
-                  receiverCity: e.target.value,
-                  receiverClientId: '',
-                  deliverySectorId: '',
-                  deliveryDriverId: '',
-                }))}
-                className={selectCls}
-              >
-                <option value="">Ville de destination</option>
-                {CITIES.map(c => <option key={c}>{c}</option>)}
-              </select>
-              <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-gray-400 pointer-events-none" />
-            </div>
-            <input placeholder="Adresse" value={form.receiverAddress} onChange={f('receiverAddress')} className={`${inputCls} col-span-2`} />
+            <input placeholder="Adresse" value={form.receiverAddress} onChange={f('receiverAddress')} className={inputCls} />
             {form.receiverCity && (
               <div className="col-span-2 bg-purple-50 border border-purple-100 rounded-xl p-3 space-y-3">
                 <div>
