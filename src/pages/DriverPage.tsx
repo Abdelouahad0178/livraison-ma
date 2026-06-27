@@ -1307,7 +1307,7 @@ export default function DriverPage() {
                         <div className={`${isLivreur ? 'grid grid-cols-1 gap-1' : 'shrink-0 flex flex-col gap-1.5'}`}>
                           {isLivreur ? (
                             <>
-                              {/* Boutons de confirmation désactivés - seul l'admin peut changer le statut
+                              {/* ✅ Boutons de signature ACTIVÉS - le livreur peut compléter la livraison */}
                               <button
                                 onClick={() => handleRequestSignature(parcel)}
                                 className="flex items-center justify-center gap-1 text-[11px] font-bold px-2 py-1.5 rounded-lg text-white bg-emerald-600 hover:bg-emerald-700 transition"
@@ -1330,10 +1330,6 @@ export default function DriverPage() {
                               >
                                 📄 Papier
                               </button>
-                              */}
-                              <div className="text-[10px] text-gray-400 italic text-center px-2 py-1.5">
-                                Seul l'admin peut modifier le statut
-                              </div>
                               {/* Bouton "Route" désactivé - seul l'admin peut changer le statut
                               {parcel.status !== 'En cours de livraison' && (
                                 <button
@@ -1376,7 +1372,7 @@ export default function DriverPage() {
                                   </button>
                                 )}
                                 */}
-                                {/* Boutons de confirmation pour deliveryDriver désactivés - seul l'admin peut changer le statut
+                                {/* ✅ Boutons de signature ACTIVÉS pour deliveryDriver - le livreur peut compléter la livraison */}
                                 {driverTab === 'delivery' && !['Livré', 'Retourné'].includes(parcel.status) && parcel.deliveryDriverId === uid && (
                                   <>
                                     <button
@@ -1405,7 +1401,6 @@ export default function DriverPage() {
                                     </button>
                                   </>
                                 )}
-                                */}
                               </>
                             )}
                           </div>
