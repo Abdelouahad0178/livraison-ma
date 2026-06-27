@@ -22,7 +22,7 @@ import { STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS, codCollectedLab
 import {
   Truck, LogOut, ScanLine, Search, CheckCircle,
   ArrowLeft, MapPin, Package, X, Phone, Calendar, Home, Banknote, Menu, Printer,
-  PenLine, QrCode, Building2, Camera, Upload, RotateCcw
+  PenLine, QrCode, Building2, Camera, Upload, RotateCcw, LayoutGrid, Table2
 } from 'lucide-react'
 import CompanyContact from '../components/CompanyContact'
 import LiveClock from '../components/LiveClock'
@@ -92,6 +92,7 @@ export default function DriverPage() {
   const [dateTo, setDateTo]               = useState('')
   const [missionSearch, setMissionSearch] = useState('')
   const [parcelStatusFilter, setParcelStatusFilter] = useState('all')
+  const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards') // Vue cartes ou tableau
   const [bulkSelectedIds, setBulkSelectedIds] = useState<any[]>([])
   const [bulkStatus, setBulkStatus]       = useState('')
   const [bulkBusy, setBulkBusy]           = useState(false)
@@ -1114,6 +1115,35 @@ export default function DriverPage() {
               })}
             </div>}
 
+            {/* Toggle vue cartes / tableau */}
+            <div className="flex items-center justify-between px-1">
+              <p className="text-xs text-gray-400">{filteredParcels.length} colis</p>
+              <div className="flex items-center bg-gray-800 rounded-lg p-0.5 border border-gray-700">
+                <button
+                  onClick={() => setViewMode('cards')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition ${
+                    viewMode === 'cards'
+                      ? 'bg-gray-700 text-blue-400 shadow-sm'
+                      : 'text-gray-500 hover:text-gray-300'
+                  }`}
+                >
+                  <LayoutGrid className="w-3.5 h-3.5" />
+                  Cartes
+                </button>
+                <button
+                  onClick={() => setViewMode('table')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition ${
+                    viewMode === 'table'
+                      ? 'bg-gray-700 text-blue-400 shadow-sm'
+                      : 'text-gray-500 hover:text-gray-300'
+                  }`}
+                >
+                  <Table2 className="w-3.5 h-3.5" />
+                  Tableau
+                </button>
+              </div>
+            </div>
+
             {loadingParcels ? (
               <div className="flex justify-center py-12">
                 <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
@@ -1125,7 +1155,137 @@ export default function DriverPage() {
                   {filter === 'active' ? 'Aucun colis à livrer' : 'Aucun colis terminé'}
                 </p>
               </div>
+            ) : viewMode === 'table' ? (
+              // ═══════════════════════════════════════════════════════════════════
+              // VUE TABLEAU
+              // ═══════════════════════════════════════════════════════════════════
+              <div className="overflow-x-auto bg-gradient-to-br from-gray-800 via-gray-900 to-gray-800 rounded-2xl shadow-xl border-2 border-gray-700">
+                <table className="w-full text-xs">
+                  <thead className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white sticky top-0 shadow-lg">
+                    <tr>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">
+                        <div className="flex items-center gap-2">
+                          <Package className="w-4 h-4" />
+                          N° EXP
+                        </div>
+                      </th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">Statut</th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30 bg-blue-600/30">Expéditeur</th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30 bg-blue-600/30">Ville Exp.</th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Destinataire</th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Tél</th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Ville</th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Adresse</th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30">Service</th>
+                      <th className="px-4 py-4 text-right font-bold whitespace-nowrap border-r border-purple-400/30 bg-green-600/30">💰 COD</th>
+                      <th className="px-4 py-4 text-center font-bold whitespace-nowrap">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-gray-900">
+                    {filteredParcels.map((parcel: any, idx: number) => {
+                      const sc = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
+                      const done = ['Livré', 'Retourné'].includes(parcel.status)
+                      const serviceInfo = SERVICE_TYPE_DISPLAY[parcel.serviceType as keyof typeof SERVICE_TYPE_DISPLAY] || SERVICE_TYPE_DISPLAY.simple
+
+                      return (
+                        <tr
+                          key={parcel.id}
+                          className={`border-b border-gray-800 transition-all hover:shadow-lg hover:bg-gray-800/50 ${
+                            idx % 2 === 0 ? 'bg-gray-900' : 'bg-gray-850'
+                          } ${done ? 'opacity-60' : ''}`}
+                        >
+                          <td className="px-4 py-3 font-mono font-black text-blue-400 whitespace-nowrap text-sm border-r border-gray-800">
+                            {parcel.sender?.nic || '—'}
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-800">
+                            <span className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm ${sc.bg} ${sc.text}`}>
+                              {parcel.status || 'Initialisé'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-gray-200 whitespace-nowrap max-w-[200px] truncate border-r border-gray-800 bg-gray-800/30">
+                            {parcel.sender?.name || '—'}
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-800 bg-gray-800/30">
+                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-900/50 text-blue-300 rounded-lg text-xs font-semibold">
+                              📍 {parcel.sender?.city || '—'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-gray-200 whitespace-nowrap max-w-[200px] truncate border-r border-gray-800 bg-pink-900/20">
+                            {parcel.receiver?.name || '—'}
+                          </td>
+                          <td className="px-4 py-3 text-gray-400 font-mono whitespace-nowrap border-r border-gray-800 bg-pink-900/20">
+                            {parcel.receiver?.tel || '—'}
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-800 bg-pink-900/20">
+                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-pink-900/50 text-pink-300 rounded-lg text-xs font-semibold">
+                              📍 {parcel.receiver?.city || parcel.destinationCity || '—'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-xs whitespace-nowrap max-w-[250px] truncate border-r border-gray-800 bg-pink-900/20">
+                            {parcel.enGare ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-gradient-to-r from-amber-900/50 to-orange-900/50 border border-amber-700 text-orange-300 rounded-lg font-bold">
+                                🚉 En gare
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">{parcel.receiver?.address || '—'}</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-800">
+                            <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-semibold ${serviceInfo.bg} ${serviceInfo.text}`}>
+                              {serviceInfo.emoji} {serviceInfo.label}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-800 bg-green-900/20">
+                            {parcel.codAmount && parcel.codAmount > 0 ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-900/50 text-green-300 rounded-lg text-sm font-black">
+                                💰 {parcel.codAmount} DH
+                              </span>
+                            ) : (
+                              <span className="text-gray-600">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1.5">
+                              {!done && isLivreur && (
+                                <>
+                                  <button
+                                    onClick={() => handleRequestSignature(parcel)}
+                                    className="p-2 rounded-lg bg-gradient-to-r from-emerald-600 to-emerald-700 hover:from-emerald-700 hover:to-emerald-800 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-110"
+                                    title="Signature électronique"
+                                  >
+                                    <PenLine className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => {
+                                      const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
+                                      setPaperReceiptModal({
+                                        parcel,
+                                        note: '',
+                                        confirming: false,
+                                        error: '',
+                                        isReturn,
+                                        codPaymentType: ''
+                                      })
+                                    }}
+                                    className="p-2 rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-110"
+                                    title="Bon papier"
+                                  >
+                                    <Printer className="w-4 h-4" />
+                                  </button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
             ) : (
+              // ═══════════════════════════════════════════════════════════════════
+              // VUE CARTES
+              // ═══════════════════════════════════════════════════════════════════
               <div className="space-y-1">
                 {filteredParcels.map((parcel: any) => {
                   const sc   = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
