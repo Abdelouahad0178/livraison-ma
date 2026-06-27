@@ -59,7 +59,7 @@ export default function NewTab() {
 
   // Navigation clavier pour le formulaire
   const fieldOrder = [
-    'senderName', 'senderTel', 'senderAddress',
+    'senderNic', 'senderName', 'senderTel', 'senderAddress',
     'receiverCity', 'receiverName', 'receiverTel', 'receiverAddress',
     'weight', 'nbColis', 'codAmount'
   ]
@@ -87,6 +87,15 @@ export default function NewTab() {
       }
     }
   }
+
+  // Focus automatique sur N EXP à l'ouverture
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      const senderNicField = document.getElementById('senderNic')
+      if (senderNicField) senderNicField.focus()
+    }, 100)
+    return () => clearTimeout(timer)
+  }, [])
 
   // Intercepter la création du colis pour afficher la modal de confirmation
   useEffect(() => {
@@ -693,7 +702,14 @@ export default function NewTab() {
             <h3 className="text-lg font-bold bg-gradient-to-r from-pink-600 to-purple-600 bg-clip-text text-transparent">Expéditeur</h3>
           </div>
           <div className="grid grid-cols-2 gap-3">
-            <input placeholder="N EXP" value={form.senderNic} onChange={f('senderNic')} className={`${inputCls} col-span-2`} />
+            <input
+              id="senderNic"
+              placeholder="N EXP"
+              value={form.senderNic}
+              onChange={f('senderNic')}
+              onKeyDown={(e) => handleKeyNav(e, 'senderNic')}
+              className={`${inputCls} col-span-2`}
+            />
 
             {/* Autocomplétion expéditeur */}
             <div className="col-span-2">
