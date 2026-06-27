@@ -592,71 +592,153 @@ export default function ParcelsTab() {
             // VUE TABLEAU (Excel-like avec scroll horizontal)
             // ═══════════════════════════════════════════════════════════════════
             <div className="space-y-4">
-              <div className="overflow-x-auto bg-white rounded-xl shadow border border-gray-200">
+              <div className="overflow-x-auto bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 rounded-2xl shadow-xl border-2 border-purple-200">
                 <table className="w-full text-xs">
-                  <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                  <thead className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white sticky top-0 shadow-lg">
                     <tr>
-                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">N° EXP</th>
-                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Date</th>
-                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Statut</th>
-                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Expéditeur</th>
-                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Tél Exp.</th>
-                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Ville Exp.</th>
-                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Destinataire</th>
-                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Tél Dest.</th>
-                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Ville Dest.</th>
-                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Adresse</th>
-                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Service</th>
-                      <th className="px-3 py-3 text-right font-bold text-gray-700 whitespace-nowrap">Nb Colis</th>
-                      <th className="px-3 py-3 text-right font-bold text-gray-700 whitespace-nowrap">Poids (kg)</th>
-                      <th className="px-3 py-3 text-right font-bold text-gray-700 whitespace-nowrap">Port (DH)</th>
-                      <th className="px-3 py-3 text-right font-bold text-gray-700 whitespace-nowrap">COD (DH)</th>
-                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Livreur</th>
-                      <th className="px-3 py-3 text-center font-bold text-gray-700 whitespace-nowrap">Actions</th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">
+                        <div className="flex items-center gap-2">
+                          <Package className="w-4 h-4" />
+                          N° EXP
+                        </div>
+                      </th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">
+                        <div className="flex items-center gap-2">
+                          <Calendar className="w-4 h-4" />
+                          Date
+                        </div>
+                      </th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">Statut</th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30 bg-blue-600/30">
+                        <div className="flex items-center gap-1">
+                          📤 Expéditeur
+                        </div>
+                      </th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30 bg-blue-600/30">Tél Exp.</th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30 bg-blue-600/30">Ville Exp.</th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">
+                        <div className="flex items-center gap-1">
+                          📥 Destinataire
+                        </div>
+                      </th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Tél Dest.</th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Ville Dest.</th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Adresse</th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30">Service</th>
+                      <th className="px-4 py-4 text-center font-bold whitespace-nowrap border-r border-purple-400/30">Nb Colis</th>
+                      <th className="px-4 py-4 text-center font-bold whitespace-nowrap border-r border-purple-400/30">Poids</th>
+                      <th className="px-4 py-4 text-right font-bold whitespace-nowrap border-r border-purple-400/30 bg-green-600/30">
+                        <div className="flex items-center justify-end gap-1">
+                          💰 Port
+                        </div>
+                      </th>
+                      <th className="px-4 py-4 text-right font-bold whitespace-nowrap border-r border-purple-400/30 bg-green-600/30">
+                        <div className="flex items-center justify-end gap-1">
+                          💵 COD
+                        </div>
+                      </th>
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30">
+                        <div className="flex items-center gap-1">
+                          🚚 Livreur
+                        </div>
+                      </th>
+                      <th className="px-4 py-4 text-center font-bold whitespace-nowrap">Actions</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {pagedParcels.map((parcel: any) => {
+                  <tbody className="bg-white">
+                    {pagedParcels.map((parcel: any, idx: number) => {
                       const isOwn = canActAsParcelOwner(parcel)
                       const sc = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
                       const serviceType = SERVICE_TYPES.find(st => st.key === parcel.serviceType)
                       const driver = drivers?.find((d: any) => d.id === parcel.deliveryDriverId || d.id === parcel.chauffeurId)
 
                       return (
-                        <tr key={parcel.id} className={`hover:bg-gray-50 transition ${isOwn ? 'bg-blue-50/30' : ''}`}>
-                          <td className="px-3 py-3 font-mono font-bold text-blue-600 whitespace-nowrap">{parcel.nic || '—'}</td>
-                          <td className="px-3 py-3 text-gray-600 whitespace-nowrap">
-                            {parcel.createdAt ? new Date(parcel.createdAt.seconds * 1000).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) : '—'}
+                        <tr
+                          key={parcel.id}
+                          className={`border-b border-gray-100 transition-all hover:shadow-lg hover:scale-[1.01] hover:z-10 relative ${
+                            idx % 2 === 0 ? 'bg-white' : 'bg-gradient-to-r from-blue-50/30 via-purple-50/20 to-pink-50/30'
+                          } ${isOwn ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-orange-400'}`}
+                        >
+                          <td className="px-4 py-3 font-mono font-black text-blue-600 whitespace-nowrap text-sm border-r border-gray-100">
+                            {parcel.sender?.nic || '—'}</td>
+                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
+                            <span className="text-gray-600 font-medium">
+                              {parcel.createdAt ? new Date(parcel.createdAt.seconds * 1000).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'}
+                            </span>
                           </td>
-                          <td className="px-3 py-3 whitespace-nowrap">
-                            <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${sc}`}>
+                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
+                            <span className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm ${sc}`}>
                               {parcel.status || 'Initialisé'}
                             </span>
                           </td>
-                          <td className="px-3 py-3 font-medium text-gray-800 whitespace-nowrap max-w-[200px] truncate">{parcel.sender?.name || '—'}</td>
-                          <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{parcel.sender?.tel || '—'}</td>
-                          <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{parcel.sender?.city || '—'}</td>
-                          <td className="px-3 py-3 font-medium text-gray-800 whitespace-nowrap max-w-[200px] truncate">{parcel.receiver?.name || '—'}</td>
-                          <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{parcel.receiver?.tel || '—'}</td>
-                          <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{parcel.receiver?.city || parcel.destinationCity || '—'}</td>
-                          <td className="px-3 py-3 text-gray-600 whitespace-nowrap max-w-[250px] truncate">{parcel.receiver?.address || '—'}</td>
-                          <td className="px-3 py-3 whitespace-nowrap">
-                            <span className="inline-flex items-center gap-1">
+                          <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap max-w-[200px] truncate border-r border-gray-100 bg-blue-50/30">
+                            {parcel.sender?.name || '—'}
+                          </td>
+                          <td className="px-4 py-3 text-gray-600 font-mono whitespace-nowrap border-r border-gray-100 bg-blue-50/30">
+                            {parcel.sender?.tel || '—'}
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100 bg-blue-50/30">
+                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-semibold">
+                              📍 {parcel.sender?.city || '—'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap max-w-[200px] truncate border-r border-gray-100 bg-pink-50/30">
+                            {parcel.receiver?.name || '—'}
+                          </td>
+                          <td className="px-4 py-3 text-gray-600 font-mono whitespace-nowrap border-r border-gray-100 bg-pink-50/30">
+                            {parcel.receiver?.tel || '—'}
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100 bg-pink-50/30">
+                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-pink-100 text-pink-700 rounded-lg text-xs font-semibold">
+                              📍 {parcel.receiver?.city || parcel.destinationCity || '—'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-gray-600 text-xs whitespace-nowrap max-w-[250px] truncate border-r border-gray-100 bg-pink-50/30">
+                            {parcel.receiver?.address || '—'}
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
+                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-100 text-purple-700 rounded-lg font-semibold">
                               {serviceType?.emoji} {serviceType?.label || 'Simple'}
                             </span>
                           </td>
-                          <td className="px-3 py-3 text-right font-semibold text-gray-700 whitespace-nowrap">{parcel.nbColis || 1}</td>
-                          <td className="px-3 py-3 text-right text-gray-600 whitespace-nowrap">{parcel.weight ? `${parcel.weight}` : '—'}</td>
-                          <td className="px-3 py-3 text-right font-semibold text-gray-900 whitespace-nowrap">{parcel.price ? `${parcel.price} DH` : '—'}</td>
-                          <td className="px-3 py-3 text-right font-semibold text-green-700 whitespace-nowrap">
-                            {parcel.codAmount && parcel.codAmount > 0 ? `${parcel.codAmount} DH` : '—'}
+                          <td className="px-4 py-3 text-center border-r border-gray-100">
+                            <span className="inline-flex items-center justify-center w-8 h-8 bg-indigo-100 text-indigo-700 rounded-lg font-bold">
+                              {parcel.nbColis || 1}
+                            </span>
                           </td>
-                          <td className="px-3 py-3 text-gray-600 whitespace-nowrap max-w-[150px] truncate">{driver?.name || '—'}</td>
-                          <td className="px-3 py-3 whitespace-nowrap">
-                            <div className="flex items-center justify-center gap-1">
+                          <td className="px-4 py-3 text-center border-r border-gray-100">
+                            <span className="text-gray-700 font-semibold">
+                              {parcel.weight ? `${parcel.weight} kg` : '—'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-100 bg-green-50/30">
+                            <span className="text-green-700 text-sm">
+                              {parcel.price ? `${parcel.price} DH` : '—'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-100 bg-green-50/30">
+                            {parcel.codAmount && parcel.codAmount > 0 ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 rounded-lg text-sm font-black">
+                                💰 {parcel.codAmount} DH
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap max-w-[150px] truncate border-r border-gray-100">
+                            {driver?.name ? (
+                              <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded-lg font-semibold">
+                                🚚 {driver.name}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400 text-xs">Non assigné</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1.5">
                               <button
                                 onClick={() => handlePrintTicket(parcel)}
-                                className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-600 transition"
+                                className="p-2 rounded-lg bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-110"
                                 title="Imprimer"
                               >
                                 <Printer className="w-4 h-4" />
@@ -664,7 +746,7 @@ export default function ParcelsTab() {
                               {canEditParcelDetails(parcel) && (
                                 <button
                                   onClick={() => handleEditClick(parcel)}
-                                  className="p-1.5 rounded-lg hover:bg-purple-50 text-purple-600 transition"
+                                  className="p-2 rounded-lg bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-110"
                                   title="Modifier"
                                 >
                                   <Edit2 className="w-4 h-4" />
@@ -673,7 +755,7 @@ export default function ParcelsTab() {
                               {isOwn && (
                                 <button
                                   onClick={() => handleDeleteClick(parcel)}
-                                  className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition"
+                                  className="p-2 rounded-lg bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-110"
                                   title="Supprimer"
                                 >
                                   <Trash2 className="w-4 h-4" />
