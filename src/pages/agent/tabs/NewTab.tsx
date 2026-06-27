@@ -63,9 +63,9 @@ export default function NewTab() {
     const form = target.closest('form')
     if (!form) return
 
-    // Récupérer TOUS les éléments focusables (inputs, selects, textareas ET boutons)
+    // Récupérer TOUS les éléments focusables (inputs, selects, textareas ET boutons - y compris submit)
     const focusables = Array.from(
-      form.querySelectorAll('input:not([type="hidden"]):not([type="submit"]), select, textarea, button[type="button"]')
+      form.querySelectorAll('input:not([type="hidden"]), select, textarea, button')
     ).filter((el: any) => !el.disabled && el.offsetParent !== null) // Visible et activé
 
     const currentIndex = focusables.indexOf(target)
@@ -77,8 +77,13 @@ export default function NewTab() {
       return
     }
 
-    // Entrée = élément suivant
+    // Entrée = élément suivant (sauf si on est sur le dernier élément ou un bouton submit)
     if (e.key === 'Enter' && !e.ctrlKey) {
+      // Si c'est un bouton submit, laisser le comportement par défaut (soumettre le formulaire)
+      if (target.tagName === 'BUTTON' && (target as HTMLButtonElement).type === 'submit') {
+        return // Laisser le formulaire se soumettre normalement
+      }
+
       e.preventDefault()
       if (currentIndex >= 0 && currentIndex < focusables.length - 1) {
         const next = focusables[currentIndex + 1] as HTMLElement
@@ -1238,6 +1243,7 @@ export default function NewTab() {
         </section>
 
         <button type="submit" disabled={loading}
+          onKeyDown={handleKeyNav}
           className="w-full bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 hover:from-pink-600 hover:via-purple-600 hover:to-indigo-600 disabled:opacity-60 text-white py-5 rounded-2xl font-bold text-lg transition-all transform hover:scale-[1.02] hover:shadow-2xl flex items-center justify-center gap-3 relative overflow-hidden group"
         >
           <div className="absolute inset-0 bg-gradient-to-r from-white/0 via-white/20 to-white/0 transform -skew-x-12 translate-x-[-100%] group-hover:translate-x-[100%] transition-transform duration-1000"></div>
