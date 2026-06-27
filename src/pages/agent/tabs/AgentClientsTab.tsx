@@ -75,7 +75,8 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
     const matchSearch = !searchTerm ||
       c.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
       c.tel?.includes(searchTerm) ||
-      c.address?.toLowerCase().includes(searchTerm.toLowerCase())
+      c.address?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      c.secteurName?.toLowerCase().includes(searchTerm.toLowerCase())
 
     const matchFilter = filter === 'all' ||
       (filter === 'expediteur' && c.isExpediteur) ||
@@ -283,7 +284,7 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
           <input
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            placeholder="Rechercher..."
+            placeholder="Rechercher par nom, tél, adresse, secteur..."
             className="w-full pl-10 pr-4 py-3 bg-white border-2 border-gray-200 rounded-xl focus:border-blue-500 focus:outline-none"
           />
         </div>
