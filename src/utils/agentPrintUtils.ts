@@ -154,10 +154,9 @@ export async function printTable(parcels: any[], driverName?: string): Promise<v
     const sigUrl    = (sigMap as any)[p.id]
     return `
       <tr style="background:${rowBg}">
-        <td style="text-align:center">${i + 1}</td>
+        <td style="font-family:monospace;color:#7c3aed;font-weight:bold">${p.sender?.nic || '—'}</td>
         <td style="font-family:monospace;font-weight:bold;color:#1d4ed8">${p.trackingId || '—'}</td>
         <td style="text-align:center">${dateStr}</td>
-        <td style="font-family:monospace;color:#7c3aed">${p.sender?.nic || '—'}</td>
         <td><div style="font-weight:bold">${p.sender?.name || '—'}</div><div style="color:#6b7280;font-size:7.5pt">${p.sender?.tel || ''} ${p.sender?.city ? '· ' + p.sender.city : ''}</div></td>
         <td><div style="font-weight:bold">${p.receiver?.name || '—'}</div><div style="color:#6b7280;font-size:7.5pt">${p.receiver?.tel || ''} ${p.receiver?.city ? '· ' + p.receiver.city : ''}</div></td>
         <td style="text-align:center">${p.nbColis || 1}</td>
@@ -211,10 +210,9 @@ export async function printTable(parcels: any[], driverName?: string): Promise<v
   <table>
     <thead>
       <tr>
-        <th>N°</th>
+        <th>N° EXP</th>
         <th>Tracking</th>
         <th>Date</th>
-        <th>N EXP</th>
         <th>Expéditeur</th>
         <th>Destinataire</th>
         <th>Nb</th>
