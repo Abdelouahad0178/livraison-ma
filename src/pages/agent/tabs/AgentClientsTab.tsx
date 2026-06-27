@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
-import { Users, Search, Plus, Edit2, Save, X } from 'lucide-react'
-import { subscribeClients, createClient, updateClient, Client } from '../../../firebase/clients'
+import { Users, Search, Plus, Edit2, Save, X, Trash2 } from 'lucide-react'
+import { subscribeClients, createClient, updateClient, deleteClient, Client } from '../../../firebase/clients'
 import { subscribeAllUsers, subscribeAllSectors } from '../../../firebase/firestore'
 import { CITIES } from '../../../firebase/constants'
 
@@ -20,6 +20,8 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<any>({})
   const [showNewModal, setShowNewModal] = useState(false)
+  const [showEditModal, setShowEditModal] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [newForm, setNewForm] = useState({
     name: '',
     tel: '',
@@ -76,19 +78,44 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
   const handleEdit = (client: Client) => {
     setEditingId(client.id)
     setEditForm({
+      name: client.name || '',
+      tel: client.tel || '',
+      email: client.email || '',
+      address: client.address || '',
+      city: client.city || agencyCity,
+      nic: client.nic || '',
+      accountType: client.accountType || 'cash',
+      remise: client.remise || 0,
       isExpediteur: client.isExpediteur || false,
       isDestinataire: client.isDestinataire || false,
       secteurId: client.secteurId || '',
       secteurName: client.secteurName || '',
       livreurIds: client.livreurIds || [],
     })
+    setShowEditModal(true)
   }
 
   const handleSave = async (clientId: string) => {
     try {
       await updateClient(clientId, editForm)
       setEditingId(null)
+      setShowEditModal(false)
       setMsg({ type: 'success', text: '✅ Client mis à jour' })
+    } catch (error: any) {
+      setMsg({ type: 'error', text: '❌ ' + error.message })
+    }
+  }
+
+  const handleDelete = async (clientId: string) => {
+    if (deleteConfirm !== clientId) {
+      setDeleteConfirm(clientId)
+      setTimeout(() => setDeleteConfirm(null), 3000)
+      return
+    }
+    try {
+      await deleteClient(clientId)
+      setDeleteConfirm(null)
+      setMsg({ type: 'success', text: '✅ Client supprimé' })
     } catch (error: any) {
       setMsg({ type: 'error', text: '❌ ' + error.message })
     }
@@ -200,103 +227,31 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
                   </div>
                 </div>
                 <div className="flex gap-2">
-                  {editingId === client.id ? (
-                    <>
-                      <button onClick={() => handleSave(client.id)} className="p-2 bg-green-600 hover:bg-green-700 text-white rounded-lg">
-                        <Save className="w-4 h-4" />
-                      </button>
-                      <button onClick={() => setEditingId(null)} className="p-2 bg-gray-600 hover:bg-gray-700 text-white rounded-lg">
-                        <X className="w-4 h-4" />
-                      </button>
-                    </>
-                  ) : (
-                    <button onClick={() => handleEdit(client)} className="p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg">
-                      <Edit2 className="w-4 h-4" />
-                    </button>
-                  )}
+                  <button onClick={() => handleEdit(client)} className="p-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg" title="Modifier">
+                    <Edit2 className="w-4 h-4" />
+                  </button>
+                  <button
+                    onClick={() => handleDelete(client.id)}
+                    className={`p-2 ${deleteConfirm === client.id ? 'bg-red-700' : 'bg-red-600 hover:bg-red-700'} text-white rounded-lg`}
+                    title={deleteConfirm === client.id ? 'Cliquer pour confirmer' : 'Supprimer'}
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
 
-              {editingId === client.id ? (
-                <div className="space-y-3 border-t pt-3">
-                  <div className="flex gap-4">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={editForm.isExpediteur}
-                        onChange={(e) => setEditForm({ ...editForm, isExpediteur: e.target.checked })}
-                        className="w-4 h-4"
-                      />
-                      <span className="font-semibold">📤 Expéditeur</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={editForm.isDestinataire}
-                        onChange={(e) => setEditForm({ ...editForm, isDestinataire: e.target.checked })}
-                        className="w-4 h-4"
-                      />
-                      <span className="font-semibold">📥 Destinataire</span>
-                    </label>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-semibold mb-2">🏘️ Secteur</label>
-                    <select
-                      value={editForm.secteurId}
-                      onChange={(e) => {
-                        const sector = sectors.find(s => s.id === e.target.value)
-                        setEditForm({
-                          ...editForm,
-                          secteurId: e.target.value,
-                          secteurName: sector ? `${sector.code}${sector.name && sector.name !== sector.code ? ' - ' + sector.name : ''}` : ''
-                        })
-                      }}
-                      className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
-                    >
-                      <option value="">Aucun secteur</option>
-                      {sectors.map(s => (
-                        <option key={s.id} value={s.id}>
-                          {s.code}{s.name && s.name !== s.code ? ` - ${s.name}` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {users.length > 0 && (
-                    <div>
-                      <label className="block text-sm font-semibold mb-2">🚚 Livreurs assignés</label>
-                      <div className="grid grid-cols-2 gap-2">
-                        {users.map(driver => (
-                          <label key={driver.id} className="flex items-center gap-2 p-3 border-2 border-gray-200 rounded-lg hover:bg-blue-50 cursor-pointer">
-                            <input
-                              type="checkbox"
-                              checked={editForm.livreurIds?.includes(driver.id)}
-                              onChange={() => setEditForm({
-                                ...editForm,
-                                livreurIds: toggleLivreur(editForm.livreurIds || [], driver.id)
-                              })}
-                              className="w-4 h-4"
-                            />
-                            <span className="text-sm font-medium">{driver.name}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <div className="flex gap-3 text-sm flex-wrap">
-                  {client.isExpediteur && <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full font-semibold">📤 Expéditeur</span>}
-                  {client.isDestinataire && <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full font-semibold">📥 Destinataire</span>}
-                  {client.secteurName && <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full font-semibold">🏘️ {client.secteurName}</span>}
-                  {client.livreurIds && client.livreurIds.length > 0 && (
-                    <span className="px-3 py-1 bg-orange-100 text-orange-700 rounded-full font-semibold">
-                      🚚 {client.livreurIds.length} livreur(s)
-                    </span>
-                  )}
-                </div>
-              )}
+              <div className="flex gap-3 text-sm flex-wrap">
+                {client.isExpediteur && <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full font-semibold">📤 Expéditeur</span>}
+                {client.isDestinataire && <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full font-semibold">📥 Destinataire</span>}
+                {client.secteurName && <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full font-semibold">🏘️ {client.secteurName}</span>}
+                {client.livreurIds && client.livreurIds.length > 0 && (
+                  <span className="px-3 py-1 bg-orange-100 text-orange-700 rounded-full font-semibold">
+                    🚚 {client.livreurIds.length} livreur(s)
+                  </span>
+                )}
+                {client.email && <span className="px-3 py-1 bg-gray-100 text-gray-700 rounded-full font-semibold">✉️ {client.email}</span>}
+                {client.accountType && <span className="px-3 py-1 bg-yellow-100 text-yellow-700 rounded-full font-semibold">{client.accountType === 'cash' ? '💵 Cash' : '📝 Crédit'}</span>}
+              </div>
             </div>
           ))
         )}
@@ -437,6 +392,176 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
                 className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Créer le client
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Modifier Client */}
+      {showEditModal && editingId && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-lg">Modifier client</h3>
+              <button onClick={() => { setShowEditModal(false); setEditingId(null) }} className="p-2 hover:bg-gray-100 rounded-lg">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="col-span-2">
+                  <label className="block text-sm font-semibold mb-2">Nom complet *</label>
+                  <input
+                    value={editForm.name}
+                    onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                    placeholder="Nom du client"
+                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold mb-2">Téléphone *</label>
+                  <input
+                    value={editForm.tel}
+                    onChange={(e) => setEditForm({ ...editForm, tel: e.target.value })}
+                    placeholder="06xxxxxxxx"
+                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold mb-2">Email</label>
+                  <input
+                    type="email"
+                    value={editForm.email}
+                    onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                    placeholder="email@exemple.com"
+                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div className="col-span-2">
+                  <label className="block text-sm font-semibold mb-2">Adresse</label>
+                  <input
+                    value={editForm.address}
+                    onChange={(e) => setEditForm({ ...editForm, address: e.target.value })}
+                    placeholder="Adresse complète"
+                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold mb-2">Ville</label>
+                  <select
+                    value={editForm.city}
+                    onChange={(e) => setEditForm({ ...editForm, city: e.target.value })}
+                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
+                  >
+                    {CITIES.map(city => <option key={city} value={city}>{city}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold mb-2">NIC / CIN</label>
+                  <input
+                    value={editForm.nic}
+                    onChange={(e) => setEditForm({ ...editForm, nic: e.target.value })}
+                    placeholder="NIC ou CIN"
+                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold mb-2">Type de compte</label>
+                  <select
+                    value={editForm.accountType}
+                    onChange={(e) => setEditForm({ ...editForm, accountType: e.target.value })}
+                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
+                  >
+                    <option value="cash">Cash</option>
+                    <option value="credit">Crédit</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold mb-2">Remise (%)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={editForm.remise}
+                    onChange={(e) => setEditForm({ ...editForm, remise: Number(e.target.value) })}
+                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="flex gap-4">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editForm.isExpediteur}
+                    onChange={(e) => setEditForm({ ...editForm, isExpediteur: e.target.checked })}
+                    className="w-4 h-4"
+                  />
+                  <span className="font-semibold">📤 Expéditeur</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={editForm.isDestinataire}
+                    onChange={(e) => setEditForm({ ...editForm, isDestinataire: e.target.checked })}
+                    className="w-4 h-4"
+                  />
+                  <span className="font-semibold">📥 Destinataire</span>
+                </label>
+              </div>
+
+              <div>
+                <label className="block text-sm font-semibold mb-2">🏘️ Secteur</label>
+                <select
+                  value={editForm.secteurId}
+                  onChange={(e) => {
+                    const sector = sectors.find(s => s.id === e.target.value)
+                    setEditForm({
+                      ...editForm,
+                      secteurId: e.target.value,
+                      secteurName: sector ? `${sector.code}${sector.name && sector.name !== sector.code ? ' - ' + sector.name : ''}` : ''
+                    })
+                  }}
+                  className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
+                >
+                  <option value="">Aucun secteur</option>
+                  {sectors.map(s => (
+                    <option key={s.id} value={s.id}>
+                      {s.code}{s.name && s.name !== s.code ? ` - ${s.name}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {users.length > 0 && (
+                <div>
+                  <label className="block text-sm font-semibold mb-2">🚚 Livreurs assignés</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {users.map(driver => (
+                      <label key={driver.id} className="flex items-center gap-2 p-3 border-2 border-gray-200 rounded-lg hover:bg-blue-50 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={editForm.livreurIds?.includes(driver.id)}
+                          onChange={() => setEditForm({
+                            ...editForm,
+                            livreurIds: toggleLivreur(editForm.livreurIds || [], driver.id)
+                          })}
+                          className="w-4 h-4"
+                        />
+                        <span className="text-sm font-medium">{driver.name}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <button
+                onClick={() => handleSave(editingId)}
+                disabled={!editForm.name || !editForm.tel}
+                className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                Enregistrer les modifications
               </button>
             </div>
           </div>
