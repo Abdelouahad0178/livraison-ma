@@ -111,6 +111,22 @@ export default function PointeurPage() {
   // ── Form modal
   const [formModal, setFormModal] = useState<any>(null) // null | { mode:'new'|'edit', data, loading, error }
 
+  // ── Refs pour navigation clavier
+  const modeReglementChequeRef = useRef<HTMLButtonElement>(null)
+  const modeReglementTraiteRef = useRef<HTMLButtonElement>(null)
+  const trackingNumberRef = useRef<HTMLInputElement>(null)
+  const montantRef = useRef<HTMLInputElement>(null)
+  const expediteurRef = useRef<HTMLInputElement>(null)
+  const expediteurTelRef = useRef<HTMLInputElement>(null)
+  const destinataireRef = useRef<HTMLInputElement>(null)
+  const destinataireTelRef = useRef<HTMLInputElement>(null)
+  const villeExpeditionRef = useRef<HTMLSelectElement>(null)
+  const banqueRef = useRef<HTMLInputElement>(null)
+  const numeroPieceRef = useRef<HTMLInputElement>(null)
+  const dateEmissionRef = useRef<HTMLInputElement>(null)
+  const dateEcheanceRef = useRef<HTMLInputElement>(null)
+  const notesRef = useRef<HTMLTextAreaElement>(null)
+
   // ── Rapport modal
   const [rapportModal, setRapportModal] = useState<any>(null) // null | { loading, error, note, selected }
   const [viewRapportModal, setViewRapportModal] = useState<any>(null)
@@ -143,6 +159,99 @@ export default function PointeurPage() {
   // ── Document control (chèques / traites)
   const [docVerifying, setDocVerifying] = useState<any>({})
   const [docControlModal, setDocControlModal] = useState<any>(null)
+
+  // ── Navigation clavier unifiée pour tout le formulaire
+  const handleFormKeyDown = (e: React.KeyboardEvent, currentField: string) => {
+    // Ordre complet de TOUS les champs et boutons
+    const fieldOrder = [
+      'trackingNumber', 'montant', 'expediteur', 'expediteurTel',
+      'destinataire', 'destinataireTel', 'villeExpedition',
+      'modeCheque', 'modeTraite',
+      'banque', 'numeroPiece', 'dateEmission', 'dateEcheance', 'notes'
+    ]
+
+    const refMap: any = {
+      trackingNumber: trackingNumberRef,
+      montant: montantRef,
+      expediteur: expediteurRef,
+      expediteurTel: expediteurTelRef,
+      destinataire: destinataireRef,
+      destinataireTel: destinataireTelRef,
+      villeExpedition: villeExpeditionRef,
+      modeCheque: modeReglementChequeRef,
+      modeTraite: modeReglementTraiteRef,
+      banque: banqueRef,
+      numeroPiece: numeroPieceRef,
+      dateEmission: dateEmissionRef,
+      dateEcheance: dateEcheanceRef,
+      notes: notesRef,
+    }
+
+    // Espace = sélectionner un bouton de mode
+    if (e.key === ' ' && (currentField === 'modeCheque' || currentField === 'modeTraite')) {
+      e.preventDefault()
+      const selectedMode = currentField === 'modeCheque' ? 'cheque' : 'traite'
+      setFormModal((f: any) => ({ ...f, data: { ...f.data, modeReglement: selectedMode } }))
+      return
+    }
+
+    // Entrée = champ suivant
+    if (e.key === 'Enter' && !e.ctrlKey && !e.shiftKey && !e.altKey) {
+      e.preventDefault()
+      const currentIndex = fieldOrder.indexOf(currentField)
+
+      // Trouver le prochain champ visible
+      for (let i = currentIndex + 1; i < fieldOrder.length; i++) {
+        const nextField = fieldOrder[i]
+        const nextRef = refMap[nextField]
+
+        // Sauter les champs conditionnels non affichés
+        if (nextField === 'banque' || nextField === 'numeroPiece' || nextField === 'dateEmission') {
+          if (!['cheque', 'traite'].includes(formModal?.data?.modeReglement)) continue
+        }
+        if (nextField === 'dateEcheance') {
+          if (formModal?.data?.modeReglement !== 'traite') continue
+        }
+
+        if (nextRef?.current) {
+          nextRef.current.focus()
+          return
+        }
+      }
+    }
+
+    // Ctrl+Entrée = champ précédent
+    if (e.key === 'Enter' && e.ctrlKey) {
+      e.preventDefault()
+      const currentIndex = fieldOrder.indexOf(currentField)
+
+      // Trouver le champ précédent visible
+      for (let i = currentIndex - 1; i >= 0; i--) {
+        const prevField = fieldOrder[i]
+        const prevRef = refMap[prevField]
+
+        // Sauter les champs conditionnels non affichés
+        if (prevField === 'banque' || prevField === 'numeroPiece' || prevField === 'dateEmission') {
+          if (!['cheque', 'traite'].includes(formModal?.data?.modeReglement)) continue
+        }
+        if (prevField === 'dateEcheance') {
+          if (formModal?.data?.modeReglement !== 'traite') continue
+        }
+
+        if (prevRef?.current) {
+          prevRef.current.focus()
+          return
+        }
+      }
+    }
+  }
+
+  // Focus automatique sur N° EXP quand le modal s'ouvre
+  useEffect(() => {
+    if (formModal && trackingNumberRef.current) {
+      setTimeout(() => trackingNumberRef.current?.focus(), 100)
+    }
+  }, [formModal])
 
   useEffect(() => {
     const uid = auth.currentUser?.uid
@@ -1773,20 +1882,34 @@ export default function PointeurPage() {
 
               {/* Mode de règlement */}
               <div>
-                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-2">Mode de règlement *</label>
+                <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-2">Mode de règlement * (Entrée pour naviguer, Espace pour sélectionner)</label>
                 <div className="grid grid-cols-2 gap-2">
-                  {REGLEMENT_MODES.filter(m => ['cheque', 'traite'].includes(m.key)).map(m => (
-                    <button type="button" key={m.key}
-                      onClick={() => setFormModal((f: any) => ({ ...f, data: { ...f.data, modeReglement: m.key } }))}
-                      className={`flex flex-col items-center gap-1 px-2 py-3 rounded-xl border-2 text-sm font-semibold transition ${
-                        formModal.data.modeReglement === m.key
-                          ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
-                          : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
-                      }`}>
-                      <span className="text-xl">{m.emoji}</span>
-                      <span className="text-xs">{m.label}</span>
-                    </button>
-                  ))}
+                  <button
+                    ref={modeReglementChequeRef}
+                    type="button"
+                    onClick={() => setFormModal((f: any) => ({ ...f, data: { ...f.data, modeReglement: 'cheque' } }))}
+                    onKeyDown={(e) => handleFormKeyDown(e, 'modeCheque')}
+                    className={`flex flex-col items-center gap-1 px-2 py-3 rounded-xl border-2 text-sm font-semibold transition ${
+                      formModal.data.modeReglement === 'cheque'
+                        ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                        : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+                    }`}>
+                    <span className="text-xl">📋</span>
+                    <span className="text-xs">Contre-Chèque</span>
+                  </button>
+                  <button
+                    ref={modeReglementTraiteRef}
+                    type="button"
+                    onClick={() => setFormModal((f: any) => ({ ...f, data: { ...f.data, modeReglement: 'traite' } }))}
+                    onKeyDown={(e) => handleFormKeyDown(e, 'modeTraite')}
+                    className={`flex flex-col items-center gap-1 px-2 py-3 rounded-xl border-2 text-sm font-semibold transition ${
+                      formModal.data.modeReglement === 'traite'
+                        ? 'border-indigo-600 bg-indigo-50 text-indigo-700'
+                        : 'border-gray-200 bg-gray-50 text-gray-600 hover:border-gray-300'
+                    }`}>
+                    <span className="text-xl">📝</span>
+                    <span className="text-xs">Traite</span>
+                  </button>
                 </div>
               </div>
 
@@ -1794,17 +1917,28 @@ export default function PointeurPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">N° d'expédition</label>
-                  <input type="text" value={formModal.data.trackingNumber}
+                  <input
+                    ref={trackingNumberRef}
+                    type="text"
+                    value={formModal.data.trackingNumber}
                     onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, trackingNumber: e.target.value } }))}
+                    onKeyDown={e => handleFormKeyDown(e, 'trackingNumber')}
                     placeholder="Ex: BGE-2025-001234"
                     className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-indigo-400 focus:outline-none font-mono"
                   />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Montant (DH) *</label>
-                  <input type="number" step="0.01" min="0" value={formModal.data.montant}
+                  <input
+                    ref={montantRef}
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={formModal.data.montant}
                     onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, montant: e.target.value } }))}
-                    placeholder="0.00" required
+                    onKeyDown={e => handleFormKeyDown(e, 'montant')}
+                    placeholder="0.00"
+                    required
                     className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-indigo-400 focus:outline-none"
                   />
                 </div>
@@ -1814,16 +1948,24 @@ export default function PointeurPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Expéditeur *</label>
-                  <input type="text" value={formModal.data.expediteur}
+                  <input
+                    ref={expediteurRef}
+                    type="text"
+                    value={formModal.data.expediteur}
                     onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, expediteur: e.target.value } }))}
+                    onKeyDown={e => handleFormKeyDown(e, 'expediteur')}
                     placeholder="Nom de l'expéditeur"
                     className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-indigo-400 focus:outline-none"
                   />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Tél. expéditeur</label>
-                  <input type="tel" value={formModal.data.expediteurTel}
+                  <input
+                    ref={expediteurTelRef}
+                    type="tel"
+                    value={formModal.data.expediteurTel}
                     onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, expediteurTel: e.target.value } }))}
+                    onKeyDown={e => handleFormKeyDown(e, 'expediteurTel')}
                     placeholder="06XXXXXXXX"
                     className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-indigo-400 focus:outline-none"
                   />
@@ -1834,16 +1976,24 @@ export default function PointeurPage() {
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Destinataire</label>
-                  <input type="text" value={formModal.data.destinataire}
+                  <input
+                    ref={destinataireRef}
+                    type="text"
+                    value={formModal.data.destinataire}
                     onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, destinataire: e.target.value } }))}
+                    onKeyDown={e => handleFormKeyDown(e, 'destinataire')}
                     placeholder="Nom du destinataire"
                     className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-indigo-400 focus:outline-none"
                   />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Tél. destinataire</label>
-                  <input type="tel" value={formModal.data.destinataireTel}
+                  <input
+                    ref={destinataireTelRef}
+                    type="tel"
+                    value={formModal.data.destinataireTel}
                     onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, destinataireTel: e.target.value } }))}
+                    onKeyDown={e => handleFormKeyDown(e, 'destinataireTel')}
                     placeholder="06XXXXXXXX"
                     className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-indigo-400 focus:outline-none"
                   />
@@ -1853,8 +2003,11 @@ export default function PointeurPage() {
               {/* Ville expédition */}
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Ville d'expédition</label>
-                <select value={formModal.data.villeExpedition}
+                <select
+                  ref={villeExpeditionRef}
+                  value={formModal.data.villeExpedition}
                   onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, villeExpedition: e.target.value } }))}
+                  onKeyDown={e => handleFormKeyDown(e, 'villeExpedition')}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-indigo-400 focus:outline-none">
                   <option value="">— Sélectionner une ville —</option>
                   {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
@@ -1867,16 +2020,24 @@ export default function PointeurPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Banque *</label>
-                      <input type="text" value={formModal.data.banque}
+                      <input
+                        ref={banqueRef}
+                        type="text"
+                        value={formModal.data.banque}
                         onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, banque: e.target.value } }))}
+                        onKeyDown={e => handleFormKeyDown(e, 'banque')}
                         placeholder="Ex: Attijariwafa, CIH..."
                         className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-indigo-400 focus:outline-none"
                       />
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">N° Pièce</label>
-                      <input type="text" value={formModal.data.numeroPiece}
+                      <input
+                        ref={numeroPieceRef}
+                        type="text"
+                        value={formModal.data.numeroPiece}
                         onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, numeroPiece: e.target.value } }))}
+                        onKeyDown={e => handleFormKeyDown(e, 'numeroPiece')}
                         placeholder="N° chèque ou traite"
                         className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-indigo-400 focus:outline-none font-mono"
                       />
@@ -1885,16 +2046,24 @@ export default function PointeurPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date d'émission</label>
-                      <input type="date" value={formModal.data.dateEmission}
+                      <input
+                        ref={dateEmissionRef}
+                        type="date"
+                        value={formModal.data.dateEmission}
                         onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, dateEmission: e.target.value } }))}
+                        onKeyDown={e => handleFormKeyDown(e, 'dateEmission')}
                         className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-indigo-400 focus:outline-none"
                       />
                     </div>
                     {formModal.data.modeReglement === 'traite' && (
                       <div>
                         <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date d'échéance</label>
-                        <input type="date" value={formModal.data.dateEcheance}
+                        <input
+                          ref={dateEcheanceRef}
+                          type="date"
+                          value={formModal.data.dateEcheance}
                           onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, dateEcheance: e.target.value } }))}
+                          onKeyDown={e => handleFormKeyDown(e, 'dateEcheance')}
                           className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-indigo-400 focus:outline-none"
                         />
                       </div>
@@ -1906,9 +2075,13 @@ export default function PointeurPage() {
               {/* Notes */}
               <div>
                 <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Notes</label>
-                <textarea value={formModal.data.notes}
+                <textarea
+                  ref={notesRef}
+                  value={formModal.data.notes}
                   onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, notes: e.target.value } }))}
-                  rows={2} placeholder="Observations, remarques..."
+                  onKeyDown={e => handleFormKeyDown(e, 'notes')}
+                  rows={2}
+                  placeholder="Observations, remarques..."
                   className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-indigo-400 focus:outline-none resize-none"
                 />
               </div>

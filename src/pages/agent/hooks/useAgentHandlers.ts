@@ -1381,7 +1381,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     if (!form.receiverName || form.receiverName.trim() === '') {
       errors.push('❌ Nom destinataire')
     }
-    if (!form.receiverAddress || form.receiverAddress.trim() === '') {
+    // Adresse obligatoire seulement si aucun livreur/secteur n'est choisi
+    if ((!form.deliveryDriverId && !form.deliverySectorId) && (!form.receiverAddress || form.receiverAddress.trim() === '')) {
       errors.push('❌ Adresse destinataire')
     }
     if (!form.receiverTel || form.receiverTel.trim() === '') {

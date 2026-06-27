@@ -764,7 +764,13 @@ export default function NewTab() {
               />
             </div>
             <input required placeholder="Téléphone" value={form.receiverTel} onChange={f('receiverTel')} className={inputCls} />
-            <input placeholder="Adresse" value={form.receiverAddress} onChange={f('receiverAddress')} className={inputCls} />
+            <input
+              required={!form.deliveryDriverId && !form.deliverySectorId}
+              placeholder={form.deliveryDriverId || form.deliverySectorId ? "Adresse (optionnel)" : "Adresse"}
+              value={form.receiverAddress}
+              onChange={f('receiverAddress')}
+              className={inputCls}
+            />
             {form.receiverCity && (
               <div className="col-span-2 bg-purple-50 border border-purple-100 rounded-xl p-3 space-y-3">
                 <div>
