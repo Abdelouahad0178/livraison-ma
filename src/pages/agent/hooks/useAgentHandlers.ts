@@ -1381,8 +1381,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     if (!form.receiverName || form.receiverName.trim() === '') {
       errors.push('❌ Nom destinataire')
     }
-    // Adresse obligatoire seulement si aucun livreur/secteur n'est choisi
-    if ((!form.deliveryDriverId && !form.deliverySectorId) && (!form.receiverAddress || form.receiverAddress.trim() === '')) {
+    // Adresse obligatoire seulement si aucun livreur/secteur n'est choisi ET que ce n'est pas "En gare"
+    if ((!form.deliveryDriverId && !form.deliverySectorId && !form.enGare) && (!form.receiverAddress || form.receiverAddress.trim() === '')) {
       errors.push('❌ Adresse destinataire')
     }
     if (!form.receiverTel || form.receiverTel.trim() === '') {
@@ -1466,6 +1466,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         operationDate:        form.operationDate || null,
         agentRole:            profile?.role || 'agent',
         hasRetourBL:          form.hasRetourBL || false,  // ⭐ Retour BL obligatoire
+        enGare:               form.enGare || false,       // 🚉 Livraison en gare
       })
 
       // Créer automatiquement un compte portail pour les particuliers

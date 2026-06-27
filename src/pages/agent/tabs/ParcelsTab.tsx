@@ -693,8 +693,14 @@ export default function ParcelsTab() {
                               📍 {parcel.receiver?.city || parcel.destinationCity || '—'}
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-gray-600 text-xs whitespace-nowrap max-w-[250px] truncate border-r border-gray-100 bg-pink-50/30">
-                            {parcel.receiver?.address || '—'}
+                          <td className="px-4 py-3 text-xs whitespace-nowrap max-w-[250px] truncate border-r border-gray-100 bg-pink-50/30">
+                            {parcel.enGare ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-gradient-to-r from-amber-100 to-orange-100 border border-amber-300 text-orange-700 rounded-lg font-bold">
+                                🚉 En gare
+                              </span>
+                            ) : (
+                              <span className="text-gray-600">{parcel.receiver?.address || '—'}</span>
+                            )}
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
                             <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-100 text-purple-700 rounded-lg font-semibold">
@@ -958,7 +964,12 @@ export default function ParcelsTab() {
                               <span>{parcel.sender.address}{parcel.sender.city ? `, ${parcel.sender.city}` : ''}</span>
                             </div>
                           )}
-                          {parcel.receiver?.address && (
+                          {parcel.enGare ? (
+                            <div className="text-xs flex items-center gap-1.5 bg-gradient-to-r from-amber-100 to-orange-100 border border-amber-300 rounded-lg px-2 py-1.5">
+                              <span className="text-lg">🚉</span>
+                              <span className="font-bold text-orange-700">Livraison en gare</span>
+                            </div>
+                          ) : parcel.receiver?.address && (
                             <div className="text-xs text-gray-500 flex items-start gap-1">
                               <span className="shrink-0 text-orange-400">📥</span>
                               <span>{parcel.receiver.address}{parcel.receiver.city ? `, ${parcel.receiver.city}` : ''}</span>

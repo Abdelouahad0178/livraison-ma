@@ -20,6 +20,7 @@ const EMPTY_FORM = {
   portPrice: '',
   clientId: '', clientName: '', autoDebit: false,
   deliverySectorId: '', deliveryDriverId: '',
+  enGare: false,
   operationDate: todayStr(),
 }
 
@@ -853,14 +854,49 @@ export default function NewTab() {
             />
             <input
               id="receiverAddress"
-              required={!form.deliveryDriverId && !form.deliverySectorId}
-              placeholder={form.deliveryDriverId || form.deliverySectorId ? "Adresse (optionnel)" : "Adresse"}
+              required={!form.deliveryDriverId && !form.deliverySectorId && !form.enGare}
+              placeholder={form.deliveryDriverId || form.deliverySectorId || form.enGare ? "Adresse (optionnel)" : "Adresse"}
               value={form.receiverAddress}
               onChange={f('receiverAddress')}
               onKeyDown={handleKeyNav}
               className={inputCls}
             />
-            {form.receiverCity && (
+
+            {/* Option En gare */}
+            <div className="col-span-2">
+              <label className="flex items-center gap-3 px-4 py-3 bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-200 rounded-xl cursor-pointer hover:shadow-md transition-all group">
+                <input
+                  type="checkbox"
+                  checked={form.enGare || false}
+                  onChange={e => setForm((p: any) => ({
+                    ...p,
+                    enGare: e.target.checked,
+                    deliverySectorId: e.target.checked ? '' : p.deliverySectorId,
+                    deliveryDriverId: e.target.checked ? '' : p.deliveryDriverId,
+                  }))}
+                  onKeyDown={handleKeyNav}
+                  className="w-5 h-5 text-orange-600 border-2 border-amber-300 rounded focus:ring-orange-500 focus:ring-2"
+                />
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-2xl">🚉</span>
+                    <span className="font-bold text-amber-900 group-hover:text-orange-600 transition-colors">
+                      Livraison en gare
+                    </span>
+                  </div>
+                  <p className="text-xs text-amber-700 mt-1">
+                    Le colis sera récupéré par le destinataire à la gare. L'adresse n'est pas nécessaire.
+                  </p>
+                </div>
+                {form.enGare && (
+                  <div className="px-3 py-1.5 bg-orange-500 text-white rounded-lg font-bold text-xs shadow-md">
+                    ACTIVÉ
+                  </div>
+                )}
+              </label>
+            </div>
+
+            {form.receiverCity && !form.enGare && (
               <div className="col-span-2 bg-purple-50 border border-purple-100 rounded-xl p-3 space-y-3">
                 <div>
                   <p className="text-xs font-bold text-purple-700 uppercase tracking-wide">Secteur de livraison destination</p>
