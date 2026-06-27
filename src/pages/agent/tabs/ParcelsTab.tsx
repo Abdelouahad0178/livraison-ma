@@ -1,9 +1,10 @@
 import {
   AlertTriangle, Banknote, Calendar, Car, Check, CheckSquare,
   ChevronDown, ChevronLeft, ChevronRight, Edit2, Filter,
-  LayoutGrid, Lock, Package, Printer, Search, Trash2, Truck,
+  LayoutGrid, Lock, Package, Printer, Search, Table2, Trash2, Truck,
   Unlock, User, X,
 } from 'lucide-react'
+import { useState } from 'react'
 import { deleteField } from 'firebase/firestore'
 import {
   loadReturnedParcelOnTruck, validateReturnArrival, getMoreAgentParcels,
@@ -192,6 +193,9 @@ export default function ParcelsTab() {
       )
       .sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''))
   })()
+
+  // État pour basculer entre vue cartes et vue tableau
+  const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards')
 
   return (
     <>
@@ -421,19 +425,48 @@ export default function ParcelsTab() {
             <div className="space-y-3">
               <div className="flex items-center justify-between px-1">
                 <p className="text-xs text-gray-400">{filteredParcels.length} expédition(s)</p>
-                <button
-                  onClick={() => {
-                    const selectedDriver = driverFilter !== 'all'
-                      ? availableDrivers.find((d: any) => d.id === driverFilter)
-                      : null
-                    handlePrintTable(filteredParcels, selectedDriver?.name)
-                  }}
-                  disabled={filteredParcels.length === 0}
-                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
-                >
-                  <Printer className="w-3.5 h-3.5" />
-                  Imprimer tableau
-                </button>
+                <div className="flex items-center gap-2">
+                  {/* Toggle vue cartes / tableau */}
+                  <div className="flex items-center bg-gray-100 rounded-lg p-0.5">
+                    <button
+                      onClick={() => setViewMode('cards')}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition ${
+                        viewMode === 'cards'
+                          ? 'bg-white text-blue-600 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      <LayoutGrid className="w-3.5 h-3.5" />
+                      Cartes
+                    </button>
+                    <button
+                      onClick={() => setViewMode('table')}
+                      className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition ${
+                        viewMode === 'table'
+                          ? 'bg-white text-blue-600 shadow-sm'
+                          : 'text-gray-500 hover:text-gray-700'
+                      }`}
+                    >
+                      <Table2 className="w-3.5 h-3.5" />
+                      Tableau
+                    </button>
+                  </div>
+
+                  {/* Bouton imprimer */}
+                  <button
+                    onClick={() => {
+                      const selectedDriver = driverFilter !== 'all'
+                        ? availableDrivers.find((d: any) => d.id === driverFilter)
+                        : null
+                      handlePrintTable(filteredParcels, selectedDriver?.name)
+                    }}
+                    disabled={filteredParcels.length === 0}
+                    className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    Imprimer
+                  </button>
+                </div>
               </div>
 
               {/* NOUVELLE POLITIQUE : Plus de validation nécessaire - section retirée */}
@@ -554,7 +587,154 @@ export default function ParcelsTab() {
           const safePage = Math.min(parcelPage, totalPages - 1)
           const pagedParcels = filteredParcels.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE)
           const isLastPage = safePage >= totalPages - 1
-          return (
+          return viewMode === 'table' ? (
+            // ═══════════════════════════════════════════════════════════════════
+            // VUE TABLEAU (Excel-like avec scroll horizontal)
+            // ═══════════════════════════════════════════════════════════════════
+            <div className="space-y-4">
+              <div className="overflow-x-auto bg-white rounded-xl shadow border border-gray-200">
+                <table className="w-full text-xs">
+                  <thead className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">N° EXP</th>
+                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Date</th>
+                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Statut</th>
+                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Expéditeur</th>
+                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Tél Exp.</th>
+                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Ville Exp.</th>
+                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Destinataire</th>
+                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Tél Dest.</th>
+                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Ville Dest.</th>
+                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Adresse</th>
+                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Service</th>
+                      <th className="px-3 py-3 text-right font-bold text-gray-700 whitespace-nowrap">Nb Colis</th>
+                      <th className="px-3 py-3 text-right font-bold text-gray-700 whitespace-nowrap">Poids (kg)</th>
+                      <th className="px-3 py-3 text-right font-bold text-gray-700 whitespace-nowrap">Port (DH)</th>
+                      <th className="px-3 py-3 text-right font-bold text-gray-700 whitespace-nowrap">COD (DH)</th>
+                      <th className="px-3 py-3 text-left font-bold text-gray-700 whitespace-nowrap">Livreur</th>
+                      <th className="px-3 py-3 text-center font-bold text-gray-700 whitespace-nowrap">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {pagedParcels.map((parcel: any) => {
+                      const isOwn = canActAsParcelOwner(parcel)
+                      const sc = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
+                      const serviceType = SERVICE_TYPES.find(st => st.key === parcel.serviceType)
+                      const driver = drivers?.find((d: any) => d.id === parcel.deliveryDriverId || d.id === parcel.chauffeurId)
+
+                      return (
+                        <tr key={parcel.id} className={`hover:bg-gray-50 transition ${isOwn ? 'bg-blue-50/30' : ''}`}>
+                          <td className="px-3 py-3 font-mono font-bold text-blue-600 whitespace-nowrap">{parcel.nic || '—'}</td>
+                          <td className="px-3 py-3 text-gray-600 whitespace-nowrap">
+                            {parcel.createdAt ? new Date(parcel.createdAt.seconds * 1000).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit' }) : '—'}
+                          </td>
+                          <td className="px-3 py-3 whitespace-nowrap">
+                            <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${sc}`}>
+                              {parcel.status || 'Initialisé'}
+                            </span>
+                          </td>
+                          <td className="px-3 py-3 font-medium text-gray-800 whitespace-nowrap max-w-[200px] truncate">{parcel.sender?.name || '—'}</td>
+                          <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{parcel.sender?.tel || '—'}</td>
+                          <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{parcel.sender?.city || '—'}</td>
+                          <td className="px-3 py-3 font-medium text-gray-800 whitespace-nowrap max-w-[200px] truncate">{parcel.receiver?.name || '—'}</td>
+                          <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{parcel.receiver?.tel || '—'}</td>
+                          <td className="px-3 py-3 text-gray-600 whitespace-nowrap">{parcel.receiver?.city || parcel.destinationCity || '—'}</td>
+                          <td className="px-3 py-3 text-gray-600 whitespace-nowrap max-w-[250px] truncate">{parcel.receiver?.address || '—'}</td>
+                          <td className="px-3 py-3 whitespace-nowrap">
+                            <span className="inline-flex items-center gap-1">
+                              {serviceType?.emoji} {serviceType?.label || 'Simple'}
+                            </span>
+                          </td>
+                          <td className="px-3 py-3 text-right font-semibold text-gray-700 whitespace-nowrap">{parcel.nbColis || 1}</td>
+                          <td className="px-3 py-3 text-right text-gray-600 whitespace-nowrap">{parcel.weight ? `${parcel.weight}` : '—'}</td>
+                          <td className="px-3 py-3 text-right font-semibold text-gray-900 whitespace-nowrap">{parcel.price ? `${parcel.price} DH` : '—'}</td>
+                          <td className="px-3 py-3 text-right font-semibold text-green-700 whitespace-nowrap">
+                            {parcel.codAmount && parcel.codAmount > 0 ? `${parcel.codAmount} DH` : '—'}
+                          </td>
+                          <td className="px-3 py-3 text-gray-600 whitespace-nowrap max-w-[150px] truncate">{driver?.name || '—'}</td>
+                          <td className="px-3 py-3 whitespace-nowrap">
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                onClick={() => handlePrintTicket(parcel)}
+                                className="p-1.5 rounded-lg hover:bg-blue-50 text-blue-600 transition"
+                                title="Imprimer"
+                              >
+                                <Printer className="w-4 h-4" />
+                              </button>
+                              {canEditParcelDetails(parcel) && (
+                                <button
+                                  onClick={() => handleEditClick(parcel)}
+                                  className="p-1.5 rounded-lg hover:bg-purple-50 text-purple-600 transition"
+                                  title="Modifier"
+                                >
+                                  <Edit2 className="w-4 h-4" />
+                                </button>
+                              )}
+                              {isOwn && (
+                                <button
+                                  onClick={() => handleDeleteClick(parcel)}
+                                  className="p-1.5 rounded-lg hover:bg-red-50 text-red-600 transition"
+                                  title="Supprimer"
+                                >
+                                  <Trash2 className="w-4 h-4" />
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Pagination pour vue tableau */}
+              {filteredParcels.length > PAGE_SIZE && (() => {
+                const goTo = (p: number) => { setParcelPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }) }
+                const pages: number[] = []
+                for (let i = 0; i < totalPages; i++) {
+                  if (i === 0 || i === totalPages - 1 || Math.abs(i - safePage) <= 1) pages.push(i)
+                }
+                const items: (number | string)[] = []
+                pages.forEach((p, idx) => {
+                  if (idx > 0 && p - pages[idx - 1] > 1) items.push('…')
+                  items.push(p)
+                })
+                return (
+                  <div className="flex items-center justify-between px-1">
+                    <span className="text-xs text-gray-400">
+                      {filteredParcels.length}{hasMoreParcels ? '+' : ''} expédition{filteredParcels.length > 1 ? 's' : ''}
+                    </span>
+                    <div className="flex items-center gap-1">
+                      <button onClick={() => goTo(Math.max(0, safePage - 1))} disabled={safePage === 0}
+                        className="p-2 rounded-xl border border-gray-200 hover:bg-gray-50 disabled:opacity-30 transition"
+                      ><ChevronLeft className="w-4 h-4 text-gray-600" /></button>
+
+                      {items.map((item, idx) =>
+                        item === '…'
+                          ? <span key={`dots-${idx}`} className="px-1 text-gray-400 text-sm select-none">…</span>
+                          : <button key={item} onClick={() => goTo(Number(item))}
+                              className={`min-w-[36px] h-9 rounded-xl text-sm font-semibold transition border ${
+                                item === safePage
+                                  ? 'bg-blue-600 text-white border-blue-600'
+                                  : 'bg-white text-gray-600 border-gray-200 hover:bg-blue-50 hover:border-blue-300'
+                              }`}
+                            >{Number(item) + 1}</button>
+                      )}
+
+                      <button onClick={() => goTo(Math.min(totalPages - 1, safePage + 1))} disabled={isLastPage}
+                        className="p-2 rounded-xl border border-gray-200 hover:bg-gray-50 disabled:opacity-30 transition"
+                      ><ChevronRight className="w-4 h-4 text-gray-600" /></button>
+                    </div>
+                    <span className="text-xs text-gray-400">Page {safePage + 1} / {totalPages}</span>
+                  </div>
+                )
+              })()}
+            </div>
+          ) : (
+            // ═══════════════════════════════════════════════════════════════════
+            // VUE CARTES (existante)
+            // ═══════════════════════════════════════════════════════════════════
           <div className="space-y-2">
             {pagedParcels.map((parcel: any) => {
               const isOwn = canActAsParcelOwner(parcel)
