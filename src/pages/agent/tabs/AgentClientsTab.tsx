@@ -176,6 +176,33 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
     setShowLivreursModal(true)
   }
 
+  const handleCleanupInvalidLivreurs = async () => {
+    if (!selectedClient) return
+
+    const validLivreurs = getValidLivreurIds(selectedClient.livreurIds)
+
+    // Filtrer uniquement les IDs qui correspondent à de vrais livreurs
+    const realLivreurs = validLivreurs.filter(id =>
+      users.some(u => u.id === id)
+    )
+
+    if (realLivreurs.length === validLivreurs.length) {
+      setMsg({ type: 'info', text: 'ℹ️ Aucun ID invalide à nettoyer' })
+      return
+    }
+
+    try {
+      await updateClient(selectedClient.id, { livreurIds: realLivreurs })
+      setSelectedClient({ ...selectedClient, livreurIds: realLivreurs })
+      setMsg({
+        type: 'success',
+        text: `✅ ${validLivreurs.length - realLivreurs.length} ID(s) invalide(s) supprimé(s)`
+      })
+    } catch (error: any) {
+      setMsg({ type: 'error', text: '❌ Erreur: ' + error.message })
+    }
+  }
+
   const handleSetPrimaryLivreur = async (livreurId: string) => {
     if (!selectedClient) return
 
@@ -676,6 +703,11 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
                 )
               }
 
+              const realLivreurs = validLivreurs.filter(id =>
+                users.some(u => u.id === id)
+              )
+              const hasInvalidIds = validLivreurs.length > realLivreurs.length
+
               return (
                 <div className="space-y-3">
                   <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm">
@@ -683,6 +715,27 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
                       ⭐ Le premier livreur de la liste est utilisé par défaut lors de la création de colis
                     </p>
                   </div>
+
+                  {hasInvalidIds && (
+                    <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex-1">
+                          <p className="text-sm font-semibold text-yellow-800">
+                            ⚠️ IDs invalides détectés
+                          </p>
+                          <p className="text-xs text-yellow-700 mt-1">
+                            {validLivreurs.length - realLivreurs.length} ID(s) ne correspondent pas à des livreurs valides
+                          </p>
+                        </div>
+                        <button
+                          onClick={handleCleanupInvalidLivreurs}
+                          className="px-3 py-1.5 bg-yellow-600 hover:bg-yellow-700 text-white text-sm font-semibold rounded-lg transition whitespace-nowrap"
+                        >
+                          Nettoyer
+                        </button>
+                      </div>
+                    </div>
+                  )}
 
                   {validLivreurs.map((livreurId, index) => {
                     const driver = users.find(u => u.id === livreurId)
