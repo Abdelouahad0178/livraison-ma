@@ -915,7 +915,7 @@ export default function NewTab() {
                       className={selectCls}
                     >
                       <option value="">Secteur à choisir par destination</option>
-                      {(destinationSectors as any[]).map((s: any) => (
+                      {(destinationSectors || []).map((s: any) => (
                         <option key={s.id} value={s.id}>{s.code}{s.name && s.name !== s.code ? ` - ${s.name}` : ''}</option>
                       ))}
                     </select>
@@ -929,14 +929,14 @@ export default function NewTab() {
                       className={selectCls}
                     >
                       <option value="">Livreur de destination</option>
-                      {(destinationDrivers as any[]).map((d: any) => (
+                      {(destinationDrivers || []).map((d: any) => (
                         <option key={d.id} value={d.id}>{d.name}{d.tel ? ` - ${d.tel}` : ''}</option>
                       ))}
                     </select>
                     <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-gray-400 pointer-events-none" />
                   </div>
                 </div>
-                {destinationSectors.length === 0 && (
+                {(destinationSectors || []).length === 0 && (
                   <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
                     Aucun secteur enregistré pour cette ville. L'agence destination pourra assigner le livreur après réception.
                   </p>
