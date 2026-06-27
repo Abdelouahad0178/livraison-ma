@@ -1115,31 +1115,44 @@ export default function DriverPage() {
               })}
             </div>}
 
-            {/* Toggle vue cartes / tableau */}
+            {/* Toggle vue cartes / tableau + bouton imprimer */}
             <div className="flex items-center justify-between px-1">
               <p className="text-xs text-gray-400">{filteredParcels.length} colis</p>
-              <div className="flex items-center bg-gray-800 rounded-lg p-0.5 border border-gray-700">
+              <div className="flex items-center gap-2">
+                {/* Toggle Cartes/Tableau */}
+                <div className="flex items-center bg-gray-800 rounded-lg p-0.5 border border-gray-700">
+                  <button
+                    onClick={() => setViewMode('cards')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition ${
+                      viewMode === 'cards'
+                        ? 'bg-gray-700 text-blue-400 shadow-sm'
+                        : 'text-gray-500 hover:text-gray-300'
+                    }`}
+                  >
+                    <LayoutGrid className="w-3.5 h-3.5" />
+                    Cartes
+                  </button>
+                  <button
+                    onClick={() => setViewMode('table')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition ${
+                      viewMode === 'table'
+                        ? 'bg-gray-700 text-blue-400 shadow-sm'
+                        : 'text-gray-500 hover:text-gray-300'
+                    }`}
+                  >
+                    <Table2 className="w-3.5 h-3.5" />
+                    Tableau
+                  </button>
+                </div>
+
+                {/* Bouton Imprimer */}
                 <button
-                  onClick={() => setViewMode('cards')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition ${
-                    viewMode === 'cards'
-                      ? 'bg-gray-700 text-blue-400 shadow-sm'
-                      : 'text-gray-500 hover:text-gray-300'
-                  }`}
+                  onClick={handlePrintMyDeliveries}
+                  disabled={filteredParcels.length === 0}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-40 disabled:cursor-not-allowed transition shadow-md"
                 >
-                  <LayoutGrid className="w-3.5 h-3.5" />
-                  Cartes
-                </button>
-                <button
-                  onClick={() => setViewMode('table')}
-                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition ${
-                    viewMode === 'table'
-                      ? 'bg-gray-700 text-blue-400 shadow-sm'
-                      : 'text-gray-500 hover:text-gray-300'
-                  }`}
-                >
-                  <Table2 className="w-3.5 h-3.5" />
-                  Tableau
+                  <Printer className="w-3.5 h-3.5" />
+                  Imprimer
                 </button>
               </div>
             </div>
