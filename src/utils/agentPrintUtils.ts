@@ -102,7 +102,7 @@ export function printCharge(groups: any[], profileData: any): void {
   }
 }
 
-export async function printTable(parcels: any[], driverName?: string): Promise<void> {
+export async function printTable(parcels: any[], driverName?: string, profile?: any): Promise<void> {
   if (!parcels.length) return
 
   // Charger les signatures depuis Firestore
@@ -198,10 +198,12 @@ export async function printTable(parcels: any[], driverName?: string): Promise<v
     <div>
       <div class="logo-text">BG EXPRESS</div>
       <div class="logo-sub">Tableau des expéditions</div>
+      ${profile?.agencyAddress ? `<div style="font-size:8pt;color:#666;margin-top:4px">${profile.agencyAddress}</div>` : ''}
     </div>
     <div class="meta">
       <div>Date : <strong>${printDate}</strong></div>
       ${driverName ? `<div>Livreur : <strong>${driverName}</strong></div>` : ''}
+      ${profile?.city ? `<div>Agence : <strong>${profile.city}</strong></div>` : ''}
       <div>Nombre de colis : <strong>${parcels.length}</strong></div>
       <div>Total RETOUR FOND : <strong>${totalCod.toLocaleString('fr-MA')} DH</strong></div>
       <div>Total Port : <strong>${totalPort.toLocaleString('fr-MA')} DH</strong></div>

@@ -68,7 +68,7 @@ export function printDeliveryList(groups: DeliveryGroup[], profile: DynamicData 
             <img src="${logoUrl}" onerror="this.style.display='none'" />
             <div>
               <div class="brand-name">BG EXPRESS</div>
-              <div class="muted">N°19, Rue 5, Hay Tissir2 - Casablanca</div>
+              ${profile?.agencyAddress ? `<div class="muted">${esc(profile.agencyAddress)}</div>` : '<div class="muted">N°19, Rue 5, Hay Tissir2 - Casablanca</div>'}
               <div class="muted">0522 62 92 89 | 0661 97 86 12</div>
             </div>
           </div>
@@ -80,6 +80,7 @@ export function printDeliveryList(groups: DeliveryGroup[], profile: DynamicData 
             <div>Date : <strong>${esc(printDate)}</strong></div>
             <div>Chef/agent : <strong>${esc(managerName)}</strong></div>
             <div>Livreur : <strong>${esc(group.name || '-')}</strong></div>
+            ${group.secteur || group.secteurCode || profile?.secteur || profile?.secteurCode ? `<div>Secteur : <strong>${esc(group.secteur || group.secteurCode || profile?.secteur || profile?.secteurCode)}</strong></div>` : ''}
             ${group.matricule ? `<div>Véhicule : <strong>${esc(group.matricule)}</strong></div>` : ''}
           </div>
         </header>

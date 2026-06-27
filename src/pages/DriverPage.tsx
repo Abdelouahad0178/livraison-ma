@@ -399,6 +399,7 @@ export default function DriverPage() {
       id: uid,
       name: profile?.name || workerLabel,
       matricule: profile?.matricule || '',
+      secteur: profile?.secteur || profile?.secteurCode || '',
       parcels: enriched,
     }], profile, {
       title: 'LISTE DES LIVRAISONS',
