@@ -57,6 +57,15 @@ export default function NewTab() {
   const [editableParcel, setEditableParcel] = useState<any>(null)
   const [isConfirmed, setIsConfirmed] = useState(false)
 
+  // Navigation clavier pour le formulaire
+  const handleKeyNav = (e: React.KeyboardEvent, currentId: string, nextId: string) => {
+    if (e.key === 'Enter' && !e.ctrlKey) {
+      e.preventDefault()
+      const nextField = document.getElementById(nextId) || document.querySelector(`[data-field="${nextId}"]`)
+      if (nextField) (nextField as HTMLElement).focus()
+    }
+  }
+
   // Intercepter la création du colis pour afficher la modal de confirmation
   useEffect(() => {
     if (createdParcel && !showConfirmModal && !pendingParcel && !isConfirmed) {
@@ -689,12 +698,27 @@ export default function NewTab() {
               />
             </div>
 
-            <input required placeholder="Téléphone" value={form.senderTel} onChange={f('senderTel')} className={inputCls} />
+            <input
+              id="senderTel"
+              required
+              placeholder="Téléphone"
+              value={form.senderTel}
+              onChange={f('senderTel')}
+              onKeyDown={(e) => handleKeyNav(e, 'senderTel', 'senderAddress')}
+              className={inputCls}
+            />
             <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl border border-gray-200 bg-gray-100 text-sm font-semibold text-gray-700">
               <MapPin className="w-4 h-4 text-gray-400 shrink-0" />
               {form.senderCity || '—'}
             </div>
-            <input placeholder="Adresse" value={form.senderAddress} onChange={f('senderAddress')} className={`${inputCls} col-span-2`} />
+            <input
+              id="senderAddress"
+              placeholder="Adresse"
+              value={form.senderAddress}
+              onChange={f('senderAddress')}
+              onKeyDown={(e) => handleKeyNav(e, 'sender Address', 'receiverCity')}
+              className={`${inputCls} col-span-2`}
+            />
           </div>
         </section>
 
@@ -718,6 +742,7 @@ export default function NewTab() {
             {/* Ville de destination - PREMIER CHAMP */}
             <div className="relative col-span-2">
               <select
+                id="receiverCity"
                 required
                 value={form.receiverCity}
                 onChange={e => setForm((p: any) => ({
@@ -730,6 +755,7 @@ export default function NewTab() {
                   deliverySectorId: '',
                   deliveryDriverId: '',
                 }))}
+                onKeyDown={(e) => handleKeyNav(e, 'receiverCity', 'receiverTel')}
                 className={selectCls}
               >
                 <option value="">Ville de destination</option>
@@ -763,12 +789,22 @@ export default function NewTab() {
                 className={inputCls}
               />
             </div>
-            <input required placeholder="Téléphone" value={form.receiverTel} onChange={f('receiverTel')} className={inputCls} />
             <input
+              id="receiverTel"
+              required
+              placeholder="Téléphone"
+              value={form.receiverTel}
+              onChange={f('receiverTel')}
+              onKeyDown={(e) => handleKeyNav(e, 'receiverTel', 'receiverAddress')}
+              className={inputCls}
+            />
+            <input
+              id="receiverAddress"
               required={!form.deliveryDriverId && !form.deliverySectorId}
               placeholder={form.deliveryDriverId || form.deliverySectorId ? "Adresse (optionnel)" : "Adresse"}
               value={form.receiverAddress}
               onChange={f('receiverAddress')}
+              onKeyDown={(e) => handleKeyNav(e, 'receiverAddress', 'weight')}
               className={inputCls}
             />
             {form.receiverCity && (
