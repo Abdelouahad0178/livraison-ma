@@ -669,6 +669,7 @@ export default function NewTab() {
               <ClientAutocomplete
                 type="expediteur"
                 searchFunction={searchExpediteurs}
+                filterCity={profile?.city}
                 value={form.senderName}
                 onChange={(value) => setForm((p: any) => ({ ...p, senderName: value }))}
                 onSelect={(client: Client | null) => {
@@ -719,6 +720,7 @@ export default function NewTab() {
               <ClientAutocomplete
                 type="destinataire"
                 searchFunction={searchDestinataires}
+                filterCity={form.receiverCity || undefined}
                 value={form.receiverName}
                 onChange={(value) => setForm((p: any) => ({ ...p, receiverName: value, receiverClientId: '' }))}
                 onSelect={(client: Client | null) => {

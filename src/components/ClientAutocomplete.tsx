@@ -3,12 +3,13 @@ import { Client } from '../firebase/clients'
 
 interface ClientAutocompleteProps {
   type: 'expediteur' | 'destinataire'
-  searchFunction: (term: string) => Promise<Client[]>
+  searchFunction: (term: string, filterCity?: string) => Promise<Client[]>
   onSelect: (client: Client | null) => void
   value: string
   onChange: (value: string) => void
   placeholder?: string
   className?: string
+  filterCity?: string
 }
 
 export default function ClientAutocomplete({
@@ -18,7 +19,8 @@ export default function ClientAutocomplete({
   value,
   onChange,
   placeholder,
-  className = ''
+  className = '',
+  filterCity
 }: ClientAutocompleteProps) {
   const [suggestions, setSuggestions] = useState<Client[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
@@ -45,7 +47,7 @@ export default function ClientAutocomplete({
 
       setLoading(true)
       try {
-        const results = await searchFunction(value)
+        const results = await searchFunction(value, filterCity)
         setSuggestions(results)
         setShowSuggestions(results.length > 0)
       } catch (error) {
@@ -58,7 +60,7 @@ export default function ClientAutocomplete({
 
     const timer = setTimeout(searchClients, 300)
     return () => clearTimeout(timer)
-  }, [value, searchFunction])
+  }, [value, searchFunction, filterCity])
 
   const handleSelect = (client: Client) => {
     onChange(client.name)

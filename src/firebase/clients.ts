@@ -492,7 +492,7 @@ export async function ensurePortalClient({ uid, email, name, tel, city, address,
 
 // Recherche clients expéditeurs avec autocomplétion
 // Pour l'instant, tous les clients peuvent être expéditeurs
-export async function searchExpediteurs(searchTerm: string): Promise<Client[]> {
+export async function searchExpediteurs(searchTerm: string, filterCity?: string): Promise<Client[]> {
   const normalizedSearch = searchTerm.toLowerCase().trim()
   if (!normalizedSearch) return []
 
@@ -515,12 +515,16 @@ export async function searchExpediteurs(searchTerm: string): Promise<Client[]> {
   // Combiner les deux sources
   const allClients = [...firestoreClients, ...localClients]
 
-  // Filtrer et trier côté client
-  const filtered = allClients.filter(c =>
-    c.name.toLowerCase().includes(normalizedSearch) ||
-    c.tel?.includes(normalizedSearch) ||
-    c.address?.toLowerCase().includes(normalizedSearch)
-  )
+  // Filtrer par recherche et optionnellement par ville
+  const filtered = allClients.filter(c => {
+    const matchSearch = c.name.toLowerCase().includes(normalizedSearch) ||
+      c.tel?.includes(normalizedSearch) ||
+      c.address?.toLowerCase().includes(normalizedSearch)
+
+    const matchCity = !filterCity || c.city === filterCity
+
+    return matchSearch && matchCity
+  })
 
   filtered.sort((a, b) => a.name.localeCompare(b.name))
   return filtered.slice(0, 20)
@@ -528,7 +532,7 @@ export async function searchExpediteurs(searchTerm: string): Promise<Client[]> {
 
 // Recherche clients destinataires avec autocomplétion
 // Pour l'instant, tous les clients peuvent être destinataires
-export async function searchDestinataires(searchTerm: string): Promise<Client[]> {
+export async function searchDestinataires(searchTerm: string, filterCity?: string): Promise<Client[]> {
   const normalizedSearch = searchTerm.toLowerCase().trim()
   if (!normalizedSearch) return []
 
@@ -551,12 +555,16 @@ export async function searchDestinataires(searchTerm: string): Promise<Client[]>
   // Combiner les deux sources
   const allClients = [...firestoreClients, ...localClients]
 
-  // Filtrer et trier côté client
-  const filtered = allClients.filter(c =>
-    c.name.toLowerCase().includes(normalizedSearch) ||
-    c.tel?.includes(normalizedSearch) ||
-    c.address?.toLowerCase().includes(normalizedSearch)
-  )
+  // Filtrer par recherche et optionnellement par ville
+  const filtered = allClients.filter(c => {
+    const matchSearch = c.name.toLowerCase().includes(normalizedSearch) ||
+      c.tel?.includes(normalizedSearch) ||
+      c.address?.toLowerCase().includes(normalizedSearch)
+
+    const matchCity = !filterCity || c.city === filterCity
+
+    return matchSearch && matchCity
+  })
 
   filtered.sort((a, b) => a.name.localeCompare(b.name))
   return filtered.slice(0, 20)
