@@ -1415,6 +1415,30 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       }
       const selectedDeliverySector = allSectors.find((sec: any) => sec.id === form.deliverySectorId)
       const selectedDeliveryDriver = drivers.find((d: any) => d.id === form.deliveryDriverId)
+
+      // Sauvegarder les clients de passage localement (si ce ne sont pas des clients Firestore)
+      const { saveLocalClient } = await import('../../../utils/localClients')
+
+      // Sauvegarder expéditeur localement si pas de clientId Firestore
+      if (!form.clientId && form.senderName && form.senderTel) {
+        saveLocalClient({
+          name: form.senderName,
+          tel: form.senderTel,
+          address: form.senderAddress || '',
+          city: form.senderCity || '',
+        })
+      }
+
+      // Sauvegarder destinataire localement
+      if (form.receiverName && form.receiverTel) {
+        saveLocalClient({
+          name: form.receiverName,
+          tel: form.receiverTel,
+          address: form.receiverAddress || '',
+          city: form.receiverCity || '',
+        })
+      }
+
       const { createParcel } = await import('../../../firebase/firestore')
       const parcel = await createParcel({
         sender:        { name: form.senderName, nic: form.senderNic, address: form.senderAddress, tel: form.senderTel, city: form.senderCity },

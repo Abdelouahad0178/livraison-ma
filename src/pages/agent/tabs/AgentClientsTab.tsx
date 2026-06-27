@@ -109,15 +109,19 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
   const handleDelete = async (clientId: string) => {
     if (deleteConfirm !== clientId) {
       setDeleteConfirm(clientId)
+      setMsg({ type: 'info', text: '⚠️ Cliquez encore une fois pour confirmer la suppression' })
       setTimeout(() => setDeleteConfirm(null), 3000)
       return
     }
     try {
+      setMsg({ type: 'info', text: '🔄 Suppression en cours...' })
       await deleteClient(clientId)
       setDeleteConfirm(null)
-      setMsg({ type: 'success', text: '✅ Client supprimé' })
+      setMsg({ type: 'success', text: '✅ Client supprimé avec succès' })
     } catch (error: any) {
-      setMsg({ type: 'error', text: '❌ ' + error.message })
+      console.error('Erreur suppression client:', error)
+      setMsg({ type: 'error', text: '❌ Erreur: ' + (error.message || 'Impossible de supprimer') })
+      setDeleteConfirm(null)
     }
   }
 
@@ -232,10 +236,11 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
                   </button>
                   <button
                     onClick={() => handleDelete(client.id)}
-                    className={`p-2 ${deleteConfirm === client.id ? 'bg-red-700' : 'bg-red-600 hover:bg-red-700'} text-white rounded-lg`}
-                    title={deleteConfirm === client.id ? 'Cliquer pour confirmer' : 'Supprimer'}
+                    className={`px-3 py-2 ${deleteConfirm === client.id ? 'bg-red-700 animate-pulse' : 'bg-red-600 hover:bg-red-700'} text-white rounded-lg font-semibold transition flex items-center gap-2`}
+                    title={deleteConfirm === client.id ? 'Cliquer pour confirmer la suppression' : 'Supprimer le client'}
                   >
                     <Trash2 className="w-4 h-4" />
+                    {deleteConfirm === client.id && <span className="text-xs">Confirmer?</span>}
                   </button>
                 </div>
               </div>

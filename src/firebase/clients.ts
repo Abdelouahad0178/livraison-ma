@@ -48,6 +48,7 @@ export interface Client {
   secteurId?: string
   secteurName?: string
   livreurIds?: string[]
+  isLocal?: boolean // true = client de passage (localStorage), false/undefined = client régulier (Firestore)
 }
 
 const rowFromDoc = (d: { id: string; data: () => DynamicData }): FirestoreRow => ({ id: d.id, ...d.data() })
@@ -495,12 +496,27 @@ export async function searchExpediteurs(searchTerm: string): Promise<Client[]> {
   const normalizedSearch = searchTerm.toLowerCase().trim()
   if (!normalizedSearch) return []
 
+  // Rechercher dans Firestore (clients réguliers enregistrés par chef d'agence)
   const q = query(collection(db, 'clients'), limit(200))
   const snap = await getDocs(q)
-  const clients = snap.docs.map(d => ({ id: d.id, ...d.data() } as Client))
+  const firestoreClients = snap.docs.map(d => ({ id: d.id, ...d.data() } as Client))
+
+  // Rechercher dans les clients locaux (clients de passage)
+  const { searchLocalClients } = await import('../utils/localClients')
+  const localClients = searchLocalClients(normalizedSearch).map(lc => ({
+    id: lc.id,
+    name: lc.name,
+    tel: lc.tel,
+    address: lc.address,
+    city: lc.city,
+    isLocal: true, // Marqueur pour identifier les clients locaux
+  } as Client))
+
+  // Combiner les deux sources
+  const allClients = [...firestoreClients, ...localClients]
 
   // Filtrer et trier côté client
-  const filtered = clients.filter(c =>
+  const filtered = allClients.filter(c =>
     c.name.toLowerCase().includes(normalizedSearch) ||
     c.tel?.includes(normalizedSearch) ||
     c.address?.toLowerCase().includes(normalizedSearch)
@@ -516,12 +532,27 @@ export async function searchDestinataires(searchTerm: string): Promise<Client[]>
   const normalizedSearch = searchTerm.toLowerCase().trim()
   if (!normalizedSearch) return []
 
+  // Rechercher dans Firestore (clients réguliers enregistrés par chef d'agence)
   const q = query(collection(db, 'clients'), limit(200))
   const snap = await getDocs(q)
-  const clients = snap.docs.map(d => ({ id: d.id, ...d.data() } as Client))
+  const firestoreClients = snap.docs.map(d => ({ id: d.id, ...d.data() } as Client))
+
+  // Rechercher dans les clients locaux (clients de passage)
+  const { searchLocalClients } = await import('../utils/localClients')
+  const localClients = searchLocalClients(normalizedSearch).map(lc => ({
+    id: lc.id,
+    name: lc.name,
+    tel: lc.tel,
+    address: lc.address,
+    city: lc.city,
+    isLocal: true, // Marqueur pour identifier les clients locaux
+  } as Client))
+
+  // Combiner les deux sources
+  const allClients = [...firestoreClients, ...localClients]
 
   // Filtrer et trier côté client
-  const filtered = clients.filter(c =>
+  const filtered = allClients.filter(c =>
     c.name.toLowerCase().includes(normalizedSearch) ||
     c.tel?.includes(normalizedSearch) ||
     c.address?.toLowerCase().includes(normalizedSearch)
