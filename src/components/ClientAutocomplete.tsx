@@ -10,6 +10,7 @@ interface ClientAutocompleteProps {
   placeholder?: string
   className?: string
   filterCity?: string
+  onKeyDown?: (e: React.KeyboardEvent<HTMLInputElement>) => void
 }
 
 export default function ClientAutocomplete({
@@ -20,7 +21,8 @@ export default function ClientAutocomplete({
   onChange,
   placeholder,
   className = '',
-  filterCity
+  filterCity,
+  onKeyDown
 }: ClientAutocompleteProps) {
   const [suggestions, setSuggestions] = useState<Client[]>([])
   const [showSuggestions, setShowSuggestions] = useState(false)
@@ -84,6 +86,7 @@ export default function ClientAutocomplete({
         onFocus={() => {
           if (suggestions.length > 0) setShowSuggestions(true)
         }}
+        onKeyDown={onKeyDown}
         placeholder={placeholder || `Nom du ${type}...`}
         className={className}
         autoComplete="off"

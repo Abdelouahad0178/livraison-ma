@@ -59,38 +59,39 @@ export default function NewTab() {
 
   // Navigation clavier pour le formulaire
   const handleKeyNav = (e: React.KeyboardEvent) => {
-    // Entrée = champ suivant
+    const target = e.target as HTMLElement
+    const form = target.closest('form')
+    if (!form) return
+
+    // Récupérer TOUS les éléments focusables (inputs, selects, textareas ET boutons)
+    const focusables = Array.from(
+      form.querySelectorAll('input:not([type="hidden"]):not([type="submit"]), select, textarea, button[type="button"]')
+    ).filter((el: any) => !el.disabled && el.offsetParent !== null) // Visible et activé
+
+    const currentIndex = focusables.indexOf(target)
+
+    // Espace = cliquer sur le bouton (si c'est un bouton)
+    if (e.key === ' ' && target.tagName === 'BUTTON') {
+      e.preventDefault()
+      target.click()
+      return
+    }
+
+    // Entrée = élément suivant
     if (e.key === 'Enter' && !e.ctrlKey) {
       e.preventDefault()
-      const target = e.target as HTMLElement
-      const form = target.closest('form')
-      if (!form) return
-
-      // Récupérer tous les inputs/selects/textareas du formulaire
-      const inputs = Array.from(form.querySelectorAll('input:not([type="hidden"]), select, textarea'))
-        .filter((el: any) => !el.disabled && el.type !== 'submit' && el.type !== 'button')
-
-      const currentIndex = inputs.indexOf(target)
-      if (currentIndex >= 0 && currentIndex < inputs.length - 1) {
-        const nextInput = inputs[currentIndex + 1] as HTMLElement
-        nextInput.focus()
+      if (currentIndex >= 0 && currentIndex < focusables.length - 1) {
+        const next = focusables[currentIndex + 1] as HTMLElement
+        next.focus()
       }
     }
 
-    // Ctrl+Entrée = champ précédent
+    // Ctrl+Entrée = élément précédent
     if (e.key === 'Enter' && e.ctrlKey) {
       e.preventDefault()
-      const target = e.target as HTMLElement
-      const form = target.closest('form')
-      if (!form) return
-
-      const inputs = Array.from(form.querySelectorAll('input:not([type="hidden"]), select, textarea'))
-        .filter((el: any) => !el.disabled && el.type !== 'submit' && el.type !== 'button')
-
-      const currentIndex = inputs.indexOf(target)
       if (currentIndex > 0) {
-        const prevInput = inputs[currentIndex - 1] as HTMLElement
-        prevInput.focus()
+        const prev = focusables[currentIndex - 1] as HTMLElement
+        prev.focus()
       }
     }
   }
@@ -738,6 +739,7 @@ export default function NewTab() {
                     }))
                   }
                 }}
+                onKeyDown={handleKeyNav}
                 placeholder="Nom complet (ou chercher un expéditeur…)"
                 className={inputCls}
               />
@@ -830,6 +832,7 @@ export default function NewTab() {
                     }))
                   }
                 }}
+                onKeyDown={handleKeyNav}
                 placeholder="Nom complet (ou chercher un destinataire…)"
                 className={inputCls}
               />
@@ -867,6 +870,7 @@ export default function NewTab() {
                         deliverySectorId: e.target.value,
                         deliveryDriverId: '',
                       }))}
+                      onKeyDown={handleKeyNav}
                       className={selectCls}
                     >
                       <option value="">Secteur à choisir par destination</option>
@@ -880,6 +884,7 @@ export default function NewTab() {
                     <select
                       value={form.deliveryDriverId}
                       onChange={f('deliveryDriverId')}
+                      onKeyDown={handleKeyNav}
                       className={selectCls}
                     >
                       <option value="">Livreur de destination</option>
@@ -941,6 +946,7 @@ export default function NewTab() {
                     key={key}
                     type="button"
                     onClick={() => setForm((p: any) => ({ ...p, natureOfGoods: key === p.natureOfGoods ? '' : key }))}
+                    onKeyDown={handleKeyNav}
                     className={`flex flex-col items-center justify-center gap-1 py-2 rounded-xl border text-xs font-medium transition-all
                       ${form.natureOfGoods === key
                         ? 'bg-blue-600 border-blue-600 text-white shadow'
@@ -956,6 +962,7 @@ export default function NewTab() {
                   placeholder="Précisez la nature…"
                   value={form.natureOfGoodsCustom || ''}
                   onChange={e => setForm((p: any) => ({ ...p, natureOfGoodsCustom: e.target.value }))}
+                  onKeyDown={handleKeyNav}
                   className={`${inputCls} mt-2`}
                 />
               )}
@@ -973,6 +980,7 @@ export default function NewTab() {
                 type="button"
                 key={st.key}
                 onClick={() => setForm((p: any) => ({ ...p, serviceType: st.key, codAmount: st.key === 'simple' ? '' : p.codAmount }))}
+                onKeyDown={handleKeyNav}
                 className={`py-2.5 rounded-xl border-2 text-xs font-bold transition ${
                   form.serviceType === st.key
                     ? 'bg-blue-600 border-blue-500 text-white'
@@ -990,6 +998,7 @@ export default function NewTab() {
               type="checkbox"
               checked={form.hasRetourBL}
               onChange={e => setForm((p: any) => ({ ...p, hasRetourBL: e.target.checked }))}
+              onKeyDown={handleKeyNav}
               className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
             />
             <span>🧾 Retour BL (bon de livraison)</span>
@@ -1035,6 +1044,7 @@ export default function NewTab() {
                     portType: pt.key,
                     shipmentMode: pt.key === 'port_du' && p.portType === 'port_en_compte' ? 'personal' : p.shipmentMode,
                   }))}
+                  onKeyDown={handleKeyNav}
                   className={`py-3 px-2 rounded-xl border-2 text-xs font-bold transition text-left ${isActive ? pt.active : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-gray-300'}`}>
                   {pt.label}
                   <p className={`text-xs font-normal mt-0.5 ${isActive ? pt.activeDesc : 'text-gray-400'}`}>{pt.desc}</p>
@@ -1054,6 +1064,7 @@ export default function NewTab() {
               placeholder={form.portType === 'port_du' ? 'Montant à payer par le destinataire (DH)' : 'Montant du port payé (DH)'}
               value={form.portPrice}
               onChange={e => setForm((p: any) => ({ ...p, portPrice: e.target.value, portPayeMontant: p.portType === 'port_paye' ? e.target.value : p.portPayeMontant }))}
+              onKeyDown={handleKeyNav}
               className={inputCls}
             />
             <p className="text-[11px] text-gray-400 mt-1">
@@ -1081,6 +1092,7 @@ export default function NewTab() {
                         portPayeMontant: m.key === 'compte' ? '' : p.portPayeMontant,
                         shipmentMode: m.key === 'compte' ? 'client' : (p.portType === 'port_en_compte' ? 'personal' : p.shipmentMode),
                       }))}
+                      onKeyDown={handleKeyNav}
                       className={`py-2 px-1 rounded-xl border text-xs font-semibold transition text-center ${isSelected ? (m.key === 'compte' ? 'bg-purple-100 border-purple-500 text-purple-700' : 'bg-blue-100 border-blue-500 text-blue-700') : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-blue-300'}`}>
                       {m.label}
                     </button>
