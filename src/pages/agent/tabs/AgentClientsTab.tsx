@@ -64,6 +64,13 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
     }
   }, [agencyCity])
 
+  // Fonction helper pour obtenir les livreurs valides uniques
+  const getValidLivreurIds = (livreurIds?: string[]) => {
+    if (!livreurIds) return []
+    // Filtrer les IDs vides et les doublons
+    return [...new Set(livreurIds.filter(id => id && id.trim() !== ''))]
+  }
+
   const filteredClients = clients.filter(c => {
     const matchSearch = !searchTerm ||
       c.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -172,7 +179,7 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
   const handleSetPrimaryLivreur = async (livreurId: string) => {
     if (!selectedClient) return
 
-    const currentLivreurIds = selectedClient.livreurIds || []
+    const currentLivreurIds = getValidLivreurIds(selectedClient.livreurIds)
     const newLivreurIds = [
       livreurId,
       ...currentLivreurIds.filter(id => id !== livreurId)
@@ -191,7 +198,7 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
   const handleMoveLivreurUp = async (index: number) => {
     if (!selectedClient || index === 0) return
 
-    const newLivreurIds = [...(selectedClient.livreurIds || [])]
+    const newLivreurIds = [...getValidLivreurIds(selectedClient.livreurIds)]
     const temp = newLivreurIds[index]
     newLivreurIds[index] = newLivreurIds[index - 1]
     newLivreurIds[index - 1] = temp
@@ -206,7 +213,7 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
 
   const handleMoveLivreurDown = async (index: number) => {
     if (!selectedClient) return
-    const livreurIds = selectedClient.livreurIds || []
+    const livreurIds = getValidLivreurIds(selectedClient.livreurIds)
     if (index === livreurIds.length - 1) return
 
     const newLivreurIds = [...livreurIds]
@@ -309,14 +316,17 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
                 {client.isExpediteur && <span className="px-3 py-1 bg-blue-100 text-blue-700 rounded-full font-semibold">📤 Expéditeur</span>}
                 {client.isDestinataire && <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full font-semibold">📥 Destinataire</span>}
                 {client.secteurName && <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full font-semibold">🏘️ {client.secteurName}</span>}
-                {client.livreurIds && client.livreurIds.length > 0 && (
-                  <button
-                    onClick={() => handleShowLivreurs(client)}
-                    className="px-3 py-1 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-full font-semibold transition cursor-pointer"
-                  >
-                    🚚 {client.livreurIds.length} livreur(s)
-                  </button>
-                )}
+                {(() => {
+                  const validLivreurs = getValidLivreurIds(client.livreurIds)
+                  return validLivreurs.length > 0 && (
+                    <button
+                      onClick={() => handleShowLivreurs(client)}
+                      className="px-3 py-1 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-full font-semibold transition cursor-pointer"
+                    >
+                      🚚 {validLivreurs.length} livreur(s)
+                    </button>
+                  )
+                })()}
               </div>
             </div>
           ))
@@ -654,24 +664,31 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
               </button>
             </div>
 
-            {!selectedClient.livreurIds || selectedClient.livreurIds.length === 0 ? (
-              <div className="text-center py-8 bg-gray-50 rounded-lg">
-                <Truck className="w-12 h-12 text-gray-400 mx-auto mb-2" />
-                <p className="text-gray-500">Aucun livreur assigné</p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm">
-                  <p className="text-blue-800 font-semibold">
-                    ⭐ Le premier livreur de la liste est utilisé par défaut lors de la création de colis
-                  </p>
-                </div>
+            {(() => {
+              const validLivreurs = getValidLivreurIds(selectedClient.livreurIds)
 
-                {selectedClient.livreurIds.map((livreurId, index) => {
-                  const driver = users.find(u => u.id === livreurId)
-                  if (!driver) return null
+              if (validLivreurs.length === 0) {
+                return (
+                  <div className="text-center py-8 bg-gray-50 rounded-lg">
+                    <Truck className="w-12 h-12 text-gray-400 mx-auto mb-2" />
+                    <p className="text-gray-500">Aucun livreur assigné</p>
+                  </div>
+                )
+              }
 
-                  const isPrimary = index === 0
+              return (
+                <div className="space-y-3">
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm">
+                    <p className="text-blue-800 font-semibold">
+                      ⭐ Le premier livreur de la liste est utilisé par défaut lors de la création de colis
+                    </p>
+                  </div>
+
+                  {validLivreurs.map((livreurId, index) => {
+                    const driver = users.find(u => u.id === livreurId)
+                    if (!driver) return null
+
+                    const isPrimary = index === 0
 
                   return (
                     <div
@@ -735,16 +752,17 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
                   )
                 })}
 
-                <div className="mt-4 p-3 bg-gray-50 rounded-lg text-sm text-gray-600">
-                  <p className="font-semibold mb-1">💡 Astuce:</p>
-                  <ul className="list-disc list-inside space-y-1 text-xs">
-                    <li>Utilisez les flèches pour réorganiser l'ordre des livreurs</li>
-                    <li>Cliquez sur "Définir comme principal" pour mettre un livreur en première position</li>
-                    <li>Le livreur principal est automatiquement sélectionné lors de la création de colis</li>
-                  </ul>
+                  <div className="mt-4 p-3 bg-gray-50 rounded-lg text-sm text-gray-600">
+                    <p className="font-semibold mb-1">💡 Astuce:</p>
+                    <ul className="list-disc list-inside space-y-1 text-xs">
+                      <li>Utilisez les flèches pour réorganiser l'ordre des livreurs</li>
+                      <li>Cliquez sur "Définir comme principal" pour mettre un livreur en première position</li>
+                      <li>Le livreur principal est automatiquement sélectionné lors de la création de colis</li>
+                    </ul>
+                  </div>
                 </div>
-              </div>
-            )}
+              )
+            })()}
           </div>
         </div>
       )}
