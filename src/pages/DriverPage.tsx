@@ -1346,12 +1346,17 @@ export default function DriverPage() {
                               </>
                             ) : (
                               <>
+                                {/* Bouton "Mettre à jour" désactivé - seul l'admin peut changer le statut
                                 <button
                                   onClick={() => openDeliveryStatusModal(parcel)}
                                   className={`text-white text-xs font-semibold px-3 py-2 rounded-lg transition ${driverTab === 'transport' ? 'bg-blue-600 hover:bg-blue-700' : 'bg-orange-600 hover:bg-orange-700'}`}
                                 >
                                   Mettre à jour
                                 </button>
+                                */}
+                                <div className="text-xs text-gray-400 italic px-3 py-2">
+                                  Seul l'admin peut modifier le statut
+                                </div>
                                 {driverTab === 'delivery' && (
                                   <button
                                     onClick={() => setRejectModal({ parcel, note: '', loading: false, error: '' })}
