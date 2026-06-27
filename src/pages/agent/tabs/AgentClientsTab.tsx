@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Users, Search, Plus, Edit2, Save, X, Trash2 } from 'lucide-react'
+import { Users, Search, Plus, Edit2, Save, X, Trash2, Truck, ChevronUp, ChevronDown } from 'lucide-react'
 import { subscribeClients, createClient, updateClient, deleteClient, Client } from '../../../firebase/clients'
 import { subscribeAllUsers, subscribeAllSectors } from '../../../firebase/firestore'
 import { CITIES } from '../../../firebase/constants'
@@ -22,6 +22,8 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
   const [showNewModal, setShowNewModal] = useState(false)
   const [showEditModal, setShowEditModal] = useState(false)
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [showLivreursModal, setShowLivreursModal] = useState(false)
+  const [selectedClient, setSelectedClient] = useState<Client | null>(null)
   const [newForm, setNewForm] = useState({
     name: '',
     tel: '',
@@ -162,6 +164,64 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
     }
   }
 
+  const handleShowLivreurs = (client: Client) => {
+    setSelectedClient(client)
+    setShowLivreursModal(true)
+  }
+
+  const handleSetPrimaryLivreur = async (livreurId: string) => {
+    if (!selectedClient) return
+
+    const currentLivreurIds = selectedClient.livreurIds || []
+    const newLivreurIds = [
+      livreurId,
+      ...currentLivreurIds.filter(id => id !== livreurId)
+    ]
+
+    try {
+      await updateClient(selectedClient.id, { livreurIds: newLivreurIds })
+      setMsg({ type: 'success', text: '✅ Livreur principal mis à jour' })
+      // Mettre à jour le client sélectionné
+      setSelectedClient({ ...selectedClient, livreurIds: newLivreurIds })
+    } catch (error: any) {
+      setMsg({ type: 'error', text: '❌ Erreur: ' + error.message })
+    }
+  }
+
+  const handleMoveLivreurUp = async (index: number) => {
+    if (!selectedClient || index === 0) return
+
+    const newLivreurIds = [...(selectedClient.livreurIds || [])]
+    const temp = newLivreurIds[index]
+    newLivreurIds[index] = newLivreurIds[index - 1]
+    newLivreurIds[index - 1] = temp
+
+    try {
+      await updateClient(selectedClient.id, { livreurIds: newLivreurIds })
+      setSelectedClient({ ...selectedClient, livreurIds: newLivreurIds })
+    } catch (error: any) {
+      setMsg({ type: 'error', text: '❌ Erreur: ' + error.message })
+    }
+  }
+
+  const handleMoveLivreurDown = async (index: number) => {
+    if (!selectedClient) return
+    const livreurIds = selectedClient.livreurIds || []
+    if (index === livreurIds.length - 1) return
+
+    const newLivreurIds = [...livreurIds]
+    const temp = newLivreurIds[index]
+    newLivreurIds[index] = newLivreurIds[index + 1]
+    newLivreurIds[index + 1] = temp
+
+    try {
+      await updateClient(selectedClient.id, { livreurIds: newLivreurIds })
+      setSelectedClient({ ...selectedClient, livreurIds: newLivreurIds })
+    } catch (error: any) {
+      setMsg({ type: 'error', text: '❌ Erreur: ' + error.message })
+    }
+  }
+
   if (loading) {
     return <div className="flex justify-center py-12"><div className="w-6 h-6 border-4 border-blue-600 border-t-transparent rounded-full animate-spin" /></div>
   }
@@ -250,9 +310,12 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
                 {client.isDestinataire && <span className="px-3 py-1 bg-green-100 text-green-700 rounded-full font-semibold">📥 Destinataire</span>}
                 {client.secteurName && <span className="px-3 py-1 bg-purple-100 text-purple-700 rounded-full font-semibold">🏘️ {client.secteurName}</span>}
                 {client.livreurIds && client.livreurIds.length > 0 && (
-                  <span className="px-3 py-1 bg-orange-100 text-orange-700 rounded-full font-semibold">
+                  <button
+                    onClick={() => handleShowLivreurs(client)}
+                    className="px-3 py-1 bg-orange-100 hover:bg-orange-200 text-orange-700 rounded-full font-semibold transition cursor-pointer"
+                  >
                     🚚 {client.livreurIds.length} livreur(s)
-                  </span>
+                  </button>
                 )}
               </div>
             </div>
@@ -567,6 +630,121 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
                 Enregistrer les modifications
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Livreurs */}
+      {showLivreursModal && selectedClient && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl max-w-lg w-full p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-bold text-lg text-gray-800">Livreurs assignés</h3>
+                <p className="text-sm text-gray-600">{selectedClient.name}</p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowLivreursModal(false)
+                  setSelectedClient(null)
+                }}
+                className="p-2 hover:bg-gray-100 rounded-lg transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {!selectedClient.livreurIds || selectedClient.livreurIds.length === 0 ? (
+              <div className="text-center py-8 bg-gray-50 rounded-lg">
+                <Truck className="w-12 h-12 text-gray-400 mx-auto mb-2" />
+                <p className="text-gray-500">Aucun livreur assigné</p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 text-sm">
+                  <p className="text-blue-800 font-semibold">
+                    ⭐ Le premier livreur de la liste est utilisé par défaut lors de la création de colis
+                  </p>
+                </div>
+
+                {selectedClient.livreurIds.map((livreurId, index) => {
+                  const driver = users.find(u => u.id === livreurId)
+                  if (!driver) return null
+
+                  const isPrimary = index === 0
+
+                  return (
+                    <div
+                      key={livreurId}
+                      className={`flex items-center gap-3 p-4 rounded-lg border-2 transition ${
+                        isPrimary
+                          ? 'border-orange-500 bg-orange-50'
+                          : 'border-gray-200 bg-white'
+                      }`}
+                    >
+                      <div className="flex-shrink-0">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${
+                          isPrimary ? 'bg-orange-500' : 'bg-gray-300'
+                        }`}>
+                          <Truck className={`w-5 h-5 ${isPrimary ? 'text-white' : 'text-gray-600'}`} />
+                        </div>
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2">
+                          <p className="font-semibold text-gray-800">{driver.name}</p>
+                          {isPrimary && (
+                            <span className="px-2 py-0.5 bg-orange-500 text-white text-xs font-bold rounded-full">
+                              PRINCIPAL
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-sm text-gray-600">
+                          {driver.tel} • {driver.city}
+                        </p>
+                      </div>
+
+                      <div className="flex flex-col gap-1">
+                        <button
+                          onClick={() => handleMoveLivreurUp(index)}
+                          disabled={index === 0}
+                          className="p-1.5 hover:bg-gray-100 rounded disabled:opacity-30 disabled:cursor-not-allowed transition"
+                          title="Monter"
+                        >
+                          <ChevronUp className="w-4 h-4 text-gray-600" />
+                        </button>
+                        <button
+                          onClick={() => handleMoveLivreurDown(index)}
+                          disabled={index === selectedClient.livreurIds!.length - 1}
+                          className="p-1.5 hover:bg-gray-100 rounded disabled:opacity-30 disabled:cursor-not-allowed transition"
+                          title="Descendre"
+                        >
+                          <ChevronDown className="w-4 h-4 text-gray-600" />
+                        </button>
+                      </div>
+
+                      {!isPrimary && (
+                        <button
+                          onClick={() => handleSetPrimaryLivreur(livreurId)}
+                          className="px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white text-sm font-semibold rounded-lg transition"
+                        >
+                          Définir comme principal
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+
+                <div className="mt-4 p-3 bg-gray-50 rounded-lg text-sm text-gray-600">
+                  <p className="font-semibold mb-1">💡 Astuce:</p>
+                  <ul className="list-disc list-inside space-y-1 text-xs">
+                    <li>Utilisez les flèches pour réorganiser l'ordre des livreurs</li>
+                    <li>Cliquez sur "Définir comme principal" pour mettre un livreur en première position</li>
+                    <li>Le livreur principal est automatiquement sélectionné lors de la création de colis</li>
+                  </ul>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}
