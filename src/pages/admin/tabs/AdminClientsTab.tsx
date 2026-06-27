@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react'
-import { Users, Search, Plus, Edit2, Save, X, MapPin, Truck, Key } from 'lucide-react'
+import { Users, Search, Plus, Edit2, Save, X, MapPin, Truck, Key, Trash2 } from 'lucide-react'
 import { subscribeClients, createClient, updateClient, Client } from '../../../firebase/clients'
 import { subscribeAllUsers, subscribeAllSectors } from '../../../firebase/firestore'
 import { CITIES } from '../../../firebase/constants'
 import { createClientPortalAccount } from '../../../firebase/portalAccounts'
+import { findPassageClients, deletePassageClients, type PassageClient } from '../../../utils/cleanupPassageClients'
 
 export default function AdminClientsTab() {
   const [clients, setClients] = useState<Client[]>([])
@@ -34,6 +35,16 @@ export default function AdminClientsTab() {
   const [showEmailModal, setShowEmailModal] = useState(false)
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
   const [emailInput, setEmailInput] = useState('')
+  const [cleanupState, setCleanupState] = useState<{
+    loading: boolean
+    passageClients: PassageClient[]
+    showModal: boolean
+    result?: { deleted: number; errors: number }
+  }>({
+    loading: false,
+    passageClients: [],
+    showModal: false,
+  })
 
   useEffect(() => {
     const unsubClients = subscribeClients((data: any[]) => {
@@ -185,6 +196,35 @@ export default function AdminClientsTab() {
     }
   }
 
+  const handleFindPassageClients = async () => {
+    setCleanupState({ loading: true, passageClients: [], showModal: false })
+    try {
+      const clients = await findPassageClients()
+      setCleanupState({ loading: false, passageClients: clients, showModal: true })
+    } catch (error: any) {
+      alert('❌ Erreur: ' + error.message)
+      setCleanupState({ loading: false, passageClients: [], showModal: false })
+    }
+  }
+
+  const handleDeletePassageClients = async () => {
+    if (cleanupState.passageClients.length === 0) return
+
+    setCleanupState({ ...cleanupState, loading: true })
+    try {
+      const result = await deletePassageClients(cleanupState.passageClients)
+      setCleanupState({
+        loading: false,
+        passageClients: [],
+        showModal: true,
+        result,
+      })
+    } catch (error: any) {
+      alert('❌ Erreur: ' + error.message)
+      setCleanupState({ ...cleanupState, loading: false })
+    }
+  }
+
   const toggleLivreur = (livreursIds: string[], livreurId: string) => {
     if (livreursIds.includes(livreurId)) {
       return livreursIds.filter(id => id !== livreurId)
@@ -208,9 +248,23 @@ export default function AdminClientsTab() {
               <p className="text-sm text-gray-600">{filteredClients.length} clients</p>
             </div>
           </div>
-          <button onClick={() => setShowNewModal(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition">
-            <Plus className="w-4 h-4" /> Nouveau client
-          </button>
+          <div className="flex gap-2">
+            <button
+              onClick={handleFindPassageClients}
+              disabled={cleanupState.loading}
+              className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white rounded-lg font-semibold transition"
+            >
+              {cleanupState.loading ? (
+                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <Trash2 className="w-4 h-4" />
+              )}
+              Nettoyer clients de passage
+            </button>
+            <button onClick={() => setShowNewModal(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition">
+              <Plus className="w-4 h-4" /> Nouveau client
+            </button>
+          </div>
         </div>
       </div>
 
@@ -602,6 +656,107 @@ export default function AdminClientsTab() {
                 Créer
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Nettoyage Clients de Passage */}
+      {cleanupState.showModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-lg text-red-600">
+                {cleanupState.result ? '✅ Nettoyage terminé' : '⚠️ Clients de passage à supprimer'}
+              </h3>
+              <button
+                onClick={() => setCleanupState({ loading: false, passageClients: [], showModal: false })}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {cleanupState.result ? (
+              // Résultat de la suppression
+              <div className="space-y-4">
+                <div className="bg-green-50 border-2 border-green-200 rounded-lg p-4">
+                  <p className="font-semibold text-green-800">
+                    ✅ {cleanupState.result.deleted} client(s) supprimé(s) de Firestore
+                  </p>
+                  {cleanupState.result.errors > 0 && (
+                    <p className="text-red-600 mt-2">
+                      ❌ {cleanupState.result.errors} erreur(s)
+                    </p>
+                  )}
+                </div>
+                <p className="text-sm text-gray-600">
+                  Ces clients seront automatiquement sauvegardés dans localStorage lors de leur prochaine utilisation.
+                </p>
+              </div>
+            ) : cleanupState.passageClients.length === 0 ? (
+              // Aucun client trouvé
+              <div className="bg-green-50 border-2 border-green-200 rounded-lg p-4">
+                <p className="font-semibold text-green-800">
+                  ✅ Aucun client de passage trouvé dans Firestore
+                </p>
+                <p className="text-sm text-gray-600 mt-2">
+                  Tous les clients enregistrés sont des clients réguliers.
+                </p>
+              </div>
+            ) : (
+              // Liste des clients à supprimer
+              <div className="space-y-4">
+                <div className="bg-yellow-50 border-2 border-yellow-200 rounded-lg p-4">
+                  <p className="font-semibold text-yellow-800">
+                    {cleanupState.passageClients.length} client(s) de passage trouvé(s)
+                  </p>
+                  <p className="text-sm text-gray-600 mt-2">
+                    Ces clients ont été créés automatiquement lors de la création de colis et ne devraient pas être dans Firestore.
+                  </p>
+                  <p className="text-sm text-gray-600 mt-1">
+                    Critères: Cash, pas d'email, pas de NIC, remise = 0, créé automatiquement
+                  </p>
+                </div>
+
+                <div className="space-y-2 max-h-96 overflow-y-auto">
+                  {cleanupState.passageClients.map((client, index) => (
+                    <div key={client.id} className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                      <div className="flex items-center justify-between">
+                        <div>
+                          <p className="font-semibold">{index + 1}. {client.name}</p>
+                          <p className="text-sm text-gray-600">
+                            📞 {client.tel} • 📍 {client.city}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => setCleanupState({ loading: false, passageClients: [], showModal: false })}
+                    className="flex-1 px-4 py-2 bg-gray-200 hover:bg-gray-300 text-gray-800 rounded-lg font-semibold transition"
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    onClick={handleDeletePassageClients}
+                    disabled={cleanupState.loading}
+                    className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white rounded-lg font-semibold transition"
+                  >
+                    {cleanupState.loading ? (
+                      <div className="flex items-center justify-center gap-2">
+                        <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        Suppression...
+                      </div>
+                    ) : (
+                      `Supprimer ${cleanupState.passageClients.length} client(s)`
+                    )}
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

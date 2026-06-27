@@ -254,8 +254,6 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
                     🚚 {client.livreurIds.length} livreur(s)
                   </span>
                 )}
-                {client.email && <span className="px-3 py-1 bg-gray-100 text-gray-700 rounded-full font-semibold">✉️ {client.email}</span>}
-                {client.accountType && <span className="px-3 py-1 bg-yellow-100 text-yellow-700 rounded-full font-semibold">{client.accountType === 'cash' ? '💵 Cash' : '📝 Crédit'}</span>}
               </div>
             </div>
           ))

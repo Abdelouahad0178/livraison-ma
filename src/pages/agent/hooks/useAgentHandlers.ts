@@ -1527,35 +1527,13 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
           })
         } catch (err: any) { console.error('createCaisseEntry port_paye:', err) }
       }
-      // Auto-register sender as client
-      if (form.senderName.trim()) {
+      // Mise à jour client si clientId Firestore existant
+      if (form.clientId && form.senderName.trim()) {
         const tel     = form.senderTel.trim()
-        const city    = form.senderCity || profile?.city || ''
         const name    = form.senderName.trim()
         const address = form.senderAddress?.trim() || ''
         const nic     = form.senderNic?.trim() || ''
-        if (form.clientId) {
-          updateClient(form.clientId, { name, tel, address, nic }).catch(() => {})
-        } else {
-          const exists = tel
-            ? clients.some((c: any) => c.tel === tel && c.city === city)
-            : clients.some((c: any) => c.name?.toLowerCase() === name.toLowerCase() && c.city === city)
-          if (!exists) {
-            createClient({
-              name, tel, city, address, nic,
-              accountType:   'cash',
-              createdBy:     auth.currentUser?.uid,
-              createdByName: profile?.name || '',
-              createdByRole: 'agent',
-            }).catch(() => {})
-          } else {
-            const existing = clients.find((c: any) =>
-              tel ? (c.tel === tel && c.city === city)
-                  : (c.name?.toLowerCase() === name.toLowerCase() && c.city === city)
-            )
-            if (existing) updateClient(existing.id, { name, tel, address, nic }).catch(() => {})
-          }
-        }
+        updateClient(form.clientId, { name, tel, address, nic }).catch(() => {})
       }
       setCreatedParcel(parcel)
     } catch (err: any) {
