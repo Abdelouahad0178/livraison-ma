@@ -58,11 +58,33 @@ export default function NewTab() {
   const [isConfirmed, setIsConfirmed] = useState(false)
 
   // Navigation clavier pour le formulaire
-  const handleKeyNav = (e: React.KeyboardEvent, currentId: string, nextId: string) => {
-    if (e.key === 'Enter' && !e.ctrlKey) {
+  const fieldOrder = [
+    'senderName', 'senderTel', 'senderAddress',
+    'receiverCity', 'receiverName', 'receiverTel', 'receiverAddress',
+    'weight', 'nbColis', 'codAmount'
+  ]
+
+  const handleKeyNav = (e: React.KeyboardEvent, currentId: string) => {
+    const currentIndex = fieldOrder.indexOf(currentId)
+
+    // Entrée = champ suivant
+    if (e.key === 'Enter' && !e.ctrlKey && currentIndex >= 0) {
       e.preventDefault()
-      const nextField = document.getElementById(nextId) || document.querySelector(`[data-field="${nextId}"]`)
-      if (nextField) (nextField as HTMLElement).focus()
+      const nextId = fieldOrder[currentIndex + 1]
+      if (nextId) {
+        const nextField = document.getElementById(nextId)
+        if (nextField) nextField.focus()
+      }
+    }
+
+    // Ctrl+Entrée = champ précédent
+    if (e.key === 'Enter' && e.ctrlKey && currentIndex > 0) {
+      e.preventDefault()
+      const prevId = fieldOrder[currentIndex - 1]
+      if (prevId) {
+        const prevField = document.getElementById(prevId)
+        if (prevField) prevField.focus()
+      }
     }
   }
 
@@ -704,7 +726,7 @@ export default function NewTab() {
               placeholder="Téléphone"
               value={form.senderTel}
               onChange={f('senderTel')}
-              onKeyDown={(e) => handleKeyNav(e, 'senderTel', 'senderAddress')}
+              onKeyDown={(e) => handleKeyNav(e, 'senderTel')}
               className={inputCls}
             />
             <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl border border-gray-200 bg-gray-100 text-sm font-semibold text-gray-700">
@@ -716,7 +738,7 @@ export default function NewTab() {
               placeholder="Adresse"
               value={form.senderAddress}
               onChange={f('senderAddress')}
-              onKeyDown={(e) => handleKeyNav(e, 'sender Address', 'receiverCity')}
+              onKeyDown={(e) => handleKeyNav(e, 'senderAddress')}
               className={`${inputCls} col-span-2`}
             />
           </div>
@@ -755,7 +777,7 @@ export default function NewTab() {
                   deliverySectorId: '',
                   deliveryDriverId: '',
                 }))}
-                onKeyDown={(e) => handleKeyNav(e, 'receiverCity', 'receiverTel')}
+                onKeyDown={(e) => handleKeyNav(e, 'receiverCity')}
                 className={selectCls}
               >
                 <option value="">Ville de destination</option>
@@ -795,7 +817,7 @@ export default function NewTab() {
               placeholder="Téléphone"
               value={form.receiverTel}
               onChange={f('receiverTel')}
-              onKeyDown={(e) => handleKeyNav(e, 'receiverTel', 'receiverAddress')}
+              onKeyDown={(e) => handleKeyNav(e, 'receiverTel')}
               className={inputCls}
             />
             <input
@@ -804,7 +826,7 @@ export default function NewTab() {
               placeholder={form.deliveryDriverId || form.deliverySectorId ? "Adresse (optionnel)" : "Adresse"}
               value={form.receiverAddress}
               onChange={f('receiverAddress')}
-              onKeyDown={(e) => handleKeyNav(e, 'receiverAddress', 'weight')}
+              onKeyDown={(e) => handleKeyNav(e, 'receiverAddress')}
               className={inputCls}
             />
             {form.receiverCity && (
@@ -860,8 +882,29 @@ export default function NewTab() {
         <section>
           <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Détails</h3>
           <div className="grid grid-cols-2 gap-3">
-            <input type="number" step="0.1" min="0.1" placeholder="Poids (kg) — optionnel" value={form.weight} onChange={f('weight')} className={inputCls} />
-            <input required type="number" min="1" step="1" placeholder="Nb de colis" value={form.nbColis} onChange={f('nbColis')} className={inputCls} />
+            <input
+              id="weight"
+              type="number"
+              step="0.1"
+              min="0.1"
+              placeholder="Poids (kg) — optionnel"
+              value={form.weight}
+              onChange={f('weight')}
+              onKeyDown={(e) => handleKeyNav(e, 'weight')}
+              className={inputCls}
+            />
+            <input
+              id="nbColis"
+              required
+              type="number"
+              min="1"
+              step="1"
+              placeholder="Nb de colis"
+              value={form.nbColis}
+              onChange={f('nbColis')}
+              onKeyDown={(e) => handleKeyNav(e, 'nbColis')}
+              className={inputCls}
+            />
             <div className="col-span-2">
               <p className="text-xs text-gray-500 mb-1.5">Nature de marchandise</p>
               <div className="grid grid-cols-4 gap-2">
@@ -932,10 +975,13 @@ export default function NewTab() {
           {form.serviceType !== 'simple' ? (
             <div className="mt-3">
               <input
-                type="number" min="0"
+                id="codAmount"
+                type="number"
+                min="0"
                 placeholder="RETOUR FOND (DH)"
                 value={form.codAmount}
                 onChange={f('codAmount')}
+                onKeyDown={(e) => handleKeyNav(e, 'codAmount')}
                 className={inputCls}
               />
             </div>
