@@ -430,7 +430,7 @@ export default function AgentPage() {
       // Seulement sur l'onglet home
       if (tab === 'home' && e.ctrlKey && e.key === 'Enter') {
         e.preventDefault()
-        setTab('nouveau')
+        setTab('new')
       }
     }
 
