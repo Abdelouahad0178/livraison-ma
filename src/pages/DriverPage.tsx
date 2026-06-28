@@ -332,7 +332,7 @@ export default function DriverPage() {
   const activeList      = driverTab === 'transport' ? parcels : deliveryParcels
   const doneStatuses    = driverTab === 'transport'
     ? ['Arrivé en agence', 'Livré', 'Retourné']
-    : ['Livré', 'Retourné', 'Retour en transit']
+    : ['Livré', 'Retourné', 'Retour en transit', 'Retour finalisé']
   const activeParcels   = activeList.filter(p => !doneStatuses.includes(p.status))
   const doneParcels     = activeList.filter(p =>  doneStatuses.includes(p.status))
   const byStatus        = filter === 'active' ? activeParcels
@@ -2554,8 +2554,9 @@ export default function DriverPage() {
               {(() => {
                 const { parcel } = paperReceiptModal
                 const isDD = parcel.deliveryDriverId === uid
-                const hasCod = isDD && parcel.codAmount > 0 && (parcel.codStatus === 'pending' || !parcel.codStatus)
-                const hasPortDu = isDD && parcel.portType === 'port_du' && parcel.portStatus !== 'collected'
+                const isMyParcel = isDD || isLivreur // Livreur simple ou deliveryDriver
+                const hasCod = isMyParcel && parcel.codAmount > 0 && (parcel.codStatus === 'pending' || !parcel.codStatus)
+                const hasPortDu = isMyParcel && parcel.portType === 'port_du' && parcel.portStatus !== 'collected'
                 if (!hasCod && !hasPortDu) return null
                 const total = (hasCod ? parcel.codAmount : 0) + (hasPortDu ? (parcel.price || 0) : 0)
                 return (
