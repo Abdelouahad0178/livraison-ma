@@ -154,7 +154,8 @@ export default function ClientAutocomplete({
         onKeyDown={handleKeyDown}
         placeholder={placeholder || `Nom du ${type}...`}
         className={className}
-        autoComplete="off"
+        autoComplete={showSuggestions ? "off" : "on"}
+        name={showSuggestions ? `${type}-${Date.now()}` : type}
       />
 
       {loading && (
