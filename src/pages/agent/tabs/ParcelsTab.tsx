@@ -587,11 +587,41 @@ export default function ParcelsTab() {
           const safePage = Math.min(parcelPage, totalPages - 1)
           const pagedParcels = filteredParcels.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE)
           const isLastPage = safePage >= totalPages - 1
+
+          // Calcul des totaux (sur TOUS les colis filtrés, pas seulement la page)
+          const totalCod = filteredParcels.reduce((sum: number, p: any) => sum + (p.codAmount || 0), 0)
+          const totalPortDu = filteredParcels.reduce((sum: number, p: any) =>
+            sum + (p.portType === 'port_du' ? (p.price || 0) : 0), 0
+          )
+
           return viewMode === 'table' ? (
             // ═══════════════════════════════════════════════════════════════════
             // VUE TABLEAU (Excel-like avec scroll horizontal)
             // ═══════════════════════════════════════════════════════════════════
             <div className="space-y-4">
+              {/* Résumé des totaux */}
+              <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-orange-200 rounded-xl p-4 shadow-lg">
+                <div className="flex items-center justify-between gap-6 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <Package className="w-5 h-5 text-orange-600" />
+                    <span className="text-sm font-bold text-gray-700">
+                      {filteredParcels.length} expédition{filteredParcels.length > 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-6">
+                    <div className="flex items-center gap-2">
+                      <Banknote className="w-5 h-5 text-green-600" />
+                      <span className="text-xs text-gray-600">Total RETOUR FOND :</span>
+                      <span className="text-base font-black text-green-700">{totalCod.toLocaleString('fr-MA')} DH</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">📮</span>
+                      <span className="text-xs text-gray-600">Total Port dû :</span>
+                      <span className="text-base font-black text-orange-700">{totalPortDu.toLocaleString('fr-MA')} DH</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <div className="overflow-x-auto bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 rounded-2xl shadow-xl border-2 border-purple-200">
                 <table className="w-full text-xs">
                   <thead className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white sticky top-0 shadow-lg">
@@ -823,7 +853,32 @@ export default function ParcelsTab() {
             // ═══════════════════════════════════════════════════════════════════
             // VUE CARTES (existante)
             // ═══════════════════════════════════════════════════════════════════
-          <div className="space-y-2">
+          <div className="space-y-4">
+            {/* Résumé des totaux */}
+            <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-orange-200 rounded-xl p-4 shadow-lg">
+              <div className="flex items-center justify-between gap-6 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <Package className="w-5 h-5 text-orange-600" />
+                  <span className="text-sm font-bold text-gray-700">
+                    {filteredParcels.length} expédition{filteredParcels.length > 1 ? 's' : ''}
+                  </span>
+                </div>
+                <div className="flex items-center gap-6">
+                  <div className="flex items-center gap-2">
+                    <Banknote className="w-5 h-5 text-green-600" />
+                    <span className="text-xs text-gray-600">Total RETOUR FOND :</span>
+                    <span className="text-base font-black text-green-700">{totalCod.toLocaleString('fr-MA')} DH</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">📮</span>
+                    <span className="text-xs text-gray-600">Total Port dû :</span>
+                    <span className="text-base font-black text-orange-700">{totalPortDu.toLocaleString('fr-MA')} DH</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
             {pagedParcels.map((parcel: any) => {
               const isOwn = canActAsParcelOwner(parcel)
               const isAideManagedByChef = !isParcelCreator(parcel) && isChefAgencyAideParcel(parcel)
@@ -1423,6 +1478,7 @@ export default function ParcelsTab() {
                 </div>
               )
             })}
+            </div>
 
             {/* Barre de pagination */}
             {filteredParcels.length > PAGE_SIZE && (() => {
