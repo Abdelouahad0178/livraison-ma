@@ -58,8 +58,9 @@ export default function NewTab() {
   const [editableParcel, setEditableParcel] = useState<any>(null)
   const [isConfirmed, setIsConfirmed] = useState(false)
 
-  // Ref pour le champ N EXP
+  // Ref pour le champ N EXP et le conteneur du ticket
   const nexpInputRef = useRef<HTMLInputElement>(null)
+  const ticketContainerRef = useRef<HTMLDivElement>(null)
 
   // Fonction pour créer un nouveau colis
   const handleNewParcel = () => {
@@ -136,6 +137,15 @@ export default function NewTab() {
       setCreatedParcel(null)
     }
   }, [createdParcel, showConfirmModal, pendingParcel, isConfirmed, setCreatedParcel])
+
+  // Focus automatique sur le conteneur du ticket pour activer Ctrl+Enter
+  useEffect(() => {
+    if (createdParcel && ticketContainerRef.current) {
+      setTimeout(() => {
+        ticketContainerRef.current?.focus()
+      }, 100)
+    }
+  }, [createdParcel])
 
   const handleVoiceResult = (field: string, value: string) => {
     setForm((prev: any) => ({
@@ -471,6 +481,7 @@ export default function NewTab() {
   if (createdParcel) {
     return (
       <div
+        ref={ticketContainerRef}
         className="space-y-4 mt-4"
         tabIndex={0}
         onKeyDown={(e) => {
