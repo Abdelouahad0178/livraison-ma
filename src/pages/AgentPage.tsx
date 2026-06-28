@@ -424,6 +424,20 @@ export default function AgentPage() {
     return () => { unsubProfile() }
   }, [])
 
+  // Raccourci Ctrl+Enter depuis l'accueil pour aller à Nouvelle expédition
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      // Seulement sur l'onglet home
+      if (tab === 'home' && e.ctrlKey && e.key === 'Enter') {
+        e.preventDefault()
+        setTab('nouveau')
+      }
+    }
+
+    window.addEventListener('keydown', handleGlobalKeyDown)
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown)
+  }, [tab])
+
   useEffect(() => {
     if (!profile?.role) return
     const uid = auth.currentUser?.uid
