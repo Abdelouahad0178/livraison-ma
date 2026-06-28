@@ -82,7 +82,7 @@ export default function ClientAutocomplete({
   }
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (!showSuggestions || suggestions.length === 0) {
+    if (!showSuggestions || !suggestions || suggestions.length === 0) {
       // Si pas de liste, appeler le handler externe
       if (onKeyDown) onKeyDown(e)
       return
