@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, useEffect } from 'react'
+import { lazy, Suspense, useState, useEffect, useRef } from 'react'
 import { Calendar, Search, X, Plus, MapPin, ChevronDown, Check, MessageCircle, Printer } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import { CITIES } from '../../../firebase/constants'
@@ -57,6 +57,19 @@ export default function NewTab() {
   const [pendingParcel, setPendingParcel] = useState<any>(null)
   const [editableParcel, setEditableParcel] = useState<any>(null)
   const [isConfirmed, setIsConfirmed] = useState(false)
+
+  // Ref pour le champ N EXP
+  const nexpInputRef = useRef<HTMLInputElement>(null)
+
+  // Fonction pour créer un nouveau colis
+  const handleNewParcel = () => {
+    setCreatedParcel(null)
+    setForm({ ...EMPTY_FORM, senderCity: profile?.city || '', operationDate: todayStr() })
+    // Focus sur N EXP après un court délai pour laisser le DOM se mettre à jour
+    setTimeout(() => {
+      nexpInputRef.current?.focus()
+    }, 100)
+  }
 
   // Navigation clavier pour le formulaire
   const handleKeyNav = (e: React.KeyboardEvent) => {
@@ -457,7 +470,16 @@ export default function NewTab() {
 
   if (createdParcel) {
     return (
-      <div className="space-y-4 mt-4">
+      <div
+        className="space-y-4 mt-4"
+        tabIndex={0}
+        onKeyDown={(e) => {
+          if (e.ctrlKey && e.key === 'Enter') {
+            e.preventDefault()
+            handleNewParcel()
+          }
+        }}
+      >
         <div className="bg-green-50 border border-green-200 rounded-2xl p-4 text-center">
           <p className="text-2xl mb-1">✅</p>
           <p className="text-green-700 font-bold text-lg">Colis enregistré avec succès !</p>
@@ -591,10 +613,10 @@ export default function NewTab() {
             <MessageCircle className="w-4 h-4" /> WhatsApp
           </a>
         </div>
-        <button onClick={() => { setCreatedParcel(null); setForm({ ...EMPTY_FORM, senderCity: profile?.city || '', operationDate: todayStr() }) }}
+        <button onClick={handleNewParcel}
           className="w-full flex items-center justify-center gap-2 border-2 border-blue-500 text-blue-600 py-4 rounded-xl font-semibold hover:bg-blue-50 transition"
         >
-          <Plus className="w-4 h-4" /> Nouveau colis
+          <Plus className="w-4 h-4" /> Nouveau colis (Ctrl+Entrée)
         </button>
       </div>
     )
@@ -717,6 +739,7 @@ export default function NewTab() {
           </div>
           <div className="grid grid-cols-2 gap-3">
             <input
+              ref={nexpInputRef}
               id="senderNic"
               placeholder="N EXP"
               value={form.senderNic}
