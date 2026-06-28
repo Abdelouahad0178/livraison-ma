@@ -61,6 +61,7 @@ export default function NewTab() {
   // Ref pour le champ N EXP et le conteneur du ticket
   const nexpInputRef = useRef<HTMLInputElement>(null)
   const ticketContainerRef = useRef<HTMLDivElement>(null)
+  const validateButtonRef = useRef<HTMLButtonElement>(null)
 
   // Fonction pour créer un nouveau colis
   const handleNewParcel = () => {
@@ -146,6 +147,15 @@ export default function NewTab() {
       }, 100)
     }
   }, [createdParcel])
+
+  // Focus automatique sur le bouton de validation de la modal
+  useEffect(() => {
+    if (showConfirmModal && validateButtonRef.current) {
+      setTimeout(() => {
+        validateButtonRef.current?.focus()
+      }, 100)
+    }
+  }, [showConfirmModal])
 
   const handleVoiceResult = (field: string, value: string) => {
     setForm((prev: any) => ({
@@ -467,10 +477,11 @@ export default function NewTab() {
               <X className="w-5 h-5" /> Annuler
             </button>
             <button
+              ref={validateButtonRef}
               onClick={handleConfirmPrint}
               className="flex-1 py-3 px-6 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl font-bold hover:shadow-xl transition flex items-center justify-center gap-2"
             >
-              <Printer className="w-5 h-5" /> Valider et Imprimer
+              <Printer className="w-5 h-5" /> Valider et Imprimer (Entrée)
             </button>
           </div>
         </div>
