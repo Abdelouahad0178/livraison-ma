@@ -916,8 +916,8 @@ export default function ArrivageTab() {
                           </div>
                           {arr.notes && <p className="text-xs text-gray-400 italic px-4 pb-2">{arr.notes}</p>}
 
-                          {/* Historique en lecture seule - pointage supprimé */}
-                          {false && (() => {
+                          {/* Interface de modification d'arrivage */}
+                          {(() => {
                             const edit   = histGetEdit(arr.id)
                             const saving = histSaving[arr.id]
                             const pErr   = histPointErr[arr.id]
