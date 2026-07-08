@@ -557,7 +557,60 @@ export default function AdminCodTab({
                           <strong>Nombre de colis :</strong> ${filteredCod.length}
                         </div>
                       </div>
-                      ${printContent.innerHTML}
+                      <table>
+                        <thead>
+                          <tr>
+                            <th>N° EXP</th>
+                            <th>Date expédition</th>
+                            <th>Destinataire</th>
+                            <th>Ville</th>
+                            <th>Montant</th>
+                            <th>Mode paiement</th>
+                            <th>Statut</th>
+                            <th>Collecté par</th>
+                            <th>Date collecte</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          ${filteredCod.map((p: any) => {
+                            const getDateExp = () => {
+                              if (p.workDate) return new Date(p.workDate).toLocaleDateString('fr-MA')
+                              if (p.createdAt?.toDate) return p.createdAt.toDate().toLocaleDateString('fr-MA')
+                              if (p.createdAt) return new Date(p.createdAt).toLocaleDateString('fr-MA')
+                              return '—'
+                            }
+                            const getPaymentType = () => {
+                              const pt = (p.serviceType || p.codPaymentType || '').toLowerCase().trim()
+                              if (pt.includes('cheque')) return '📝 Chèque'
+                              if (pt.includes('espece')) return '💵 Espèces'
+                              if (pt.includes('traite')) return '📄 Traite'
+                              if (pt.includes('bon') && pt.includes('livraison')) return '🧾 Bon de livraison'
+                              return '—'
+                            }
+                            const getStatus = () => {
+                              if (p.codSenderPaid) return 'Réglé ✓'
+                              if (p.codReceivedBySource && !p.codSenderPaid) return 'Reçu — à régler'
+                              if (p.codSentToSource && !p.codReceivedBySource) return 'En transit source'
+                              if (p.codStatus === 'collected') return 'Collecté'
+                              if (p.codStatus === 'remis') return 'Remis agence'
+                              return 'En attente'
+                            }
+                            return \`
+                              <tr>
+                                <td>\${p.sender?.nic || '—'}</td>
+                                <td>\${getDateExp()}</td>
+                                <td>\${p.receiver?.name || '—'}</td>
+                                <td>\${p.receiver?.city || '—'}</td>
+                                <td style="text-align: right; font-weight: 600;">\${p.codAmount} DH</td>
+                                <td>\${getPaymentType()}</td>
+                                <td>\${getStatus()}</td>
+                                <td>\${p.codCollectedBy || '—'}</td>
+                                <td>\${p.codCollectedAt ? new Date(p.codCollectedAt).toLocaleDateString('fr-MA') : '—'}</td>
+                              </tr>
+                            \`
+                          }).join('')}
+                        </tbody>
+                      </table>
                       <div class="footer">
                         <div class="totals">
                           <span class="total-label">💰 TOTAL GÉNÉRAL</span>
