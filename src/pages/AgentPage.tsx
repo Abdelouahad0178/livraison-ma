@@ -48,6 +48,7 @@ import {
   subscribeClients, createClient, updateClient, addPayment,
   subscribeAgencyModificationRequests, resolveModificationRequest, deleteModificationRequest,
 } from '../firebase/clients'
+import { initWorkingDate } from '../utils/workingDate'
 import { subscribeVehicles } from '../firebase/vehicles'
 import { createBankDeposit, subscribeBankDepositsByCity } from '../firebase/bankDeposits'
 import {
@@ -103,6 +104,8 @@ const fmtModDate = (ts: any) => {
 }
 
 const parcelDate = (p: any) => {
+  // 📅 Utiliser workDate (date de travail) pour respecter les sessions 8h→6h
+  if (p.workDate) return new Date(p.workDate + 'T12:00:00')
   if (p.createdAt?.toDate) return p.createdAt.toDate()
   if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
   return new Date(0)
@@ -165,21 +168,23 @@ function useDebounce(value: any, delay = 280) {
   return d
 }
 
-const todayStr = () => new Date().toISOString().split('T')[0]
+import { getWorkingDateStr } from '../utils/workingDate'
+
 const parsePositiveNumber = (value: any, fallback = 0) => {
   const num = parseFloat(String(value ?? '').replace(',', '.'))
   return Number.isFinite(num) && num >= 0 ? num : fallback
 }
+
 const EMPTY_FORM = {
   senderName: '', senderNic: '', senderAddress: '', senderTel: '', senderCity: '',
   receiverName: '', receiverAddress: '', receiverTel: '', receiverCity: '',
-  weight: '', nbColis: '1', natureOfGoods: '', natureOfGoodsCustomPrice: '', codAmount: '',
+  weight: '', nbColis: '', natureOfGoods: '', natureOfGoodsCustomPrice: '', codAmount: '',
   serviceType: 'simple', shipmentMode: 'personal',
   portType: 'port_paye', portPayeMethod: '', portPayeMontant: '',
   portPrice: '',
   clientId: '', clientName: '', autoDebit: false,
   deliverySectorId: '', deliveryDriverId: '',
-  operationDate: todayStr(),
+  operationDate: getWorkingDateStr(),
 }
 
 export default function AgentPage() {
@@ -254,15 +259,17 @@ export default function AgentPage() {
   const [loadingParcels, setLoadingParcels] = useState(false)
   const [pendingAideParcels, setPendingAideParcels] = useState<any[]>([])
   const [search, setSearch]             = useState('')
+  // Utiliser 'all' par défaut pour voir tous les colis, pas seulement ceux du jour de travail
   const [datePreset, setDatePreset]     = useState('all')
   const [dateFrom, setDateFrom]         = useState('')
   const [dateTo, setDateTo]             = useState('')
   const [parcelDirection, setParcelDirection] = useState('all')
   const [serviceFilter, setServiceFilter]   = useState('all')
-  const [parcelStatusFilter, setParcelStatusFilter] = useState('all')
+  const [parcelStatusFilter, setParcelStatusFilter] = useState('Initialisé')
   const [parcelEditorFilter, setParcelEditorFilter] = useState('all')
   const [destinationCityFilter, setDestinationCityFilter] = useState('all')  // ⭐ Filtre ville de destination
   const [driverFilter, setDriverFilter] = useState('all')  // ⭐ Filtre par livreur/chauffeur
+  const [portTypeFilter, setPortTypeFilter] = useState('all')  // ⭐ Filtre par type de port
   const [extraParcels, setExtraParcels]             = useState<any[]>([])
   const [hasMoreParcels, setHasMoreParcels]         = useState(false)
   const [loadingMore, setLoadingMore]               = useState(false)
@@ -312,6 +319,18 @@ export default function AgentPage() {
   const [bulkLoadPhone, setBulkLoadPhone] = useState('')
   const [bulkLoadBusy, setBulkLoadBusy] = useState(false)
   const [bulkLoadError, setBulkLoadError] = useState('')
+
+  // ⭐ États pour assignation en masse à un livreur
+  const [bulkAssignSelectedIds, setBulkAssignSelectedIds] = useState<any[]>([])
+  const [bulkAssignDriverId, setBulkAssignDriverId] = useState('')
+  const [bulkAssignSectorId, setBulkAssignSectorId] = useState('')
+  const [bulkAssignBusy, setBulkAssignBusy] = useState(false)
+  const [bulkAssignError, setBulkAssignError] = useState('')
+
+  // ⭐ Permissions de modification par rôle
+  const [editPermissions, setEditPermissions] = useState<any>({ chef_agence: [], aide_agent: [] })
+  const [actionPermissions, setActionPermissions] = useState<any>({ chef_agence: [] })
+
   const [deliveryModal, setDeliveryModal] = useState({ open: false, parcel: null as any, sectorId: '', driverId: '', vehicleId: '', loading: false, error: '' })
   const [codCollectModal, setCodCollectModal] = useState({ open: false, parcel: null as any, paymentType: '', loading: false, withDelivery: false })
   const [portCollectModal, setPortCollectModal] = useState({ open: false, parcel: null as any, paymentType: '', loading: false })
@@ -423,6 +442,33 @@ export default function AgentPage() {
     )
     return () => { unsubProfile() }
   }, [])
+
+  // ⭐ Charger les permissions de modification depuis Firestore
+  useEffect(() => {
+    const loadPermissions = async () => {
+      try {
+        const docRef = doc(db, 'settings', 'editPermissions')
+        const snapshot = await getDoc(docRef)
+        if (snapshot.exists()) {
+          const data = snapshot.data()
+          setEditPermissions(data)
+          setActionPermissions({ chef_agence: data.chef_agence_actions || [] })
+        }
+      } catch (error) {
+        console.error('Erreur chargement permissions:', error)
+      }
+    }
+    loadPermissions()
+  }, [])
+
+  // DÉSACTIVÉ TEMPORAIREMENT - cause boucle infinie
+  // useEffect(() => {
+  //   if (profile?.city) {
+  //     initWorkingDate(profile.city).catch(err => {
+  //       console.error('Erreur init date de travail:', err)
+  //     })
+  //   }
+  // }, [profile?.city])
 
   // Raccourci Ctrl+Enter depuis l'accueil pour aller à Nouvelle expédition
   useEffect(() => {
@@ -733,6 +779,11 @@ export default function AgentPage() {
     bulkLoadPhone, setBulkLoadPhone,
     bulkLoadBusy, setBulkLoadBusy,
     bulkLoadError, setBulkLoadError,
+    bulkAssignSelectedIds, setBulkAssignSelectedIds,
+    bulkAssignDriverId, setBulkAssignDriverId,
+    bulkAssignSectorId, setBulkAssignSectorId,
+    bulkAssignBusy, setBulkAssignBusy,
+    bulkAssignError, setBulkAssignError,
     deliveryModal, setDeliveryModal,
     drivers, allSectors, allUsers, sectors, vehicles, bonBatches,
     // return
@@ -846,7 +897,7 @@ export default function AgentPage() {
   })
   const handlers = useAgentHandlers(_s)
   const {
-    handleAssignTransport, handleBulkLoadTransport, handleAssignDelivery, handleChefPointParcel,
+    handleAssignTransport, handleBulkLoadTransport, handleBulkAssignDriver, handleAssignDelivery, handleChefPointParcel,
     handleAgentCollectCod, handleAgentCollectPort,
     handleDirectCashierTransfer, handleRequestCashRecovery, handleAdminTransfer,
     handleDeleteAgentOperations, handleDeleteCashierHistory,
@@ -906,7 +957,7 @@ export default function AgentPage() {
       senderTel:     client.tel     || p.senderTel,
       senderAddress: client.address || p.senderAddress,
       senderCity:    client.city    || p.senderCity,
-      senderNic:     client.nic     || p.senderNic,
+      // senderNic: NE PAS auto-remplir - chaque expédition a son propre N° EXP
     }))
     setClientSearch('')
     setShowClientDropdown(false)
@@ -982,6 +1033,10 @@ export default function AgentPage() {
       const matchesDriver = p.deliveryDriverId === driverFilter || p.chauffeurId === driverFilter
       if (!matchesDriver) return false
     }
+    // ⭐ Filtre par type de port
+    if (portTypeFilter !== 'all' && p.portType !== portTypeFilter) {
+      return false
+    }
     if (debouncedSearch) {
       const matches = matchesSearch([
         p.id, p.trackingId, p.senderNic, p.sender?.nic, p.sender?.name, p.sender?.tel,
@@ -993,7 +1048,7 @@ export default function AgentPage() {
       return true
     })
   }, [allDisplayParcels, datePreset, dateFrom, dateTo, profileCity, profileRole, subTab, uid, serviceFilter,
-       parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, debouncedSearch])
+       parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, debouncedSearch])
 
   // ── Phase 3: memoized stats — only recompute when Firestore sends new data ──
 
@@ -1109,7 +1164,13 @@ export default function AgentPage() {
       allUsers.find((u: any) => u.id === parcel?.agentId)?.city === profile?.city)
   const canActAsParcelOwner = (parcel: any) => isParcelCreator(parcel) || isChefAgencyAideParcel(parcel)
   const canEditParcelDetails = (parcel: any) => {
+    // 👑 Admin peut TOUJOURS éditer
     if (profile?.role === 'admin') return true
+
+    // 🔒 VERROUILLAGE: Si colis chargé dans camion (shipmentLoadedAt existe),
+    // SEUL admin peut modifier les données du bon
+    if (parcel?.shipmentLoadedAt) return false
+
     if (!canActAsParcelOwner(parcel)) return false
 
     // NOUVELLE POLITIQUE : Aide-agent ne peut éditer que si colis PAS chargé
@@ -1120,6 +1181,40 @@ export default function AgentPage() {
     // Chef peut toujours éditer (sauf si livré/retourné)
     return !['Livré', 'Retourné', 'Retour en transit'].includes(parcel?.status)
   }
+
+  // ⭐ Vérifier si un champ spécifique peut être modifié selon les permissions Admin
+  const canEditField = (fieldPath: string) => {
+    // Admin peut TOUJOURS tout modifier
+    if (profile?.role === 'admin') return true
+
+    // Chef d'agence: vérifier les permissions configurées
+    if (profile?.role === 'chef_agence') {
+      return editPermissions?.chef_agence?.includes(fieldPath) ?? false
+    }
+
+    // Aide agent: vérifier les permissions configurées
+    if (profile?.role === 'aide_agent') {
+      return editPermissions?.aide_agent?.includes(fieldPath) ?? false
+    }
+
+    // Par défaut: pas autorisé
+    return false
+  }
+
+  // ⭐ Vérifier si une action peut être effectuée selon les permissions Admin
+  const canPerformAction = (action: string) => {
+    // Admin peut TOUJOURS tout faire
+    if (profile?.role === 'admin') return true
+
+    // Chef d'agence: vérifier les permissions configurées
+    if (profile?.role === 'chef_agence') {
+      return actionPermissions?.chef_agence?.includes(action) ?? false
+    }
+
+    // Par défaut: pas autorisé
+    return false
+  }
+
   const canManageStatus = (parcel: any) =>
     profile?.role === 'admin' || profile?.role === 'chef_agence' || isParcelCreator(parcel)
   const canManageReturnDelivery = (_parcel: any) =>
@@ -1137,7 +1232,9 @@ export default function AgentPage() {
   // NOUVELLE POLITIQUE : Plus de validation requise
   // Un colis d'aide-agent est "verrouillé" seulement si chargé (transportAssignedAt existe)
   const isAideParcelLockedForEdit = (p: any) => {
-    return !!p.transportAssignedAt // Verrouillé si chargé sur camion
+    // Verrouillé SEULEMENT si le colis est vraiment chargé dans le camion (en transit)
+    // Pas juste assigné, mais chargé et parti
+    return !!p.shipmentLoadedAt
   }
 
   const isPendingAideParcelForAgency = (p: any) =>
@@ -1151,7 +1248,7 @@ export default function AgentPage() {
   const agencyPendingAideParcels = pendingAideParcels.filter((p: any) =>
     p.originCity === profile?.city || p.sender?.city === profile?.city ||
     aideAgents.some((a: any) => a.id === p.agentId))
-  const aideParcelsFor = (aideId: string) => pendingAideParcels.filter((p: any) => p.agentId === aideId)
+  const aideParcelsFor = (aideId: string) => parcels.filter((p: any) => p.createdBy === aideId || p.agentId === aideId)
 
   // ── Form helpers ───────────────────────────────────────────────────────────
   const f = (field: string) => (e: any) => setForm((p: any) => ({ ...p, [field]: e.target.value }))
@@ -1314,8 +1411,6 @@ export default function AgentPage() {
       return
     }
 
-    console.log('📦 Scan détecté:', barcode, 'length:', barcode.length)
-
     // Normaliser le code scanné
     const normalized = barcode.toUpperCase().trim()
 
@@ -1334,17 +1429,14 @@ export default function AgentPage() {
     })
 
     if (found) {
-      console.log('✅ Trouvé localement:', found.trackingId)
       setGlobalScanModal(found)
       return
     }
 
     // Si pas trouvé localement, rechercher dans la base
-    console.log('🔍 Recherche dans la base...')
     try {
       const result = await searchParcelByTrackingId(barcode)
       if (result) {
-        console.log('✅ Trouvé dans la base:', result.trackingId)
         setGlobalScanModal(result)
       } else {
         console.error('❌ Introuvable:', barcode)
@@ -1430,6 +1522,7 @@ export default function AgentPage() {
     parcelEditorFilter, setParcelEditorFilter,
     destinationCityFilter, setDestinationCityFilter,  // ⭐ Filtre ville de destination
     driverFilter, setDriverFilter,  // ⭐ Filtre par livreur/chauffeur
+    portTypeFilter, setPortTypeFilter,  // ⭐ Filtre par type de port
     parcelPage, setParcelPage,
     scanOpen, setScanOpen,
     scanQuery, setScanQuery,
@@ -1443,6 +1536,11 @@ export default function AgentPage() {
     bulkLoadPhone, setBulkLoadPhone,
     bulkLoadBusy, setBulkLoadBusy,
     bulkLoadError, setBulkLoadError,
+    bulkAssignSelectedIds, setBulkAssignSelectedIds,
+    bulkAssignDriverId, setBulkAssignDriverId,
+    bulkAssignSectorId, setBulkAssignSectorId,
+    bulkAssignBusy, setBulkAssignBusy,
+    bulkAssignError, setBulkAssignError,
     deliveryModal, setDeliveryModal,
     editingParcel, setEditingParcel,
     editForm, setEditForm,
@@ -1462,7 +1560,7 @@ export default function AgentPage() {
     allUsers, setAllUsers,
     sameCity,
     isParcelCreator, isChefAgencyAideParcel,
-    canActAsParcelOwner, canEditParcelDetails,
+    canActAsParcelOwner, canEditParcelDetails, canEditField, canPerformAction,
     canManageStatus, canManageReturnDelivery,
     isReturnOriginCity, canManageDeliveryAssignment,
     isPointedForDelivery, canLoadTransportParcel,
@@ -1479,6 +1577,7 @@ export default function AgentPage() {
     handleAssignTransport,
     handleAssignDelivery,
     handleBulkLoadTransport,
+    handleBulkAssignDriver,
     handleCodeVerify, handleEditSave,
     handleCreateReturnParcel,
     handleReturnDirect,

@@ -8,7 +8,11 @@ import {
   ExternalLink,
   Filter,
   Package,
+  Plus,
+  Printer,
+  X,
 } from 'lucide-react'
+import { useState } from 'react'
 import {
   CITIES,
   COD_PAYMENT_TYPES,
@@ -18,6 +22,7 @@ import {
   codCollectedLabel,
 } from '../../../firebase/constants'
 import { fmt } from '../../../utils/formatNumber'
+import { printAdminExpeditions } from '../../../utils/agentPrintUtils'
 
 const RETURN_REASONS = [
   'Refus du client',
@@ -38,6 +43,10 @@ export default function AdminExpeditionsTab({
   setDriverFilter,
   statusFilter,
   setStatusFilter,
+  serviceTypeFilter,
+  setServiceTypeFilter,
+  portTypeFilter,
+  setPortTypeFilter,
   users,
   datePreset,
   setDatePreset,
@@ -48,6 +57,8 @@ export default function AdminExpeditionsTab({
   filtered,
   loading,
   setCodEditModal,
+  setNicEditModal,
+  setNewParcelModal,
   setStatusModal,
   openAdminEdit,
   allParcels,
@@ -60,6 +71,18 @@ export default function AdminExpeditionsTab({
   deleteConfirm,
   deleting,
 }: any) {
+  const [showPrintModal, setShowPrintModal] = useState(false)
+  const [printGroupBy, setPrintGroupBy] = useState<'agency' | 'status' | 'none'>('none')
+
+  const handlePrint = () => {
+    if (filtered.length === 0) {
+      alert('Aucune expédition à imprimer')
+      return
+    }
+    printAdminExpeditions(filtered, printGroupBy, 'Liste des Expéditions')
+    setShowPrintModal(false)
+  }
+
   return (
     <>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 mt-2">
@@ -83,6 +106,23 @@ export default function AdminExpeditionsTab({
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 mb-4 space-y-3">
         <div className="flex flex-wrap gap-3 items-center">
+          <button
+            onClick={() => setNewParcelModal({
+              form: {
+                senderNic: '', senderName: '', senderTel: '', senderAddress: '', senderCity: '',
+                receiverName: '', receiverTel: '', receiverAddress: '', receiverCity: '',
+                weight: '', nbColis: '1', serviceType: 'simple',
+                portType: 'port_paye', portPrice: '',
+                codAmount: '0',
+              },
+              loading: false,
+              error: ''
+            })}
+            className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-sm transition shadow-sm"
+            title="Créer une nouvelle expédition"
+          >
+            <Plus className="w-4 h-4" /> Nouvelle expédition
+          </button>
           <Filter className="w-4 h-4 text-gray-400 shrink-0" />
           <input
             value={search}
@@ -138,13 +178,119 @@ export default function AdminExpeditionsTab({
                       if (e.target.checked) {
                         setStatusFilter([...statusFilter, s])
                       } else {
-                        setStatusFilter(statusFilter.filter(f => f !== s))
+                        setStatusFilter(statusFilter.filter((f: string) => f !== s))
                       }
                     }}
                     className="w-3 h-3 rounded"
                   />
                   <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
                   {s}
+                </label>
+              )
+            })}
+          </div>
+        </div>
+
+        <div className="border-t border-gray-100 pt-3">
+          <div className="flex items-center justify-between mb-2">
+            <span className="text-[10px] text-gray-400 font-bold uppercase">Type de service (multi-select) :</span>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setServiceTypeFilter([])}
+                className="text-[10px] text-gray-500 hover:text-gray-700 underline"
+              >
+                Tout désélectionner
+              </button>
+              <button
+                onClick={() => setServiceTypeFilter(['simple', 'especes', 'cheque', 'traite', 'retour_bl'])}
+                className="text-[10px] text-blue-600 hover:text-blue-700 underline"
+              >
+                Tout sélectionner
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { key: 'simple', label: 'Simple', emoji: '📦', bg: 'bg-gray-100', text: 'text-gray-700' },
+              { key: 'especes', label: 'C/Espèces', emoji: '💵', bg: 'bg-green-100', text: 'text-green-700' },
+              { key: 'cheque', label: 'C/Chèque', emoji: '📋', bg: 'bg-blue-100', text: 'text-blue-700' },
+              { key: 'traite', label: 'C/Traite', emoji: '📝', bg: 'bg-purple-100', text: 'text-purple-700' },
+              { key: 'retour_bl', label: 'Retour BL', emoji: '🧾', bg: 'bg-orange-100', text: 'text-orange-700' },
+            ].map(st => {
+              const active = serviceTypeFilter.includes(st.key)
+              return (
+                <label
+                  key={st.key}
+                  className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition whitespace-nowrap border cursor-pointer ${active ? `${st.bg} ${st.text} border-current` : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={active}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setServiceTypeFilter([...serviceTypeFilter, st.key])
+                      } else {
+                        setServiceTypeFilter(serviceTypeFilter.filter((f: string) => f !== st.key))
+                      }
+                    }}
+                    className="w-3 h-3 rounded"
+                  />
+                  <span>{st.emoji}</span>
+                  {st.label}
+                </label>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Type de port */}
+        <div className="border-t border-gray-100 pt-3 space-y-2">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Package className="w-4 h-4 text-gray-400" />
+              <span className="text-xs font-semibold text-gray-600">Type de port</span>
+            </div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setPortTypeFilter([])}
+                className="text-[10px] text-gray-500 hover:text-gray-700 underline"
+              >
+                Effacer
+              </button>
+              <button
+                onClick={() => setPortTypeFilter(['port_paye', 'port_du', 'port_en_compte'])}
+                className="text-[10px] text-blue-600 hover:text-blue-700 underline"
+              >
+                Tout sélectionner
+              </button>
+            </div>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {[
+              { key: 'port_paye', label: 'Port payé', emoji: '✅', bg: 'bg-blue-100', text: 'text-blue-700' },
+              { key: 'port_du', label: 'Port dû', emoji: '📮', bg: 'bg-orange-100', text: 'text-orange-700' },
+              { key: 'port_en_compte', label: 'En compte', emoji: '💼', bg: 'bg-purple-100', text: 'text-purple-700' },
+            ].map(pt => {
+              const active = portTypeFilter.includes(pt.key)
+              return (
+                <label
+                  key={pt.key}
+                  className={`shrink-0 flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-[11px] font-medium transition whitespace-nowrap border cursor-pointer ${active ? `${pt.bg} ${pt.text} border-current` : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'}`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={active}
+                    onChange={(e) => {
+                      if (e.target.checked) {
+                        setPortTypeFilter([...portTypeFilter, pt.key])
+                      } else {
+                        setPortTypeFilter(portTypeFilter.filter((f: string) => f !== pt.key))
+                      }
+                    }}
+                    className="w-3 h-3 rounded"
+                  />
+                  <span>{pt.emoji}</span>
+                  {pt.label}
                 </label>
               )
             })}
@@ -191,6 +337,12 @@ export default function AdminExpeditionsTab({
             {filtered.length} resultat(s)
           </span>
           <button
+            onClick={() => setShowPrintModal(true)}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold bg-blue-600 text-white hover:bg-blue-700 transition shadow-sm"
+          >
+            <Printer className="w-4 h-4" /> Imprimer
+          </button>
+          <button
             onClick={openArchiveModal}
             className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition shadow-sm"
           >
@@ -209,7 +361,7 @@ export default function AdminExpeditionsTab({
             <table className="w-full text-sm min-w-215">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  {['Tracking ID', 'Date', 'Expediteur', 'Destinataire', 'Ville', 'Poids', 'RETOUR FOND', 'Statut RETOUR FOND', 'Statut', 'Modifier', 'Suivi'].map(h => (
+                  {['N EXP', 'Date', 'Expediteur', 'Destinataire', 'Ville', 'Poids', 'Port Payé', 'Port Dû', 'En Compte', 'RETOUR FOND', 'Statut RETOUR FOND', 'Statut', 'Modifier', 'Suivi'].map(h => (
                     <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
                       {h}
                     </th>
@@ -218,7 +370,17 @@ export default function AdminExpeditionsTab({
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {filtered.length === 0 ? (
-                  <tr><td colSpan={11} className="px-4 py-12 text-center text-gray-400">Aucun colis trouve</td></tr>
+                  <tr><td colSpan={14} className="px-4 py-12 text-center">
+                    {!search && cityFilter === 'Toutes' && driverFilter === 'Tous' && statusFilter.length === 0 ? (
+                      <div className="text-gray-500">
+                        <div className="text-2xl mb-2">🔍</div>
+                        <div className="font-semibold">Utilisez la recherche ou les filtres ci-dessus</div>
+                        <div className="text-sm text-gray-400 mt-1">Pour optimiser les performances, les colis s'affichent uniquement avec recherche/filtres actifs (max 300 résultats)</div>
+                      </div>
+                    ) : (
+                      <div className="text-gray-400">Aucun colis trouvé</div>
+                    )}
+                  </td></tr>
                 ) : filtered.map((p: any) => {
                   const c = STATUS_COLORS[p.status] || STATUS_COLORS['Initialisé']
                   const cs = p.codAmount > 0
@@ -239,10 +401,20 @@ export default function AdminExpeditionsTab({
                   return (
                     <tr key={p.id} className="hover:bg-gray-50 transition">
                       <td className="px-4 py-3">
-                        <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">{p.trackingId}</span>
-                        {p.lastAdminEditAt && (
-                          <span className="ml-1 text-[10px] text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded font-semibold" title={`Modifie admin le ${new Date(p.lastAdminEditAt).toLocaleDateString('fr-MA')}`}>Admin</span>
-                        )}
+                        <div className="flex items-center gap-1.5">
+                          <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">{p.senderNic || p.sender?.nic || '-'}</span>
+                          <button
+                            onClick={() => setNicEditModal({ parcel: p, value: p.senderNic || p.sender?.nic || '', loading: false, error: '' })}
+                            className="p-0.5 rounded hover:bg-blue-50 text-gray-400 hover:text-blue-500 transition"
+                            title="Modifier le N° EXP (Admin)"
+                          >
+                            <Edit2 className="w-3 h-3" />
+                          </button>
+                          {p.lastAdminEditAt && (
+                            <span className="text-[10px] text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded font-semibold" title={`Modifie admin le ${new Date(p.lastAdminEditAt).toLocaleDateString('fr-MA')}`}>Admin</span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-gray-400 mt-0.5">ID: {p.trackingId}</div>
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{date}</td>
                       <td className="px-4 py-3">
@@ -255,6 +427,24 @@ export default function AdminExpeditionsTab({
                       </td>
                       <td className="px-4 py-3 font-semibold text-gray-700 whitespace-nowrap">{p.receiver?.city}</td>
                       <td className="px-4 py-3 text-gray-600">{p.weight} kg</td>
+                      <td className="px-4 py-3">
+                        {p.portType === 'port_paye'
+                          ? <span className="text-blue-600 font-bold">{p.price || 0} DH</span>
+                          : <span className="text-gray-300">-</span>
+                        }
+                      </td>
+                      <td className="px-4 py-3">
+                        {p.portType === 'port_du'
+                          ? <span className="text-orange-600 font-bold">{p.price || 0} DH</span>
+                          : <span className="text-gray-300">-</span>
+                        }
+                      </td>
+                      <td className="px-4 py-3">
+                        {p.portType === 'port_en_compte'
+                          ? <span className="text-purple-600 font-bold">{p.price || 0} DH</span>
+                          : <span className="text-gray-300">-</span>
+                        }
+                      </td>
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
                           {p.codAmount > 0
@@ -344,6 +534,110 @@ export default function AdminExpeditionsTab({
                   : 'Charger plus de colis'}
               </button>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal d'impression */}
+      {showPrintModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden">
+            <div className="bg-gradient-to-r from-blue-600 to-blue-700 px-6 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-white bg-opacity-20 rounded-xl flex items-center justify-center">
+                  <Printer className="w-5 h-5 text-white" />
+                </div>
+                <h3 className="text-lg font-bold text-white">Imprimer les expéditions</h3>
+              </div>
+              <button
+                onClick={() => setShowPrintModal(false)}
+                className="text-white hover:bg-white hover:bg-opacity-20 rounded-lg p-1 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div>
+                <p className="text-sm text-gray-600 mb-3">
+                  Choisissez comment organiser les expéditions dans le document :
+                </p>
+                <div className="space-y-2">
+                  <label className={`flex items-center gap-3 p-4 border-2 rounded-xl cursor-pointer transition ${
+                    printGroupBy === 'none' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-blue-300'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="printGroupBy"
+                      value="none"
+                      checked={printGroupBy === 'none'}
+                      onChange={(e) => setPrintGroupBy(e.target.value as any)}
+                      className="w-4 h-4 text-blue-600"
+                    />
+                    <div>
+                      <div className="font-semibold text-gray-800">Sans tri</div>
+                      <div className="text-xs text-gray-500">Toutes les expéditions dans l'ordre actuel</div>
+                    </div>
+                  </label>
+
+                  <label className={`flex items-center gap-3 p-4 border-2 rounded-xl cursor-pointer transition ${
+                    printGroupBy === 'agency' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-blue-300'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="printGroupBy"
+                      value="agency"
+                      checked={printGroupBy === 'agency'}
+                      onChange={(e) => setPrintGroupBy(e.target.value as any)}
+                      className="w-4 h-4 text-blue-600"
+                    />
+                    <div>
+                      <div className="font-semibold text-gray-800">Par agence (ville de destination)</div>
+                      <div className="text-xs text-gray-500">Grouper par ville de destination</div>
+                    </div>
+                  </label>
+
+                  <label className={`flex items-center gap-3 p-4 border-2 rounded-xl cursor-pointer transition ${
+                    printGroupBy === 'status' ? 'border-blue-500 bg-blue-50' : 'border-gray-200 hover:border-blue-300'
+                  }`}>
+                    <input
+                      type="radio"
+                      name="printGroupBy"
+                      value="status"
+                      checked={printGroupBy === 'status'}
+                      onChange={(e) => setPrintGroupBy(e.target.value as any)}
+                      className="w-4 h-4 text-blue-600"
+                    />
+                    <div>
+                      <div className="font-semibold text-gray-800">Par statut</div>
+                      <div className="text-xs text-gray-500">Grouper par statut de livraison</div>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-3">
+                <p className="text-xs text-blue-800">
+                  <strong>{filtered.length}</strong> expédition(s) sera(ont) imprimée(s)
+                </p>
+              </div>
+
+              <div className="flex gap-3 pt-2">
+                <button
+                  onClick={() => setShowPrintModal(false)}
+                  className="flex-1 px-4 py-2.5 border-2 border-gray-200 rounded-xl font-semibold text-gray-700 hover:bg-gray-50 transition"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={handlePrint}
+                  className="flex-1 px-4 py-2.5 bg-blue-600 text-white rounded-xl font-semibold hover:bg-blue-700 transition shadow-sm flex items-center justify-center gap-2"
+                >
+                  <Printer className="w-4 h-4" />
+                  Imprimer
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

@@ -325,6 +325,7 @@ export default function AdminPage() {
   const [cityFilter,       setCityFilter]       = useState('Toutes')
   const [statusFilter,     setStatusFilter]     = useState<string[]>([])
   const [serviceTypeFilter, setServiceTypeFilter] = useState<string[]>([])
+  const [portTypeFilter,   setPortTypeFilter]   = useState<string[]>([])
   const [driverFilter,     setDriverFilter]     = useState('Tous')
   const [search,        setSearch]        = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
@@ -510,7 +511,7 @@ export default function AdminPage() {
   useEffect(() => {
     // ✋ Vérifier si un filtre/recherche est actif
     const hasSearch = search.trim() !== ''
-    const hasFilter = cityFilter !== 'Toutes' || driverFilter !== 'Tous' || statusFilter.length > 0 || serviceTypeFilter.length > 0
+    const hasFilter = cityFilter !== 'Toutes' || driverFilter !== 'Tous' || statusFilter.length > 0 || serviceTypeFilter.length > 0 || portTypeFilter.length > 0
 
     setLoading(true)
 
@@ -962,6 +963,10 @@ export default function AdminPage() {
         if (!hasMatch) return false
       }
 
+      if (portTypeFilter.length > 0 && !portTypeFilter.includes(p.portType)) {
+        return false
+      }
+
       return true
     })
 
@@ -1300,6 +1305,8 @@ export default function AdminPage() {
               setStatusFilter={setStatusFilter}
               serviceTypeFilter={serviceTypeFilter}
               setServiceTypeFilter={setServiceTypeFilter}
+              portTypeFilter={portTypeFilter}
+              setPortTypeFilter={setPortTypeFilter}
               users={users}
               datePreset={datePreset}
               setDatePreset={setDatePreset}

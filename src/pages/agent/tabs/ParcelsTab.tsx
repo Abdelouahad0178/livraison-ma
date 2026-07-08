@@ -66,6 +66,7 @@ export default function ParcelsTab() {
     parcelEditorFilter, setParcelEditorFilter,
     destinationCityFilter, setDestinationCityFilter,  // ⭐ Filtre ville de destination
     driverFilter, setDriverFilter,  // ⭐ Filtre par livreur
+    portTypeFilter, setPortTypeFilter,  // ⭐ Filtre par type de port
     showFilters, setShowFilters,
     subTab, setSubTab,
     parcelPage, setParcelPage,
@@ -287,6 +288,7 @@ export default function ParcelsTab() {
             parcelStatusFilter !== 'all',
             destinationCityFilter !== 'all',
             driverFilter !== 'all',
+            portTypeFilter !== 'all',
             datePreset !== 'all',
           ].filter(Boolean).length
           return (
@@ -392,6 +394,23 @@ export default function ParcelsTab() {
                       <button key={key} onClick={() => setServiceFilter(key)}
                         className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
                           serviceFilter === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >{emoji ? `${emoji} ${label}` : label}</button>
+                    ))}
+                  </div>
+
+                  {/* Type de port */}
+                  <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Type port</span>
+                    {[
+                      { key: 'all', label: 'Tous', emoji: '' },
+                      { key: 'port_paye', label: 'Port payé', emoji: '✅' },
+                      { key: 'port_du', label: 'Port dû', emoji: '📮' },
+                      { key: 'port_en_compte', label: 'En compte', emoji: '💼' },
+                    ].map(({ key, label, emoji }) => (
+                      <button key={key} onClick={() => setPortTypeFilter(key)}
+                        className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
+                          portTypeFilter === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                         }`}
                       >{emoji ? `${emoji} ${label}` : label}</button>
                     ))}
