@@ -709,12 +709,10 @@ export default function AdminPage() {
   const filteredCod = useMemo(() => {
     if (!Array.isArray(codDateFiltered)) return []
     let list = codDateFiltered
-    if (codFilter === 'pending')   list = list.filter((p: any) => !p.codStatus || p.codStatus === 'pending')
-    if (codFilter === 'collected') list = list.filter((p: any) => p.codStatus === 'collected')
-    if (codFilter === 'remis')     list = list.filter((p: any) => p.codStatus === 'remis' && !p.codSenderPaid)
-    if (codFilter === 'transit')   list = list.filter((p: any) => p.codSentToSource && !p.codReceivedBySource)
-    if (codFilter === 'recu')      list = list.filter((p: any) => p.codReceivedBySource && !p.codSenderPaid)
-    if (codFilter === 'regle')     list = list.filter((p: any) => p.codSenderPaid)
+    if (codFilter === 'especes')   list = list.filter((p: any) => p.codPaymentType === 'especes')
+    if (codFilter === 'cheque')    list = list.filter((p: any) => p.codPaymentType === 'cheque')
+    if (codFilter === 'traite')    list = list.filter((p: any) => p.codPaymentType === 'traite')
+    if (codFilter === 'autres')    list = list.filter((p: any) => p.codPaymentType && !['especes', 'cheque', 'traite'].includes(p.codPaymentType))
     if (codSearch) {
       const q = codSearch.toLowerCase()
       list = list.filter((p: any) =>

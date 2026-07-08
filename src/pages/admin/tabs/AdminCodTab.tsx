@@ -410,12 +410,10 @@ export default function AdminCodTab({
           <div className="flex gap-2 flex-wrap">
             {[
               { key: 'all',       label: 'Tous' },
-              { key: 'pending',   label: '⏳ En attente' },
-              { key: 'collected', label: '💰 Collecté' },
-              { key: 'remis',     label: '🔄 Remis agence' },
-              { key: 'transit',   label: '🚚 En transit source' },
-              { key: 'recu',      label: '📥 Reçu — à régler' },
-              { key: 'regle',     label: '✅ Réglé' },
+              { key: 'especes',   label: '💵 Contre espèces' },
+              { key: 'cheque',    label: '📝 Contre chèque' },
+              { key: 'traite',    label: '📄 Contre traite' },
+              { key: 'autres',    label: '📋 Autres' },
             ].map(({ key, label }) => (
               <button key={key} onClick={() => setCodFilter(key)}
                 className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
