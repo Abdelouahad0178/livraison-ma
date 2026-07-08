@@ -452,7 +452,7 @@ export default function AdminCodTab({
                   <tr key={p.id} className="hover:bg-gray-50 transition">
                     {/* N° EXP */}
                     <td className="px-4 py-3">
-                      <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg font-semibold">{p.trackingId}</span>
+                      <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg font-semibold">{p.sender?.nic || '—'}</span>
                     </td>
                     {/* Date expédition */}
                     <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">
