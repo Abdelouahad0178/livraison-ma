@@ -1,5 +1,5 @@
 import * as React from 'react'
-import { Calendar, Search, MessageCircle, CheckCircle, Banknote, Filter } from 'lucide-react'
+import { Calendar, Search, MessageCircle, CheckCircle, Banknote, Filter, Printer } from 'lucide-react'
 import { COD_STATUS, COD_PAYMENT_TYPES } from '../../../firebase/constants'
 import { fmt } from '../../../utils/formatNumber'
 
@@ -425,10 +425,68 @@ export default function AdminCodTab({
               >{label}</button>
             ))}
           </div>
+
+          {/* Bouton Imprimer */}
+          <div className="flex justify-end pt-3 border-t border-gray-100">
+            <button
+              onClick={() => {
+                const printContent = document.getElementById('cod-table-print')
+                if (!printContent) return
+
+                const printWindow = window.open('', '_blank')
+                if (!printWindow) return
+
+                printWindow.document.write(`
+                  <!DOCTYPE html>
+                  <html>
+                    <head>
+                      <title>RETOUR FOND - ${new Date().toLocaleDateString('fr-MA')}</title>
+                      <style>
+                        body { font-family: Arial, sans-serif; margin: 20px; }
+                        h1 { text-align: center; color: #1e40af; margin-bottom: 10px; }
+                        .info { text-align: center; margin-bottom: 20px; font-size: 12px; color: #666; }
+                        table { width: 100%; border-collapse: collapse; font-size: 11px; }
+                        th { background: #f3f4f6; padding: 8px; text-align: left; border: 1px solid #d1d5db; font-weight: bold; }
+                        td { padding: 6px 8px; border: 1px solid #e5e7eb; }
+                        tr:nth-child(even) { background: #f9fafb; }
+                        .total { margin-top: 20px; text-align: right; font-size: 14px; font-weight: bold; }
+                        @media print {
+                          body { margin: 10px; }
+                          table { page-break-inside: auto; }
+                          tr { page-break-inside: avoid; page-break-after: auto; }
+                        }
+                      </style>
+                    </head>
+                    <body>
+                      <h1>📋 RETOUR FOND</h1>
+                      <div class="info">
+                        Date d'impression : ${new Date().toLocaleString('fr-MA')}<br>
+                        Nombre de colis : ${filteredCod.length}
+                      </div>
+                      ${printContent.innerHTML}
+                      <div class="total">
+                        Total : ${fmt(filteredCod.reduce((s: any, p: any) => s + (parseFloat(p.codAmount) || 0), 0))} DH
+                      </div>
+                    </body>
+                  </html>
+                `)
+                printWindow.document.close()
+                printWindow.focus()
+                setTimeout(() => {
+                  printWindow.print()
+                  printWindow.close()
+                }, 250)
+              }}
+              className="flex items-center gap-2 bg-purple-600 hover:bg-purple-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition"
+            >
+              <Printer className="w-4 h-4" />
+              Imprimer le tableau
+            </button>
+          </div>
         </div>
 
         <div className="overflow-x-auto">
-          <table className="w-full text-sm min-w-205">
+          <table id="cod-table-print" className="w-full text-sm min-w-205">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
                 {['N° EXP','Date expédition','Destinataire','Ville','Montant RETOUR FOND','Mode paiement','Statut RETOUR FOND','Collecté par','Date collecte'].map(h => (
