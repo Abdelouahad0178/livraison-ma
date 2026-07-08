@@ -429,7 +429,7 @@ export default function AdminCodTab({
           <table className="w-full text-sm min-w-205">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
-                {['Tracking ID','Destinataire','Ville','Montant RETOUR FOND','Mode paiement','Statut RETOUR FOND','Collecté par','Date collecte','Action'].map(h => (
+                {['N° EXP','Date expédition','Destinataire','Ville','Montant RETOUR FOND','Mode paiement','Statut RETOUR FOND','Collecté par','Date collecte'].map(h => (
                   <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -449,70 +449,49 @@ export default function AdminCodTab({
                 const openReq = agentCodRequests.find((r: any) => r.parcelId === p.id && r.status !== 'resolved')
                 return (
                   <tr key={p.id} className="hover:bg-gray-50 transition">
+                    {/* N° EXP */}
                     <td className="px-4 py-3">
-                      <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">{p.trackingId}</span>
+                      <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg font-semibold">{p.trackingId}</span>
                     </td>
+                    {/* Date expédition */}
+                    <td className="px-4 py-3 text-xs text-gray-600 whitespace-nowrap">
+                      {(() => {
+                        if (p.workDate) return new Date(p.workDate).toLocaleDateString('fr-MA')
+                        if (p.createdAt?.toDate) return p.createdAt.toDate().toLocaleDateString('fr-MA')
+                        if (p.createdAt) return new Date(p.createdAt).toLocaleDateString('fr-MA')
+                        return '—'
+                      })()}
+                    </td>
+                    {/* Destinataire */}
                     <td className="px-4 py-3">
                       <p className="font-medium text-gray-800">{p.receiver?.name}</p>
                       <p className="text-xs text-gray-400">{p.receiver?.tel}</p>
                     </td>
+                    {/* Ville */}
                     <td className="px-4 py-3 font-semibold text-gray-700">{p.receiver?.city}</td>
+                    {/* Montant RETOUR FOND */}
                     <td className="px-4 py-3">
                       <span className="text-orange-600 font-bold text-base">{p.codAmount} DH</span>
                     </td>
+                    {/* Mode paiement */}
                     <td className="px-4 py-3">
                       {cpt
                         ? <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${(cpt as any).bg} ${(cpt as any).text}`}>{(cpt as any).emoji} {(cpt as any).label}</span>
                         : <span className="text-gray-300 text-xs">—</span>
                       }
                     </td>
+                    {/* Statut RETOUR FOND */}
                     <td className="px-4 py-3">
                       <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${cs.bg} ${cs.text}`}>
                         <span className={`w-1.5 h-1.5 rounded-full ${cs.dot}`} />
                         {cs.label}
                       </span>
                     </td>
+                    {/* Collecté par */}
                     <td className="px-4 py-3 text-xs text-gray-600">{p.codCollectedBy || '—'}</td>
+                    {/* Date collecte */}
                     <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">
                       {p.codCollectedAt ? new Date(p.codCollectedAt).toLocaleDateString('fr-MA') : '—'}
-                    </td>
-                    <td className="px-4 py-3">
-                      <div className="space-y-2 min-w-44">
-                      {p.codStatus === 'collected' && !p.codSenderPaid && (
-                        <button onClick={() => handleRemitCod(p)}
-                          className="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg font-semibold transition flex items-center gap-1.5"
-                        >
-                          <CheckCircle className="w-3.5 h-3.5" /> Marquer remis
-                        </button>
-                      )}
-                      {p.codStatus === 'remis' && !p.codSenderPaid && (
-                        <button onClick={() => handleSettleCodAdmin(p)}
-                          className="text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg font-semibold transition flex items-center gap-1.5"
-                        >
-                          <CheckCircle className="w-3.5 h-3.5" /> Marquer réglé
-                        </button>
-                      )}
-                      {!p.codSenderPaid && (
-                        <div className="space-y-1">
-                          <input
-                            value={codRequestDrafts[p.id] || ''}
-                            onChange={e => setCodRequestDrafts((d: any) => ({ ...d, [p.id]: e.target.value }))}
-                            placeholder="Message à l'agent..."
-                            className="w-full border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:border-amber-500 focus:outline-none"
-                          />
-                          <button onClick={() => handleSendCodRequest(p)} disabled={codRequestBusy === p.id || !!openReq}
-                            className={`w-full text-xs px-3 py-1.5 rounded-lg font-semibold transition flex items-center justify-center gap-1.5 ${
-                              openReq
-                                ? 'bg-amber-100 text-amber-700 cursor-not-allowed'
-                                : 'bg-amber-500 hover:bg-amber-600 text-white'
-                            }`}
-                          >
-                            <MessageCircle className="w-3.5 h-3.5" />
-                            {openReq ? 'Demande envoyée' : codRequestBusy === p.id ? 'Envoi...' : 'Demander réglage'}
-                          </button>
-                        </div>
-                      )}
-                      </div>
                     </td>
                   </tr>
                 )
