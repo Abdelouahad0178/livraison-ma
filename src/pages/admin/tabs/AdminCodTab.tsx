@@ -69,6 +69,18 @@ export default function AdminCodTab({
   const [selectedCity, setSelectedCity] = React.useState<string>('all')
   const [selectedPaymentType, setSelectedPaymentType] = React.useState<string>('all')
 
+  // Fonction pour normaliser le type de paiement
+  const normalizePaymentType = (p: any) => {
+    const paymentType = (p.serviceType || p.codPaymentType || '').toLowerCase().trim()
+    const removeAccents = (str: string) => str.normalize('NFD').replace(/[̀-ͯ]/g, '')
+    const normalized = removeAccents(paymentType)
+    if (normalized.includes('cheque')) return 'cheque'
+    if (normalized.includes('espece')) return 'especes'
+    if (normalized.includes('traite')) return 'traite'
+    if (normalized.includes('bon') && normalized.includes('livraison')) return 'bon_livraison'
+    return null
+  }
+
   // Filtrer par ville et type de paiement
   const cityAndPaymentFiltered = React.useMemo(() => {
     let filtered = codDateFiltered
@@ -80,7 +92,7 @@ export default function AdminCodTab({
     }
 
     if (selectedPaymentType !== 'all') {
-      filtered = filtered.filter((p: any) => p.codPaymentType === selectedPaymentType)
+      filtered = filtered.filter((p: any) => normalizePaymentType(p) === selectedPaymentType)
     }
 
     return filtered
@@ -194,7 +206,7 @@ export default function AdminCodTab({
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {COD_PAYMENT_TYPES.map(pt => {
-            const filtered = cityAndPaymentFiltered.filter((p: any) => p.codPaymentType === pt.key)
+            const filtered = cityAndPaymentFiltered.filter((p: any) => normalizePaymentType(p) === pt.key)
             const total = filtered.reduce((s: any, p: any) => s + (parseFloat(p.codAmount) || 0), 0)
             const count = filtered.length
 
