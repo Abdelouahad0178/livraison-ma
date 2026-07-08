@@ -709,10 +709,10 @@ export default function AdminPage() {
   const filteredCod = useMemo(() => {
     if (!Array.isArray(codDateFiltered)) return []
     let list = codDateFiltered
-    if (codFilter === 'especes')   list = list.filter((p: any) => p.codPaymentType === 'especes')
-    if (codFilter === 'cheque')    list = list.filter((p: any) => p.codPaymentType === 'cheque')
+    if (codFilter === 'especes')   list = list.filter((p: any) => p.codPaymentType === 'especes' || p.codPaymentType === 'espèces')
+    if (codFilter === 'cheque')    list = list.filter((p: any) => p.codPaymentType === 'cheque' || p.codPaymentType === 'chèque')
     if (codFilter === 'traite')    list = list.filter((p: any) => p.codPaymentType === 'traite')
-    if (codFilter === 'autres')    list = list.filter((p: any) => p.codPaymentType && !['especes', 'cheque', 'traite'].includes(p.codPaymentType))
+    if (codFilter === 'autres')    list = list.filter((p: any) => p.codPaymentType && !['especes', 'espèces', 'cheque', 'chèque', 'traite'].includes(p.codPaymentType))
     if (codSearch) {
       const q = codSearch.toLowerCase()
       list = list.filter((p: any) =>
