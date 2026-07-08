@@ -86,33 +86,6 @@ export default function AdminCodTab({
     return filtered
   }, [codDateFiltered, selectedCity, selectedPaymentType])
 
-  // Calculer les stats par ville
-  const statsByCity = React.useMemo(() => {
-    const stats: Record<string, { total: number; count: number; byType: Record<string, { total: number; count: number }> }> = {}
-
-    codDateFiltered.forEach((p: any) => {
-      const city = p.destinationCity || p.receiver?.city || 'Autre'
-      const amount = parseFloat(p.codAmount) || 0
-      const paymentType = p.codPaymentType || 'non_defini'
-
-      if (!stats[city]) {
-        stats[city] = { total: 0, count: 0, byType: {} }
-      }
-
-      stats[city].total += amount
-      stats[city].count += 1
-
-      if (!stats[city].byType[paymentType]) {
-        stats[city].byType[paymentType] = { total: 0, count: 0 }
-      }
-
-      stats[city].byType[paymentType].total += amount
-      stats[city].byType[paymentType].count += 1
-    })
-
-    return stats
-  }, [codDateFiltered])
-
   return (
     <div className="mt-4 space-y-6">
 
@@ -268,50 +241,6 @@ export default function AdminCodTab({
           </div>
         </div>
       </div>
-
-      {/* STATISTIQUES PAR VILLE */}
-      {Object.keys(statsByCity).length > 1 && (
-        <div className="bg-white border-2 border-blue-200 rounded-2xl p-6 shadow-lg">
-          <h3 className="font-black text-blue-800 mb-5 flex items-center gap-2 text-lg">
-            🏙️ Répartition par Ville
-          </h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {Object.entries(statsByCity)
-              .sort(([, a]: any, [, b]: any) => b.total - a.total)
-              .map(([city, stats]: [string, any]) => (
-              <div key={city} className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4">
-                <h4 className="font-bold text-blue-900 mb-3">{city}</h4>
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-600">Total:</span>
-                    <span className="text-xl font-black text-blue-700">{fmt(stats.total)} DH</span>
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-sm text-gray-600">Colis:</span>
-                    <span className="text-sm font-bold text-blue-600">{stats.count}</span>
-                  </div>
-                  {Object.keys(stats.byType).length > 0 && (
-                    <div className="pt-2 border-t border-blue-200 mt-2">
-                      <p className="text-xs font-semibold text-gray-500 mb-1">Par mode:</p>
-                      {Object.entries(stats.byType).map(([type, typeStats]: [string, any]) => {
-                        const pt = COD_PAYMENT_TYPES.find(t => t.key === type)
-                        return (
-                          <div key={type} className="flex items-center justify-between text-xs">
-                            <span className="text-gray-600">
-                              {pt?.emoji} {pt?.label || type}:
-                            </span>
-                            <span className="font-bold">{fmt(typeStats.total)} DH ({typeStats.count})</span>
-                          </div>
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
 
       {/* Batch settle banner */}
       {(() => {
