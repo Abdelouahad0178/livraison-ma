@@ -76,6 +76,7 @@ export default function ParcelsTab() {
     // Parcel logic helpers
     canActAsParcelOwner,
     canEditParcelDetails,
+    canEditField,
     canManageStatus,
     canManageReturnDelivery,
     isReturnOriginCity,
@@ -104,6 +105,7 @@ export default function ParcelsTab() {
     handleAssignTransport,
     handleAssignDelivery,
     handleBulkLoadTransport,
+    handleBulkAssignDriver,
 
     // State: bulk transport load
     bulkLoadSelectedIds, setBulkLoadSelectedIds,
@@ -111,6 +113,13 @@ export default function ParcelsTab() {
     bulkLoadPhone, setBulkLoadPhone,
     bulkLoadBusy,
     bulkLoadError, setBulkLoadError,
+
+    // State: bulk assign driver
+    bulkAssignSelectedIds, setBulkAssignSelectedIds,
+    bulkAssignDriverId, setBulkAssignDriverId,
+    bulkAssignSectorId, setBulkAssignSectorId,
+    bulkAssignBusy,
+    bulkAssignError, setBulkAssignError,
 
     // State: aide bulk validation
     selectedAideEntryIds, setSelectedAideEntryIds,
@@ -161,8 +170,22 @@ export default function ParcelsTab() {
 
   const PAGE_SIZE = 25
 
+  // État pour afficher les expéditions livrées par d'autres agences
+  const [showDeliveredByOthers, setShowDeliveredByOthers] = useState(false)
+
   // Sécurité : s'assurer que les tableaux ne sont jamais undefined
-  const safeParcels = filteredParcels || []
+  const safeParcels = (() => {
+    if (showDeliveredByOthers) {
+      // Afficher les colis expédiés par cette agence et livrés par d'autres
+      return (allDisplayParcels || []).filter((p: any) => {
+        const isOriginAgency = p.originCity === profile?.city || p.sender?.city === profile?.city
+        const isDelivered = p.status === 'Livré' && p.deliveredAt
+        const deliveredByOther = p.destinationCity !== profile?.city
+        return isOriginAgency && isDelivered && deliveredByOther
+      })
+    }
+    return filteredParcels || []
+  })()
 
   // ⭐ Calculer les villes de destination disponibles
   const availableDestCities = (() => {
@@ -197,6 +220,17 @@ export default function ParcelsTab() {
   // État pour basculer entre vue cartes et vue tableau
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards')
 
+  // ⭐ État pour recherche spécifique dans le tableau
+  const [tableSearch, setTableSearch] = useState('')
+
+  // État pour modal détails ports
+  const [portDetailsModal, setPortDetailsModal] = useState<{ open: boolean; portType: string; title: string; parcels: any[] }>({
+    open: false,
+    portType: '',
+    title: '',
+    parcels: []
+  })
+
   return (
     <>
       <div className="mt-4 space-y-3">
@@ -219,11 +253,11 @@ export default function ParcelsTab() {
           </span>
         </div>
 
-        {/* Search */}
+        {/* Search - Zone de recherche améliorée */}
         {<div className="relative">
-          <Search className="absolute left-3 top-3 w-4 h-4 text-gray-400" />
+          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-blue-500" />
           <input
-            placeholder="Rechercher (ID, nom, ville, N EXP…)"
+            placeholder="🔍 Rechercher par N° EXP, Nom Expéditeur, Nom Destinataire, Téléphone, Ville..."
             value={search}
             onChange={e => setSearch(e.target.value)}
             onKeyDown={e => {
@@ -233,8 +267,16 @@ export default function ParcelsTab() {
                 if (fixed !== search) setSearch(fixed)
               }
             }}
-            className="w-full bg-white border border-gray-200 pl-9 pr-4 py-2.5 rounded-xl text-sm focus:border-blue-500 focus:outline-none"
+            className="w-full bg-gradient-to-r from-blue-50 to-purple-50 border-2 border-blue-300 pl-12 pr-4 py-3.5 rounded-xl text-sm font-medium text-gray-800 placeholder-gray-500 focus:border-blue-500 focus:bg-white focus:shadow-lg focus:outline-none transition-all"
           />
+          {search && (
+            <button
+              onClick={() => setSearch('')}
+              className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-gray-200 transition"
+            >
+              <X className="w-4 h-4 text-gray-500" />
+            </button>
+          )}
         </div>}
 
         {/* ── TOGGLE FILTRES ── */}
@@ -249,6 +291,28 @@ export default function ParcelsTab() {
           ].filter(Boolean).length
           return (
             <div className="space-y-2">
+              {/* Toggle pour afficher les expéditions livrées par d'autres agences */}
+              <button
+                onClick={() => setShowDeliveredByOthers((v) => !v)}
+                className={`w-full flex items-center justify-between px-4 py-2.5 border rounded-xl shadow-sm transition ${
+                  showDeliveredByOthers
+                    ? 'bg-green-50 border-green-300 hover:bg-green-100'
+                    : 'bg-white border-gray-200 hover:border-green-400 hover:bg-green-50'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Package className={`w-3.5 h-3.5 transition ${showDeliveredByOthers ? 'text-green-600' : 'text-gray-400'}`} />
+                  <span className={`text-xs font-semibold transition ${showDeliveredByOthers ? 'text-green-700' : 'text-gray-600'}`}>
+                    Expéditions livrées par d'autres agences
+                  </span>
+                </div>
+                <div className={`w-4 h-4 rounded border transition flex items-center justify-center ${
+                  showDeliveredByOthers ? 'bg-green-600 border-green-600' : 'border-gray-300'
+                }`}>
+                  {showDeliveredByOthers && <Check className="w-3 h-3 text-white" />}
+                </div>
+              </button>
+
               <button
                 onClick={() => setShowFilters((v: any) => !v)}
                 className="w-full flex items-center justify-between px-4 py-2.5 bg-white border border-gray-200 rounded-xl shadow-sm hover:border-blue-400 hover:bg-blue-50 transition group"
@@ -569,6 +633,116 @@ export default function ParcelsTab() {
                   </div>
                 </div>
               )}
+
+              {/* ⭐ NOUVEAU: Panneau d'assignation en masse à un livreur (chef d'agence uniquement) */}
+              {profile?.role === 'chef_agence' && (() => {
+                // Colis assignables: arrivés dans la ville du chef, pas encore livrés
+                const assignableParcels = filteredParcels.filter((p: any) => {
+                  const isInMyCity = (p.destinationCity === profile?.city || p.receiver?.city === profile?.city)
+                  // Tous les colis dans ma ville qui ne sont pas livrés ni retournés
+                  const notDelivered = !p.deliveredAt && !p.returnedAt && p.status !== 'Livré'
+                  return isInMyCity && notDelivered
+                })
+                const selectedCount = bulkAssignSelectedIds.length
+                const allSelected = assignableParcels.length > 0 && selectedCount === assignableParcels.length
+
+                if (assignableParcels.length === 0) return null
+
+                return (
+                  <div className="bg-green-50 border border-green-200 rounded-2xl p-4 space-y-3">
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <div>
+                        <h3 className="text-sm font-bold text-green-800 flex items-center gap-2">
+                          <User className="w-4 h-4" /> Assignation livreur groupée
+                        </h3>
+                        <p className="text-xs text-green-500 mt-0.5">
+                          {selectedCount} sélectionné(s) sur {assignableParcels.length} colis à assigner
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBulkAssignError('')
+                            setBulkAssignSelectedIds(allSelected ? [] : assignableParcels.map((p: any) => p.id))
+                          }}
+                          className={`px-3 py-2 rounded-xl text-xs font-bold border transition ${
+                            allSelected
+                              ? 'bg-white text-green-700 border-green-300'
+                              : 'bg-green-600 text-white border-green-600 hover:bg-green-700'
+                          }`}
+                        >
+                          {allSelected ? 'Désélectionner tout' : 'Sélectionner tout'}
+                        </button>
+                        {selectedCount > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setBulkAssignError('')
+                              setBulkAssignSelectedIds([])
+                            }}
+                            className="px-3 py-2 rounded-xl text-xs font-bold border border-red-300 bg-white text-red-700 hover:bg-red-50 transition flex items-center gap-1"
+                          >
+                            <X className="w-3 h-3" />
+                            Annuler ({selectedCount})
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <div className="bg-white border border-green-100 rounded-xl px-3 py-2">
+                        <label className="text-[10px] font-bold text-green-600 uppercase tracking-wider block mb-1">Livreur *</label>
+                        <select
+                          value={bulkAssignDriverId}
+                          onChange={e => { setBulkAssignError(''); setBulkAssignDriverId(e.target.value) }}
+                          className="w-full text-sm font-semibold text-gray-800 focus:outline-none bg-transparent"
+                        >
+                          <option value="">-- Choisir un livreur --</option>
+                          {(drivers || [])
+                            .filter((d: any) => d.city === profile?.city && ['livreur', 'chauffeur'].includes(d.role))
+                            .map((d: any) => (
+                              <option key={d.id} value={d.id}>{d.name}</option>
+                            ))}
+                        </select>
+                      </div>
+                      <div className="bg-white border border-green-100 rounded-xl px-3 py-2">
+                        <label className="text-[10px] font-bold text-green-600 uppercase tracking-wider block mb-1">Secteur (optionnel)</label>
+                        <select
+                          value={bulkAssignSectorId}
+                          onChange={e => setBulkAssignSectorId(e.target.value)}
+                          className="w-full text-sm text-gray-700 focus:outline-none bg-transparent"
+                        >
+                          <option value="">-- Aucun --</option>
+                          {(allSectors || [])
+                            .filter((s: any) => s.city === profile?.city)
+                            .map((s: any) => (
+                              <option key={s.id} value={s.id}>{s.code} - {s.name}</option>
+                            ))}
+                        </select>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between gap-3 flex-wrap">
+                      <p className="text-xs font-semibold text-green-600">
+                        {selectedCount} colis sélectionné(s)
+                      </p>
+                      {bulkAssignError && <p className="text-xs font-semibold text-red-600">{bulkAssignError}</p>}
+                      <button
+                        type="button"
+                        onClick={() => handleBulkAssignDriver(assignableParcels)}
+                        disabled={bulkAssignBusy || selectedCount === 0}
+                        className="ml-auto flex items-center gap-2 px-4 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 disabled:opacity-40 text-white text-sm font-bold transition"
+                      >
+                        {bulkAssignBusy
+                          ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Assignation...</>
+                          : <><User className="w-4 h-4" /> Assigner au livreur</>
+                        }
+                      </button>
+                    </div>
+                  </div>
+                )
+              })()}
             </div>
           )
         })()}
@@ -583,16 +757,54 @@ export default function ParcelsTab() {
             <p className="text-sm">Aucune expédition trouvée</p>
           </div>
         ) : (() => {
-          const totalPages = Math.max(1, Math.ceil(filteredParcels.length / PAGE_SIZE))
+          // ⭐ Appliquer le filtre de recherche du tableau sur TOUS les parcels
+          const tableFilteredParcels = tableSearch ? filteredParcels.filter((p: any) => {
+            const searchLower = tableSearch.toLowerCase()
+            return (
+              p.sender?.nic?.toLowerCase().includes(searchLower) ||
+              p.trackingId?.toLowerCase().includes(searchLower) ||
+              p.sender?.name?.toLowerCase().includes(searchLower) ||
+              p.receiver?.name?.toLowerCase().includes(searchLower) ||
+              p.sender?.tel?.toLowerCase().includes(searchLower) ||
+              p.receiver?.tel?.toLowerCase().includes(searchLower) ||
+              p.sender?.city?.toLowerCase().includes(searchLower) ||
+              p.receiver?.city?.toLowerCase().includes(searchLower)
+            )
+          }) : filteredParcels
+
+          const totalPages = Math.max(1, Math.ceil(tableFilteredParcels.length / PAGE_SIZE))
           const safePage = Math.min(parcelPage, totalPages - 1)
-          const pagedParcels = filteredParcels.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE)
+          const pagedParcels = tableFilteredParcels.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE)
           const isLastPage = safePage >= totalPages - 1
 
-          // Calcul des totaux (sur TOUS les colis filtrés, pas seulement la page)
-          const totalCod = filteredParcels.reduce((sum: number, p: any) => sum + (p.codAmount || 0), 0)
-          const totalPortDu = filteredParcels.reduce((sum: number, p: any) =>
-            sum + (p.portType === 'port_du' ? (p.price || 0) : 0), 0
-          )
+          // Calcul des totaux (sur TOUS les colis filtrés par la recherche, pas seulement la page)
+          const agencyCity = profile?.city
+          // ⭐ Utiliser tableFilteredParcels pour refléter la recherche du tableau
+          const parcelsForTotals = tableFilteredParcels
+
+          // RETOUR FOND (COD): collecté à la DESTINATION (colis à livrer dans cette ville)
+          const totalCod = parcelsForTotals.reduce((sum: number, p: any) => {
+            const isDestination = p.destinationCity === agencyCity || p.receiver?.city === agencyCity
+            return sum + (isDestination ? (parseFloat(p.codAmount) || 0) : 0)
+          }, 0)
+
+          // Port Dû: collecté à la DESTINATION (colis reçus dans cette ville)
+          const totalPortDu = parcelsForTotals.reduce((sum: number, p: any) => {
+            const isDestination = p.destinationCity === agencyCity || p.receiver?.city === agencyCity
+            return sum + (p.portType === 'port_du' && isDestination ? (parseFloat(p.price) || 0) : 0)
+          }, 0)
+
+          // Port Payé: collecté à l'ORIGINE (colis expédiés depuis cette ville)
+          const totalPortPaye = parcelsForTotals.reduce((sum: number, p: any) => {
+            const isOrigin = p.originCity === agencyCity || p.sender?.city === agencyCity
+            return sum + (p.portType === 'port_paye' && isOrigin ? (parseFloat(p.price) || 0) : 0)
+          }, 0)
+
+          // En Compte: collecté à l'ORIGINE (colis expédiés depuis cette ville)
+          const totalPortEnCompte = parcelsForTotals.reduce((sum: number, p: any) => {
+            const isOrigin = p.originCity === agencyCity || p.sender?.city === agencyCity
+            return sum + (p.portType === 'port_en_compte' && isOrigin ? (parseFloat(p.price) || 0) : 0)
+          }, 0)
 
           return viewMode === 'table' ? (
             // ═══════════════════════════════════════════════════════════════════
@@ -605,7 +817,7 @@ export default function ParcelsTab() {
                   <div className="flex items-center gap-2">
                     <Package className="w-5 h-5 text-orange-600" />
                     <span className="text-sm font-bold text-gray-700">
-                      {filteredParcels.length} expédition{filteredParcels.length > 1 ? 's' : ''}
+                      {tableFilteredParcels.length} expédition{tableFilteredParcels.length > 1 ? 's' : ''}
                     </span>
                   </div>
                   <div className="flex items-center gap-6">
@@ -614,18 +826,83 @@ export default function ParcelsTab() {
                       <span className="text-xs text-gray-600">Total RETOUR FOND :</span>
                       <span className="text-base font-black text-green-700">{totalCod.toLocaleString('fr-MA')} DH</span>
                     </div>
-                    <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        const portPayeParcels = filteredParcels.filter((p: any) => {
+                          const isOrigin = p.originCity === agencyCity || p.sender?.city === agencyCity
+                          return p.portType === 'port_paye' && isOrigin
+                        })
+                        setPortDetailsModal({
+                          open: true,
+                          portType: 'port_paye',
+                          title: 'Ports Payés',
+                          parcels: portPayeParcels
+                        })
+                      }}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-blue-50 transition cursor-pointer"
+                    >
+                      <span className="text-xl">✅</span>
+                      <span className="text-xs text-gray-600">Total Port payé :</span>
+                      <span className="text-base font-black text-blue-700">{totalPortPaye.toLocaleString('fr-MA')} DH</span>
+                    </button>
+                    <button
+                      onClick={() => {
+                        const portDuParcels = filteredParcels.filter((p: any) => {
+                          const isDestination = p.destinationCity === agencyCity || p.receiver?.city === agencyCity
+                          return p.portType === 'port_du' && isDestination
+                        })
+                        setPortDetailsModal({
+                          open: true,
+                          portType: 'port_du',
+                          title: 'Ports Dûs',
+                          parcels: portDuParcels
+                        })
+                      }}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-orange-50 transition cursor-pointer"
+                    >
                       <span className="text-xl">📮</span>
                       <span className="text-xs text-gray-600">Total Port dû :</span>
                       <span className="text-base font-black text-orange-700">{totalPortDu.toLocaleString('fr-MA')} DH</span>
+                    </button>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xl">💼</span>
+                      <span className="text-xs text-gray-600">Total Port en compte :</span>
+                      <span className="text-base font-black text-purple-700">{totalPortEnCompte.toLocaleString('fr-MA')} DH</span>
                     </div>
                   </div>
                 </div>
               </div>
+
+              {/* ⭐ Barre de recherche spécifique au tableau */}
+              <div className="relative">
+                <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-purple-500" />
+                <input
+                  placeholder="🔍 Recherche dans le tableau: N° EXP, Nom Expéditeur, Nom Destinataire..."
+                  value={tableSearch}
+                  onChange={e => setTableSearch(e.target.value)}
+                  className="w-full bg-gradient-to-r from-purple-50 to-pink-50 border-2 border-purple-300 pl-12 pr-12 py-3.5 rounded-xl text-sm font-medium text-gray-800 placeholder-gray-500 focus:border-purple-500 focus:bg-white focus:shadow-lg focus:outline-none transition-all"
+                />
+                {tableSearch && (
+                  <button
+                    onClick={() => setTableSearch('')}
+                    className="absolute right-3 top-1/2 -translate-y-1/2 p-1 rounded-full hover:bg-gray-200 transition"
+                  >
+                    <X className="w-4 h-4 text-gray-500" />
+                  </button>
+                )}
+              </div>
+
               <div className="overflow-x-auto bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 rounded-2xl shadow-xl border-2 border-purple-200">
                 <table className="w-full text-xs">
                   <thead className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white sticky top-0 shadow-lg">
                     <tr>
+                      {profile?.role === 'chef_agence' && (
+                        <th className="px-3 py-4 text-center font-bold whitespace-nowrap border-r border-green-400/30 bg-green-600/40">
+                          <div className="flex items-center justify-center gap-1">
+                            <CheckSquare className="w-4 h-4" />
+                          </div>
+                        </th>
+                      )}
                       <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">
                         <div className="flex items-center gap-2">
                           <Package className="w-4 h-4" />
@@ -662,6 +939,11 @@ export default function ParcelsTab() {
                           💰 Port
                         </div>
                       </th>
+                      <th className="px-4 py-4 text-center font-bold whitespace-nowrap border-r border-purple-400/30 bg-green-600/30">
+                        <div className="flex items-center justify-center gap-1">
+                          📋 Type Port
+                        </div>
+                      </th>
                       <th className="px-4 py-4 text-right font-bold whitespace-nowrap border-r border-purple-400/30 bg-green-600/30">
                         <div className="flex items-center justify-end gap-1">
                           💵 COD
@@ -676,11 +958,31 @@ export default function ParcelsTab() {
                     </tr>
                   </thead>
                   <tbody className="bg-white">
-                    {pagedParcels.map((parcel: any, idx: number) => {
+                    {pagedParcels.filter((p: any) => {
+                      // ⭐ Filtre par recherche tableau
+                      if (!tableSearch) return true
+                      const searchLower = tableSearch.toLowerCase()
+                      return (
+                        p.sender?.nic?.toLowerCase().includes(searchLower) ||
+                        p.trackingId?.toLowerCase().includes(searchLower) ||
+                        p.sender?.name?.toLowerCase().includes(searchLower) ||
+                        p.receiver?.name?.toLowerCase().includes(searchLower) ||
+                        p.sender?.tel?.toLowerCase().includes(searchLower) ||
+                        p.receiver?.tel?.toLowerCase().includes(searchLower) ||
+                        p.sender?.city?.toLowerCase().includes(searchLower) ||
+                        p.receiver?.city?.toLowerCase().includes(searchLower)
+                      )
+                    }).map((parcel: any, idx: number) => {
                       const isOwn = canActAsParcelOwner(parcel)
                       const sc = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
                       const serviceType = SERVICE_TYPES.find(st => st.key === parcel.serviceType)
                       const driver = drivers?.find((d: any) => d.id === parcel.deliveryDriverId || d.id === parcel.chauffeurId)
+
+                      // Vérifier si ce colis peut être assigné
+                      const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
+                      const canAssign = !parcel.deliveredAt && !parcel.returnedAt && parcel.status !== 'Livré'
+                      const isAssignable = profile?.role === 'chef_agence' && isInMyCity && canAssign
+                      const assignSelected = bulkAssignSelectedIds.includes(parcel.id)
 
                       return (
                         <tr
@@ -689,6 +991,26 @@ export default function ParcelsTab() {
                             idx % 2 === 0 ? 'bg-white' : 'bg-gradient-to-r from-blue-50/30 via-purple-50/20 to-pink-50/30'
                           } ${isOwn ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-orange-400'}`}
                         >
+                          {profile?.role === 'chef_agence' && (
+                            <td className="px-3 py-3 text-center border-r border-gray-100 bg-green-50/30">
+                              {isAssignable ? (
+                                <input
+                                  type="checkbox"
+                                  checked={assignSelected}
+                                  onChange={e => {
+                                    setBulkAssignError('')
+                                    setBulkAssignSelectedIds((prev: any) => e.target.checked
+                                      ? [...new Set([...prev, parcel.id])]
+                                      : prev.filter((id: any) => id !== parcel.id)
+                                    )
+                                  }}
+                                  className="w-4 h-4 accent-green-600 cursor-pointer"
+                                />
+                              ) : (
+                                <span className="text-gray-300">—</span>
+                              )}
+                            </td>
+                          )}
                           <td className="px-4 py-3 font-mono font-black text-blue-600 whitespace-nowrap text-sm border-r border-gray-100">
                             {parcel.sender?.nic || '—'}</td>
                           <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
@@ -751,6 +1073,23 @@ export default function ParcelsTab() {
                             <span className="text-green-700 text-sm">
                               {parcel.price ? `${parcel.price} DH` : '—'}
                             </span>
+                          </td>
+                          <td className="px-4 py-3 text-center whitespace-nowrap border-r border-gray-100 bg-green-50/30">
+                            {parcel.portType === 'port_paye' ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-bold">
+                                ✅ Payé
+                              </span>
+                            ) : parcel.portType === 'port_du' ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 rounded-lg text-xs font-bold">
+                                📮 Dû
+                              </span>
+                            ) : parcel.portType === 'port_en_compte' ? (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-xs font-bold">
+                                💼 En compte
+                              </span>
+                            ) : (
+                              <span className="text-gray-400">—</span>
+                            )}
                           </td>
                           <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-100 bg-green-50/30">
                             {parcel.codAmount && parcel.codAmount > 0 ? (
@@ -821,7 +1160,7 @@ export default function ParcelsTab() {
                 return (
                   <div className="flex items-center justify-between px-1">
                     <span className="text-xs text-gray-400">
-                      {filteredParcels.length}{hasMoreParcels ? '+' : ''} expédition{filteredParcels.length > 1 ? 's' : ''}
+                      {tableFilteredParcels.length}{hasMoreParcels ? '+' : ''} expédition{tableFilteredParcels.length > 1 ? 's' : ''}
                     </span>
                     <div className="flex items-center gap-1">
                       <button onClick={() => goTo(Math.max(0, safePage - 1))} disabled={safePage === 0}
@@ -869,10 +1208,48 @@ export default function ParcelsTab() {
                     <span className="text-xs text-gray-600">Total RETOUR FOND :</span>
                     <span className="text-base font-black text-green-700">{totalCod.toLocaleString('fr-MA')} DH</span>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => {
+                      const portPayeParcels = filteredParcels.filter((p: any) => {
+                        const isOrigin = p.originCity === agencyCity || p.sender?.city === agencyCity
+                        return p.portType === 'port_paye' && isOrigin
+                      })
+                      setPortDetailsModal({
+                        open: true,
+                        portType: 'port_paye',
+                        title: 'Ports Payés',
+                        parcels: portPayeParcels
+                      })
+                    }}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-blue-50 transition cursor-pointer"
+                  >
+                    <span className="text-xl">✅</span>
+                    <span className="text-xs text-gray-600">Total Port payé :</span>
+                    <span className="text-base font-black text-blue-700">{totalPortPaye.toLocaleString('fr-MA')} DH</span>
+                  </button>
+                  <button
+                    onClick={() => {
+                      const portDuParcels = filteredParcels.filter((p: any) => {
+                        const isDestination = p.destinationCity === agencyCity || p.receiver?.city === agencyCity
+                        return p.portType === 'port_du' && isDestination
+                      })
+                      setPortDetailsModal({
+                        open: true,
+                        portType: 'port_du',
+                        title: 'Ports Dûs',
+                        parcels: portDuParcels
+                      })
+                    }}
+                    className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-orange-50 transition cursor-pointer"
+                  >
                     <span className="text-xl">📮</span>
                     <span className="text-xs text-gray-600">Total Port dû :</span>
                     <span className="text-base font-black text-orange-700">{totalPortDu.toLocaleString('fr-MA')} DH</span>
+                  </button>
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">💼</span>
+                    <span className="text-xs text-gray-600">Total Port en compte :</span>
+                    <span className="text-base font-black text-purple-700">{totalPortEnCompte.toLocaleString('fr-MA')} DH</span>
                   </div>
                 </div>
               </div>
@@ -913,6 +1290,36 @@ export default function ParcelsTab() {
                       <span className="text-xs font-bold">Sélection chargement camion</span>
                     </label>
                   )}
+
+                  {/* ⭐ NOUVEAU: Checkbox pour assignation livreur (chef d'agence) */}
+                  {(() => {
+                    if (profile?.role !== 'chef_agence') return null
+                    const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
+                    // Tous les colis dans ma ville qui ne sont pas livrés
+                    const canAssign = !parcel.deliveredAt && !parcel.returnedAt && parcel.status !== 'Livré'
+                    if (!isInMyCity || !canAssign) return null
+                    const assignSelected = bulkAssignSelectedIds.includes(parcel.id)
+                    return (
+                      <label className={`mb-3 flex items-center gap-2 rounded-xl border px-3 py-2 cursor-pointer transition ${
+                        assignSelected ? 'bg-green-50 border-green-300 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-green-200'
+                      }`}>
+                        <input
+                          type="checkbox"
+                          checked={assignSelected}
+                          onChange={e => {
+                            setBulkAssignError('')
+                            setBulkAssignSelectedIds((prev: any) => e.target.checked
+                              ? [...new Set([...prev, parcel.id])]
+                              : prev.filter((id: any) => id !== parcel.id)
+                            )
+                          }}
+                          className="w-4 h-4 accent-green-600"
+                        />
+                        <span className="text-xs font-bold">Sélection assignation livreur</span>
+                      </label>
+                    )
+                  })()}
+
                   {/* Agent badge */}
                   <div className="flex items-center gap-2 mb-2 flex-wrap">
                     <div className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${isOwn ? 'bg-blue-50 text-blue-600' : 'bg-orange-50 text-orange-600'}`}>
@@ -970,6 +1377,21 @@ export default function ParcelsTab() {
                             </span>
                           )
                         })()}
+                        {parcel.portType === 'port_paye' && (
+                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold bg-blue-100 text-blue-700 border border-blue-300">
+                            ✅ Port payé
+                          </span>
+                        )}
+                        {parcel.portType === 'port_du' && (
+                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold bg-orange-100 text-orange-700 border border-orange-300">
+                            📮 Port dû
+                          </span>
+                        )}
+                        {parcel.portType === 'port_en_compte' && (
+                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold bg-purple-100 text-purple-700 border border-purple-300">
+                            💼 En compte
+                          </span>
+                        )}
                         {parcel.returnedAt && parcel.status === 'Livré' && (
                           <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-orange-100 text-orange-700">
                             ↩️ Retourné à l'expéditeur
@@ -1112,23 +1534,27 @@ export default function ParcelsTab() {
                           ✍️
                         </button>
                       )}
-                      {canEditParcelDetails(parcel) ? (
-                        <>
-                          <button
-                            onClick={() => handleEditClick(parcel)}
-                            className="flex items-center gap-1 text-xs px-2.5 py-2 rounded-lg transition bg-blue-50 hover:bg-blue-100 text-blue-600"
-                          >
-                            <Edit2 className="w-3.5 h-3.5" />
-                            Modifier
-                          </button>
-                          <button
-                            onClick={() => handleDeleteClick(parcel)}
-                            className="flex items-center gap-1 text-xs bg-red-50 hover:bg-red-100 text-red-500 px-2.5 py-2 rounded-lg transition"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </>
-                      ) : (
+                      {/* Bouton Modifier - Toujours affiché pour chef d'agence et aide agent */}
+                      {(canEditParcelDetails(parcel) || profile?.role === 'chef_agence' || profile?.role === 'aide_agent') && (
+                        <button
+                          onClick={() => handleEditClick(parcel)}
+                          className="flex items-center gap-1 text-xs px-2.5 py-2 rounded-lg transition bg-blue-50 hover:bg-blue-100 text-blue-600"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                          Modifier
+                        </button>
+                      )}
+                      {/* Bouton Supprimer - Seulement si peut vraiment éditer */}
+                      {canEditParcelDetails(parcel) && (
+                        <button
+                          onClick={() => handleDeleteClick(parcel)}
+                          className="flex items-center gap-1 text-xs bg-red-50 hover:bg-red-100 text-red-500 px-2.5 py-2 rounded-lg transition"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {/* Badge Lecture seule - Seulement si ne peut vraiment pas modifier */}
+                      {!canEditParcelDetails(parcel) && profile?.role !== 'chef_agence' && profile?.role !== 'aide_agent' && (
                         <span className="inline-flex items-center gap-1 text-xs bg-gray-50 text-gray-500 px-2.5 py-2 rounded-lg border border-gray-100">
                           <Lock className="w-3.5 h-3.5" />
                           Lecture seule
@@ -1320,11 +1746,6 @@ export default function ParcelsTab() {
                               if (!window.confirm(`Réessayer la livraison de ce colis ?\n${parcel.trackingId}\n\nLe colis sera remis en circulation pour une nouvelle tentative de livraison.`)) return
                               setLoadingTruckId(parcel.id)
                               try {
-                                console.log('🔄 Réessai livraison - AVANT:', {
-                                  status: parcel.status,
-                                  wasReturned: parcel.wasReturned,
-                                  returnToCity: parcel.returnToCity
-                                })
                                 await updateParcel(parcel.id, {
                                   status: 'En livraison',
                                   wasReturned: deleteField(),
@@ -1337,8 +1758,7 @@ export default function ParcelsTab() {
                                   returnLoadedBy: deleteField(),
                                   retryDeliveryAt: new Date(),
                                   retryDeliveryBy: profile?.name || profile?.email || 'Inconnu'
-                                })
-                                console.log('✅ Réessai livraison - Mise à jour réussie')
+                                } as any)
                                 alert('✅ Colis remis en livraison !\n\nRafraîchissez la page pour voir les changements.')
                               }
                               catch (e: any) {
@@ -1669,23 +2089,90 @@ export default function ParcelsTab() {
                 <X className="w-5 h-5 text-gray-500" />
               </button>
             </div>
-            <div className="p-5 space-y-4">
+            <div
+              className="p-5 space-y-4"
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  const target = e.target as HTMLElement
+                  const modal = target.closest('.overflow-y-auto')
+                  if (!modal) return
+
+                  const focusables = Array.from(
+                    modal.querySelectorAll('input:not([type="hidden"]):not([disabled]), select:not([disabled]), textarea:not([disabled]), button[type="submit"], button:not([disabled])')
+                  ).filter((el: any) => el.offsetParent !== null) as HTMLElement[]
+
+                  const currentIndex = focusables.indexOf(target)
+                  if (currentIndex >= 0 && currentIndex < focusables.length - 1) {
+                    focusables[currentIndex + 1].focus()
+                  } else if (currentIndex === focusables.length - 1) {
+                    // Dernier champ : sauvegarder
+                    handleEditSave()
+                  }
+                }
+              }}
+            >
               {editError && <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {editError}</div>}
 
               <section>
                 <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Expéditeur</h4>
                 <div className="grid grid-cols-2 gap-2">
-                  <input placeholder="Nom" value={editForm.senderName} onChange={ef('senderName')} className={inputCls} />
-                  <input placeholder="N EXP" value={editForm.senderNic || ''} onChange={ef('senderNic')} className={inputCls} />
-                  <input placeholder="Téléphone" value={editForm.senderTel} onChange={ef('senderTel')} className={inputCls} />
                   <div className="relative">
-                    <select value={editForm.senderCity} onChange={ef('senderCity')} className={selectCls}>
+                    <input
+                      placeholder="Nom"
+                      value={editForm.senderName}
+                      onChange={ef('senderName')}
+                      disabled={!canEditField('sender.name')}
+                      className={`${inputCls} ${!canEditField('sender.name') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''}`}
+                    />
+                    {!canEditField('sender.name') && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
+                  </div>
+                  <div className="relative">
+                    <input
+                      placeholder="N EXP"
+                      value={editForm.senderNic || ''}
+                      onChange={ef('senderNic')}
+                      disabled={!canEditField('sender.nic')}
+                      className={`${inputCls} ${!canEditField('sender.nic') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''}`}
+                    />
+                    {!canEditField('sender.nic') && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
+                  </div>
+                  <div className="relative">
+                    <input
+                      placeholder="Téléphone"
+                      value={editForm.senderTel}
+                      onChange={ef('senderTel')}
+                      disabled={!canEditField('sender.tel')}
+                      className={`${inputCls} ${!canEditField('sender.tel') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''}`}
+                    />
+                    {!canEditField('sender.tel') && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
+                  </div>
+                  <div className="relative">
+                    <select
+                      value={editForm.senderCity}
+                      onChange={ef('senderCity')}
+                      disabled={!canEditField('sender.city')}
+                      className={`${selectCls} ${!canEditField('sender.city') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''}`}
+                    >
                       <option value="">Ville</option>
                       {CITIES.map(c => <option key={c}>{c}</option>)}
                     </select>
-                    <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-gray-400 pointer-events-none" />
+                    {canEditField('sender.city') ? (
+                      <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-gray-400 pointer-events-none" />
+                    ) : (
+                      <Lock className="absolute right-3 top-3.5 w-4 h-4 text-gray-400" />
+                    )}
                   </div>
-                  <input placeholder="Adresse" value={editForm.senderAddress || ''} onChange={ef('senderAddress')} className={`${inputCls} col-span-2`} />
+                  <div className="relative col-span-2">
+                    <input
+                      placeholder="Adresse"
+                      value={editForm.senderAddress || ''}
+                      onChange={ef('senderAddress')}
+                      disabled={!canEditField('sender.address')}
+                      className={`${inputCls} ${!canEditField('sender.address') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''}`}
+                    />
+                    {!canEditField('sender.address') && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
+                  </div>
                 </div>
               </section>
 
@@ -1694,16 +2181,52 @@ export default function ParcelsTab() {
               <section>
                 <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Destinataire</h4>
                 <div className="grid grid-cols-2 gap-2">
-                  <input placeholder="Nom" value={editForm.receiverName} onChange={ef('receiverName')} className={inputCls} />
-                  <input placeholder="Téléphone" value={editForm.receiverTel} onChange={ef('receiverTel')} className={inputCls} />
+                  <div className="relative">
+                    <input
+                      placeholder="Nom"
+                      value={editForm.receiverName}
+                      onChange={ef('receiverName')}
+                      disabled={!canEditField('receiver.name')}
+                      className={`${inputCls} ${!canEditField('receiver.name') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''}`}
+                    />
+                    {!canEditField('receiver.name') && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
+                  </div>
+                  <div className="relative">
+                    <input
+                      placeholder="Téléphone"
+                      value={editForm.receiverTel}
+                      onChange={ef('receiverTel')}
+                      disabled={!canEditField('receiver.tel')}
+                      className={`${inputCls} ${!canEditField('receiver.tel') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''}`}
+                    />
+                    {!canEditField('receiver.tel') && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
+                  </div>
                   <div className="col-span-2 relative">
-                    <select value={editForm.receiverCity} onChange={ef('receiverCity')} className={selectCls}>
+                    <select
+                      value={editForm.receiverCity}
+                      onChange={ef('receiverCity')}
+                      disabled={!canEditField('receiver.city')}
+                      className={`${selectCls} ${!canEditField('receiver.city') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''}`}
+                    >
                       <option value="">Ville</option>
                       {CITIES.map(c => <option key={c}>{c}</option>)}
                     </select>
-                    <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-gray-400 pointer-events-none" />
+                    {canEditField('receiver.city') ? (
+                      <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-gray-400 pointer-events-none" />
+                    ) : (
+                      <Lock className="absolute right-3 top-3.5 w-4 h-4 text-gray-400" />
+                    )}
                   </div>
-                  <input placeholder="Adresse" value={editForm.receiverAddress || ''} onChange={ef('receiverAddress')} className={`${inputCls} col-span-2`} />
+                  <div className="relative col-span-2">
+                    <input
+                      placeholder="Adresse"
+                      value={editForm.receiverAddress || ''}
+                      onChange={ef('receiverAddress')}
+                      disabled={!canEditField('receiver.address')}
+                      className={`${inputCls} ${!canEditField('receiver.address') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''}`}
+                    />
+                    {!canEditField('receiver.address') && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
+                  </div>
                 </div>
               </section>
 
@@ -1712,8 +2235,30 @@ export default function ParcelsTab() {
               <section>
                 <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Détails</h4>
                 <div className="grid grid-cols-2 gap-2">
-                  <input inputMode="decimal" placeholder="Poids (kg)" value={editForm.weight} onChange={ef('weight')} className={inputCls} />
-                  <input type="number" min="1" step="1" placeholder="Nb de colis" value={editForm.nbColis || 1} onChange={ef('nbColis')} className={inputCls} />
+                  <div className="relative">
+                    <input
+                      inputMode="decimal"
+                      placeholder="Poids (kg)"
+                      value={editForm.weight}
+                      onChange={ef('weight')}
+                      disabled={!canEditField('weight')}
+                      className={`${inputCls} ${!canEditField('weight') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''}`}
+                    />
+                    {!canEditField('weight') && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
+                  </div>
+                  <div className="relative">
+                    <input
+                      type="number"
+                      min="1"
+                      step="1"
+                      placeholder="Nb de colis"
+                      value={editForm.nbColis || 1}
+                      onChange={ef('nbColis')}
+                      disabled={!canEditField('nbColis')}
+                      className={`${inputCls} ${!canEditField('nbColis') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''}`}
+                    />
+                    {!canEditField('nbColis') && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
+                  </div>
                   <div className="col-span-2">
                     <p className="text-xs text-gray-500 mb-1.5">Nature de marchandise</p>
                     <div className="grid grid-cols-4 gap-2">
@@ -1746,23 +2291,118 @@ export default function ParcelsTab() {
                       />
                     )}
                   </div>
-                  <div className={`${inputCls} col-span-2 flex items-center justify-between bg-gray-50 cursor-not-allowed`}>
-                    <span className="text-xs text-gray-400 flex items-center gap-1"><Lock className="w-3 h-3" /> RETOUR FOND — modification Admin uniquement</span>
-                    <span className={`font-bold text-sm ${editForm.codAmount > 0 ? 'text-orange-600' : 'text-gray-300'}`}>{editForm.codAmount > 0 ? `${editForm.codAmount} DH` : '—'}</span>
+
+                  {/* RETOUR FOND (COD Amount) */}
+                  <div className="col-span-2">
+                    <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5 flex items-center gap-2">
+                      RETOUR FOND (COD)
+                      {!canEditField('codAmount') && <Lock className="w-3.5 h-3.5 text-gray-400" />}
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        placeholder="Montant COD (DH)"
+                        value={editForm.codAmount || ''}
+                        onChange={ef('codAmount')}
+                        disabled={!canEditField('codAmount')}
+                        className={`${inputCls} ${!canEditField('codAmount') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''} ${editForm.codAmount > 0 ? 'font-bold text-orange-600' : ''}`}
+                      />
+                      {!canEditField('codAmount') && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
+                    </div>
                   </div>
+
+                  {/* Type de Port */}
+                  <div className="col-span-2">
+                    <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5 flex items-center gap-2">
+                      Type de port
+                      {!canEditField('portType') && <Lock className="w-3.5 h-3.5 text-gray-400" />}
+                    </label>
+                    <div className="grid grid-cols-3 gap-2">
+                      {[
+                        { key: 'port_paye', label: 'Port Payé', emoji: '💵' },
+                        { key: 'port_du', label: 'Port Dû', emoji: '📮' },
+                        { key: 'port_en_compte', label: 'En Compte', emoji: '📋' },
+                      ].map(({ key, label, emoji }) => (
+                        <button
+                          key={key}
+                          type="button"
+                          onClick={() => canEditField('portType') && setEditForm((p: any) => ({ ...p, portType: key }))}
+                          disabled={!canEditField('portType')}
+                          className={`py-2 rounded-xl border-2 text-xs font-bold transition ${
+                            editForm.portType === key
+                              ? 'bg-blue-600 border-blue-500 text-white'
+                              : canEditField('portType')
+                                ? 'bg-gray-50 border-gray-200 text-gray-500 hover:border-gray-300'
+                                : 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed opacity-60'
+                          }`}
+                        >
+                          <div className="flex flex-col items-center gap-1">
+                            <span className="text-base">{emoji}</span>
+                            <span>{label}</span>
+                          </div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
+                  {/* Fragile */}
+                  <div className="col-span-2">
+                    <button
+                      type="button"
+                      onClick={() => canEditField('fragile') && setEditForm((p: any) => ({ ...p, fragile: !p.fragile }))}
+                      disabled={!canEditField('fragile')}
+                      className={`w-full py-3 rounded-xl border-2 text-sm font-bold transition flex items-center justify-center gap-2 ${
+                        editForm.fragile
+                          ? 'bg-red-50 border-red-500 text-red-600'
+                          : canEditField('fragile')
+                            ? 'bg-gray-50 border-gray-200 text-gray-500 hover:border-gray-300'
+                            : 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed opacity-60'
+                      }`}
+                    >
+                      {!canEditField('fragile') && <Lock className="w-4 h-4" />}
+                      <AlertTriangle className="w-4 h-4" />
+                      {editForm.fragile ? 'Colis FRAGILE ⚠️' : 'Marquer comme FRAGILE'}
+                    </button>
+                  </div>
+
+                  {/* Notes/Observations */}
+                  <div className="col-span-2">
+                    <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5 flex items-center gap-2">
+                      Notes / Observations
+                      {!canEditField('notes') && <Lock className="w-3.5 h-3.5 text-gray-400" />}
+                    </label>
+                    <div className="relative">
+                      <textarea
+                        placeholder="Notes internes ou observations..."
+                        value={editForm.notes || ''}
+                        onChange={e => setEditForm((p: any) => ({ ...p, notes: e.target.value }))}
+                        disabled={!canEditField('notes')}
+                        rows={3}
+                        className={`${inputCls} ${!canEditField('notes') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''} resize-none`}
+                      />
+                      {!canEditField('notes') && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
+                    </div>
+                  </div>
+
                   <div className="col-span-2">
                     <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5">
                       Montant du port manuel
                     </label>
-                    <input
-                      type="number"
-                      min="0"
-                      step="0.5"
-                      placeholder="Prix du port (DH)"
-                      value={editForm.price}
-                      onChange={ef('price')}
-                      className={inputCls}
-                    />
+                    <div className="relative">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.5"
+                        placeholder="Prix du port (DH)"
+                        value={editForm.price}
+                        onChange={ef('price')}
+                        disabled={!canEditField('price')}
+                        className={`${inputCls} ${!canEditField('price') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''}`}
+                      />
+                      {!canEditField('price') && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
+                    </div>
                   </div>
                 </div>
               </section>
@@ -1770,17 +2410,23 @@ export default function ParcelsTab() {
               <div className="border-t border-dashed border-gray-200" />
 
               <section>
-                <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Type de service</h4>
+                <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                  Type de service
+                  {!canEditField('serviceType') && <Lock className="w-3.5 h-3.5 text-gray-400" />}
+                </h4>
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                   {SERVICE_TYPES.map(st => (
                     <button
                       type="button"
                       key={st.key}
-                      onClick={() => setEditForm((p: any) => ({ ...p, serviceType: st.key, codAmount: st.key === 'simple' || st.key === 'retour_bl' ? 0 : p.codAmount }))}
+                      onClick={() => canEditField('serviceType') && setEditForm((p: any) => ({ ...p, serviceType: st.key, codAmount: st.key === 'simple' || st.key === 'retour_bl' ? 0 : p.codAmount }))}
+                      disabled={!canEditField('serviceType')}
                       className={`py-2 rounded-xl border-2 text-xs font-bold transition ${
                         (editForm?.serviceType || 'oc') === st.key
                           ? 'bg-blue-600 border-blue-500 text-white'
-                          : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-gray-300'
+                          : canEditField('serviceType')
+                            ? 'bg-gray-50 border-gray-200 text-gray-500 hover:border-gray-300'
+                            : 'bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed opacity-60'
                       }`}
                     >
                       {st.label}
@@ -1792,8 +2438,11 @@ export default function ParcelsTab() {
               <div className="border-t border-dashed border-gray-200" />
 
               <section>
-                <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Statut</h4>
-                {canManageStatus(editingParcel) ? (
+                <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 flex items-center gap-2">
+                  Statut
+                  {!canEditField('status') && <Lock className="w-3.5 h-3.5 text-gray-400" />}
+                </h4>
+                {canManageStatus(editingParcel) && canEditField('status') ? (
                   <>
                     <div className="grid grid-cols-2 gap-2">
                       {STATUSES.map(s => {
@@ -1955,7 +2604,7 @@ export default function ParcelsTab() {
       {/* ── MODAL LIVRAISON ── */}
       {deliveryModal.open && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-sm p-6">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-sm max-h-[90vh] overflow-y-auto p-6">
             <div className="flex items-center justify-between mb-4">
               <div>
                 <h3 className="font-bold text-gray-800">Assigner un livreur local</h3>
@@ -2065,7 +2714,7 @@ export default function ParcelsTab() {
                   return null
                 })()}
 
-                <div className="grid grid-cols-1 gap-2">
+                <div className="grid grid-cols-1 gap-2 max-h-96 overflow-y-auto pr-1">
                   {cityDrivers.map((d: any) => {
                     const sector = allSectors.find((s: any) => s.id === d.sectorId)
                     return (
@@ -2166,6 +2815,105 @@ export default function ParcelsTab() {
                 disabled={returnReasonModal.loading || !returnReasonModal.reason}
                 className="flex-1 py-2.5 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white text-sm font-bold transition">
                 {returnReasonModal.loading ? 'En cours…' : 'Confirmer retour'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL DÉTAILS PORTS ── */}
+      {portDetailsModal.open && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setPortDetailsModal({ open: false, portType: '', title: '', parcels: [] })}>
+          <div className="bg-white rounded-2xl w-full max-w-6xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <div className="flex items-center justify-between p-6 border-b border-gray-200">
+              <div>
+                <h3 className="font-bold text-xl text-gray-800">{portDetailsModal.title}</h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  {portDetailsModal.parcels.length} expédition{portDetailsModal.parcels.length > 1 ? 's' : ''} • Total: {' '}
+                  <span className={`font-black ${portDetailsModal.portType === 'port_paye' ? 'text-blue-700' : 'text-orange-700'}`}>
+                    {portDetailsModal.parcels.reduce((sum: number, p: any) => sum + (p.price || 0), 0).toLocaleString('fr-MA')} DH
+                  </span>
+                </p>
+              </div>
+              <button
+                onClick={() => setPortDetailsModal({ open: false, portType: '', title: '', parcels: [] })}
+                className="p-2 hover:bg-gray-100 rounded-xl transition"
+              >
+                <X className="w-6 h-6 text-gray-500" />
+              </button>
+            </div>
+
+            {/* Table */}
+            <div className="flex-1 overflow-auto p-6">
+              {portDetailsModal.parcels.length === 0 ? (
+                <div className="text-center py-12 text-gray-400">
+                  <Package className="w-16 h-16 mx-auto mb-3 opacity-30" />
+                  <p className="text-sm">Aucune expédition trouvée</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-gray-100 sticky top-0">
+                      <tr>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-700">N° EXP</th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-700">Tracking ID</th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-700">Date</th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-700">Expéditeur</th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-700">Ville Origine</th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-700">Destinataire</th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-700">Ville Destination</th>
+                        <th className="px-4 py-3 text-right font-semibold text-gray-700">Port</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {portDetailsModal.parcels.map((p: any, idx: number) => (
+                        <tr key={p.id || idx} className="border-b border-gray-100 hover:bg-gray-50 transition">
+                          <td className="px-4 py-3 font-mono text-xs">{p.senderNic || p.sender?.nic || '-'}</td>
+                          <td className="px-4 py-3 font-mono text-xs text-blue-600">{p.trackingId || '-'}</td>
+                          <td className="px-4 py-3 text-xs text-gray-600">
+                            {p.workDate || (p.createdAt?.toDate ? p.createdAt.toDate().toLocaleDateString('fr-FR') : '-')}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="text-xs font-medium text-gray-800">{p.senderName || p.sender?.name || '-'}</div>
+                            <div className="text-xs text-gray-500">{p.senderTel || p.sender?.tel || ''}</div>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-gray-600">{p.originCity || p.sender?.city || '-'}</td>
+                          <td className="px-4 py-3">
+                            <div className="text-xs font-medium text-gray-800">{p.receiverName || p.receiver?.name || '-'}</div>
+                            <div className="text-xs text-gray-500">{p.receiverTel || p.receiver?.tel || ''}</div>
+                          </td>
+                          <td className="px-4 py-3 text-xs text-gray-600">{p.destinationCity || p.receiver?.city || '-'}</td>
+                          <td className="px-4 py-3 text-right">
+                            <span className={`font-bold ${portDetailsModal.portType === 'port_paye' ? 'text-blue-700' : 'text-orange-700'}`}>
+                              {(p.price || 0).toLocaleString('fr-MA')} DH
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                    <tfoot className="bg-gray-50 sticky bottom-0">
+                      <tr>
+                        <td colSpan={7} className="px-4 py-3 text-right font-bold text-gray-700">TOTAL:</td>
+                        <td className="px-4 py-3 text-right">
+                          <span className={`text-lg font-black ${portDetailsModal.portType === 'port_paye' ? 'text-blue-700' : 'text-orange-700'}`}>
+                            {portDetailsModal.parcels.reduce((sum: number, p: any) => sum + (p.price || 0), 0).toLocaleString('fr-MA')} DH
+                          </span>
+                        </td>
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="p-6 border-t border-gray-200">
+              <button
+                onClick={() => setPortDetailsModal({ open: false, portType: '', title: '', parcels: [] })}
+                className="w-full py-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold transition"
+              >
+                Fermer
               </button>
             </div>
           </div>

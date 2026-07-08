@@ -3,6 +3,7 @@ import { signOut, createUserWithEmailAndPassword, signOut as fbSignOut, updatePa
 import { collection, doc, setDoc, getDoc } from 'firebase/firestore'
 import { auth, authSecondary, db } from '../firebase/config'
 import { useNavigate } from 'react-router-dom'
+import Fuse from 'fuse.js'
 import {
   subscribeAllParcels, subscribeAllUsers,
   updateParcel, updateParcelStatus, markParcelAsReturned, remitCod, settleCodToSender, batchSettleCods, updateUser, deleteUserDoc,
@@ -17,6 +18,7 @@ import {
   createReturnParcel,
   subscribeAllReglementsGlobal, subscribeAllRapportsGlobal,
   getParcelsPage,
+  searchParcelByNicOptimized,
 } from '../firebase/firestore'
 import { deleteParcel, getRealParcelsStats } from '../firebase/parcels'
 import {
@@ -45,11 +47,12 @@ import {
   Banknote, Filter, ExternalLink, Edit2, X, Calendar, Users, Wallet,
   ChevronDown, Save, Search, UserPlus, Eye, EyeOff, Contact, Menu,
   BarChart2, Truck, MapPin, ArrowRight, Car, Ban, ShieldCheck, Trash2, TrendingUp, TrendingDown,
-  Building2, AlertTriangle, Download, Calculator, RotateCcw, Lock, CheckCircle2, FileText, Upload, Power, Copy, MessageCircle, Monitor, Star, Archive,
+  Building2, AlertTriangle, Download, Calculator, RotateCcw, Lock, CheckCircle2, FileText, Upload, Power, Copy, MessageCircle, Monitor, Star, Archive, Settings,
 } from 'lucide-react'
 import CompanyContact from '../components/CompanyContact'
 import SignatureViewerModal from '../components/SignatureViewerModal'
 import LiveClock from '../components/LiveClock'
+import WorkingDateIndicator from '../components/WorkingDateIndicator'
 
 const AdminCaisseTab = lazy(() => import('./admin/tabs/AdminCaisseTab'))
 const AdminBanqueTab = lazy(() => import('./admin/tabs/AdminBanqueTab'))
@@ -67,8 +70,11 @@ const AdminAlertsTab = lazy(() => import('./admin/tabs/AdminAlertsTab'))
 const AdminTariffsTab = lazy(() => import('./admin/tabs/AdminTariffsTab'))
 const AdminExportsTab = lazy(() => import('./admin/tabs/AdminExportsTab'))
 const AdminArchivageTab = lazy(() => import('./admin/tabs/AdminArchivageTab'))
+const AdminPortAgenciesTab = lazy(() => import('./admin/tabs/AdminPortAgenciesTab'))
 const AdminLostParcelsTab = lazy(() => import('./admin/tabs/AdminLostParcelsTab'))
 const AdminClientsTab = lazy(() => import('./admin/tabs/AdminClientsTab'))
+const AdminUtilitiesTab = lazy(() => import('./admin/tabs/AdminUtilitiesTab'))
+const AdminPermissionsTab = lazy(() => import('./admin/tabs/AdminPermissionsTab'))
 const EmployeeContractModal = lazy(() => import('./admin/components/EmployeeContractModal'))
 import { useAdminHandlers, downloadCsv, downloadJson, copyText } from './admin/hooks/useAdminHandlers'
 import UserEditModal from './admin/modals/UserEditModal'
@@ -130,16 +136,127 @@ const formatPeriod = (preset: any, from: any, to: any) => {
   return 'Toutes les dates'
 }
 
-const normalizeSearch = (value: any) => String(value ?? '').toLowerCase().replace(/\s+/g, '')
-const matchesSearch = (values: any, query: any) => {
-  const q = String(query ?? '').trim().toLowerCase()
-  if (!q) return true
-  const compactQ = normalizeSearch(q)
-  return values.some((v: any) => {
-    const raw = String(v ?? '').toLowerCase()
-    return raw.includes(q) || normalizeSearch(raw).includes(compactQ)
-  })
+// 🔬 Algorithme de distance de Levenshtein (mesure similarité entre 2 chaînes)
+const levenshteinDistance = (str1: string, str2: string): number => {
+  const len1 = str1.length
+  const len2 = str2.length
+  const matrix: number[][] = []
+
+  if (len1 === 0) return len2
+  if (len2 === 0) return len1
+
+  for (let i = 0; i <= len2; i++) {
+    matrix[i] = [i]
+  }
+
+  for (let j = 0; j <= len1; j++) {
+    matrix[0][j] = j
+  }
+
+  for (let i = 1; i <= len2; i++) {
+    for (let j = 1; j <= len1; j++) {
+      if (str2.charAt(i - 1) === str1.charAt(j - 1)) {
+        matrix[i][j] = matrix[i - 1][j - 1]
+      } else {
+        matrix[i][j] = Math.min(
+          matrix[i - 1][j - 1] + 1,
+          matrix[i][j - 1] + 1,
+          matrix[i - 1][j] + 1
+        )
+      }
+    }
+  }
+
+  return matrix[len2][len1]
 }
+
+// 🎯 Score de similarité avancé (0-100, 100 = match parfait)
+const calculateSimilarity = (value: string, query: string): number => {
+  const v = String(value ?? '').toLowerCase().trim()
+  const q = query.toLowerCase().trim()
+
+  if (!v || !q) return 0
+
+  // Match exact = 100 points
+  if (v === q) return 100
+
+  // Commence par la recherche = 90 points
+  if (v.startsWith(q)) return 90
+
+  // Contient la recherche = 80 points
+  if (v.includes(q)) return 80
+
+  // Normalisation (enlever espaces/caractères spéciaux)
+  const normalizeStr = (s: string) => s.replace(/[^a-z0-9]/g, '')
+  const vNorm = normalizeStr(v)
+  const qNorm = normalizeStr(q)
+
+  // Match normalisé exact = 85 points
+  if (vNorm === qNorm) return 85
+
+  // Contient normalisé = 75 points
+  if (vNorm.includes(qNorm)) return 75
+
+  // Distance de Levenshtein (fuzzy matching - tolère fautes de frappe)
+  const distance = levenshteinDistance(vNorm, qNorm)
+  const maxLen = Math.max(vNorm.length, qNorm.length)
+
+  // Si distance est petite par rapport à la longueur = match flou
+  if (maxLen > 0) {
+    const similarity = ((maxLen - distance) / maxLen) * 100
+    // Seuil minimum : 60% de similarité
+    if (similarity >= 60) return similarity
+  }
+
+  return 0
+}
+
+// 🔍 Recherche multi-champs avec pondération intelligente
+const advancedSearch = (parcel: any, query: string): boolean => {
+  if (!query?.trim()) return true
+
+  const q = query.trim().toUpperCase()
+
+  // 🔢 Si recherche numérique pure (N° EXP) → MATCH EXACT uniquement
+  if (/^[0-9]+$/.test(q)) {
+    return (
+      parcel.senderNic === q ||
+      parcel.sender?.nic === q ||
+      parcel.trackingId === q
+    )
+  }
+
+  // 📝 Sinon → recherche avancée pour texte (noms, tél, etc.)
+  const fields = [
+    { value: parcel.trackingId,     weight: 10 },
+    { value: parcel.senderNic,      weight: 10 },
+    { value: parcel.sender?.nic,    weight: 10 },
+    { value: parcel.sender?.name,   weight: 5 },
+    { value: parcel.sender?.tel,    weight: 7 },
+    { value: parcel.receiver?.name, weight: 5 },
+    { value: parcel.receiver?.tel,  weight: 7 },
+    { value: parcel.sender?.city,   weight: 3 },
+    { value: parcel.receiver?.city, weight: 3 },
+  ]
+
+  let maxScore = 0
+  for (const field of fields) {
+    const score = calculateSimilarity(field.value, query)
+    const weightedScore = score * field.weight
+    maxScore = Math.max(maxScore, weightedScore)
+  }
+
+  return maxScore >= 300
+}
+
+// Fonction legacy pour compatibilité
+const normalizeSearch = (value: any) => String(value ?? '').toLowerCase().replace(/\s+/g, '')
+const matchesSearch = (values: any, query: any) => advancedSearch({
+  trackingId: values[0],
+  senderNic: values[1],
+  sender: { nic: values[2], name: values[3], tel: values[4], city: values[5] },
+  receiver: { name: values[6], tel: values[7], city: values[8] }
+}, query)
 const parsePositiveNumber = (value: any, fallback = 0) => {
   const num = parseFloat(String(value ?? '').replace(',', '.'))
   return Number.isFinite(num) && num >= 0 ? num : fallback
@@ -178,6 +295,7 @@ const ROLES = [
   { key: 'encaisseur_central',   label: 'Encaisseur central',  emoji: '🏦',   badge: 'bg-emerald-100 text-emerald-700' },
   { key: 'chauffeur',            label: 'Chauffeur',           emoji: '🚗',   badge: 'bg-orange-100 text-orange-700'  },
   { key: 'livreur',              label: 'Livreur',             emoji: '🚚',   badge: 'bg-amber-100 text-amber-700'    },
+  { key: 'livreur-gare',         label: 'Livreur en gare',     emoji: '🚉',   badge: 'bg-yellow-100 text-yellow-700'  },
   { key: 'caissier',             label: 'Caissier',            emoji: '💵',   badge: 'bg-teal-100 text-teal-700'     },
   { key: 'salarie',     label: 'Salarié',         emoji: '👷',   badge: 'bg-rose-100 text-rose-700'      },
   { key: 'client',      label: 'Client',          emoji: '🧑',   badge: 'bg-sky-100 text-sky-700'        },
@@ -192,6 +310,9 @@ export default function AdminPage() {
   const [adminDatePreset, setAdminDatePreset] = useState('all')
   const [adminDateFrom,   setAdminDateFrom]   = useState('')
   const [adminDateTo,     setAdminDateTo]     = useState('')
+  const [codDatePreset, setCodDatePreset] = useState('all')
+  const [codDateFrom,   setCodDateFrom]   = useState('')
+  const [codDateTo,     setCodDateTo]     = useState('')
 
   // Parcels
   const [parcels,      setParcels]      = useState<any[]>([])
@@ -201,10 +322,12 @@ export default function AdminPage() {
   const [loadingMore,  setLoadingMore]  = useState(false)
   const [loading,      setLoading]      = useState(true)
   const [realStats,    setRealStats]    = useState<any>(null)
-  const [cityFilter,    setCityFilter]    = useState('Toutes')
-  const [statusFilter,  setStatusFilter]  = useState<string[]>([])
-  const [driverFilter,  setDriverFilter]  = useState('Tous')
+  const [cityFilter,       setCityFilter]       = useState('Toutes')
+  const [statusFilter,     setStatusFilter]     = useState<string[]>([])
+  const [serviceTypeFilter, setServiceTypeFilter] = useState<string[]>([])
+  const [driverFilter,     setDriverFilter]     = useState('Tous')
   const [search,        setSearch]        = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [statusModal,       setStatusModal]       = useState<any>(null)
   const [returnModal,       setReturnModal]       = useState<any>(null)
   const [returnParcelModal, setReturnParcelModal] = useState<any>(null) // { parcel, loading, result, error }
@@ -322,6 +445,8 @@ export default function AdminPage() {
   const [userEditTab,      setUserEditTab]      = useState('access')
   const [contractModal,    setContractModal]    = useState<any>(null) // null | { employee, form }
   const [codEditModal,     setCodEditModal]     = useState<any>(null) // null | { parcel, value, loading, error }
+  const [nicEditModal,     setNicEditModal]     = useState<any>(null) // null | { parcel, value, loading, error }
+  const [newParcelModal,   setNewParcelModal]   = useState<any>(null) // null | { form, loading, error }
   const [adminEditModal,   setAdminEditModal]   = useState<any>(null) // null | { parcel, form, loading, error }
   const [backupBusy,       setBackupBusy]       = useState(false)
   const [backupMessage,    setBackupMessage]    = useState<any>(null)
@@ -340,12 +465,7 @@ export default function AdminPage() {
   const setDatePreset = setAdminDatePreset
   const setDateFrom = setAdminDateFrom
   const setDateTo = setAdminDateTo
-  const codDatePreset = adminDatePreset
-  const codDateFrom = adminDateFrom
-  const codDateTo = adminDateTo
-  const setCodDatePreset = setAdminDatePreset
-  const setCodDateFrom = setAdminDateFrom
-  const setCodDateTo = setAdminDateTo
+  // codDatePreset, codDateFrom, codDateTo and their setters are now independent states (defined above)
   const usersDatePreset = adminDatePreset
   const usersDateFrom = adminDateFrom
   const usersDateTo = adminDateTo
@@ -360,10 +480,20 @@ export default function AdminPage() {
   const setActivityDateTo = setAdminDateTo
   const periodLabel = formatPeriod(adminDatePreset, adminDateFrom, adminDateTo)
 
+  // ⚡ Debounce de la recherche - temps réel pour meilleure UX
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search)
+    }, 500) // ⚡ 500ms - Optimisation : attendre que l'utilisateur finisse de taper
+
+    return () => clearTimeout(timer)
+  }, [search])
+
   // Subscriptions de base � ddémarrent au montage du composant
   useEffect(() => {
-    setLoading(true)
-    const unsubParcels        = subscribeAllParcels((data: any, lastSnap: any) => { setParcels(data); setLoading(false); if (!lastPageDocRef.current) lastPageDocRef.current = lastSnap })
+    setLoading(false) // Pas de loading initial - on attend les filtres
+    // Ne PAS charger les colis au départ - uniquement quand filtres actifs
+    const unsubParcels = () => {} // Subscription vide au départ
     const unsubUsers          = subscribeAllUsers(setUsers)
     const unsubLocks          = subscribeOperationLocks(setOperationLocks)
     const unsubTariffs        = subscribeTariffConfig((config: any) => { setTariffDraft(config) })
@@ -375,6 +505,39 @@ export default function AdminPage() {
     const unsubRapports       = subscribeAllRapportsGlobal(setAdminRapports, err => console.error('rapports:', err))
     return () => { unsubParcels(); unsubUsers(); unsubLocks(); unsubTariffs(); unsubClientMessages(); unsubSectors(); unsubCentralCash(); unsubReglements(); unsubRapports() }
   }, [])
+
+  // Charger les colis - uniquement si filtre ou recherche actif
+  useEffect(() => {
+    // ✋ Vérifier si un filtre/recherche est actif
+    const hasSearch = search.trim() !== ''
+    const hasFilter = cityFilter !== 'Toutes' || driverFilter !== 'Tous' || statusFilter.length > 0 || serviceTypeFilter.length > 0
+
+    setLoading(true)
+
+    // 📊 Chargement avec limites optimisées
+    // - Recherche : 5000 colis max (pour couvrir plus de données)
+    // - Filtre ou par défaut : 500 colis
+    const loadLimit = hasSearch ? 5000 : 500
+
+    console.log(`📦 Chargement ${loadLimit} colis (recherche: ${hasSearch ? 'OUI' : 'NON'}, filtre: ${hasFilter ? 'OUI' : 'NON'})`)
+
+    const unsubParcels = subscribeAllParcels(
+      (data: any, lastSnap: any) => {
+        console.log(`✅ ${data.length} colis chargés`)
+        setParcels(data)
+        setLoading(false)
+        if (!lastPageDocRef.current) lastPageDocRef.current = lastSnap
+      },
+      (err: any) => {
+        console.error('❌ Erreur chargement:', err)
+        setLoading(false)
+      },
+      0,
+      loadLimit
+    )
+
+    return () => unsubParcels()
+  }, [search, cityFilter, driverFilter, statusFilter, serviceTypeFilter])
 
   // Charger les vrais compteurs au montage uniquement (économie forfait gratuit)
   const loadRealStats = async () => {
@@ -466,6 +629,8 @@ export default function AdminPage() {
     archiveModal, setArchiveModal, archiveProgress, setArchiveProgress,
     archiveDone, setArchiveDone, archiving, setArchiving,
     codEditModal, setCodEditModal,
+    nicEditModal, setNicEditModal,
+    newParcelModal, setNewParcelModal,
     createModal, setCreateModal, createLoading, setCreateLoading, createError, setCreateError,
     deleteConfirmUser, setDeleteConfirmUser,
     copyMessage, setCopyMessage, mainTab, setMainTab,
@@ -480,7 +645,7 @@ export default function AdminPage() {
   const adminHandlers = useAdminHandlers(_as)
   const {
     handleDeleteBankDeposit, openAdminEdit, handleAdminEditSave,
-    handleSaveCodAmount, handleAddPortDuTx, handleDeletePortDuTx,
+    handleSaveCodAmount, handleSaveNic, handleCreateParcel, handleAddPortDuTx, handleDeletePortDuTx,
     handleSavePortDuEdit, handleConfirmDriverVersement,
     handleStatusUpdate, handleCreateReturnParcel,
     handleRemitCod, handleSettleCodAdmin, handleBatchSettleAdmin,
@@ -512,6 +677,8 @@ export default function AdminPage() {
 
   const periodParcels = useMemo(() =>
     filterByDate(allParcels, adminDatePreset, adminDateFrom, adminDateTo, (p: any) => {
+      // 📅 Utiliser workDate (date de travail) au lieu de createdAt pour respecter les shifts de nuit
+      if (p.workDate) return new Date(p.workDate + 'T12:00:00')
       if (p.createdAt?.toDate) return p.createdAt.toDate()
       if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
       return new Date(0)
@@ -530,11 +697,13 @@ export default function AdminPage() {
 
   const codDateFiltered = useMemo(() =>
     filterByDate(allParcels.filter((p: any) => parseFloat(p.codAmount) > 0),
-      adminDatePreset, adminDateFrom, adminDateTo, (p: any) => {
+      codDatePreset, codDateFrom, codDateTo, (p: any) => {
+        // 📅 Utiliser workDate (date de travail) au lieu de createdAt
+        if (p.workDate) return new Date(p.workDate + 'T12:00:00')
         if (p.createdAt?.toDate) return p.createdAt.toDate()
         return new Date(p.createdAt || 0)
       })
-  , [allParcels, adminDatePreset, adminDateFrom, adminDateTo])
+  , [allParcels, codDatePreset, codDateFrom, codDateTo])
 
   const filteredCod = useMemo(() => {
     if (!Array.isArray(codDateFiltered)) return []
@@ -724,43 +893,107 @@ export default function AdminPage() {
     alertes: Array.isArray(visibleAlerts) ? visibleAlerts.map((a: any) => ({ tracking: a.parcel.trackingId, type: a.type, age: a.ageHours + 'h', statut: a.parcel.status })) : [],
   }), [periodParcels, filteredCod, returnParcels, agencyStats, visibleAlerts])
 
-  const filtered = useMemo(() => {
-    if (!Array.isArray(allParcels)) return []
-    let list = allParcels
-    if (cityFilter !== 'Toutes') list = list.filter((p: any) => p.originCity === cityFilter || p.destinationCity === cityFilter || p.sender?.city === cityFilter || p.receiver?.city === cityFilter)
+  // 🚀 Index de recherche Fuse.js pour performance optimale
+  // ⚡ OPTIMISATION MAJEURE: Utiliser periodParcels au lieu de allParcels
+  // periodParcels est déjà filtré par période → beaucoup moins de données à indexer
+  const fuseIndex = useMemo(() => {
+    if (!Array.isArray(periodParcels) || periodParcels.length === 0) return null
 
-    // Filtre par livreur/chauffeur
-    if (driverFilter !== 'Tous') {
-      list = list.filter((p: any) =>
-        p.deliveryDriverId === driverFilter ||
-        p.chauffeurId === driverFilter
-      )
+    return new Fuse(periodParcels, {
+      keys: [
+        { name: 'trackingId', weight: 2.0 },
+        { name: 'senderNic', weight: 2.0 },
+        { name: 'sender.nic', weight: 2.0 },
+        { name: 'sender.name', weight: 1.0 },
+        { name: 'sender.tel', weight: 1.5 },
+        { name: 'receiver.name', weight: 1.0 },
+        { name: 'receiver.tel', weight: 1.5 },
+        { name: 'sender.city', weight: 0.5 },
+        { name: 'receiver.city', weight: 0.5 },
+      ],
+      threshold: 0.1, // 0=exact, 1=anything → 0.1 = résultats quasi-exacts uniquement
+      ignoreLocation: true,
+      useExtendedSearch: true,
+      distance: 50, // Limite la distance de recherche pour plus de précision
+    })
+  }, [periodParcels])
+
+  const filtered = useMemo(() => {
+    if (!Array.isArray(periodParcels)) return []
+
+    // 🚀 OPTIMISATION: Utiliser Fuse.js pour recherche rapide
+    let results = periodParcels
+
+    // Si recherche active, utiliser Fuse.js pour filtrage ultra-rapide
+    if (debouncedSearch && fuseIndex) {
+      const searchResults = fuseIndex.search(debouncedSearch.trim())
+      results = searchResults.map(r => r.item)
     }
 
-    // Filtre statut multi-select
-    if (statusFilter.length > 0) {
-      list = list.filter((p: any) => {
+    // Appliquer les autres filtres (ville, driver, statut)
+    results = results.filter((p: any) => {
+      // Filtre par ville
+      if (cityFilter !== 'Toutes') {
+        const cityMatch = p.originCity === cityFilter || p.destinationCity === cityFilter || p.sender?.city === cityFilter || p.receiver?.city === cityFilter
+        if (!cityMatch) return false
+      }
+
+      // Filtre par livreur/chauffeur
+      if (driverFilter !== 'Tous') {
+        const driverMatch = p.deliveryDriverId === driverFilter || p.chauffeurId === driverFilter
+        if (!driverMatch) return false
+      }
+
+      // Filtre statut multi-select
+      if (statusFilter.length > 0) {
         // Logique : "Retourné" inclut tous les statuts du circuit retour
         if (statusFilter.includes('Retourné')) {
           const returnStatuses = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
           if (returnStatuses.includes(p.status)) return true
         }
         // Match exact pour les autres statuts
-        return statusFilter.includes(p.status)
+        if (!statusFilter.includes(p.status)) return false
+      }
+
+      // Filtre type de service multi-select
+      if (serviceTypeFilter.length > 0) {
+        const serviceTypes = p.serviceType?.split(',').filter(Boolean) || ['simple']
+        const hasMatch = serviceTypes.some((st: string) => serviceTypeFilter.includes(st))
+        if (!hasMatch) return false
+      }
+
+      return true
+    })
+
+    // 2️⃣ Si recherche numérique (N° EXP) → trier par match exact d'abord
+    if (debouncedSearch && /^[0-9]+$/.test(debouncedSearch.trim())) {
+      const searchNum = debouncedSearch.trim().toUpperCase()
+      results.sort((a, b) => {
+        // Score A
+        const aExact = (a.senderNic === searchNum || a.sender?.nic === searchNum || a.trackingId === searchNum) ? 1000 : 0
+        const aStart = (a.senderNic?.startsWith(searchNum) || a.sender?.nic?.startsWith(searchNum) || a.trackingId?.startsWith(searchNum)) ? 100 : 0
+        const aContains = (a.senderNic?.includes(searchNum) || a.sender?.nic?.includes(searchNum) || a.trackingId?.includes(searchNum)) ? 10 : 0
+        const scoreA = aExact + aStart + aContains
+
+        // Score B
+        const bExact = (b.senderNic === searchNum || b.sender?.nic === searchNum || b.trackingId === searchNum) ? 1000 : 0
+        const bStart = (b.senderNic?.startsWith(searchNum) || b.sender?.nic?.startsWith(searchNum) || b.trackingId?.startsWith(searchNum)) ? 100 : 0
+        const bContains = (b.senderNic?.includes(searchNum) || b.sender?.nic?.includes(searchNum) || b.trackingId?.includes(searchNum)) ? 10 : 0
+        const scoreB = bExact + bStart + bContains
+
+        return scoreB - scoreA // Tri décroissant (meilleur score en premier)
       })
     }
-    if (search.trim()) {
-      const q = search.trim().toLowerCase()
-      list = list.filter((p: any) => (p.trackingId||'').toLowerCase().includes(q) || (p.sender?.name||'').toLowerCase().includes(q) || (p.receiver?.name||'').toLowerCase().includes(q) || (p.receiver?.tel||'').includes(q))
-    }
-    return list
-  }, [allParcels, cityFilter, driverFilter, statusFilter, search])
+
+    // 🔢 Limiter à 100 expéditions maximum pour performance
+    return results.slice(0, 100)
+  }, [periodParcels, cityFilter, driverFilter, statusFilter, serviceTypeFilter, debouncedSearch, fuseIndex])
 
   const loadMoreParcels = async () => {
     if (!hasMore || loadingMore) return
     setLoadingMore(true)
     try {
-      const { docs: data, lastDocSnap: lastSnap, hasMore: moreAvailable } = await getParcelsPage(lastPageDocRef.current, 50)
+      const { docs: data, lastDocSnap: lastSnap, hasMore: moreAvailable } = await getParcelsPage(lastPageDocRef.current, 200) // Charger seulement 200 colis
       setMoreParcels((prev: any[]) => { const map = new Map(); prev.forEach((p: any) => map.set(p.id, p)); data.forEach((p: any) => map.set(p.id, p)); return [...map.values()] })
       lastPageDocRef.current = lastSnap
       if (!moreAvailable) setHasMore(false)
@@ -881,6 +1114,7 @@ export default function AdminPage() {
             </div>
             <div className="flex items-center gap-2">
               <LiveClock className="text-gray-400 hidden sm:inline" />
+              <WorkingDateIndicator />
               <span className="hidden sm:flex items-center gap-1.5 text-xs text-green-600 font-medium">
                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" /> Temps réel
               </span>
@@ -904,7 +1138,7 @@ export default function AdminPage() {
               </button>
               <span className="text-gray-200 font-light">/</span>
               <span className="text-sm font-bold text-blue-600">
-                {{ expeditions:'Expéditions', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', clients:'Clients', exports:'Exports', caisse:'Caisse', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents' }[mainTab] || mainTab}
+                {{ expeditions:'Expéditions', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', clients:'Clients', exports:'Exports', caisse:'Caisse', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires' }[mainTab] || mainTab}
               </span>
             </div>
           )}
@@ -919,6 +1153,7 @@ export default function AdminPage() {
               {[
                 { key: 'expeditions', label: 'Expéditions',         icon: Package   },
                 { key: 'cod',         label: 'RETOUR FOND / Remboursement', icon: Wallet    },
+                { key: 'port_agencies', label: '📮 Port par agence', icon: Building2 },
                 { key: 'archivage',   label: '🗄️ Archives',          icon: Archive   },
                 { key: 'users',       label: 'Utilisateurs',         icon: Users     },
                 { key: 'activity',    label: 'Activité',             icon: BarChart2 },
@@ -934,6 +1169,8 @@ export default function AdminPage() {
                 { key: 'reglements',  label: 'Règlements',            icon: Banknote  },
                 { key: 'banque',      label: 'Banque RETOUR FOND',    icon: Building2 },
                 { key: 'notes',       label: 'Notes agents',          icon: Star      },
+                { key: 'utilities',   label: '🔧 Utilitaires',        icon: Settings  },
+                { key: 'permissions', label: '🔐 Permissions',        icon: ShieldCheck },
               ].map(({ key, label, icon: Icon }) => (
                 <button key={key} onClick={() => { setMainTab(key); setMenuOpen(false) }}
                   className={`w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold transition ${
@@ -1061,6 +1298,8 @@ export default function AdminPage() {
               setDriverFilter={setDriverFilter}
               statusFilter={statusFilter}
               setStatusFilter={setStatusFilter}
+              serviceTypeFilter={serviceTypeFilter}
+              setServiceTypeFilter={setServiceTypeFilter}
               users={users}
               datePreset={datePreset}
               setDatePreset={setDatePreset}
@@ -1071,6 +1310,8 @@ export default function AdminPage() {
               filtered={filtered}
               loading={loading}
               setCodEditModal={setCodEditModal}
+              setNicEditModal={setNicEditModal}
+              setNewParcelModal={setNewParcelModal}
               setStatusModal={setStatusModal}
               openAdminEdit={openAdminEdit}
               allParcels={allParcels}
@@ -1400,6 +1641,35 @@ export default function AdminPage() {
           </Suspense>
         )}
 
+        {/* TAB: UTILITAIRES */}
+        {mainTab === 'utilities' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminUtilitiesTab />
+          </Suspense>
+        )}
+
+        {/* TAB: PERMISSIONS */}
+        {mainTab === 'permissions' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminPermissionsTab />
+          </Suspense>
+        )}
+
+        {/* TAB: PORT PAR AGENCE */}
+        {mainTab === 'port_agencies' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminPortAgenciesTab
+              allParcels={allParcels}
+              datePreset={datePreset}
+              setDatePreset={setDatePreset}
+              dateFrom={dateFrom}
+              setDateFrom={setDateFrom}
+              dateTo={dateTo}
+              setDateTo={setDateTo}
+            />
+          </Suspense>
+        )}
+
         {/* TAB: ARCHIVAGE */}
         {mainTab === 'archivage' && (
           <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
@@ -1691,7 +1961,7 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* MODAL STATUT */}
+      {/* MODAL RETOUR FOND */}
       {codEditModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl">
@@ -1730,6 +2000,113 @@ export default function AdminPage() {
                 >{codEditModal.loading ? 'Sauvegarde...' : 'Enregistrer'}</button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL N° EXP */}
+      {nicEditModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-sm shadow-2xl">
+            <div className="flex items-center justify-between p-5 border-b">
+              <div>
+                <h3 className="font-bold text-gray-800 flex items-center gap-2"><Edit2 className="w-4 h-4 text-blue-500" /> Modifier le N° EXP</h3>
+                <p className="text-xs font-mono text-blue-600 mt-0.5">{nicEditModal.parcel.trackingId}</p>
+                <p className="text-xs text-gray-400 mt-0.5">{nicEditModal.parcel.sender?.name}</p>
+              </div>
+              <button onClick={() => setNicEditModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              {nicEditModal.error && (
+                <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {nicEditModal.error}</div>
+              )}
+              <div>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">N° EXP</label>
+                <input
+                  type="text"
+                  value={nicEditModal.value}
+                  onChange={e => setNicEditModal((m: any) => ({ ...m, value: e.target.value }))}
+                  onKeyDown={e => e.key === 'Enter' && handleSaveNic()}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-blue-400 focus:outline-none bg-gray-50 focus:bg-white transition font-bold text-blue-600"
+                  autoFocus
+                  placeholder="N° d'expédition"
+                />
+                <p className="text-xs text-gray-400 mt-1">Numéro unique d'expédition.</p>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <button onClick={() => setNicEditModal(null)}
+                  className="py-2.5 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition text-sm"
+                >Annuler</button>
+                <button onClick={handleSaveNic} disabled={nicEditModal.loading}
+                  className="py-2.5 rounded-xl bg-blue-500 hover:bg-blue-600 text-white font-semibold transition text-sm disabled:opacity-50"
+                >{nicEditModal.loading ? 'Sauvegarde...' : 'Enregistrer'}</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL NOUVELLE EXPÉDITION */}
+      {newParcelModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl">
+            <div className="sticky top-0 bg-white border-b p-5 flex items-center justify-between z-10">
+              <h3 className="font-bold text-xl text-gray-800">📦 Nouvelle Expédition</h3>
+              <button onClick={() => setNewParcelModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition"><X className="w-5 h-5" /></button>
+            </div>
+            <form autoComplete="off" className="p-6 space-y-6">
+              {newParcelModal.error && (<div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {newParcelModal.error}</div>)}
+
+              {/* Expéditeur */}
+              <div className="bg-pink-50 border border-pink-200 rounded-xl p-4 space-y-3">
+                <h4 className="font-bold text-pink-700">📤 Expéditeur</h4>
+                <div className="grid grid-cols-2 gap-3">
+                  <input placeholder="N° EXP" value={newParcelModal.form.senderNic} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, senderNic: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+                  <input placeholder="Nom *" value={newParcelModal.form.senderName} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, senderName: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+                  <input placeholder="Téléphone" value={newParcelModal.form.senderTel} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, senderTel: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+                  <input placeholder="Ville" value={newParcelModal.form.senderCity} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, senderCity: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+                  <input placeholder="Adresse" value={newParcelModal.form.senderAddress} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, senderAddress: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm col-span-2" />
+                </div>
+              </div>
+
+              {/* Destinataire */}
+              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
+                <h4 className="font-bold text-blue-700">📥 Destinataire</h4>
+                <div className="grid grid-cols-2 gap-3">
+                  <input placeholder="Nom *" value={newParcelModal.form.receiverName} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, receiverName: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+                  <input placeholder="Téléphone" value={newParcelModal.form.receiverTel} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, receiverTel: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+                  <input placeholder="Ville *" value={newParcelModal.form.receiverCity} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, receiverCity: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
+                  <input placeholder="Adresse" value={newParcelModal.form.receiverAddress} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, receiverAddress: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm col-span-2" />
+                </div>
+              </div>
+
+              {/* Détails */}
+              <div className="grid grid-cols-3 gap-3">
+                <div><label className="text-xs font-semibold text-gray-500 block mb-1">Poids (kg)</label><input type="number" min="0" step="0.1" value={newParcelModal.form.weight} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, weight: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
+                <div><label className="text-xs font-semibold text-gray-500 block mb-1">Nb Colis</label><input type="number" min="1" value={newParcelModal.form.nbColis} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, nbColis: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
+                <div><label className="text-xs font-semibold text-gray-500 block mb-1">Type</label><select value={newParcelModal.form.serviceType} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, serviceType: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full"><option value="simple">Simple</option><option value="especes">C/Espèces</option><option value="cheque">C/Chèque</option></select></div>
+              </div>
+
+              {/* Port */}
+              <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 space-y-3">
+                <h4 className="font-bold text-purple-700">💰 Port</h4>
+                <div className="flex gap-2 mb-2">
+                  {[{k:'port_paye',l:'Port Payé'},{k:'port_du',l:'Port Dû'},{k:'port_en_compte',l:'En Compte'}].map(p=><button key={p.k} onClick={()=>setNewParcelModal((m:any)=>({...m,form:{...m.form,portType:p.k}}))} className={`px-3 py-2 rounded-xl text-xs font-bold ${newParcelModal.form.portType===p.k?'bg-purple-600 text-white':'bg-white border'}`}>{p.l}</button>)}
+                </div>
+                <input type="number" min="0" step="0.01" placeholder="Montant port (DH)" value={newParcelModal.form.portPrice} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, portPrice: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" />
+              </div>
+
+              {/* RETOUR FOND */}
+              <div><label className="text-xs font-semibold text-gray-500 block mb-1">RETOUR FOND (DH)</label><input type="number" min="0" step="0.01" value={newParcelModal.form.codAmount} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, codAmount: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
+
+              {/* Actions */}
+              <div className="grid grid-cols-2 gap-3 pt-4 border-t">
+                <button type="button" onClick={() => setNewParcelModal(null)} className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition">Annuler</button>
+                <button type="button" onClick={handleCreateParcel} disabled={newParcelModal.loading} className="py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold transition disabled:opacity-50">{newParcelModal.loading ? 'Création...' : 'Créer l\'expédition'}</button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -1843,7 +2220,7 @@ export default function AdminPage() {
               </button>
             </div>
 
-            <form onSubmit={handleCreateUser} className="p-5 space-y-3">
+            <form onSubmit={handleCreateUser} autoComplete="off" className="p-5 space-y-3">
               {createError && (
                 <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {createError}</div>
               )}
