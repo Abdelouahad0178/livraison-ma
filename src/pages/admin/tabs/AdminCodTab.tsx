@@ -355,6 +355,47 @@ export default function AdminCodTab({
             ))}
           </div>
 
+          {/* Filtre personnalisé - Plage de dates */}
+          <div className="flex flex-wrap gap-3 items-center">
+            <span className="text-xs font-bold text-gray-600">📆 Période personnalisée :</span>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-500">De</label>
+              <input
+                type="date"
+                value={codDateFrom}
+                onChange={e => {
+                  setCodDateFrom(e.target.value)
+                  if (e.target.value || codDateTo) setCodDatePreset('custom')
+                }}
+                className="px-3 py-1 border border-gray-300 rounded-lg text-xs focus:border-green-500 focus:outline-none"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs text-gray-500">À</label>
+              <input
+                type="date"
+                value={codDateTo}
+                onChange={e => {
+                  setCodDateTo(e.target.value)
+                  if (e.target.value || codDateFrom) setCodDatePreset('custom')
+                }}
+                className="px-3 py-1 border border-gray-300 rounded-lg text-xs focus:border-green-500 focus:outline-none"
+              />
+            </div>
+            {(codDateFrom || codDateTo) && (
+              <button
+                onClick={() => {
+                  setCodDateFrom('')
+                  setCodDateTo('')
+                  setCodDatePreset('all')
+                }}
+                className="px-2 py-1 text-xs text-red-600 hover:bg-red-50 rounded-lg font-semibold transition"
+              >
+                ✕ Effacer
+              </button>
+            )}
+          </div>
+
           {/* Filtres rapides - Mode de paiement */}
           <div className="flex flex-wrap gap-2 items-center">
             <span className="text-xs font-bold text-gray-600">💳</span>

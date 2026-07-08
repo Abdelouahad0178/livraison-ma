@@ -71,7 +71,7 @@ export function EditParcelModal({ parcel, onClose, onSuccess }: EditParcelModalP
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        <form onSubmit={handleSubmit} autoComplete="off" className="p-6 space-y-4">
           {error && (
             <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm">
               {error}
@@ -302,7 +302,7 @@ export function EditModRequestModal({ request, onClose, onSuccess }: EditModRequ
           </button>
         </div>
 
-        <form onSubmit={handleSubmit} className="p-6 space-y-4">
+        <form onSubmit={handleSubmit} autoComplete="off" className="p-6 space-y-4">
           {error && (
             <div className="bg-red-50 border border-red-100 text-red-700 rounded-xl px-4 py-3 text-sm">
               {error}

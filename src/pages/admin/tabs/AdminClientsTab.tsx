@@ -118,12 +118,7 @@ export default function AdminClientsTab() {
 
             // Créer le compte portail
             const result = await createClientPortalAccount(clientData as Client, newForm.email)
-
-            if (result.success) {
-              alert(`✅ Client et compte portail créés !\n📧 Email: ${result.email}\n🔑 Mot de passe: ${result.password}`)
-            } else {
-              alert(`✅ Client créé\n⚠️ Compte portail: ${result.message}`)
-            }
+            alert(`✅ Client et compte portail créés !\n📧 Email: ${result.email}\n🔑 Mot de passe: ${result.password}`)
           }
         } catch (portalError: any) {
           console.error('Erreur création portail:', portalError)

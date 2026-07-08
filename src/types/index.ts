@@ -41,7 +41,7 @@ export type DateFilterPreset = 'all' | 'today' | 'week' | 'month' | 'day' | 'cus
 
 export interface Address {
   name: string
-  tel: string
+  tel?: string  // 📞 Téléphone optionnel
   city: string
   address?: string
   nic?: string
@@ -82,6 +82,7 @@ export interface Parcel {
   history: HistoryEntry[]
   photoUrl: string
   createdAt: Timestamp | string
+  workDate?: string  // 📅 Date de travail (YYYY-MM-DD) - gère sessions de nuit 20h-06h
   agentId: string | null
   agentName: string | null
   chauffeurId: string | null
@@ -93,6 +94,7 @@ export interface Parcel {
   deliverySectorName: string
   deliveryVehicleId: string | null
   deliveryVehicleLabel: string
+  deliveryMethod: 'domicile' | 'gare'  // Mode de livraison: domicile ou en gare
   destinationCity: string | null
   originCity: string | null
   shipmentLoadedAt: string | null

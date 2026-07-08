@@ -2,6 +2,7 @@ import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import ErrorBoundary from './components/ErrorBoundary'
 import { initMonitoring, setUserContext } from './utils/monitoring'
+import { loadWorkingDateFromFirestore } from './utils/workingDate'
 
 initMonitoring()
 
@@ -32,11 +33,15 @@ const DirectorPage  = lazy(() => import('./pages/DirectorPage'))
 const DashboardPage  = lazy(() => import('./pages/DashboardPage'))
 const CaissierPage   = lazy(() => import('./pages/CaissierPage'))
 const DriverPage     = lazy(() => import('./pages/DriverPage'))
+const DriverGarePage = lazy(() => import('./pages/DriverGarePage'))
+const DriverGarePageTest = lazy(() => import('./pages/DriverGarePageTest'))
+const TestMinimal = lazy(() => import('./pages/TestMinimal'))
 const CaisseAdminPage = lazy(() => import('./pages/CaisseAdminPage'))
 const ClientPortalPage = lazy(() => import('./pages/ClientPortalPage'))
 const SignaturePage    = lazy(() => import('./pages/SignaturePage'))
 const ArrivagePage     = lazy(() => import('./pages/ArrivagePage'))
 const PointeurPage     = lazy(() => import('./pages/PointeurPage'))
+const PointeurPageNew  = lazy(() => import('./pages/PointeurPageNew'))
 const CentralCollectorPage = lazy(() => import('./pages/CentralCollectorPage'))
 const SeedPage         = lazy(() => import('./pages/SeedPage'))
 const ArchivePage      = lazy(() => import('./pages/ArchivePage'))
@@ -136,6 +141,12 @@ function AppContent() {
       if (u) {
         setUser(u)
         setUserContext(u.uid, u.email ?? undefined)
+
+        // Charger la date de travail une fois authentifié
+        loadWorkingDateFromFirestore().catch(err => {
+          console.error('Erreur chargement date de travail:', err)
+        })
+
         ;(async () => {
           const [{ doc, onSnapshot }, { db }, { subscribeOperationLocks }] = await Promise.all([
             import('firebase/firestore'),
@@ -271,6 +282,18 @@ function AppContent() {
               <DriverPage />
             </PrivateRoute>
           } />
+          <Route path="/gare-driver" element={
+            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="livreur-gare">
+              <DriverGarePage />
+            </PrivateRoute>
+          } />
+          <Route path="/gare-driver-test" element={
+            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="livreur-gare">
+              <DriverGarePageTest />
+            </PrivateRoute>
+          } />
+          <Route path="/gare-driver-test-public" element={<DriverGarePageTest />} />
+          <Route path="/test-minimal" element={<TestMinimal />} />
           <Route path="/caisse-admin" element={
             <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="admin">
               <CaisseAdminPage />
@@ -291,7 +314,7 @@ function AppContent() {
 
           <Route path="/pointeur" element={
             <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="pointeur_encaisseur">
-              <PointeurPage />
+              <PointeurPageNew />
             </PrivateRoute>
           } />
 

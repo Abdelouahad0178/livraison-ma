@@ -1875,7 +1875,7 @@ export default function PointeurPage() {
               </button>
             </div>
 
-            <form onSubmit={handleSaveReglement} className="flex-1 overflow-y-auto p-5 space-y-4">
+            <form onSubmit={handleSaveReglement} autoComplete="off" className="flex-1 overflow-y-auto p-5 space-y-4">
               {formModal.error && (
                 <div className="bg-red-50 border border-red-200 rounded-xl px-3 py-2 text-sm text-red-600">{formModal.error}</div>
               )}

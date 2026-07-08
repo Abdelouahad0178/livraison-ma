@@ -424,7 +424,7 @@ export default function FleetPage() {
               </button>
             </div>
 
-            <form onSubmit={handleSave} className="overflow-y-auto flex-1 p-5 space-y-4">
+            <form onSubmit={handleSave} autoComplete="off" className="overflow-y-auto flex-1 p-5 space-y-4">
               {saveError && (
                 <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-sm font-semibold">
                   {saveError}

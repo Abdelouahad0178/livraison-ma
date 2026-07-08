@@ -82,6 +82,12 @@ export default function AdminHomeTab({
   // adminName is available for use in the welcome banner
   void adminName
 
+  // Stats de port
+  const portPaye = periodParcels.filter((p: any) => p.portType === 'port_paye').reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
+  const portDu = periodParcels.filter((p: any) => p.portType === 'port_du').reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
+  const portEnCompte = periodParcels.filter((p: any) => p.portType === 'port_en_compte').reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
+  const totalPort = portPaye + portDu + portEnCompte
+
   const CARDS = [
     {
       key: 'expeditions', label: 'Expéditions', desc: 'Gérer tous les colis',
@@ -95,6 +101,13 @@ export default function AdminHomeTab({
       glow: 'bg-orange-50/80', stat: `${fmt(codPend)} DH en attente`,
       badge: codStats.collectedDH > 0 ? `${fmt(codStats.collectedDH)} DH` : null,
       action: () => setMainTab('cod'),
+    },
+    {
+      key: 'port_agencies', label: '📮 Port par agence', desc: 'Statistiques de port par ville',
+      icon: Building2, grad: 'from-purple-500 via-pink-600 to-rose-700',
+      glow: 'bg-purple-50/80', stat: `${fmt(totalPort)} DH total`,
+      badge: portDu > 0 ? `${fmt(portDu)} DH dû` : null,
+      action: () => setMainTab('port_agencies'),
     },
     {
       key: 'archivage', label: '🗄️ Archives', desc: 'Archivage cloud automatique et manuel',
@@ -190,6 +203,12 @@ export default function AdminHomeTab({
         ? `${allBankDeposits.filter((d: any) => !d.adminConfirmed).length} à confirmer`
         : null,
       action: () => setMainTab('banque'),
+    },
+    {
+      key: 'permissions', label: '🔐 Permissions', desc: 'Contrôler les champs modifiables par rôle',
+      icon: ShieldCheck, grad: 'from-violet-500 via-purple-600 to-indigo-700',
+      glow: 'bg-violet-50/80', stat: 'Chef d\'agence · Aide agent',
+      action: () => setMainTab('permissions'),
     },
   ]
 

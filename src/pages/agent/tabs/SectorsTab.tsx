@@ -21,6 +21,7 @@ export default function SectorsTab() {
     setBonPrintModal,
     confirmDeleteDriverId, setConfirmDeleteDriverId,
     handlePrintBonRamassage,
+    canPerformAction,
   } = useAgentCtx()
 
   return (
@@ -30,9 +31,11 @@ export default function SectorsTab() {
             <h2 className="font-bold text-gray-800 text-base">Secteurs & equipes</h2>
             <p className="text-xs text-gray-400 mt-0.5">Organisez les zones et livreurs de votre agence</p>
           </div>
-          <button onClick={() => setSectorModal?.({ mode: 'new', code: '', name: '', loading: false, error: '' })} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition">
-            <Plus className="w-4 h-4" /> Nouveau secteur
-          </button>
+          {canPerformAction?.('add_sector') && (
+            <button onClick={() => setSectorModal?.({ mode: 'new', code: '', name: '', loading: false, error: '' })} className="flex items-center gap-1.5 px-3 py-2 rounded-xl bg-indigo-600 text-white text-sm font-semibold hover:bg-indigo-700 transition">
+              <Plus className="w-4 h-4" /> Nouveau secteur
+            </button>
+          )}
         </div>
 
       {sectors.length === 0 ? (
@@ -59,9 +62,13 @@ export default function SectorsTab() {
                     {sector.name !== sector.code && <p className="text-xs text-indigo-600">{sector.name}</p>}
                   </div>
                   <div className="flex items-center gap-1.5">
-                    <button onClick={() => setDriverModal({ mode: 'new', sectorId: sector.id, sectorCode: sector.code, name: '', email: '', password: '', tel: '', matricule: '', existingDriverId: '', loading: false, error: '' })} className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-indigo-600 text-white text-[10px] font-bold hover:bg-indigo-700 transition">
-                      <Plus className="w-3 h-3" /> Livreur
-                    </button>
+                    {canPerformAction?.('add_driver') && (
+                      <button onClick={() => {
+                        setDriverModal({ mode: 'new', sectorId: sector.id, sectorCode: sector.code, name: '', email: '', password: '', tel: '', matricule: '', existingDriverId: '', loading: false, error: '' })
+                      }} className="flex items-center gap-1 px-2 py-1.5 rounded-lg bg-indigo-600 text-white text-[10px] font-bold hover:bg-indigo-700 transition">
+                        <Plus className="w-3 h-3" /> Livreur
+                      </button>
+                    )}
                     <button onClick={() => setSectorModal({ mode: 'edit', id: sector.id, code: sector.code, name: sector.name, loading: false, error: '' })} className="p-1.5 rounded-lg hover:bg-indigo-100 text-indigo-600 transition">
                       <Edit2 className="w-3.5 h-3.5" />
                     </button>

@@ -735,7 +735,7 @@ export default function ClientsPage() {
                 <X className="w-5 h-5 text-gray-500" />
               </button>
             </div>
-            <form onSubmit={handleSaveClient} className="p-5 space-y-4">
+            <form onSubmit={handleSaveClient} autoComplete="off" className="p-5 space-y-4">
               <div className="grid grid-cols-2 gap-3">
                 <div className="col-span-2">
                   <label className="text-xs text-gray-500 font-medium mb-1 block">Nom complet *</label>
@@ -750,15 +750,10 @@ export default function ClientsPage() {
                     className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500 font-medium mb-1 block">Téléphone</label>
+                  <label className="text-xs text-gray-500 font-medium mb-1 block">Téléphone (optionnel)</label>
                   <input type="tel" value={clientModal.data.tel}
                     onChange={e => setClientModal((m: any) => ({ ...m, data: { ...m.data, tel: e.target.value } }))}
-                    className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-blue-500" />
-                </div>
-                <div className="col-span-2">
-                  <label className="text-xs text-gray-500 font-medium mb-1 block">Email</label>
-                  <input type="email" value={clientModal.data.email}
-                    onChange={e => setClientModal((m: any) => ({ ...m, data: { ...m.data, email: e.target.value } }))}
+                    placeholder="0612345678"
                     className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-blue-500" />
                 </div>
                 <div>
@@ -771,9 +766,10 @@ export default function ClientsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="text-xs text-gray-500 font-medium mb-1 block">Adresse</label>
+                  <label className="text-xs text-gray-500 font-medium mb-1 block">Adresse (optionnel)</label>
                   <input value={clientModal.data.address}
                     onChange={e => setClientModal((m: any) => ({ ...m, data: { ...m.data, address: e.target.value } }))}
+                    placeholder="Adresse complète"
                     className="w-full border border-gray-200 rounded-xl px-4 py-2.5 text-sm focus:outline-none focus:border-blue-500" />
                 </div>
 
@@ -845,7 +841,7 @@ export default function ClientsPage() {
                 <X className="w-5 h-5 text-gray-500" />
               </button>
             </div>
-            <form onSubmit={handleSavePayment} className="p-5 space-y-4">
+            <form onSubmit={handleSavePayment} autoComplete="off" className="p-5 space-y-4">
               {/* Debit / Credit */}
               <div>
                 <label className="text-xs text-gray-500 font-medium mb-2 block">Type de mouvement</label>

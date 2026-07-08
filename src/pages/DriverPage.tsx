@@ -98,6 +98,10 @@ export default function DriverPage() {
   const [bulkBusy, setBulkBusy]           = useState(false)
   const [bulkError, setBulkError]         = useState('')
 
+  // Sélection multiple pour validation papier
+  const [paperSelectedIds, setPaperSelectedIds] = useState<Set<string>>(new Set())
+  const [bulkPaperValidating, setBulkPaperValidating] = useState(false)
+
   // Modal mise à jour statut
   const [statusModal, setStatusModal]     = useState<any>(null)
   const [rejectModal, setRejectModal]     = useState<any>(null)
@@ -502,18 +506,9 @@ export default function DriverPage() {
       const isReturn = parcel?.status?.includes('Retour')
         || parcel?.wasReturned === true
 
-      console.log('🔍 Demande signature:', {
-        parcelId: parcel.id,
-        status: parcel.status,
-        isReturn,
-        wasReturned: parcel.wasReturned,
-        returnedAt: parcel.returnedAt
-      })
-
       const token = await generateSignatureToken(parcel.id, isReturn)
       const url   = `${window.location.origin}/sign/${parcel.id}/${token}`
 
-      console.log('✅ Token généré:', { token: token.slice(0, 10) + '...', isReturn })
 
       // ⭐ Si Retour BL coché, présélectionner "Bon de livraison" comme mode de paiement
       const defaultPaymentType = parcel.hasRetourBL ? 'bon_livraison' : ''
@@ -646,12 +641,6 @@ export default function DriverPage() {
       return
     }
 
-    console.log('📝 Confirmation signature:', {
-      parcelId: parcel.id,
-      isReturn,
-      finalStatus: isReturn ? 'Retour finalisé' : 'Livré'
-    })
-
     setSignatureModal((m: any) => ({ ...m, confirming: true, error: '' }))
     try {
       if (needsCod) await collectCod(parcel.id, codPaymentType, name)
@@ -668,7 +657,6 @@ export default function DriverPage() {
       if (signatureUnsubRef.current) signatureUnsubRef.current()
       setSignatureModal((m: any) => ({ ...m, confirming: false, done: true }))
       setTimeout(() => setSignatureModal(null), 2500)
-      console.log('✅ Signature confirmée avec succès, statut:', finalStatus)
     } catch (err: any) {
       console.error('❌ Erreur confirmation signature:', err)
       setSignatureModal((m: any) => ({ ...m, confirming: false, error: 'Erreur lors de la confirmation. Réessayez.' }))
@@ -694,12 +682,6 @@ export default function DriverPage() {
       return
     }
 
-    console.log('📄 Confirmation bon papier:', {
-      parcelId: parcel.id,
-      isReturn,
-      finalStatus: isReturn ? 'Retour finalisé' : 'Livré'
-    })
-
     setPaperReceiptModal((m: any) => ({ ...m, confirming: true, error: '' }))
     try {
       if (needsCod) await collectCod(parcel.id, codPaymentType, name)
@@ -715,7 +697,6 @@ export default function DriverPage() {
       setDeliveryParcels(patchList)
       setMsg({ type: 'success', text: `✅ ${isReturn ? 'Retour confirmé' : 'Livraison confirmée'} avec bon papier !` })
       setPaperReceiptModal(null)
-      console.log('✅ Bon papier confirmé avec succès, statut:', finalStatus)
     } catch (err: any) {
       console.error('❌ Erreur confirmation bon papier:', err)
       setPaperReceiptModal((m: any) => ({ ...m, confirming: false, error: 'Erreur lors de la confirmation. Réessayez.' }))
@@ -757,11 +738,11 @@ export default function DriverPage() {
                 <span className="font-bold hidden sm:inline">Interface {workerLabel}</span>
               </div>
               {profile?.name && (
-                <span className="text-gray-400 text-sm hidden md:inline">— {profile.name}</span>
+                <span className="text-white text-sm hidden md:inline">— {profile.name}</span>
               )}
             </div>
             <div className="flex items-center gap-2">
-              <LiveClock className="text-gray-400 hidden sm:inline" />
+              <LiveClock className="text-white hidden sm:inline" />
               <button
                 onClick={() => signOut(auth).then(() => navigate('/login'))}
                 className="hidden md:flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 transition"
@@ -771,17 +752,17 @@ export default function DriverPage() {
               </button>
               <button
                 onClick={() => setMenuOpen(v => !v)}
-                className="md:hidden p-2 rounded-lg text-gray-400 hover:bg-gray-800 transition"
+                className="md:hidden p-2 rounded-lg text-white hover:bg-gray-800 transition"
               >
                 {menuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
               </button>
             </div>
           </div>
           {/* Desktop tabs */}
-          <div className="hidden md:flex border-t border-gray-800">
+          <div className="hidden md:flex border-t border-gray-700">
             <button
               onClick={() => setTab('parcels')}
-              className={`py-3 px-4 text-sm font-semibold border-b-2 transition ${tab === 'parcels' ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+              className={`py-3 px-4 text-sm font-semibold border-b-2 transition ${tab === 'parcels' ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-400 hover:text-white'}`}
             >
               Mes missions
               {(parcels.filter(p => !['Livré','Retourné'].includes(p.status)).length + deliveryParcels.filter(p => !['Livré','Retourné'].includes(p.status)).length) > 0 && (
@@ -792,13 +773,13 @@ export default function DriverPage() {
             </button>
             <button
               onClick={() => setTab('scan')}
-              className={`py-3 px-4 text-sm font-semibold border-b-2 transition ${tab === 'scan' ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+              className={`py-3 px-4 text-sm font-semibold border-b-2 transition ${tab === 'scan' ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-400 hover:text-white'}`}
             >
               Scanner
             </button>
             <button
               onClick={() => setTab('portdu')}
-              className={`py-3 px-4 text-sm font-semibold border-b-2 transition ${tab === 'portdu' ? 'border-orange-500 text-orange-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+              className={`py-3 px-4 text-sm font-semibold border-b-2 transition ${tab === 'portdu' ? 'border-orange-500 text-orange-400' : 'border-transparent text-gray-400 hover:text-white'}`}
             >
               📮 Ports dus
               {myPortDuTxs.filter(t => t.status === 'pending').length > 0 && (
@@ -809,7 +790,7 @@ export default function DriverPage() {
             </button>
             <button
               onClick={() => setTab('cod')}
-              className={`py-3 px-4 text-sm font-semibold border-b-2 transition ${tab === 'cod' ? 'border-green-500 text-green-400' : 'border-transparent text-gray-500 hover:text-gray-300'}`}
+              className={`py-3 px-4 text-sm font-semibold border-b-2 transition ${tab === 'cod' ? 'border-green-500 text-green-400' : 'border-transparent text-gray-400 hover:text-white'}`}
             >
               💰 Mes COD
               {deliveryParcels.filter(p => parseFloat(p.codAmount || 0) > 0 && ['collected', 'remis'].includes(p.codStatus || '')).length > 0 && (
@@ -821,10 +802,10 @@ export default function DriverPage() {
           </div>
           {/* Mobile dropdown */}
           {menuOpen && (
-            <div className="md:hidden border-t border-gray-800 py-2 space-y-1">
+            <div className="md:hidden border-t border-gray-700 py-2 space-y-1">
               <button
                 onClick={() => { setTab('parcels'); setMenuOpen(false) }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'parcels' ? 'bg-blue-600/20 text-blue-400' : 'text-gray-400 hover:bg-gray-800'}`}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'parcels' ? 'bg-blue-600/20 text-blue-400' : 'text-white hover:bg-gray-800'}`}
               >
                 <Truck className="w-4 h-4" />
                 Mes missions
@@ -836,13 +817,13 @@ export default function DriverPage() {
               </button>
               <button
                 onClick={() => { setTab('scan'); setMenuOpen(false) }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'scan' ? 'bg-blue-600/20 text-blue-400' : 'text-gray-400 hover:bg-gray-800'}`}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'scan' ? 'bg-blue-600/20 text-blue-400' : 'text-white hover:bg-gray-800'}`}
               >
                 <ScanLine className="w-4 h-4" /> Scanner
               </button>
               <button
                 onClick={() => { setTab('portdu'); setMenuOpen(false) }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'portdu' ? 'bg-orange-600/20 text-orange-400' : 'text-gray-400 hover:bg-gray-800'}`}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'portdu' ? 'bg-orange-600/20 text-orange-400' : 'text-white hover:bg-gray-800'}`}
               >
                 <Banknote className="w-4 h-4" /> Ports dus
                 {myPortDuTxs.filter(t => t.status === 'pending').length > 0 && (
@@ -853,7 +834,7 @@ export default function DriverPage() {
               </button>
               <button
                 onClick={() => { setTab('cod'); setMenuOpen(false) }}
-                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'cod' ? 'bg-green-600/20 text-green-400' : 'text-gray-400 hover:bg-gray-800'}`}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'cod' ? 'bg-green-600/20 text-green-400' : 'text-white hover:bg-gray-800'}`}
               >
                 <Banknote className="w-4 h-4" /> 💰 Mes COD
                 {deliveryParcels.filter(p => parseFloat(p.codAmount || 0) > 0 && ['collected', 'remis'].includes(p.codStatus || '')).length > 0 && (
@@ -862,7 +843,7 @@ export default function DriverPage() {
                   </span>
                 )}
               </button>
-              <div className="border-t border-gray-800 mt-2 pt-2 px-4 py-2">
+              <div className="border-t border-gray-700 mt-2 pt-2 px-4 py-2">
                 <button
                   onClick={() => signOut(auth).then(() => navigate('/login'))}
                   className="flex items-center gap-2 text-sm text-red-400 hover:text-red-300 transition"
@@ -886,7 +867,7 @@ export default function DriverPage() {
               <div className="flex bg-gray-800 border border-gray-700 rounded-xl p-1">
                 <button
                   onClick={() => setDriverTab('transport')}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition ${driverTab === 'transport' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition ${driverTab === 'transport' ? 'bg-blue-600 text-white' : 'text-white hover:text-white'}`}
                 >
                   <Truck className="w-4 h-4" />
                   <span className="hidden sm:inline">Trajets inter-villes</span>
@@ -899,7 +880,7 @@ export default function DriverPage() {
                 </button>
                 <button
                   onClick={() => setDriverTab('delivery')}
-                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition ${driverTab === 'delivery' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+                  className={`flex-1 flex items-center justify-center gap-2 py-2.5 rounded-lg text-sm font-semibold transition ${driverTab === 'delivery' ? 'bg-orange-600 text-white' : 'text-white hover:text-white'}`}
                 >
                   <Home className="w-4 h-4" />
                   <span className="hidden sm:inline">Livraisons locales</span>
@@ -936,19 +917,19 @@ export default function DriverPage() {
             {/* Recherche */}
             <div className="bg-gray-800 border border-gray-700 rounded-xl p-3">
               <div className="relative">
-                <Search className="w-4 h-4 text-gray-500 absolute left-3 top-1/2 -translate-y-1/2" />
+                <Search className="w-4 h-4 text-gray-400 absolute left-3 top-1/2 -translate-y-1/2" />
                 <input
                   value={missionSearch}
                   onChange={e => setMissionSearch(e.target.value)}
                   placeholder={driverTab === 'transport'
                     ? 'Rechercher trajet, colis, ville, agent...'
                     : 'Rechercher livraison, client, tel, RETOUR FOND...'}
-                  className="w-full bg-gray-900 border border-gray-700 rounded-xl pl-9 pr-10 py-3 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                  className="w-full bg-gray-800 border border-gray-700 rounded-xl pl-9 pr-10 py-3 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
                 />
                 {missionSearch && (
                   <button
                     onClick={() => setMissionSearch('')}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-gray-500 hover:text-white hover:bg-gray-700 transition"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 p-1.5 rounded-lg text-gray-400 hover:text-white hover:bg-gray-700 transition"
                     title="Effacer la recherche"
                   >
                     <X className="w-4 h-4" />
@@ -956,7 +937,7 @@ export default function DriverPage() {
                 )}
               </div>
               {missionSearch && (
-                <p className="mt-2 text-xs text-gray-500">
+                <p className="mt-2 text-xs text-gray-400">
                   {filteredParcels.length} resultat(s) sur {dateFilteredParcels.length}
                 </p>
               )}
@@ -972,7 +953,7 @@ export default function DriverPage() {
                 ].map(({ key, label }) => (
                   <button key={key}
                     onClick={() => setFilter(key)}
-                    className={`flex-1 py-2 rounded-lg text-xs font-semibold transition ${filter === key ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+                    className={`flex-1 py-2 rounded-lg text-xs font-semibold transition ${filter === key ? 'bg-blue-600 text-white' : 'text-white hover:text-white'}`}
                   >
                     {label}
                   </button>
@@ -1006,7 +987,7 @@ export default function DriverPage() {
                     }`}>
                       <Truck className="w-4 h-4" /> Gestion globale
                     </h3>
-                    <p className="text-xs text-gray-400 mt-0.5">
+                    <p className="text-xs text-white mt-0.5">
                       {selectedBulkParcels.length} sélectionné(s) sur {bulkManageableParcels.length}
                     </p>
                   </div>
@@ -1018,7 +999,7 @@ export default function DriverPage() {
                     }}
                     className={`px-3 py-2 rounded-xl text-xs font-bold transition ${
                       allBulkSelected
-                        ? 'bg-gray-800 text-gray-300 border border-gray-700'
+                        ? 'bg-gray-800 text-white border border-gray-700'
                         : driverTab === 'transport'
                           ? 'bg-blue-600 hover:bg-blue-700 text-white'
                           : 'bg-orange-600 hover:bg-orange-700 text-white'
@@ -1032,7 +1013,7 @@ export default function DriverPage() {
                   <select
                     value={bulkStatus}
                     onChange={e => { setBulkStatus(e.target.value); setBulkError('') }}
-                    className="bg-gray-900 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500"
+                    className="bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-white focus:outline-none focus:border-blue-500"
                   >
                     <option value="">Choisir un statut global</option>
                     {bulkStatusOptions.map(status => (
@@ -1064,7 +1045,7 @@ export default function DriverPage() {
             {/* Filtre date */}
             {!isLivreur && <div className="bg-gray-800 border border-gray-700 rounded-xl p-3 space-y-2">
               <div className="flex items-center gap-2 flex-wrap">
-                <Calendar className="w-4 h-4 text-gray-500 shrink-0" />
+                <Calendar className="w-4 h-4 text-gray-400 shrink-0" />
                 {[
                   { key: 'all',    label: 'Tout' },
                   { key: 'today',  label: "Aujourd'hui" },
@@ -1075,7 +1056,7 @@ export default function DriverPage() {
                   <button key={key}
                     onClick={() => setDatePreset(key)}
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                      datePreset === key ? 'bg-blue-600 text-white' : 'bg-gray-700 text-gray-400 hover:bg-gray-600'
+                      datePreset === key ? 'bg-blue-600 text-white' : 'bg-gray-700 text-white hover:bg-gray-800'
                     }`}
                   >
                     {label}
@@ -1085,11 +1066,11 @@ export default function DriverPage() {
               {datePreset === 'custom' && (
                 <div className="flex items-center gap-2 pl-6">
                   <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
-                    className="bg-gray-700 border border-gray-600 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 flex-1"
+                    className="bg-gray-700 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 flex-1"
                   />
-                  <span className="text-gray-500 text-xs shrink-0">→</span>
+                  <span className="text-gray-400 text-xs shrink-0">→</span>
                   <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
-                    className="bg-gray-700 border border-gray-600 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 flex-1"
+                    className="bg-gray-700 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 flex-1"
                   />
                 </div>
               )}
@@ -1097,17 +1078,17 @@ export default function DriverPage() {
 
             {/* Filtre statut */}
             {!isLivreur && <div className="bg-gray-800 border border-gray-700 rounded-xl px-3 py-2.5 flex flex-wrap items-center gap-1.5">
-              <span className="text-[10px] text-gray-500 font-bold uppercase shrink-0 mr-1">Statut :</span>
+              <span className="text-[10px] text-gray-400 font-bold uppercase shrink-0 mr-1">Statut :</span>
               <button
                 onClick={() => setParcelStatusFilter('all')}
-                className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition border ${parcelStatusFilter === 'all' ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-700 text-gray-400 border-transparent hover:bg-gray-600'}`}
+                className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition border ${parcelStatusFilter === 'all' ? 'bg-blue-600 text-white border-blue-600' : 'bg-gray-700 text-white border-transparent hover:bg-gray-800'}`}
               >Tous</button>
               {STATUSES.map(s => {
                 const sc = STATUS_COLORS[s] || STATUS_COLORS['Initialisé']
                 const active = parcelStatusFilter === s
                 return (
                   <button key={s} onClick={() => setParcelStatusFilter(s)}
-                    className={`shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap border ${active ? `${sc.bg} ${sc.text} border-current` : 'bg-gray-700 text-gray-400 border-transparent hover:bg-gray-600'}`}
+                    className={`shrink-0 flex items-center gap-1 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap border ${active ? `${sc.bg} ${sc.text} border-current` : 'bg-gray-700 text-white border-transparent hover:bg-gray-800'}`}
                   >
                     <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
                     {s}
@@ -1118,7 +1099,7 @@ export default function DriverPage() {
 
             {/* Toggle vue cartes / tableau + bouton imprimer */}
             <div className="flex items-center justify-between px-1">
-              <p className="text-xs text-gray-400">{filteredParcels.length} colis</p>
+              <p className="text-xs text-white">{filteredParcels.length} colis</p>
               <div className="flex items-center gap-2">
                 {/* Toggle Cartes/Tableau */}
                 <div className="flex items-center bg-gray-800 rounded-lg p-0.5 border border-gray-700">
@@ -1127,7 +1108,7 @@ export default function DriverPage() {
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition ${
                       viewMode === 'cards'
                         ? 'bg-gray-700 text-blue-400 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-300'
+                        : 'text-gray-400 hover:text-white'
                     }`}
                   >
                     <LayoutGrid className="w-3.5 h-3.5" />
@@ -1138,7 +1119,7 @@ export default function DriverPage() {
                     className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition ${
                       viewMode === 'table'
                         ? 'bg-gray-700 text-blue-400 shadow-sm'
-                        : 'text-gray-500 hover:text-gray-300'
+                        : 'text-gray-400 hover:text-white'
                     }`}
                   >
                     <Table2 className="w-3.5 h-3.5" />
@@ -1163,7 +1144,7 @@ export default function DriverPage() {
                 <div className="w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
               </div>
             ) : filteredParcels.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
+              <div className="text-center py-12 text-gray-400">
                 <Package className="w-12 h-12 mx-auto mb-3 opacity-20" />
                 <p className="text-sm">
                   {filter === 'active' ? 'Aucun colis à livrer' : 'Aucun colis terminé'}
@@ -1173,10 +1154,88 @@ export default function DriverPage() {
               // ═══════════════════════════════════════════════════════════════════
               // VUE TABLEAU
               // ═══════════════════════════════════════════════════════════════════
+              <>
+              {/* Boutons sélection groupée validation papier */}
+              {filteredParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status)).length > 1 && isLivreur && (
+                <div className="mb-3 px-4 py-3 bg-gradient-to-r from-blue-900/50 to-purple-900/50 border border-blue-700/50 rounded-xl flex items-center gap-3 flex-wrap">
+                  <button
+                    onClick={() => {
+                      const activeParcels = filteredParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status))
+                      if (paperSelectedIds.size === activeParcels.length) {
+                        setPaperSelectedIds(new Set())
+                      } else {
+                        setPaperSelectedIds(new Set(activeParcels.map((p: any) => p.id)))
+                      }
+                    }}
+                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg font-semibold border border-blue-500 transition"
+                  >
+                    {paperSelectedIds.size === filteredParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status)).length ? '❌ Tout désélectionner' : '☑️ Tout sélectionner'}
+                  </button>
+
+                  {paperSelectedIds.size > 0 && (
+                    <>
+                      <span className="text-xs text-blue-300 font-semibold">
+                        {paperSelectedIds.size} colis sélectionné(s)
+                      </span>
+                      <button
+                        onClick={async () => {
+                          if (bulkPaperValidating) return
+                          if (!window.confirm(`Valider ${paperSelectedIds.size} livraison(s) avec bon papier (signature manuelle) ?`)) return
+
+                          setBulkPaperValidating(true)
+                          let successCount = 0
+                          try {
+                            for (const parcelId of paperSelectedIds) {
+                              const parcel = filteredParcels.find((p: any) => p.id === parcelId)
+                              if (parcel && !['Livré','Retourné'].includes(parcel.status)) {
+                                try {
+                                  const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
+                                  const codPaymentType = parcel.codAmount > 0 ? 'especes' : ''
+                                  await confirmDeliveryWithPaperReceipt(parcel.id, '', codPaymentType, isReturn)
+                                  successCount++
+                                } catch (err) {
+                                  console.error(`Erreur validation ${parcel.trackingId}:`, err)
+                                }
+                              }
+                            }
+                            setPaperSelectedIds(new Set())
+                            setMsg({ type: 'success', text: `✅ ${successCount} livraison(s) validée(s) avec bon papier !` })
+                          } catch (err) {
+                            console.error('Erreur validation groupée:', err)
+                            setMsg({ type: 'error', text: '❌ Erreur lors de la validation groupée' })
+                          } finally {
+                            setBulkPaperValidating(false)
+                          }
+                        }}
+                        disabled={bulkPaperValidating}
+                        className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-semibold transition ml-auto"
+                      >
+                        {bulkPaperValidating ? (
+                          <>
+                            <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            Validation...
+                          </>
+                        ) : (
+                          <>
+                            <Printer className="w-3.5 h-3.5" /> Valider sélection (papier)
+                          </>
+                        )}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
               <div className="overflow-x-auto bg-gradient-to-br from-gray-800 via-gray-900 to-gray-800 rounded-2xl shadow-xl border-2 border-gray-700">
                 <table className="w-full text-xs">
                   <thead className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white sticky top-0 shadow-lg">
                     <tr>
+                      {/* Colonne checkbox pour sélection groupée (si livreur + plusieurs colis actifs) */}
+                      {isLivreur && filteredParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status)).length > 1 && (
+                        <th className="px-3 py-4 text-center font-bold border-r border-blue-400/30 w-12">
+                          ☑️
+                        </th>
+                      )}
                       <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">
                         <div className="flex items-center gap-2">
                           <Package className="w-4 h-4" />
@@ -1204,52 +1263,73 @@ export default function DriverPage() {
                       return (
                         <tr
                           key={parcel.id}
-                          className={`border-b border-gray-800 transition-all hover:shadow-lg hover:bg-gray-800/50 ${
-                            idx % 2 === 0 ? 'bg-gray-900' : 'bg-gray-850'
+                          className={`border-b border-gray-800 transition-all hover:shadow-lg hover:bg-gray-700/70 ${
+                            idx % 2 === 0 ? 'bg-gray-900' : 'bg-gray-700'
                           } ${done ? 'opacity-60' : ''}`}
                         >
-                          <td className="px-4 py-3 font-mono font-black text-blue-400 whitespace-nowrap text-sm border-r border-gray-800">
+                          {/* Colonne checkbox (si livreur + plusieurs colis actifs) */}
+                          {isLivreur && filteredParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status)).length > 1 && (
+                            <td className="px-3 py-3 text-center border-r border-gray-700">
+                              {!done && (
+                                <input
+                                  type="checkbox"
+                                  checked={paperSelectedIds.has(parcel.id)}
+                                  onChange={() => {
+                                    const newSet = new Set(paperSelectedIds)
+                                    if (newSet.has(parcel.id)) {
+                                      newSet.delete(parcel.id)
+                                    } else {
+                                      newSet.add(parcel.id)
+                                    }
+                                    setPaperSelectedIds(newSet)
+                                  }}
+                                  className="w-4 h-4 cursor-pointer accent-blue-500"
+                                />
+                              )}
+                            </td>
+                          )}
+                          <td className="px-4 py-3 font-mono font-black text-blue-400 whitespace-nowrap text-sm border-r border-gray-700">
                             {parcel.sender?.nic || '—'}
                           </td>
-                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-800">
+                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-700">
                             <span className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm ${sc.bg} ${sc.text}`}>
                               {parcel.status || 'Initialisé'}
                             </span>
                           </td>
-                          <td className="px-4 py-3 font-semibold text-gray-200 whitespace-nowrap max-w-[200px] truncate border-r border-gray-800 bg-gray-800/30">
+                          <td className="px-4 py-3 font-semibold text-white whitespace-nowrap max-w-[200px] truncate border-r border-gray-700 bg-gray-800/30">
                             {parcel.sender?.name || '—'}
                           </td>
-                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-800 bg-gray-800/30">
+                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-700 bg-gray-800/30">
                             <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-900/50 text-blue-300 rounded-lg text-xs font-semibold">
                               📍 {parcel.sender?.city || '—'}
                             </span>
                           </td>
-                          <td className="px-4 py-3 font-semibold text-gray-200 whitespace-nowrap max-w-[200px] truncate border-r border-gray-800 bg-pink-900/20">
+                          <td className="px-4 py-3 font-semibold text-white whitespace-nowrap max-w-[200px] truncate border-r border-gray-700 bg-pink-900/20">
                             {parcel.receiver?.name || '—'}
                           </td>
-                          <td className="px-4 py-3 text-gray-400 font-mono whitespace-nowrap border-r border-gray-800 bg-pink-900/20">
+                          <td className="px-4 py-3 text-white font-mono whitespace-nowrap border-r border-gray-700 bg-pink-900/20">
                             {parcel.receiver?.tel || '—'}
                           </td>
-                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-800 bg-pink-900/20">
+                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-700 bg-pink-900/20">
                             <span className="inline-flex items-center gap-1 px-2 py-1 bg-pink-900/50 text-pink-300 rounded-lg text-xs font-semibold">
                               📍 {parcel.receiver?.city || parcel.destinationCity || '—'}
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-xs whitespace-nowrap max-w-[250px] truncate border-r border-gray-800 bg-pink-900/20">
+                          <td className="px-4 py-3 text-xs whitespace-nowrap max-w-[250px] truncate border-r border-gray-700 bg-pink-900/20">
                             {parcel.enGare ? (
                               <span className="inline-flex items-center gap-1 px-2 py-1 bg-gradient-to-r from-amber-900/50 to-orange-900/50 border border-amber-700 text-orange-300 rounded-lg font-bold">
                                 🚉 En gare
                               </span>
                             ) : (
-                              <span className="text-gray-400">{parcel.receiver?.address || '—'}</span>
+                              <span className="text-white">{parcel.receiver?.address || '—'}</span>
                             )}
                           </td>
-                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-800">
+                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-700">
                             <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-semibold ${serviceInfo.bg} ${serviceInfo.text}`}>
                               {serviceInfo.emoji} {serviceInfo.label}
                             </span>
                           </td>
-                          <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-800 bg-green-900/20">
+                          <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-700 bg-green-900/20">
                             {parcel.codAmount && parcel.codAmount > 0 ? (
                               <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-900/50 text-green-300 rounded-lg text-sm font-black">
                                 💰 {parcel.codAmount} DH
@@ -1296,10 +1376,83 @@ export default function DriverPage() {
                   </tbody>
                 </table>
               </div>
+              </>
             ) : (
               // ═══════════════════════════════════════════════════════════════════
               // VUE CARTES
               // ═══════════════════════════════════════════════════════════════════
+              <>
+              {/* Boutons sélection groupée validation papier (cartes) */}
+              {filteredParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status)).length > 1 && isLivreur && (
+                <div className="mb-3 px-4 py-3 bg-gradient-to-r from-blue-900/50 to-purple-900/50 border border-blue-700/50 rounded-xl flex items-center gap-3 flex-wrap">
+                  <button
+                    onClick={() => {
+                      const activeParcels = filteredParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status))
+                      if (paperSelectedIds.size === activeParcels.length) {
+                        setPaperSelectedIds(new Set())
+                      } else {
+                        setPaperSelectedIds(new Set(activeParcels.map((p: any) => p.id)))
+                      }
+                    }}
+                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white px-3 py-2 rounded-lg font-semibold border border-blue-500 transition"
+                  >
+                    {paperSelectedIds.size === filteredParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status)).length ? '❌ Tout désélectionner' : '☑️ Tout sélectionner'}
+                  </button>
+
+                  {paperSelectedIds.size > 0 && (
+                    <>
+                      <span className="text-xs text-blue-300 font-semibold">
+                        {paperSelectedIds.size} colis sélectionné(s)
+                      </span>
+                      <button
+                        onClick={async () => {
+                          if (bulkPaperValidating) return
+                          if (!window.confirm(`Valider ${paperSelectedIds.size} livraison(s) avec bon papier (signature manuelle) ?`)) return
+
+                          setBulkPaperValidating(true)
+                          let successCount = 0
+                          try {
+                            for (const parcelId of paperSelectedIds) {
+                              const parcel = filteredParcels.find((p: any) => p.id === parcelId)
+                              if (parcel && !['Livré','Retourné'].includes(parcel.status)) {
+                                try {
+                                  const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
+                                  const codPaymentType = parcel.codAmount > 0 ? 'especes' : ''
+                                  await confirmDeliveryWithPaperReceipt(parcel.id, '', codPaymentType, isReturn)
+                                  successCount++
+                                } catch (err) {
+                                  console.error(`Erreur validation ${parcel.trackingId}:`, err)
+                                }
+                              }
+                            }
+                            setPaperSelectedIds(new Set())
+                            setMsg({ type: 'success', text: `✅ ${successCount} livraison(s) validée(s) avec bon papier !` })
+                          } catch (err) {
+                            console.error('Erreur validation groupée:', err)
+                            setMsg({ type: 'error', text: '❌ Erreur lors de la validation groupée' })
+                          } finally {
+                            setBulkPaperValidating(false)
+                          }
+                        }}
+                        disabled={bulkPaperValidating}
+                        className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-4 py-2 rounded-lg font-semibold transition ml-auto"
+                      >
+                        {bulkPaperValidating ? (
+                          <>
+                            <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            Validation...
+                          </>
+                        ) : (
+                          <>
+                            <Printer className="w-3.5 h-3.5" /> Valider sélection (papier)
+                          </>
+                        )}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+
               <div className="space-y-1">
                 {filteredParcels.map((parcel: any) => {
                   const sc   = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
@@ -1309,7 +1462,7 @@ export default function DriverPage() {
                   return (
                     <div key={parcel.id}
                       className={`${isDeliveryView ? 'bg-white text-slate-950 rounded-lg p-2 border border-orange-100 shadow-sm' : 'bg-gray-800 rounded-md p-2 border'} transition ${
-                        done ? (isDeliveryView ? 'border-emerald-300' : 'border-gray-700 opacity-60') : (isDeliveryView ? 'border-orange-200' : 'border-gray-600')
+                        done ? (isDeliveryView ? 'border-emerald-300' : 'border-gray-700 opacity-60') : (isDeliveryView ? 'border-orange-200' : 'border-gray-700')
                       }`}
                     >
                       {bulkManageable && !isLivreur && (
@@ -1318,7 +1471,7 @@ export default function DriverPage() {
                             ? driverTab === 'transport'
                               ? 'bg-blue-600 border-blue-500 text-white'
                               : 'bg-orange-600 border-orange-500 text-white'
-                            : 'bg-gray-900 border-gray-700 text-gray-400 hover:border-gray-600'
+                            : 'bg-gray-800 border-gray-700 text-white hover:border-gray-700'
                         }`}>
                           <input
                             type="checkbox"
@@ -1333,6 +1486,30 @@ export default function DriverPage() {
                             className="w-3 h-3 accent-blue-600"
                           />
                           <span className="text-[10px] font-bold">Sél. globale</span>
+                        </label>
+                      )}
+                      {/* Checkbox validation papier (livreur) */}
+                      {!done && isLivreur && filteredParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status)).length > 1 && (
+                        <label className={`mb-1 flex items-center gap-1.5 rounded-md border px-2 py-1 cursor-pointer transition ${
+                          paperSelectedIds.has(parcel.id)
+                            ? 'bg-emerald-600 border-emerald-500 text-white'
+                            : 'bg-gray-800 border-gray-700 text-white hover:border-gray-700'
+                        }`}>
+                          <input
+                            type="checkbox"
+                            checked={paperSelectedIds.has(parcel.id)}
+                            onChange={e => {
+                              const newSet = new Set(paperSelectedIds)
+                              if (e.target.checked) {
+                                newSet.add(parcel.id)
+                              } else {
+                                newSet.delete(parcel.id)
+                              }
+                              setPaperSelectedIds(newSet)
+                            }}
+                            className="w-3 h-3 accent-emerald-600"
+                          />
+                          <span className="text-[10px] font-bold">Sél. papier</span>
                         </label>
                       )}
                       {/* Statut + type + tracking sur une ligne */}
@@ -1410,12 +1587,12 @@ export default function DriverPage() {
                             <span className="truncate">{parcel.receiver.address}</span>
                           </div>
                         ) : (
-                          <div className={`flex items-center gap-0.5 ${isDeliveryView ? 'text-[10px] text-slate-700 font-semibold' : 'text-[10px] text-gray-400'}`}>
+                          <div className={`flex items-center gap-0.5 ${isDeliveryView ? 'text-[10px] text-slate-700 font-semibold' : 'text-[10px] text-white'}`}>
                             <MapPin className="w-2 h-2" />
                             <span>{parcel.sender?.city} → {parcel.receiver?.city}</span>
                           </div>
                         )}
-                        <div className={`flex items-center gap-2 shrink-0 ${isDeliveryView ? 'text-xs text-slate-700 font-bold' : 'text-[10px] text-gray-500'}`}>
+                        <div className={`flex items-center gap-2 shrink-0 ${isDeliveryView ? 'text-xs text-slate-700 font-bold' : 'text-[10px] text-gray-400'}`}>
                           <span>{parcel.weight}kg</span>
                           <span>{parcel.price}DH</span>
                         </div>
@@ -1429,7 +1606,7 @@ export default function DriverPage() {
                           </span>
                         )}
                         {(parcel.arrivedNbColis ?? parcel.nbColis) > 1 && (
-                          <span className="inline-flex items-center text-[10px] bg-gray-700/40 text-gray-300 px-1.5 py-0.5 rounded-md font-medium">
+                          <span className="inline-flex items-center text-[10px] bg-gray-700/40 text-white px-1.5 py-0.5 rounded-md font-medium">
                             × {parcel.arrivedNbColis ?? parcel.nbColis}
                             {parcel.arrivedNbColis != null && parcel.arrivedNbColis < parcel.nbColis && (
                               <span className="text-orange-400 font-bold">/{parcel.nbColis}</span>
@@ -1532,7 +1709,7 @@ export default function DriverPage() {
                                   Mettre à jour
                                 </button>
                                 */}
-                                <div className="text-xs text-gray-400 italic px-3 py-2">
+                                <div className="text-xs text-white italic px-3 py-2">
                                   Seul l'admin peut modifier le statut
                                 </div>
                                 {/* ✅ Bouton "Refuser" ACTIVÉ - le chauffeur peut signaler un refus de réception */}
@@ -1582,9 +1759,9 @@ export default function DriverPage() {
                       {parcel.history?.length > 0 && (
                         <div className={`mt-3 pt-3 space-y-1 ${isDeliveryView ? 'border-t border-slate-200' : 'border-t border-gray-700'}`}>
                           {[...parcel.history].reverse().slice(0, 3).map((h, i) => (
-                            <div key={i} className={`flex items-center gap-2 text-xs ${isDeliveryView ? 'text-slate-700 font-semibold' : 'text-gray-500'}`}>
+                            <div key={i} className={`flex items-center gap-2 text-xs ${isDeliveryView ? 'text-slate-700 font-semibold' : 'text-gray-400'}`}>
                               <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${STATUS_COLORS[h.status]?.dot || 'bg-gray-500'}`} />
-                              <span className={`font-medium ${isDeliveryView ? 'text-slate-700' : 'text-gray-400'}`}>{h.status}</span>
+                              <span className={`font-medium ${isDeliveryView ? 'text-slate-700' : 'text-white'}`}>{h.status}</span>
                               <span className="ml-auto">
                                 {new Date(h.timestamp).toLocaleString('fr-MA', {
                                   day: '2-digit', month: 'short',
@@ -1604,6 +1781,7 @@ export default function DriverPage() {
                   )
                 })}
               </div>
+              </>
             )}
           </div>
         )}
@@ -1633,19 +1811,19 @@ export default function DriverPage() {
               {/* KPIs */}
               <div className="grid grid-cols-3 bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
                 <div className="px-3 py-3 text-center">
-                  <p className="text-[10px] text-gray-400 uppercase mb-1">Collecté</p>
+                  <p className="text-[10px] text-white uppercase mb-1">Collecté</p>
                   <p className="text-lg font-black text-orange-400">{fmt(totalCollected)}</p>
-                  <p className="text-[9px] text-gray-500">DH</p>
+                  <p className="text-[9px] text-gray-400">DH</p>
                 </div>
                 <div className="px-3 py-3 text-center border-x border-gray-700">
-                  <p className="text-[10px] text-gray-400 uppercase mb-1">Reçu chef</p>
+                  <p className="text-[10px] text-white uppercase mb-1">Reçu chef</p>
                   <p className="text-lg font-black text-green-400">{fmt(totalReceivedByChef)}</p>
-                  <p className="text-[9px] text-gray-500">DH</p>
+                  <p className="text-[9px] text-gray-400">DH</p>
                 </div>
                 <div className="px-3 py-3 text-center">
-                  <p className="text-[10px] text-gray-400 uppercase mb-1">Solde dû</p>
+                  <p className="text-[10px] text-white uppercase mb-1">Solde dû</p>
                   <p className={`text-lg font-black ${balance > 0 ? 'text-red-400' : 'text-green-400'}`}>{fmt(balance)}</p>
-                  <p className="text-[9px] text-gray-500">DH</p>
+                  <p className="text-[9px] text-gray-400">DH</p>
                 </div>
               </div>
 
@@ -1653,7 +1831,7 @@ export default function DriverPage() {
                 <p className="text-sm font-bold text-orange-300 flex items-center gap-2">
                   <Banknote className="w-4 h-4" /> Remise directe au chef d'agence
                 </p>
-                <p className="text-xs text-gray-400 leading-relaxed">
+                <p className="text-xs text-white leading-relaxed">
                   Le port dû est validé par le chef colis par colis. Aucun versement groupé n'est créé ici, pour éviter les doublons en caisse.
                 </p>
               </div>
@@ -1663,7 +1841,7 @@ export default function DriverPage() {
                 <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
                   <div className="px-4 py-3 border-b border-gray-700 flex items-center gap-2">
                     <span className="text-base">📦</span>
-                    <span className="text-sm font-bold text-gray-200">Colis collectés ({myPortDuParcels.length})</span>
+                    <span className="text-sm font-bold text-white">Colis collectés ({myPortDuParcels.length})</span>
                     <span className="ml-auto text-xs font-bold text-orange-400">{fmt(balance)} DH à remettre</span>
                   </div>
                   <div className="divide-y divide-gray-700/50">
@@ -1671,8 +1849,8 @@ export default function DriverPage() {
                       <div key={p.id} className="flex items-center justify-between px-4 py-2.5 gap-3">
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold text-white">{p.receiver?.name || '—'}</p>
-                          <p className="text-xs text-gray-400 font-mono">EXP {p.trackingId}</p>
-                          <p className="text-[10px] text-gray-500">{fmtDate(p.portCollectedAt || p.updatedAt)}</p>
+                          <p className="text-xs text-white font-mono">EXP {p.trackingId}</p>
+                          <p className="text-[10px] text-gray-400">{fmtDate(p.portCollectedAt || p.updatedAt)}</p>
                         </div>
                         <div className="text-right shrink-0 space-y-1">
                           <p className="text-sm font-black text-orange-400">{fmt(p.price)} DH</p>
@@ -1689,7 +1867,7 @@ export default function DriverPage() {
               )}
 
               {myPortDuParcels.length === 0 && (
-                <div className="text-center py-10 text-gray-500">
+                <div className="text-center py-10 text-gray-400">
                   <Banknote className="w-10 h-10 mx-auto mb-3 opacity-20" />
                   <p className="text-sm">Aucun port dû collecté pour l'instant</p>
                 </div>
@@ -1699,7 +1877,7 @@ export default function DriverPage() {
                 <div className="bg-gray-800 border border-gray-700 rounded-2xl overflow-hidden">
                   <div className="px-4 py-3 border-b border-gray-700 flex items-center gap-2">
                     <span className="text-base">✅</span>
-                    <span className="text-sm font-bold text-gray-200">Reçus par le chef</span>
+                    <span className="text-sm font-bold text-white">Reçus par le chef</span>
                     <span className="ml-auto text-xs font-bold text-green-400">{fmt(totalReceivedByChef)} DH</span>
                   </div>
                   <div className="divide-y divide-gray-700/50">
@@ -1707,9 +1885,9 @@ export default function DriverPage() {
                       <div key={p.id} className="flex items-center justify-between px-4 py-2.5 gap-3">
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-semibold text-green-300">{p.receiver?.name || '—'}</p>
-                          <p className="text-xs text-gray-400 font-mono">EXP {p.trackingId}</p>
-                          {p.portChefReceivedBy && <p className="text-[10px] text-gray-500">Reçu par {p.portChefReceivedBy}</p>}
-                          <p className="text-[10px] text-gray-500">{fmtDate(p.portChefReceivedAt)}</p>
+                          <p className="text-xs text-white font-mono">EXP {p.trackingId}</p>
+                          {p.portChefReceivedBy && <p className="text-[10px] text-gray-400">Reçu par {p.portChefReceivedBy}</p>}
+                          <p className="text-[10px] text-gray-400">{fmtDate(p.portChefReceivedAt)}</p>
                         </div>
                         <span className="text-sm font-black text-green-400 shrink-0">{fmt(p.price)} DH</span>
                       </div>
@@ -1785,7 +1963,7 @@ export default function DriverPage() {
             if (p.codReceivedByChef) return { label: '✅ Réceptionné', bg: 'bg-green-600', desc: 'Chef a confirmé réception', color: 'text-green-300' }
             if (p.codRemisBy || p.codStatus === 'remis') return { label: '🟠 Versé au chef', bg: 'bg-orange-600', desc: 'En attente de réception', color: 'text-orange-300' }
             if (p.codStatus === 'collected') return { label: '🟡 Collecté', bg: 'bg-yellow-600', desc: 'À verser au chef', color: 'text-yellow-300' }
-            return { label: '⚪ En attente', bg: 'bg-gray-600', desc: 'À collecter', color: 'text-gray-300' }
+            return { label: '⚪ En attente', bg: 'bg-gray-800', desc: 'À collecter', color: 'text-white' }
           }
 
           const totalCollected = myCodParcels.filter(p => ['collected', 'remis'].includes(p.codStatus || '')).reduce((s, p) => s + (parseFloat(p.codAmount) || 0), 0)
@@ -1822,7 +2000,7 @@ export default function DriverPage() {
               <div className="space-y-3">
                 {/* Recherche */}
                 <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-500" />
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
                   <input
                     type="text"
                     placeholder="Rechercher par N° ou nom..."
@@ -1833,7 +2011,7 @@ export default function DriverPage() {
                   {codSearchQuery && (
                     <button
                       onClick={() => setCodSearchQuery('')}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-500 hover:text-white"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white"
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -1847,7 +2025,7 @@ export default function DriverPage() {
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                       codStatusFilter === 'all'
                         ? 'bg-green-600 text-white'
-                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                        : 'bg-gray-800 text-white hover:bg-gray-700'
                     }`}
                   >
                     Tous
@@ -1857,7 +2035,7 @@ export default function DriverPage() {
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                       codStatusFilter === 'collected'
                         ? 'bg-yellow-600 text-white'
-                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                        : 'bg-gray-800 text-white hover:bg-gray-700'
                     }`}
                   >
                     🟡 Collectés
@@ -1867,7 +2045,7 @@ export default function DriverPage() {
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                       codStatusFilter === 'remis'
                         ? 'bg-orange-600 text-white'
-                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                        : 'bg-gray-800 text-white hover:bg-gray-700'
                     }`}
                   >
                     🟠 Versés
@@ -1877,7 +2055,7 @@ export default function DriverPage() {
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                       codStatusFilter === 'received'
                         ? 'bg-green-600 text-white'
-                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                        : 'bg-gray-800 text-white hover:bg-gray-700'
                     }`}
                   >
                     ✅ Réceptionnés
@@ -1887,7 +2065,7 @@ export default function DriverPage() {
                     className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                       codStatusFilter === 'paid'
                         ? 'bg-purple-600 text-white'
-                        : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+                        : 'bg-gray-800 text-white hover:bg-gray-700'
                     }`}
                   >
                     🎯 Réglés
@@ -1924,12 +2102,12 @@ export default function DriverPage() {
 
               {/* Liste COD */}
               <div className="space-y-3">
-                <h3 className="text-gray-300 font-bold text-sm flex items-center gap-2">
+                <h3 className="text-white font-bold text-sm flex items-center gap-2">
                   💰 Résultats ({myCodParcels.length})
                 </h3>
 
                 {myCodParcels.length === 0 && (
-                  <div className="text-center py-12 text-gray-500 bg-gray-800/50 rounded-xl border border-gray-700">
+                  <div className="text-center py-12 text-gray-400 bg-gray-800/50 rounded-xl border border-gray-700">
                     <p className="text-3xl mb-2">💰</p>
                     <p className="text-sm">Aucun COD collecté</p>
                   </div>
@@ -1948,9 +2126,9 @@ export default function DriverPage() {
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
                           <p className="text-white font-bold text-sm truncate">EXP {p.trackingId}</p>
-                          <p className="text-gray-400 text-xs truncate">{p.receiver?.name}</p>
+                          <p className="text-white text-xs truncate">{p.receiver?.name}</p>
                           {p.codCollectedAt && (
-                            <p className="text-gray-500 text-xs">
+                            <p className="text-gray-400 text-xs">
                               Collecté le {fmtDate(collectedDate)}
                             </p>
                           )}
@@ -2052,7 +2230,7 @@ export default function DriverPage() {
                     <div className="w-full border-t border-gray-700" />
                   </div>
                   <div className="relative text-center">
-                    <span className="bg-gray-900 px-3 text-xs text-gray-500">OU SAISIR MANUELLEMENT</span>
+                    <span className="bg-gray-800 px-3 text-xs text-gray-400">OU SAISIR MANUELLEMENT</span>
                   </div>
                 </div>
 
@@ -2067,7 +2245,7 @@ export default function DriverPage() {
                   />
                   <button
                     onClick={() => lookupParcel(searchId)}
-                    className="bg-gray-700 hover:bg-gray-600 px-4 rounded-xl transition"
+                    className="bg-gray-700 hover:bg-gray-800 px-4 rounded-xl transition"
                   >
                     <Search className="w-4 h-4" />
                   </button>
@@ -2082,21 +2260,21 @@ export default function DriverPage() {
                     <p className={`text-sm font-semibold ${scanColors.text}`}>
                       Statut actuel : {scannedParcel.status}
                     </p>
-                    <p className="font-mono text-xs text-gray-400 mt-0.5">EXP {scannedParcel.trackingId}</p>
+                    <p className="font-mono text-xs text-white mt-0.5">EXP {scannedParcel.trackingId}</p>
                   </div>
                   <div className="p-4 space-y-2 text-sm">
                     <div className="flex justify-between">
-                      <span className="text-gray-400">Destinataire</span>
+                      <span className="text-white">Destinataire</span>
                       <span className="font-semibold">{scannedParcel.receiver.name}</span>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-gray-400">Téléphone</span>
+                      <span className="text-white">Téléphone</span>
                       <a href={`tel:${scannedParcel.receiver.tel}`} className="text-blue-400">
                         {scannedParcel.receiver.tel}
                       </a>
                     </div>
                     <div className="flex justify-between">
-                      <span className="text-gray-400 flex items-center gap-1">
+                      <span className="text-white flex items-center gap-1">
                         <MapPin className="w-3 h-3" /> Destination
                       </span>
                       <span className="font-bold text-white">{scannedParcel.receiver.city}</span>
@@ -2122,14 +2300,14 @@ export default function DriverPage() {
 
                 {/* Section de mise à jour de statut désactivée - seul l'admin peut changer le statut
                 <div className="bg-gray-800 rounded-2xl p-4 border border-gray-700">
-                  <p className="text-sm text-gray-400 mb-3 font-medium">Mettre à jour le statut :</p>
+                  <p className="text-sm text-white mb-3 font-medium">Mettre à jour le statut :</p>
                   <div className="space-y-2">
                     {STATUSES.map(s => (
                       <button key={s} onClick={() => setNewStatus(s)}
                         className={`w-full text-left px-4 py-3 rounded-xl text-sm font-medium transition border ${
                           newStatus === s
                             ? 'bg-blue-600 border-blue-500 text-white'
-                            : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
+                            : 'bg-gray-700 border-gray-700 text-white hover:bg-gray-800'
                         }`}
                       >
                         {statusLabelForDriverTab(s, driverTab)}
@@ -2147,13 +2325,13 @@ export default function DriverPage() {
                 </button>
                 */}
 
-                <div className="text-sm text-gray-400 italic text-center px-4 py-3 bg-gray-800 rounded-xl border border-gray-700">
+                <div className="text-sm text-white italic text-center px-4 py-3 bg-gray-800 rounded-xl border border-gray-700">
                   Seul l'admin peut modifier le statut des colis
                 </div>
 
                 <button
                   onClick={() => { setScannedParcel(null); setMsg(null); setSearchId('') }}
-                  className="w-full flex items-center justify-center gap-2 bg-gray-700 hover:bg-gray-600 py-3 rounded-xl text-sm font-medium transition"
+                  className="w-full flex items-center justify-center gap-2 bg-gray-700 hover:bg-gray-800 py-3 rounded-xl text-sm font-medium transition"
                 >
                   <ArrowLeft className="w-4 h-4" /> Scanner un autre colis
                 </button>
@@ -2186,7 +2364,7 @@ export default function DriverPage() {
                   Signature électronique
                 </h3>
                 <p className="text-xs font-mono text-violet-400 mt-0.5">EXP {signatureModal.parcel.trackingId}</p>
-                <p className="text-xs text-gray-400 mt-0.5">
+                <p className="text-xs text-white mt-0.5">
                   {signatureModal.parcel.receiver?.name} · {signatureModal.parcel.receiver?.city}
                 </p>
               </div>
@@ -2195,7 +2373,7 @@ export default function DriverPage() {
                   onClick={() => { if (signatureUnsubRef.current) signatureUnsubRef.current(); setSignatureModal(null) }}
                   className="p-2 hover:bg-gray-700 rounded-xl transition"
                 >
-                  <X className="w-5 h-5 text-gray-400" />
+                  <X className="w-5 h-5 text-white" />
                 </button>
               )}
             </div>
@@ -2209,7 +2387,7 @@ export default function DriverPage() {
                     <CheckCircle className="w-8 h-8 text-green-400" />
                   </div>
                   <p className="text-white font-bold text-lg">Livraison confirmée !</p>
-                  <p className="text-gray-400 text-sm mt-1">La signature du client a été enregistrée.</p>
+                  <p className="text-white text-sm mt-1">La signature du client a été enregistrée.</p>
                 </div>
 
               ) : signatureModal.receivedSig ? (
@@ -2226,14 +2404,14 @@ export default function DriverPage() {
 
                   {/* Aperçu de la signature */}
                   <div className="bg-white rounded-2xl p-3 border border-gray-200">
-                    <p className="text-xs text-gray-400 mb-2 text-center font-medium">Signature du destinataire</p>
+                    <p className="text-xs text-white mb-2 text-center font-medium">Signature du destinataire</p>
                     <img
                       src={signatureModal.receivedSig.signatureDataUrl}
                       alt="Signature"
                       className="w-full h-24 object-contain"
                     />
                     <div className="border-t border-gray-200 mt-2 pt-2 text-center">
-                      <p className="text-xs text-gray-500">{signatureModal.receivedSig.recipientName}</p>
+                      <p className="text-xs text-gray-400">{signatureModal.receivedSig.recipientName}</p>
                     </div>
                   </div>
 
@@ -2282,7 +2460,7 @@ export default function DriverPage() {
                                   className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold transition border ${
                                     signatureModal.codPaymentType === pt.key
                                       ? 'bg-yellow-500 text-gray-900 border-yellow-400'
-                                      : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
+                                      : 'bg-gray-700 border-gray-700 text-white hover:bg-gray-800'
                                   }`}
                                 >
                                   <span>{pt.emoji}</span> {pt.label}
@@ -2318,22 +2496,22 @@ export default function DriverPage() {
                 <div className="space-y-4">
 
                   {/* Toggle */}
-                  <div className="grid grid-cols-3 rounded-2xl bg-gray-900 p-1 gap-1">
+                  <div className="grid grid-cols-3 rounded-2xl bg-gray-800 p-1 gap-1">
                     <button
                       onClick={() => setSignatureModal((m: any) => ({ ...m, stampMode: 'qr', error: '' }))}
-                      className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold transition ${signatureModal.stampMode === 'qr' ? 'bg-violet-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+                      className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold transition ${signatureModal.stampMode === 'qr' ? 'bg-violet-600 text-white' : 'text-white hover:text-white'}`}
                     >
                       <QrCode className="w-4 h-4" /> QR Code
                     </button>
                     <button
                       onClick={() => setSignatureModal((m: any) => ({ ...m, stampMode: 'handwritten', error: '' }))}
-                      className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold transition ${signatureModal.stampMode === 'handwritten' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+                      className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold transition ${signatureModal.stampMode === 'handwritten' ? 'bg-blue-600 text-white' : 'text-white hover:text-white'}`}
                     >
                       <PenLine className="w-4 h-4" /> Signature
                     </button>
                     <button
                       onClick={() => setSignatureModal((m: any) => ({ ...m, stampMode: 'company', error: '' }))}
-                      className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold transition ${signatureModal.stampMode === 'company' ? 'bg-orange-600 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+                      className={`flex items-center justify-center gap-1.5 py-2.5 rounded-xl text-xs font-bold transition ${signatureModal.stampMode === 'company' ? 'bg-orange-600 text-white' : 'text-white hover:text-white'}`}
                     >
                       <Building2 className="w-4 h-4" /> Cachet société
                     </button>
@@ -2346,7 +2524,7 @@ export default function DriverPage() {
                         value={signatureModal.driverCompanyName}
                         onChange={e => setSignatureModal((m: any) => ({ ...m, driverCompanyName: e.target.value, error: '' }))}
                         placeholder="Nom de la société *"
-                        className="w-full bg-gray-900 border border-gray-700 rounded-2xl px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-orange-500 focus:outline-none"
+                        className="w-full bg-gray-800 border border-gray-700 rounded-2xl px-4 py-3 text-sm text-white placeholder-gray-500 focus:border-orange-500 focus:outline-none"
                       />
 
                       <input
@@ -2369,7 +2547,7 @@ export default function DriverPage() {
                           <img src={signatureModal.driverStamp} alt="Cachet" className="w-full max-h-36 object-contain rounded-xl" />
                           <button
                             onClick={() => setSignatureModal((m: any) => ({ ...m, driverStamp: null }))}
-                            className="absolute top-2 right-2 bg-gray-800 rounded-full p-1.5 text-gray-400 hover:text-red-400 transition"
+                            className="absolute top-2 right-2 bg-gray-800 rounded-full p-1.5 text-white hover:text-red-400 transition"
                           >
                             <RotateCcw className="w-3.5 h-3.5" />
                           </button>
@@ -2385,7 +2563,7 @@ export default function DriverPage() {
                           </button>
                           <button
                             onClick={() => { if (stampInputRef.current) { stampInputRef.current.removeAttribute('capture'); stampInputRef.current.click() } }}
-                            className="flex-1 flex flex-col items-center gap-2 py-5 rounded-2xl border-2 border-dashed border-gray-700 bg-gray-900 text-gray-400 hover:bg-gray-800 transition"
+                            className="flex-1 flex flex-col items-center gap-2 py-5 rounded-2xl border-2 border-dashed border-gray-700 bg-gray-800 text-white hover:bg-gray-800 transition"
                           >
                             <Upload className="w-7 h-7" />
                             <span className="text-xs font-semibold">Importer</span>
@@ -2448,7 +2626,7 @@ export default function DriverPage() {
 
                       <button
                         onClick={clearHandSignature}
-                        className="flex items-center justify-center gap-1.5 text-xs text-gray-400 hover:text-red-400 font-medium transition mx-auto"
+                        className="flex items-center justify-center gap-1.5 text-xs text-white hover:text-red-400 font-medium transition mx-auto"
                       >
                         <RotateCcw className="w-3.5 h-3.5" /> Effacer
                       </button>
@@ -2486,9 +2664,9 @@ export default function DriverPage() {
                           </Suspense>
                         </div>
                       </div>
-                      <div className="bg-gray-900 rounded-2xl px-4 py-3 text-center">
-                        <p className="text-[10px] text-gray-500 mb-1">Lien de signature</p>
-                        <p className="text-xs font-mono text-gray-300 break-all leading-relaxed">{signatureModal.url}</p>
+                      <div className="bg-gray-800 rounded-2xl px-4 py-3 text-center">
+                        <p className="text-[10px] text-gray-400 mb-1">Lien de signature</p>
+                        <p className="text-xs font-mono text-white break-all leading-relaxed">{signatureModal.url}</p>
                       </div>
                       <div className="flex items-center justify-center gap-3 py-2">
                         <div className="flex gap-1">
@@ -2496,7 +2674,7 @@ export default function DriverPage() {
                           <div className="w-2 h-2 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
                           <div className="w-2 h-2 bg-violet-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
                         </div>
-                        <p className="text-xs text-gray-400">En attente de la signature du client...</p>
+                        <p className="text-xs text-white">En attente de la signature du client...</p>
                       </div>
                     </>
                   )}
@@ -2532,7 +2710,7 @@ export default function DriverPage() {
                   onClick={() => setPaperReceiptModal(null)}
                   className="p-2 hover:bg-gray-100 rounded-xl transition"
                 >
-                  <X className="w-5 h-5 text-gray-500" />
+                  <X className="w-5 h-5 text-gray-400" />
                 </button>
               )}
             </div>
@@ -2676,12 +2854,12 @@ export default function DriverPage() {
               <div>
                 <h3 className="font-bold text-white">Refuser cette livraison</h3>
                 <p className="text-xs font-mono text-red-300 mt-0.5">EXP {rejectModal.parcel.trackingId}</p>
-                <p className="text-xs text-gray-400 mt-0.5">
+                <p className="text-xs text-white mt-0.5">
                   {rejectModal.parcel.receiver?.name} - {rejectModal.parcel.receiver?.city}
                 </p>
               </div>
               <button onClick={() => setRejectModal(null)} className="p-2 hover:bg-gray-700 rounded-xl transition">
-                <X className="w-5 h-5 text-gray-400" />
+                <X className="w-5 h-5 text-white" />
               </button>
             </div>
             <div className="p-5 space-y-4">
@@ -2697,12 +2875,12 @@ export default function DriverPage() {
                 value={rejectModal.note}
                 onChange={e => setRejectModal((m: any) => ({ ...m, note: e.target.value }))}
                 placeholder="Motif du refus (optionnel)"
-                className="w-full bg-gray-700 border border-gray-600 rounded-xl px-3 py-2.5 text-sm text-white placeholder-gray-500 focus:border-red-500 focus:outline-none min-h-[90px]"
+                className="w-full bg-gray-700 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-gray-500 focus:border-red-500 focus:outline-none min-h-[90px]"
               />
               <div className="grid grid-cols-2 gap-3">
                 <button
                   onClick={() => setRejectModal(null)}
-                  className="py-3 rounded-xl border border-gray-600 text-gray-300 font-semibold hover:bg-gray-700 transition"
+                  className="py-3 rounded-xl border border-gray-700 text-white font-semibold hover:bg-gray-700 transition"
                 >
                   Annuler
                 </button>
@@ -2730,12 +2908,12 @@ export default function DriverPage() {
               <div>
                 <h3 className="font-bold text-white">Mettre à jour le statut</h3>
                 <p className="text-xs font-mono text-blue-400 mt-0.5">EXP {statusModal.parcel.trackingId}</p>
-                <p className="text-xs text-gray-400 mt-0.5">
+                <p className="text-xs text-white mt-0.5">
                   {statusModal.parcel.receiver.name} · {statusModal.parcel.receiver.city}
                 </p>
               </div>
               <button onClick={() => setStatusModal(null)} className="p-2 hover:bg-gray-700 rounded-xl transition">
-                <X className="w-5 h-5 text-gray-400" />
+                <X className="w-5 h-5 text-white" />
               </button>
             </div>
             <div className="p-5 space-y-3 overflow-y-auto flex-1">
@@ -2755,7 +2933,7 @@ export default function DriverPage() {
                       className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition border ${
                         selected
                           ? `${sc.bg} ${sc.text} border-current`
-                          : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
+                          : 'bg-gray-700 border-gray-700 text-white hover:bg-gray-800'
                       }`}
                     >
                       <span className={`w-2.5 h-2.5 rounded-full ${sc.dot} shrink-0`} />
@@ -2818,7 +2996,7 @@ export default function DriverPage() {
                               className={`flex items-center gap-2 px-3 py-2.5 rounded-xl text-sm font-semibold transition border ${
                                 statusModal.codPaymentType === pt.key
                                   ? 'bg-yellow-500 text-gray-900 border-yellow-400'
-                                  : 'bg-gray-700 border-gray-600 text-gray-300 hover:bg-gray-600'
+                                  : 'bg-gray-700 border-gray-700 text-white hover:bg-gray-800'
                               }`}
                             >
                               <span className="text-base">{pt.emoji}</span> {pt.label}
@@ -2835,12 +3013,12 @@ export default function DriverPage() {
                 placeholder="Note (optionnel) — ex: client absent"
                 value={statusModal.note}
                 onChange={e => setStatusModal((m: any) => ({ ...m, note: e.target.value }))}
-                className="w-full bg-gray-700 border border-gray-600 rounded-xl px-3 py-2.5 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
+                className="w-full bg-gray-700 border border-gray-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-gray-500 focus:border-blue-500 focus:outline-none"
               />
 
               <div className="grid grid-cols-2 gap-3 pt-1">
                 <button onClick={() => setStatusModal(null)}
-                  className="py-3 rounded-xl border border-gray-600 text-gray-300 font-semibold hover:bg-gray-700 transition"
+                  className="py-3 rounded-xl border border-gray-700 text-white font-semibold hover:bg-gray-700 transition"
                 >
                   Annuler
                 </button>

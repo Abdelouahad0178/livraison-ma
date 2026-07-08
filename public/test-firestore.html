@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Firestore - Chargement Colis</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 1200px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f5;
+        }
+        .status {
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .loading { background: #fff3cd; color: #856404; }
+        .success { background: #d4edda; color: #155724; }
+        .error { background: #f8d7da; color: #721c24; }
+        .parcel {
+            background: white;
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            border: 1px solid #ddd;
+        }
+        .parcel strong { color: #2563eb; }
+        pre {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🔍 Test Direct Firestore</h1>
+    <div id="status" class="status loading">⏳ Chargement en cours...</div>
+    <div id="results"></div>
+
+    <script type="module">
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+        import { getFirestore, collection, query, orderBy, limit, getDocs } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+        // Configuration Firebase (même config que l'app)
+        const firebaseConfig = {
+            apiKey: "AIzaSyBpCwZM3MYe8t_w4L7C7IwXg51vgjINJoM",
+            authDomain: "arelanc.firebaseapp.com",
+            projectId: "arelanc",
+            storageBucket: "arelanc.firebasestorage.app",
+            messagingSenderId: "1027827992158",
+            appId: "1:1027827992158:web:d3b0c3dc93b0f1e68d4e9e"
+        };
+
+        const app = initializeApp(firebaseConfig);
+        const db = getFirestore(app);
+
+        const statusEl = document.getElementById('status');
+        const resultsEl = document.getElementById('results');
+
+        try {
+            console.log('🚀 Début du test...');
+
+            // Test 1: Charger avec orderBy et limit
+            statusEl.textContent = '📡 Requête Firestore en cours...';
+            statusEl.className = 'status loading';
+
+            const q = query(
+                collection(db, 'parcels'),
+                orderBy('createdAt', 'desc'),
+                limit(10)
+            );
+
+            const snapshot = await getDocs(q);
+
+            console.log('✅ Snapshot reçu:', snapshot.size, 'documents');
+
+            if (snapshot.empty) {
+                statusEl.textContent = '⚠️ Aucun colis trouvé dans Firestore!';
+                statusEl.className = 'status error';
+                resultsEl.innerHTML = `
+                    <p><strong>La collection "parcels" est vide ou vous n'avez pas les permissions de lecture.</strong></p>
+                    <p>Vérifiez:</p>
+                    <ol>
+                        <li>Que des colis existent dans Firestore Console</li>
+                        <li>Les règles Firestore (firestore.rules)</li>
+                        <li>Que vous êtes authentifié</li>
+                    </ol>
+                `;
+            } else {
+                statusEl.textContent = `✅ ${snapshot.size} colis chargés avec succès!`;
+                statusEl.className = 'status success';
+
+                let html = `<h2>📦 Colis trouvés (${snapshot.size})</h2>`;
+
+                snapshot.forEach((doc) => {
+                    const data = doc.data();
+                    html += `
+                        <div class="parcel">
+                            <strong>ID:</strong> ${doc.id}<br>
+                            <strong>Tracking:</strong> ${data.trackingId || 'N/A'}<br>
+                            <strong>Statut:</strong> ${data.status || 'N/A'}<br>
+                            <strong>Origine:</strong> ${data.originCity || 'N/A'} → <strong>Destination:</strong> ${data.destinationCity || 'N/A'}<br>
+                            <strong>Date:</strong> ${data.createdAt ? new Date(data.createdAt.toMillis()).toLocaleString('fr-FR') : 'N/A'}
+                        </div>
+                    `;
+                });
+
+                html += '<h3>📋 Données brutes du premier colis:</h3>';
+                html += `<pre>${JSON.stringify(snapshot.docs[0].data(), null, 2)}</pre>`;
+
+                resultsEl.innerHTML = html;
+            }
+
+        } catch (error) {
+            console.error('❌ ERREUR:', error);
+            statusEl.textContent = '❌ Erreur Firestore!';
+            statusEl.className = 'status error';
+            resultsEl.innerHTML = `
+                <h3>Erreur détaillée:</h3>
+                <pre>Code: ${error.code}
+Message: ${error.message}
+Stack: ${error.stack}</pre>
+                <p><strong>Cette erreur indique exactement ce qui ne va pas.</strong></p>
+            `;
+        }
+    </script>
+</body>
+</html>

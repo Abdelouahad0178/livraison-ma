@@ -4,7 +4,7 @@
  * Extrait automatiquement les données d'expédition
  */
 
-interface ExtractionResult {
+export interface ExtractionResult {
   confidence: number
   data: {
     senderName?: string
@@ -352,11 +352,9 @@ export async function extractParcelDataFromSpeech(
       return basicExtraction(transcript)
     }
 
-    console.log('🤖 Envoi à Claude AI:', transcript)
 
     // 🔐 EN PRODUCTION : Utiliser Firebase Cloud Function (sécurisé)
     if (import.meta.env.PROD) {
-      console.log('🔐 Mode PRODUCTION : utilisation Cloud Function sécurisée')
 
       // Importer Firebase Functions
       const { getFunctions, httpsCallable } = await import('firebase/functions')
@@ -368,13 +366,11 @@ export async function extractParcelDataFromSpeech(
       const extractParcelData = httpsCallable(functions, 'extractParcelData')
       const result = await extractParcelData({ transcript })
 
-      console.log('✅ Extraction via Cloud Function réussie:', result.data)
 
       return (result.data as any).result
     }
 
     // 💻 EN LOCAL : Appel direct à l'API Claude (développement uniquement)
-    console.log('💻 Mode LOCAL : appel direct API Claude')
 
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
@@ -433,7 +429,6 @@ ATTENTION:
     }
 
     const result = await response.json()
-    console.log('✅ Réponse Claude:', result)
 
     // Parser la réponse de manière robuste
     const content = result.content?.[0]?.text || '{}'
@@ -455,7 +450,6 @@ ATTENTION:
     const jsonOnly = cleanContent.substring(firstBrace, lastBrace + 1)
     const extracted = JSON.parse(jsonOnly)
 
-    console.log('📦 Données extraites:', extracted)
 
     return extracted
 

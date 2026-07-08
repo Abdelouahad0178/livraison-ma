@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { collection, addDoc, serverTimestamp, getDocs, writeBatch, doc, Timestamp, query, where } from 'firebase/firestore'
+import { collection, addDoc, serverTimestamp, getDocs, writeBatch, doc, Timestamp, query, where, limit } from 'firebase/firestore'
 import { db, auth } from '../firebase/config'
 import { generateTrackingId, archiveParcels } from '../firebase/firestore'
 import { CITIES } from '../firebase/constants'
@@ -1314,7 +1314,6 @@ export default function SeedPage() {
                 report += `  - returnToCity: ${p.returnToCity || 'undefined'}\n`
                 report += `  - createdByCity: ${p.createdByCity || 'undefined'}\n\n`
               })
-              console.log(report)
               alert(report + '\n(Voir console pour détails)')
             }}
             className="flex items-center gap-2 bg-blue-700 hover:bg-blue-600 text-white font-bold py-3 px-5 rounded-xl transition text-sm"

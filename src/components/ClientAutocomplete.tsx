@@ -62,7 +62,7 @@ export default function ClientAutocomplete({
       }
     }
 
-    const timer = setTimeout(searchClients, 300)
+    const timer = setTimeout(searchClients, 800)
     return () => clearTimeout(timer)
   }, [value, searchFunction, filterCity])
 
@@ -158,11 +158,12 @@ export default function ClientAutocomplete({
         name={showSuggestions ? `${type}-${Date.now()}` : type}
       />
 
-      {loading && (
+      {/* Spinner désactivé pour ne pas gêner la saisie */}
+      {/* {loading && (
         <div className="absolute right-3 top-1/2 -translate-y-1/2">
           <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
         </div>
-      )}
+      )} */}
 
       {showSuggestions && suggestions.length > 0 && (
         <div

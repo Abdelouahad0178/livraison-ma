@@ -12,6 +12,7 @@ import {
   createReturnParcel,
   createCaisseRequest, completeRhSalaryCaisseRequest,
 } from '../../../firebase/firestore'
+import { createParcel } from '../../../firebase/parcels'
 import {
   createAgentCodRequest, addAgentCodRequestReply,
 } from '../../../firebase/agentCodRequests'
@@ -125,6 +126,7 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
         nbColis:       String(parcel.nbColis ?? '1'),
         natureOfGoods: parcel.natureOfGoods  || '',
         price:         String(parcel.price   ?? ''),
+        portType:      parcel.portType       || '',
         codAmount:     String(parcel.codAmount ?? '0'),
         codStatus:     parcel.codStatus      || 'pending',
         codSentToSource:     !!parcel.codSentToSource,
@@ -150,9 +152,24 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       const changes = [...(parcel.adminChanges || [])]
 
       const track = (fieldLabel: any, oldVal: any, newVal: any, updateKey: any, finalVal: any) => {
-        if (String(oldVal ?? '') !== String(newVal ?? '')) {
-          updates[updateKey] = finalVal !== undefined ? finalVal : newVal
-          changes.push({ field: fieldLabel, oldValue: String(oldVal ?? ''), newValue: String(newVal ?? ''), changedAt: now, changedBy: adminEmail })
+        // Normaliser les valeurs vides (null, undefined, '') pour comparaison
+        const normalize = (val: any) => (val === null || val === undefined || val === '') ? '' : String(val)
+        const oldNorm = normalize(oldVal)
+        const newNorm = normalize(newVal)
+
+        if (oldNorm !== newNorm) {
+          // Ne pas ajouter undefined - utiliser la valeur finale ou nouvelle
+          const valueToUpdate = finalVal !== undefined ? finalVal : newVal
+          if (valueToUpdate !== undefined) {
+            updates[updateKey] = valueToUpdate
+          }
+          changes.push({
+            field: fieldLabel,
+            oldValue: oldNorm,
+            newValue: newNorm,
+            changedAt: now,
+            changedBy: adminEmail
+          })
         }
       }
 
@@ -187,6 +204,7 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       track('Nb colis',           String(parcel.nbColis  ?? ''), form.nbColis,       'nbColis',       parseInt(form.nbColis)    || 1)
       track('Nature marchandise', parcel.natureOfGoods   || '',  form.natureOfGoods, 'natureOfGoods', form.natureOfGoods)
       track('Prix (DH)',          String(parcel.price    ?? ''), form.price,         'price',         parsePositiveNumber(form.price))
+      track('Type de port',       parcel.portType        || '',  form.portType,      'portType',      form.portType)
       track('RETOUR FOND (DH)',   String(parcel.codAmount ?? ''), form.codAmount,     'codAmount',     parsePositiveNumber(form.codAmount))
 
       // Pipeline RETOUR FOND
@@ -199,17 +217,19 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       track('Motif retour', parcel.returnReason || '', form.returnReason, 'returnReason', form.returnReason)
 
       if (Object.keys(updates).length === 0) {
-        setAdminEditModal((m: any) => ({ ...m, loading: false, error: 'Aucune modification d?tect?e.' }))
+        // Aucune modification → Fermer le modal automatiquement
+        setAdminEditModal(null)
         return
       }
+
       if ((parcel.status === 'Livré' || parcel.status === 'Livré') && updates.status && updates.status !== parcel.status) {
-        setAdminEditModal((m: any) => ({ ...m, loading: false, error: 'Colis deja livre : son statut est verrouille.' }))
+        setAdminEditModal((m: any) => ({ ...m, loading: false, error: 'Colis déjà livré : son statut est verrouillé.' }))
         return
       }
 
       // Statut → ajout historique si changé
       if (updates.status) {
-        await updateParcelStatus(parcel.id, updates.status, { note: `Modifi? par Admin (${adminEmail})`, updatedBy: adminEmail })
+        await updateParcelStatus(parcel.id, updates.status, { note: `Modifié par Admin (${adminEmail})`, updatedBy: adminEmail })
         delete updates.status
       }
 
@@ -217,10 +237,19 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       updates.lastAdminEditAt  = now
       updates.lastAdminEditBy  = adminEmail
 
-      await updateParcel(parcel.id, updates)
+      // Nettoyer les valeurs undefined (Firestore ne les accepte pas)
+      const cleanUpdates: Record<string, any> = {}
+      Object.keys(updates).forEach(key => {
+        const value = updates[key]
+        if (value !== undefined) {
+          cleanUpdates[key] = value
+        }
+      })
+
+      await updateParcel(parcel.id, cleanUpdates)
       setAdminEditModal(null)
     } catch (err: any) {
-      setAdminEditModal((m: any) => ({ ...m, loading: false, error: 'Erreur : ' + (err?.message || 'r?essayez') }))
+      setAdminEditModal((m: any) => ({ ...m, loading: false, error: 'Erreur : ' + (err?.message || 'réessayez') }))
     }
   }
 
@@ -234,6 +263,55 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       setCodEditModal(null)
     } catch {
       setCodEditModal((m: any) => ({ ...m, loading: false, error: 'Erreur lors de la mise à jour.' }))
+    }
+  }
+
+  const handleSaveNic = async () => {
+    const { nicEditModal, setNicEditModal } = s.current
+    const nic = nicEditModal.value.trim()
+    if (!nic) { setNicEditModal((m: any) => ({ ...m, error: 'N° EXP requis.' })); return }
+    setNicEditModal((m: any) => ({ ...m, loading: true, error: '' }))
+    try {
+      await updateParcel(nicEditModal.parcel.id, { senderNic: nic })
+      setNicEditModal(null)
+    } catch {
+      setNicEditModal((m: any) => ({ ...m, loading: false, error: 'Erreur lors de la mise à jour.' }))
+    }
+  }
+
+  const handleCreateParcel = async () => {
+    const { newParcelModal, setNewParcelModal } = s.current
+    const f = newParcelModal.form
+
+    // Validation
+    if (!f.senderName?.trim()) { setNewParcelModal((m: any) => ({ ...m, error: 'Nom expéditeur requis.' })); return }
+    if (!f.receiverName?.trim()) { setNewParcelModal((m: any) => ({ ...m, error: 'Nom destinataire requis.' })); return }
+    if (!f.receiverCity?.trim()) { setNewParcelModal((m: any) => ({ ...m, error: 'Ville destinataire requise.' })); return }
+
+    setNewParcelModal((m: any) => ({ ...m, loading: true, error: '' }))
+    try {
+      const adminEmail = auth.currentUser?.email || 'Admin'
+      await createParcel({
+        senderNic: f.senderNic || '',
+        sender: { name: f.senderName, tel: f.senderTel || '', city: f.senderCity || '', address: f.senderAddress || '' },
+        receiver: { name: f.receiverName, tel: f.receiverTel || '', city: f.receiverCity, address: f.receiverAddress || '' },
+        originCity: f.senderCity || '',
+        destinationCity: f.receiverCity,
+        weight: parseFloat(f.weight) || 0,
+        nbColis: parseInt(f.nbColis) || 1,
+        serviceType: f.serviceType || 'simple',
+        portType: f.portType || 'port_paye',
+        price: parseFloat(f.portPrice) || 0,
+        codAmount: parseFloat(f.codAmount) || 0,
+        agentId: auth.currentUser?.uid || '',
+        agentName: adminEmail,
+        status: 'Initialisé',
+        createdBy: 'admin',
+        createdByEmail: adminEmail,
+      })
+      setNewParcelModal(null)
+    } catch (err: any) {
+      setNewParcelModal((m: any) => ({ ...m, loading: false, error: err?.message || 'Erreur lors de la création.' }))
     }
   }
 
@@ -1039,6 +1117,8 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
     openAdminEdit,
     handleAdminEditSave,
     handleSaveCodAmount,
+    handleSaveNic,
+    handleCreateParcel,
     handleAddPortDuTx,
     handleDeletePortDuTx,
     handleSavePortDuEdit,

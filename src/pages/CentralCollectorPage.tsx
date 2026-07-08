@@ -11,7 +11,8 @@ import {
   subscribeAllCentralSupplierPayments,
   subscribeAllParcels,
 } from '../firebase/firestore'
-import { Banknote, Building2, CheckCircle2, LogOut, Search, FileText, X, Save, Printer, Calendar, Filter, Edit, Trash2 } from 'lucide-react'
+import { Banknote, Building2, CheckCircle2, LogOut, Search, FileText, X, Save, Printer, Calendar, Filter, Edit, Trash2, Sparkles, TrendingUp, Wallet } from 'lucide-react'
+import ProfilePhotoUpload from '../components/ProfilePhotoUpload'
 
 const money = (n: any) => (parseFloat(n) || 0).toLocaleString('fr-MA')
 const asDate = (value: any) => {
@@ -428,93 +429,228 @@ export default function CentralCollectorPage() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="bg-white border-b border-slate-200 px-5 py-4 flex items-center gap-4 sticky top-0 z-20">
-        <div className="w-11 h-11 rounded-2xl bg-emerald-600 text-white flex items-center justify-center">
-          <Banknote className="w-6 h-6" />
+    <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-pink-50 text-slate-900">
+      {/* Header magnifique */}
+      <header className="bg-white/80 backdrop-blur-xl border-b border-pink-100/50 px-6 py-5 sticky top-0 z-20 shadow-sm">
+        <div className="max-w-7xl mx-auto flex items-center gap-4">
+          {/* Photo de profil avec effet brillant */}
+          {auth.currentUser?.uid && (
+            <div className="relative">
+              <div className="absolute -inset-1 bg-gradient-to-r from-pink-400 via-purple-400 to-rose-400 rounded-full opacity-30 blur animate-pulse" />
+              <div className="relative">
+                <ProfilePhotoUpload
+                  userId={auth.currentUser.uid}
+                  currentPhotoURL={profile?.photoURL}
+                  userName={profile?.name || profile?.email}
+                  size="md"
+                  editable={true}
+                />
+              </div>
+            </div>
+          )}
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2">
+              <h1 className="text-2xl font-black bg-gradient-to-r from-pink-600 via-purple-600 to-rose-600 bg-clip-text text-transparent">
+                Encaisseur Central
+              </h1>
+              <Sparkles className="w-5 h-5 text-pink-500 animate-pulse" />
+            </div>
+            <p className="text-sm text-purple-600/70 font-medium mt-0.5">
+              Versements agences • RETOUR FOND • Chèques fournisseurs
+            </p>
+            {profile?.name && (
+              <p className="text-sm text-rose-600 font-semibold mt-1 flex items-center gap-1.5">
+                <span className="w-2 h-2 bg-rose-500 rounded-full animate-pulse" />
+                {profile.name}
+              </p>
+            )}
+          </div>
+          <button
+            onClick={() => signOut(auth)}
+            className="px-4 py-2.5 rounded-2xl bg-gradient-to-r from-rose-500 to-pink-500 text-white hover:from-rose-600 hover:to-pink-600 text-sm font-bold flex items-center gap-2 shadow-lg hover:shadow-xl transition-all duration-300 transform hover:scale-105"
+          >
+            <LogOut className="w-4 h-4" /> Déconnexion
+          </button>
         </div>
-        <div className="flex-1 min-w-0">
-          <h1 className="text-xl font-black">Encaisseur central</h1>
-          <p className="text-xs text-slate-500">Versements agences, details RETOUR FOND et cheques fournisseurs</p>
-        </div>
-        <button onClick={() => signOut(auth)} className="px-3 py-2 rounded-xl border border-red-100 text-red-600 hover:bg-red-50 text-sm font-bold flex items-center gap-2">
-          <LogOut className="w-4 h-4" /> Deconnexion
-        </button>
       </header>
 
-      <main className="p-5 max-w-7xl mx-auto space-y-5">
-        <section className="grid md:grid-cols-3 gap-3">
+      <main className="p-6 max-w-7xl mx-auto space-y-6">
+        {/* Cartes statistiques magnifiques */}
+        <section className="grid md:grid-cols-3 gap-4">
           {[
-            ['Verse au compte societe', totalDeposited, deposits.length, 'bg-emerald-50 text-emerald-700 border-emerald-100'],
-            ['A payer fournisseurs', totalWaiting, unpaidCount, 'bg-amber-50 text-amber-700 border-amber-100'],
-            ['Cheques prepares', totalPrepared, preparedPayments.length, 'bg-blue-50 text-blue-700 border-blue-100'],
-          ].map(([label, total, count, cls]) => (
-            <div key={label} className={`rounded-2xl border p-4 ${cls}`}>
-              <p className="text-xs font-bold uppercase tracking-wide opacity-75">{label}</p>
-              <p className="text-3xl font-black mt-1">{money(total)} DH</p>
-              <p className="text-xs font-semibold mt-1">{count} operation(s)</p>
+            {
+              label: 'Versé au compte société',
+              total: totalDeposited,
+              count: deposits.length,
+              gradient: 'from-emerald-400 to-teal-500',
+              bgGradient: 'from-emerald-50 to-teal-50',
+              icon: <TrendingUp className="w-6 h-6" />
+            },
+            {
+              label: 'À payer fournisseurs',
+              total: totalWaiting,
+              count: unpaidCount,
+              gradient: 'from-amber-400 to-orange-500',
+              bgGradient: 'from-amber-50 to-orange-50',
+              icon: <Wallet className="w-6 h-6" />
+            },
+            {
+              label: 'Chèques préparés',
+              total: totalPrepared,
+              count: preparedPayments.length,
+              gradient: 'from-blue-400 to-indigo-500',
+              bgGradient: 'from-blue-50 to-indigo-50',
+              icon: <CheckCircle2 className="w-6 h-6" />
+            },
+          ].map((stat) => (
+            <div
+              key={stat.label}
+              className={`relative rounded-3xl bg-gradient-to-br ${stat.bgGradient} p-6 overflow-hidden group hover:shadow-2xl transition-all duration-500 transform hover:-translate-y-1`}
+            >
+              {/* Effet de brillance */}
+              <div className={`absolute -right-8 -top-8 w-32 h-32 bg-gradient-to-br ${stat.gradient} rounded-full opacity-10 group-hover:opacity-20 transition-opacity duration-500`} />
+              <div className={`absolute -left-4 -bottom-4 w-24 h-24 bg-gradient-to-tr ${stat.gradient} rounded-full opacity-5 group-hover:opacity-15 transition-opacity duration-500`} />
+
+              <div className="relative">
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-600/70">
+                    {stat.label}
+                  </p>
+                  <div className={`p-2 rounded-2xl bg-gradient-to-br ${stat.gradient} text-white shadow-lg`}>
+                    {stat.icon}
+                  </div>
+                </div>
+                <p className={`text-4xl font-black bg-gradient-to-r ${stat.gradient} bg-clip-text text-transparent mb-2`}>
+                  {money(stat.total)} DH
+                </p>
+                <div className="flex items-center gap-2">
+                  <div className={`w-1.5 h-1.5 rounded-full bg-gradient-to-r ${stat.gradient}`} />
+                  <p className="text-sm font-semibold text-slate-600">
+                    {stat.count} opération{stat.count > 1 ? 's' : ''}
+                  </p>
+                </div>
+              </div>
             </div>
           ))}
         </section>
 
-        <section className="bg-white rounded-2xl border border-slate-200 p-3 space-y-3">
-          <div className="flex items-center gap-2 text-slate-700">
-            <Filter className="w-4 h-4" />
-            <p className="text-sm font-black">Filtres</p>
-            <button onClick={clearFilters} className="ml-auto text-xs font-bold text-slate-500 hover:text-red-600">Reinitialiser</button>
+        {/* Section filtres élégante */}
+        <section className="bg-white/60 backdrop-blur-xl rounded-3xl border border-pink-100/50 p-5 space-y-4 shadow-lg">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-2xl bg-gradient-to-br from-purple-400 to-pink-400 text-white">
+              <Filter className="w-4 h-4" />
+            </div>
+            <p className="text-base font-black bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">
+              Filtres
+            </p>
+            <button
+              onClick={clearFilters}
+              className="ml-auto text-xs font-bold text-rose-500 hover:text-rose-600 px-3 py-1.5 rounded-full hover:bg-rose-50 transition-all duration-300"
+            >
+              Réinitialiser
+            </button>
           </div>
+
           <div className="grid md:grid-cols-[1.3fr_0.8fr_0.8fr] gap-3">
-          <div className="relative">
-            <Search className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-            <input
-              value={query}
-              onChange={e => setQuery(e.target.value)}
-              placeholder="Rechercher tracking, N EXP, fournisseur, client, agence..."
-              className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 focus:border-emerald-500 focus:outline-none text-sm"
-            />
+            <div className="relative group">
+              <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-purple-400 group-focus-within:text-pink-500 transition-colors" />
+              <input
+                value={query}
+                onChange={e => setQuery(e.target.value)}
+                placeholder="Rechercher tracking, fournisseur, client, agence..."
+                className="w-full pl-11 pr-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm focus:outline-none text-sm font-medium placeholder:text-purple-300 transition-all duration-300"
+              />
+            </div>
+            <select
+              value={cityFilter}
+              onChange={e => setCityFilter(e.target.value)}
+              className="px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm text-sm font-semibold text-purple-700 cursor-pointer hover:bg-white/70 transition-all duration-300"
+            >
+              <option value="all">✨ Toutes les agences</option>
+              {cities.map(city => <option key={city} value={city}>📍 {city}</option>)}
+            </select>
+            <select
+              value={paymentFilter}
+              onChange={e => setPaymentFilter(e.target.value)}
+              className="px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm text-sm font-semibold text-purple-700 cursor-pointer hover:bg-white/70 transition-all duration-300"
+            >
+              <option value="unpaid">💰 À payer</option>
+              <option value="prepared">📝 Chèques préparés</option>
+              <option value="paid">✅ Payés</option>
+              <option value="all">🌟 Tous statuts</option>
+            </select>
           </div>
-          <select value={cityFilter} onChange={e => setCityFilter(e.target.value)} className="px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-semibold">
-            <option value="all">Toutes les agences</option>
-            {cities.map(city => <option key={city} value={city}>{city}</option>)}
-          </select>
-          <select value={paymentFilter} onChange={e => setPaymentFilter(e.target.value)} className="px-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-semibold">
-            <option value="unpaid">A payer</option>
-            <option value="prepared">Cheques prepares</option>
-            <option value="paid">Payes</option>
-            <option value="all">Tous statuts</option>
-          </select>
-          </div>
+
           <div className="grid md:grid-cols-[1fr_0.65fr_0.65fr_0.55fr_0.55fr] gap-3">
-            <div className="relative">
-              <Calendar className="absolute left-3 top-3 w-4 h-4 text-slate-400" />
-              <select value={datePreset} onChange={e => setDatePreset(e.target.value)} className="w-full pl-9 pr-3 py-2.5 rounded-xl border border-slate-200 bg-white text-sm font-semibold">
-                <option value="all">Toutes les dates</option>
-                <option value="today">Aujourd'hui</option>
-                <option value="week">7 jours</option>
-                <option value="month">Ce mois</option>
-                <option value="custom">Personnalise</option>
+            <div className="relative group">
+              <Calendar className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-purple-400 group-focus-within:text-pink-500 transition-colors" />
+              <select
+                value={datePreset}
+                onChange={e => setDatePreset(e.target.value)}
+                className="w-full pl-11 pr-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm text-sm font-semibold text-purple-700 cursor-pointer hover:bg-white/70 transition-all duration-300"
+              >
+                <option value="all">🗓️ Toutes les dates</option>
+                <option value="today">📅 Aujourd'hui</option>
+                <option value="week">📆 7 jours</option>
+                <option value="month">🌙 Ce mois</option>
+                <option value="custom">🎯 Personnalisé</option>
               </select>
             </div>
-            <input type="date" value={dateFrom} onChange={e => { setDateFrom(e.target.value); setDatePreset('custom') }} className="px-3 py-2.5 rounded-xl border border-slate-200 text-sm" />
-            <input type="date" value={dateTo} onChange={e => { setDateTo(e.target.value); setDatePreset('custom') }} className="px-3 py-2.5 rounded-xl border border-slate-200 text-sm" />
-            <input type="number" min="0" value={minAmount} onChange={e => setMinAmount(e.target.value)} placeholder="Min DH" className="px-3 py-2.5 rounded-xl border border-slate-200 text-sm" />
-            <input type="number" min="0" value={maxAmount} onChange={e => setMaxAmount(e.target.value)} placeholder="Max DH" className="px-3 py-2.5 rounded-xl border border-slate-200 text-sm" />
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={e => { setDateFrom(e.target.value); setDatePreset('custom') }}
+              className="px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm text-sm font-medium transition-all duration-300"
+            />
+            <input
+              type="date"
+              value={dateTo}
+              onChange={e => { setDateTo(e.target.value); setDatePreset('custom') }}
+              className="px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm text-sm font-medium transition-all duration-300"
+            />
+            <input
+              type="number"
+              min="0"
+              value={minAmount}
+              onChange={e => setMinAmount(e.target.value)}
+              placeholder="Min DH"
+              className="px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm text-sm font-medium placeholder:text-purple-300 transition-all duration-300"
+            />
+            <input
+              type="number"
+              min="0"
+              value={maxAmount}
+              onChange={e => setMaxAmount(e.target.value)}
+              placeholder="Max DH"
+              className="px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm text-sm font-medium placeholder:text-purple-300 transition-all duration-300"
+            />
           </div>
         </section>
 
-        <section className="space-y-4">
+        <section className="space-y-5">
           {agencySections.length === 0 && (
-            <div className="bg-white rounded-2xl border border-slate-200 p-10 text-center text-slate-400 text-sm">
-              Aucune operation ne correspond aux filtres.
+            <div className="bg-white/60 backdrop-blur-xl rounded-3xl border border-pink-100/50 p-16 text-center shadow-lg">
+              <div className="inline-flex items-center justify-center w-20 h-20 rounded-full bg-gradient-to-br from-purple-100 to-pink-100 mb-4">
+                <Sparkles className="w-10 h-10 text-purple-400" />
+              </div>
+              <p className="text-purple-400 text-sm font-medium">
+                Aucune opération ne correspond aux filtres
+              </p>
             </div>
           )}
 
           {agencySections.length > 0 && (
-            <div className="bg-white rounded-2xl border border-slate-200 p-3">
-              <div className="flex items-center gap-2 mb-3">
-                <Building2 className="w-4 h-4 text-blue-600" />
-                <h2 className="font-black text-slate-800">Agences</h2>
-                <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">{agencySections.length}</span>
+            <div className="bg-white/60 backdrop-blur-xl rounded-3xl border border-pink-100/50 p-5 shadow-lg">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="p-2 rounded-2xl bg-gradient-to-br from-blue-400 to-indigo-400 text-white">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <h2 className="text-lg font-black bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">
+                  Agences
+                </h2>
+                <span className="px-3 py-1 rounded-full bg-gradient-to-r from-blue-100 to-indigo-100 text-blue-700 text-xs font-bold">
+                  {agencySections.length}
+                </span>
               </div>
               <div className="grid sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-2">
                 {agencySections.map(section => {

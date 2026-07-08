@@ -5,6 +5,8 @@ import {
   LayoutGrid, Truck, MessageCircle, User, BarChart2, ChevronDown,
 } from 'lucide-react'
 import LiveClock from '../../components/LiveClock'
+import ProfilePhotoUpload from '../../components/ProfilePhotoUpload'
+import WorkingDateIndicator from '../../components/WorkingDateIndicator'
 
 interface AgentHeaderProps {
   profile: any
@@ -58,6 +60,18 @@ export default function AgentHeader({
         <div className="flex items-center justify-between gap-3 py-3 min-w-0">
           <div className="flex items-center gap-2 min-w-0">
             <img src="/LOGO.jpg" alt="BG Express" className="h-9 object-contain shrink-0" />
+            {/* Photo de profil pour chef d'agence */}
+            {profile?.role === 'chef_agence' && auth.currentUser?.uid && (
+              <div className="border-l border-gray-200 pl-2">
+                <ProfilePhotoUpload
+                  userId={auth.currentUser.uid}
+                  currentPhotoURL={profile?.photoURL}
+                  userName={profile?.name || profile?.email}
+                  size="sm"
+                  editable={true}
+                />
+              </div>
+            )}
             <div className="flex items-center gap-1.5 border-l border-gray-200 pl-2 min-w-0">
               <Package className="w-4 h-4 text-blue-600" />
               <span className="font-bold text-gray-800 hidden sm:inline">Interface Agent</span>
@@ -70,20 +84,24 @@ export default function AgentHeader({
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            <button
-              onClick={openScanModal}
-              className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition shadow-sm"
-              title="Scanner un code-barres"
-            >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M3 5v3M3 5h3M21 5h-3M21 5v3M3 19v-3M3 19h3M21 19h-3M21 19v-3"/>
-                <line x1="7" y1="8" x2="7" y2="16"/><line x1="10" y1="8" x2="10" y2="16"/>
-                <line x1="13" y1="8" x2="13" y2="12"/><line x1="16" y1="8" x2="16" y2="16"/>
-                <line x1="13" y1="14" x2="13" y2="16"/>
-              </svg>
-              <span className="hidden sm:inline">Scanner</span>
-            </button>
+            {/* Scanner masqué pour les aides agents */}
+            {profile?.role !== 'aide_agent' && (
+              <button
+                onClick={openScanModal}
+                className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition shadow-sm"
+                title="Scanner un code-barres"
+              >
+                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 5v3M3 5h3M21 5h-3M21 5v3M3 19v-3M3 19h3M21 19h-3M21 19v-3"/>
+                  <line x1="7" y1="8" x2="7" y2="16"/><line x1="10" y1="8" x2="10" y2="16"/>
+                  <line x1="13" y1="8" x2="13" y2="12"/><line x1="16" y1="8" x2="16" y2="16"/>
+                  <line x1="13" y1="14" x2="13" y2="16"/>
+                </svg>
+                <span className="hidden sm:inline">Scanner</span>
+              </button>
+            )}
             <LiveClock className="text-gray-400 hidden sm:inline" />
+            <WorkingDateIndicator />
             {profile?.code && (
               <span className="text-xs bg-blue-50 text-blue-600 px-2.5 py-1 rounded-lg font-mono border border-blue-200 hidden sm:inline">
                 Code : <strong>{profile.code}</strong>

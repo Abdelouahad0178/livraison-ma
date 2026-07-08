@@ -65,13 +65,11 @@ export default function ClientPortalPageNew() {
     if (!user?.clientId) return
 
     const handleError = (err?: any) => {
-      console.log('Erreur chargement:', err?.code)
     }
 
     const isExpediteur = user.clientType === 'expediteur' || user.clientType === 'both'
     const isDestinataire = user.clientType === 'destinataire' || user.clientType === 'both'
 
-    console.log('📦 Type client:', user.clientType, { isExpediteur, isDestinataire })
 
     // Charger selon le type
     const unsubs: any[] = []

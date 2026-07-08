@@ -9,8 +9,22 @@ import type { CaisseEntry } from '../types'
 import { CAISSE_CATEGORIES, REGLEMENT_MODES, CITIES } from './constants'
 import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
 
+// 🔒 Fonction sécurisée pour parser les montants
+const safeParseAmount = (value: any): number => {
+  if (value === null || value === undefined || value === '') return 0
+  const num = parseFloat(String(value).replace(',', '.'))
+  return (!isNaN(num) && isFinite(num) && num >= 0) ? num : 0
+}
+
 export async function createCaisseEntry(data: Record<string, unknown>): Promise<string> {
-  const amount = parseFloat(data.amount as unknown as string) || 0
+  const amount = safeParseAmount(data.amount)
+
+  // 🛡️ VALIDATION: Port dû ne peut JAMAIS être une sortie
+  if (data.type === 'sortie' && data.category === 'port_du') {
+    console.error('❌ ERREUR CRITIQUE: Tentative de créer une SORTIE avec category port_du!', data)
+    throw new Error('Un encaissement de port dû ne peut pas être une sortie. Type forcé à "entree".')
+  }
+
   const ref = await addDoc(collection(db, 'caisseEntries'), {
     type:        data.type,
     category:    data.category,
@@ -40,7 +54,7 @@ export async function deleteCaisseEntry(id: string): Promise<void> {
   await deleteDoc(doc(db, 'caisseEntries', id))
 }
 export async function updateCaisseEntry(id: string, data: Partial<CaisseEntry> & Record<string, unknown>): Promise<void> {
-  const amount = parseFloat(data.amount as unknown as string) || 0
+  const amount = safeParseAmount(data.amount)
   if (!id) throw new Error('Mouvement invalide.')
   if (!amount || amount <= 0) throw new Error('Le montant doit etre superieur a 0.')
   await updateDoc(doc(db, 'caisseEntries', id), {
@@ -537,6 +551,12 @@ export function subscribeCentralCash(callback: any, onError: (err?: any) => void
 // -- Helpers internes ----------------------------------------------------------
 
 export function buildCaisseEntryPayload(data: Record<string, any>) {
+  // 🛡️ VALIDATION: Port dû ne peut JAMAIS être une sortie
+  if (data.type === 'sortie' && data.category === 'port_du') {
+    console.error('❌ ERREUR CRITIQUE: Tentative de créer une SORTIE avec category port_du!', data)
+    throw new Error('Un encaissement de port dû ne peut pas être une sortie. Type forcé à "entree".')
+  }
+
   return {
     type:            data.type,
     category:        data.category,

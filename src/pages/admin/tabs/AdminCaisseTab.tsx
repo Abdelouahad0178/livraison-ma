@@ -1,8 +1,10 @@
 import { auth } from '../../../firebase/config'
 import { createCaisseCloture, REMARK_TYPES, resolveRemark, deleteRemark } from '../../../firebase/firestore'
+import { deleteCaisseEntries } from '../../../firebase/caisse'
 import { CAISSE_CATEGORIES } from '../../../firebase/constants'
 import { MapPin, Wallet, Lock, Users, AlertTriangle, CheckCircle2, Trash2, X } from 'lucide-react'
 import { fmt } from '../../../utils/formatNumber'
+import { useState } from 'react'
 
 const filterByDate = (list: any, preset: any, from: any, to: any, getDate: any) => {
   if (preset === 'all') return list
@@ -130,6 +132,51 @@ export default function AdminCaisseTab({
             finally { setClotureLoading(false) }
           }
 
+          // 🧹 Fonction de nettoyage des entrées erronées (recherche dans TOUTES les entrées récentes)
+          const [cleanupLoading, setCleanupLoading] = (useState as any)(false)
+          const now = new Date()
+          const sevenDaysAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
+          const erroneousEntries = caisseEntries.filter((e: any) => {
+            const createdAt = e.createdAt?.toDate ? e.createdAt.toDate() : new Date(e.createdAt || 0)
+            return (
+              e.type === 'sortie' &&
+              e.category === 'port_du' &&
+              createdAt > sevenDaysAgo
+            )
+          })
+          const erroneousAmount = erroneousEntries.reduce((s: any, e: any) => s + (e.amount || 0), 0)
+
+          const handleCleanup = async () => {
+            if (erroneousEntries.length === 0) {
+              alert('Aucune entrée erronée trouvée.')
+              return
+            }
+
+            const confirmed = window.confirm(
+              `⚠️ NETTOYAGE DES ENTRÉES ERRONÉES\n\n` +
+              `${erroneousEntries.length} entrées de type "sortie" avec catégorie "port_du" détectées.\n` +
+              `Montant total: ${erroneousAmount.toFixed(2)} DH\n\n` +
+              `Ces entrées seront SUPPRIMÉES définitivement.\n` +
+              `Le solde de la caisse augmentera de ${erroneousAmount.toFixed(2)} DH.\n\n` +
+              `Voulez-vous continuer ?`
+            )
+
+            if (!confirmed) return
+
+            setCleanupLoading(true)
+            try {
+              const idsToDelete = erroneousEntries.map((e: any) => e.id)
+              await deleteCaisseEntries(idsToDelete)
+              alert(`✅ ${idsToDelete.length} entrées erronées supprimées avec succès!\nSolde corrigé: +${erroneousAmount.toFixed(2)} DH`)
+              window.location.reload()
+            } catch (err: any) {
+              console.error('Cleanup error:', err)
+              alert('❌ Erreur lors du nettoyage: ' + (err?.message || err))
+            } finally {
+              setCleanupLoading(false)
+            }
+          }
+
           return (
             <div className="mt-4 space-y-5">
 
@@ -161,6 +208,42 @@ export default function AdminCaisseTab({
                       <p className="text-lg font-black text-red-300">{fmt(allSorties)} DH</p>
                     </div>
                   </div>
+
+                  {/* 🧹 Bouton de nettoyage des entrées erronées */}
+                  {erroneousEntries.length > 0 && (
+                    <div className="mt-4 pt-4 border-t border-white/20">
+                      <div className="bg-orange-500/20 backdrop-blur-sm rounded-xl p-3 border border-orange-300/30">
+                        <div className="flex items-start gap-3">
+                          <AlertTriangle className="w-5 h-5 text-orange-200 shrink-0 mt-0.5" />
+                          <div className="flex-1 min-w-0">
+                            <p className="text-sm font-bold text-white">
+                              {erroneousEntries.length} entrée(s) erronée(s) détectée(s)
+                            </p>
+                            <p className="text-xs text-orange-200 mt-1">
+                              Type "sortie" avec catégorie "port_du" • Total: {erroneousAmount.toFixed(2)} DH
+                            </p>
+                          </div>
+                          <button
+                            onClick={handleCleanup}
+                            disabled={cleanupLoading}
+                            className="px-4 py-2 bg-white/90 hover:bg-white disabled:opacity-50 text-orange-700 rounded-lg font-bold text-sm transition flex items-center gap-2 shrink-0"
+                          >
+                            {cleanupLoading ? (
+                              <>
+                                <div className="w-4 h-4 border-2 border-orange-700 border-t-transparent rounded-full animate-spin" />
+                                Nettoyage...
+                              </>
+                            ) : (
+                              <>
+                                <Trash2 className="w-4 h-4" />
+                                Nettoyer
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 

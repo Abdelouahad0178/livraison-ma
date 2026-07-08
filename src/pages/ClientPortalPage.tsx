@@ -166,16 +166,7 @@ export default function ClientPortalPage() {
     const unsubs: Array<() => void> = []
 
     if (isExpediteur) {
-      console.log('🔍 Chargement colis pour clientId:', profile.clientId)
       unsubs.push(subscribeClientParcels(profile.clientId, (parcels) => {
-        console.log('📦 Colis reçus:', parcels.length)
-        if (parcels.length > 0) {
-          console.log('   Exemples:', parcels.slice(0, 3).map(p => ({
-            trackingId: p.trackingId,
-            clientId: p.clientId,
-            status: p.status
-          })))
-        }
         setParcels(parcels)
       }, handleError))
       unsubs.push(subscribeClientPayments(profile.clientId, setPayments, handleError))
@@ -364,14 +355,6 @@ export default function ClientPortalPage() {
       const workflowType = isDestinataire && !client.isExpediteur
         ? 'destinataire_to_expediteur'
         : 'expediteur_to_transporteur'
-
-      console.log('🔍 Création demande:', {
-        workflowType,
-        clientId: targetClientId,
-        requestedByClientId: client.id,
-        isDestinataire,
-        client: client.name
-      })
 
       await createModificationRequest({
         parcelId:         parcel.id,
@@ -711,7 +694,7 @@ export default function ClientPortalPage() {
                       <p className="text-[11px] text-gray-500">{[client.tel, client.city].filter(Boolean).join(' - ')}</p>
                     </div>
                   </div>
-                  <form onSubmit={handleCreateParcelRequest} className="space-y-4">
+                  <form onSubmit={handleCreateParcelRequest} autoComplete="off" className="space-y-4">
                     <div>
                       <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">Destinataire</p>
                       <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-3">
@@ -1002,7 +985,7 @@ export default function ClientPortalPage() {
                       <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />{modSuccess}
                     </div>
                   )}
-                  <form onSubmit={handleSubmitModification} className="space-y-3">
+                  <form onSubmit={handleSubmitModification} autoComplete="off" className="space-y-3">
                     <select required value={modForm.parcelId}
                       onChange={e => setModForm(f => ({ ...f, parcelId: e.target.value, newValue: '' }))}
                       className={selectCls}>

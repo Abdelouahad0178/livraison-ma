@@ -17,6 +17,10 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
+        // Ajouter un hash unique pour forcer le rechargement
+        entryFileNames: `assets/[name]-[hash]-${Date.now()}.js`,
+        chunkFileNames: `assets/[name]-[hash]-${Date.now()}.js`,
+        assetFileNames: `assets/[name]-[hash]-${Date.now()}.[ext]`,
         manualChunks: {
           react: ['react', 'react-dom', 'react-router-dom'],
           firebaseCore: ['firebase/app'],
@@ -53,6 +57,8 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
         skipWaiting: true,
         clientsClaim: true,
+        // Force le rechargement en changeant la version
+        cacheId: `bg-express-v${Date.now()}`,
         globPatterns: ['**/*.{css,html,ico,png,jpg,svg,woff,woff2}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/__/, /\/[^/?]+\.[^/]+$/],

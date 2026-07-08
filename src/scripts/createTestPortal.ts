@@ -27,7 +27,7 @@ export async function createTestPortalAccount() {
 
     const client = { id: clientSnap.id, ...clientSnap.data() }
 
-    console.log('📦 Création compte portail pour:', client.name)
+    console.log('📦 Création compte portail pour:', (client as any).name)
 
     // Créer le compte
     const result = await createClientPortalAccount(client as any)

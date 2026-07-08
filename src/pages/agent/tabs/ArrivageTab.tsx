@@ -833,7 +833,7 @@ export default function ArrivageTab() {
                           </div>
                           {/* Destinataires */}
                           {arr.arrivedColisDetail && arr.arrivedColisDetail.length > 0 && (() => {
-                            const receivers = [...new Set(arr.arrivedColisDetail.map((c: any) => c.receiverName).filter(Boolean))]
+                            const receivers: string[] = [...new Set(arr.arrivedColisDetail.map((c: any) => c.receiverName).filter(Boolean) as string[])]
                             const displayReceivers = receivers.slice(0, 2)
                             const remaining = receivers.length - displayReceivers.length
                             return (

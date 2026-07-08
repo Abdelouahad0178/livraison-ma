@@ -98,13 +98,16 @@ export default function AideAgentsTab() {
                       onClick={() => handleDeleteAideAgent(aide)}
                       className="px-3 py-1.5 rounded-lg text-xs font-bold bg-red-100 text-red-700 hover:bg-red-200 transition"
                     >
-                      <Trash2 className="w-3.5 h-3.5" />
+                      Supprimer
                     </button>
                   </div>
                 </div>
-                <div className="mt-3 pt-3 border-t border-gray-100 flex items-center gap-4 text-xs text-gray-400">
-                  <span>📦 {aideParcelsFor(aide.id).length} colis saisis</span>
-                  <span className="text-green-600">✅ Enregistrement direct (pas de validation)</span>
+                <div className="mt-4 pt-4 border-t border-gray-200">
+                  <div className="text-center">
+                    <p className="text-2xl font-bold text-gray-900">
+                      📦 {aideParcelsFor(aide.id).length} colis saisis
+                    </p>
+                  </div>
                 </div>
               </div>
             ))}
@@ -198,7 +201,7 @@ export default function AideAgentsTab() {
                           await deleteDoc(doc(db, 'users', p.id))
                         }}
                         className="px-3 py-1.5 rounded-lg text-xs font-bold bg-red-100 text-red-700 hover:bg-red-200 transition">
-                        <Trash2 className="w-3.5 h-3.5" />
+                        Supprimer
                       </button>
                     </div>
                   </div>

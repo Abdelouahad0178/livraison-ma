@@ -39,7 +39,7 @@ export function useBarcodeScanner({
 }: BarcodeScannerOptions) {
   const bufferRef = useRef('')
   const lastKeyTimeRef = useRef(0)
-  const timeoutRef = useRef<NodeJS.Timeout>()
+  const timeoutRef = useRef<NodeJS.Timeout | null>(null)
   const scanCountRef = useRef(0)
 
   const handleKeyPress = useCallback((e: KeyboardEvent) => {
@@ -64,33 +64,9 @@ export function useBarcodeScanner({
       const rawBarcode = (bufferRef.current || '').trim()
 
       if (rawBarcode.length >= minLength) {
-        scanCountRef.current++
-        const scanNum = scanCountRef.current
-
-        // Essayer les deux versions
-        const qwertyBarcode = rawBarcode
-        const azertyBarcode = normalizeAzerty(rawBarcode, azertyFix)
-
-        console.log(`🔍 Scan #${scanNum}:`, {
-          raw: rawBarcode,
-          qwerty: qwertyBarcode,
-          azerty: azertyBarcode,
-          length: rawBarcode.length,
-          delay: now - lastKeyTimeRef.current
-        })
-
         e.preventDefault()
         e.stopPropagation()
-
-        // Essayer d'abord QWERTY, puis AZERTY si nécessaire
-        onScan(qwertyBarcode)
-
-        // Si différent et azertyFix activé, proposer aussi la version AZERTY
-        if (azertyFix && azertyBarcode !== qwertyBarcode) {
-          setTimeout(() => {
-            console.log(`🔄 Essai AZERTY: ${azertyBarcode}`)
-          }, 100)
-        }
+        onScan(rawBarcode)
       }
 
       bufferRef.current = ''
@@ -107,18 +83,10 @@ export function useBarcodeScanner({
       }
 
       bufferRef.current += e.key
-
-      // Log en temps réel pour debug
-      if (bufferRef.current.length === 1) {
-        console.log('🎯 Début scan:', e.key, 'time:', now)
-      }
-    } else if (e.key.length === 1 && e.key !== 'Enter') {
-      // Capturer TOUS les caractères pour debug
-      console.log('⚠️ Caractère ignoré:', e.key, 'code:', e.code, 'keyCode:', e.keyCode)
     }
 
     // Auto-reset après maxDelay * 2
-    clearTimeout(timeoutRef.current)
+    if (timeoutRef.current) clearTimeout(timeoutRef.current)
     timeoutRef.current = setTimeout(() => {
       bufferRef.current = ''
     }, maxDelay * 2)
@@ -131,7 +99,7 @@ export function useBarcodeScanner({
 
     return () => {
       window.removeEventListener('keydown', handleKeyPress, true)
-      clearTimeout(timeoutRef.current)
+      if (timeoutRef.current) clearTimeout(timeoutRef.current)
     }
   }, [enabled, handleKeyPress])
 }

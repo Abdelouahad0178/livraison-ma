@@ -16,6 +16,7 @@ const AUTH_ROLES = [
   { key: 'encaisseur_central',   label: 'Encaisseur central',   emoji: '🏦' },
   { key: 'chauffeur',            label: 'Chauffeur',            emoji: '🚚' },
   { key: 'livreur',              label: 'Livreur',              emoji: '🛵' },
+  { key: 'livreur-gare',         label: 'Livreur en gare',      emoji: '🚉' },
   { key: 'caissier',             label: 'Caissier',             emoji: '🏦' },
   { key: 'client',               label: 'Client',               emoji: '🧾' },
 ]
@@ -150,6 +151,7 @@ export default function LoginPage() {
       else if (r === 'encaisseur_central')   navigate('/central')
       else if (r === 'chauffeur')            navigate('/driver')
       else if (r === 'livreur')              navigate('/driver')
+      else if (r === 'livreur-gare')         navigate('/gare-driver')
       else if (r === 'directeur')            navigate('/director')
       else if (r === 'caissier')             navigate('/caissier')
       else if (r === 'client')               navigate(nextClientPath || ownClientPath || '/')
@@ -327,7 +329,7 @@ export default function LoginPage() {
 
             {/* Connexion */}
             {mode === 'login' && (
-              <form onSubmit={handleLogin} className="space-y-4">
+              <form onSubmit={handleLogin} autoComplete="off" className="space-y-4">
                 <div className="relative">
                   <Mail className="absolute left-3 top-3.5 w-4 h-4 text-gray-400" />
                   <input type="email" placeholder="Email" value={email}
@@ -351,7 +353,7 @@ export default function LoginPage() {
 
             {/* Inscription initiale admin */}
             {mode === 'register' && adminExists === false && (
-              <form onSubmit={handleRegister} className="space-y-4">
+              <form onSubmit={handleRegister} autoComplete="off" className="space-y-4">
                 <div className="bg-amber-500/15 border border-amber-500/30 text-amber-200 px-4 py-3 rounded-xl text-sm">
                   🔑 Création du compte administrateur principal. Cette action n'est possible qu'une seule fois.
                 </div>

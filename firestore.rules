@@ -189,6 +189,19 @@ service cloud.firestore {
         );
     }
 
+
+    function isParcelLocked() {
+      // 🔒 Un colis est verrouillé s'il a été chargé dans un camion
+      return 'shipmentLoadedAt' in resource.data && resource.data.shipmentLoadedAt != null;
+    }
+
+    function keepsEnComptePortType() {
+      // 💼 Si le colis était "en compte", le portType ne peut JAMAIS être modifié
+      // (sauf par admin) pour éviter les problèmes de comptabilité client
+      return resource.data.portType != 'port_en_compte'
+        || request.resource.data.portType == 'port_en_compte'
+        || isAdmin();
+    }
     // Ã¢â€â‚¬Ã¢â€â‚¬ Colis : lecture publique (tracking)
     // codAmount modifiable uniquement par Admin (protection double : rÃ¨gle + code)
     match /parcels/{parcelId} {
@@ -197,6 +210,8 @@ service cloud.firestore {
         || ownsClient(resource.data.clientId)
         || isDeliveryWorker()
         || (request.query.limit != null && request.query.limit <= 1);
+      // ✅ Autoriser les requêtes d'agrégation (count, sum) pour le staff
+      allow read:   if isStaff();
       allow create: if (signedIn() && request.resource.data.agentId == request.auth.uid)
         || (isStaff() && isNotBlocked());
       allow delete: if ((resource.data.status != 'LivrÃ©' && resource.data.status != 'Livr\u00c3\u00a9') || isAdmin()) && (
@@ -206,13 +221,32 @@ service cloud.firestore {
         || (isAideAgent() && isParcelCreator() && resource.data.validatedByChef != true)
         || (isStaff() && !isAgentOrChef() && !isAideAgent())
       );
+
+      // 🔒 RÈGLE GLOBALE : Admin peut TOUJOURS modifier (même après chargement camion)
+      allow update: if isAdmin();
+
+      // ✅ RÈGLE : Aide-agent peut modifier ses propres colis non validés et non verrouillés
+      allow update: if isAideAgent()
+        && isParcelCreator()
+        && resource.data.validatedByChef != true
+        && !isParcelLocked()
+        && keepsDeliveredStatus();
+
+      // 🔒 VERROUILLAGE PERMANENT : Si colis a été chargé dans un camion (shipmentLoadedAt existe),
+      // SEUL l'admin peut modifier, et ce pour TOUT le reste du parcours
+      // (En transit → Arrivé en agence → En livraison → Livré → etc.)
+
       // Correction du bon: poids/details uniquement, jamais COD/statut.
       // Autorisation volontairement limitee aux champs du bon pour eviter les rejets de role/token.
       // ⭐ RÈGLE PRIORITAIRE : Retour de colis (depuis N'IMPORTE QUEL statut → Retourné)
+      // 🔒 VERROUILLAGE : Refusé si colis a été chargé dans un camion (sauf admin via règle globale ci-dessus)
       // Autorise TOUTES les modifications nécessaires pour markParcelAsReturned()
-      allow update: if signedIn() && request.resource.data.status == 'Retourné';
+      allow update: if signedIn()
+        && request.resource.data.status == 'Retourné'
+        && !isParcelLocked();
       // ⭐ RÈGLE : Réessayer livraison (Retourné → En livraison)
       // Permet de remettre un colis retourné en circulation
+      // 🔒 Note: déjà protégé car on ne peut pas avoir "Retourné" ET "En transit" simultanément
       allow update: if signedIn()
         && resource.data.status == 'Retourné'
         && request.resource.data.status == 'En livraison';
@@ -220,7 +254,8 @@ service cloud.firestore {
         && keepsDeliveredStatus()
         && resource.data.status != 'LivrÃ©'
         && resource.data.status != 'Livr\u00c3\u00a9'
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(parcelCorrectionFields());
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(parcelCorrectionFields())
+        && !isParcelLocked();
       allow update: if signedIn()
         && keepsDeliveredStatus()
         && request.auth.uid != resource.data.agentId
@@ -511,11 +546,22 @@ service cloud.firestore {
     // Ã¢â€â‚¬Ã¢â€â‚¬ ParamÃ¨tres globaux
     match /settings/{settingId} {
       // adminSetup lisible publiquement pour la page de login
-      allow read:  if settingId == 'adminSetup' ? true : signedIn();
+      allow read:  if settingId == 'adminSetup' || settingId == 'workingDate' || settingId == 'editPermissions' ? true : signedIn();
       allow write: if settingId == 'tariffs' ? isAdmin() : isStaff();
       // CrÃ©ation du document adminSetup lors de la premiÃ¨re inscription admin
       allow create: if settingId == 'adminSetup'
         && !exists(/databases/$(database)/documents/settings/adminSetup);
+    }
+
+    // Dates de travail (par ville)
+    match /workingDates/{cityId} {
+      // Tous les utilisateurs peuvent lire la date de travail de leur ville
+      allow read: if signedIn();
+      // Seul l'Admin ou Chef d'agence de la ville peut modifier
+      allow write: if isAdmin()
+        || (role() == 'chef_agence' && userCity() == cityId);
+      // Permettre la création si le document n'existe pas encore
+      allow create: if signedIn();
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Utilisateurs

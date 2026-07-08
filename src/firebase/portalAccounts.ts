@@ -1,4 +1,4 @@
-import { createUserWithEmailAndPassword } from 'firebase/auth'
+import { createUserWithEmailAndPassword, sendPasswordResetEmail } from 'firebase/auth'
 import { doc, setDoc, updateDoc, serverTimestamp, getDocs, query, where, limit, collection } from 'firebase/firestore'
 import { authSecondary } from './auth'
 import { db } from './db'
@@ -251,11 +251,14 @@ export async function resetClientPortalPassword(client: Client) {
     throw new Error('Ce client n\'a pas de compte portail')
   }
 
-  // TODO: Implémenter la réinitialisation de mot de passe
-  // Peut utiliser sendPasswordResetEmail ou créer un nouveau mot de passe
-
-  return {
-    success: true,
-    message: 'Un email de réinitialisation a été envoyé'
+  try {
+    await sendPasswordResetEmail(authSecondary, client.portalEmail)
+    return {
+      success: true,
+      message: 'Un email de réinitialisation a été envoyé à ' + client.portalEmail
+    }
+  } catch (error: any) {
+    console.error('Erreur réinitialisation mot de passe:', error)
+    throw new Error(error.message || 'Erreur lors de l\'envoi de l\'email de réinitialisation')
   }
 }

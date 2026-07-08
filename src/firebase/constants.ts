@@ -1,16 +1,14 @@
 import type { TariffConfig } from '../types'
 
 export const CITIES = [
-  'Casablanca', 'Rabat', 'Agadir', 'Marrakech', 'Tanger',
-  'Fès', 'Meknès', 'Oujda', 'Laâyoune', 'Dakhla',
-  'Kenitra', 'Tétouan', 'Safi', 'El Jadida', 'Beni Mellal', 'Guelmim', 'Ait Melloul',
+  'Casablanca', 'Agadir', 'Marrakech', 'Guelmim',
 ]
 
 export const TARIFS: Record<string, number> = {
-  Casablanca: 25, Rabat: 30, Agadir: 45, Marrakech: 40,
-  Tanger: 40, Fès: 35, Meknès: 35, Oujda: 50,
-  Laâyoune: 60, Dakhla: 75, Kenitra: 30, Tétouan: 42,
-  Safi: 38, 'El Jadida': 32, 'Beni Mellal': 38, Guelmim: 55, 'Ait Melloul': 45,
+  Casablanca: 25,
+  Agadir: 45,
+  Marrakech: 40,
+  Guelmim: 55,
 }
 
 export const TARIF_WEIGHT_RULES = [

@@ -2,27 +2,38 @@ import { lazy, Suspense, useState, useEffect, useRef } from 'react'
 import { Calendar, Search, X, Plus, MapPin, ChevronDown, Check, MessageCircle, Printer } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import { CITIES } from '../../../firebase/constants'
-import ClientAutocomplete from '../../../components/ClientAutocomplete'
-import { searchExpediteurs, searchDestinataires, Client } from '../../../firebase/clients'
-import VoiceInputAI from '../../../components/VoiceInputAI'
+// Autocomplétion et reconnaissance vocale désactivées pour optimiser performances
+// import ClientAutocomplete from '../../../components/ClientAutocomplete'
+// import { searchExpediteurs, searchDestinataires, Client } from '../../../firebase/clients'
+// import VoiceInputAI from '../../../components/VoiceInputAI'
+import { collection, query, where, getDocs, limit } from 'firebase/firestore'
+import { db } from '../../../firebase/config'
+import { getWorkingDateStr } from '../../../utils/workingDate'
 
 const Barcode = lazy(() => import('react-barcode'))
 const QRCodeSVG = lazy(() => import('../../../components/QRCodeSvg'))
 
-const todayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}` }
+// Fonction pour normaliser les nombres avec virgule → point
+const normalizeDecimal = (value: string) => {
+  return value.replace(/,/g, '.')
+}
 
-const EMPTY_FORM = {
+// Utiliser la date de travail au lieu de la date système
+const todayStr = () => getWorkingDateStr()
+
+// Fonction pour obtenir un formulaire vide avec la date de travail ACTUELLE
+const getEmptyForm = () => ({
   senderName: '', senderNic: '', senderAddress: '', senderTel: '', senderCity: '',
   receiverName: '', receiverAddress: '', receiverTel: '', receiverCity: '', receiverClientId: '',
-  weight: '', nbColis: '1', natureOfGoods: '', natureOfGoodsCustomPrice: '', codAmount: '',
+  weight: '', nbColis: '0', natureOfGoods: '', natureOfGoodsCustomPrice: '', codAmount: '',
   serviceType: 'simple', hasRetourBL: false, shipmentMode: 'personal',
   portType: 'port_paye', portPayeMethod: '', portPayeMontant: '',
   portPrice: '',
   clientId: '', clientName: '', autoDebit: false,
   deliverySectorId: '', deliveryDriverId: '',
   enGare: false,
-  operationDate: todayStr(),
-}
+  operationDate: todayStr(), // Date de travail ACTUELLE à chaque appel
+})
 
 // Tous les types pour affichage (compatibilité anciens colis)
 const ALL_SERVICE_TYPES = [
@@ -66,7 +77,7 @@ export default function NewTab() {
   // Fonction pour créer un nouveau colis
   const handleNewParcel = () => {
     setCreatedParcel(null)
-    setForm({ ...EMPTY_FORM, senderCity: profile?.city || '', operationDate: todayStr() })
+    setForm({ ...getEmptyForm(), senderCity: profile?.city || '' })
     // Focus sur N EXP après un court délai pour laisser le DOM se mettre à jour
     setTimeout(() => {
       nexpInputRef.current?.focus()
@@ -115,6 +126,20 @@ export default function NewTab() {
         prev.focus()
       }
     }
+
+    // Flèche Bas ou Flèche Droite = élément suivant
+    if ((e.key === 'ArrowDown' || e.key === 'ArrowRight') && currentIndex >= 0 && currentIndex < focusables.length - 1) {
+      e.preventDefault()
+      const next = focusables[currentIndex + 1] as HTMLElement
+      next.focus()
+    }
+
+    // Flèche Haut ou Flèche Gauche = élément précédent
+    if ((e.key === 'ArrowUp' || e.key === 'ArrowLeft') && currentIndex > 0) {
+      e.preventDefault()
+      const prev = focusables[currentIndex - 1] as HTMLElement
+      prev.focus()
+    }
   }
 
   // Focus automatique sur N EXP à l'ouverture
@@ -125,6 +150,45 @@ export default function NewTab() {
     }, 100)
     return () => clearTimeout(timer)
   }, [])
+
+  // Vérifier si le N° EXP existe déjà dans l'agence courante
+  const checkDuplicateNic = async (nic: string) => {
+    if (!nic || nic.trim() === '') return
+    if (!profile?.city) return // Pas de vérification si pas de ville définie
+
+    try {
+      // Chercher uniquement dans les colis de la même agence (ville)
+      const q = query(
+        collection(db, 'parcels'),
+        where('sender.nic', '==', nic.trim()),
+        where('originCity', '==', profile.city),
+        limit(1)
+      )
+      const snapshot = await getDocs(q)
+
+      if (!snapshot.empty) {
+        const existingParcel = snapshot.docs[0].data()
+        alert(`⚠️ ATTENTION - N° EXP DÉJÀ EXISTANT!\n\nLe N° EXP "${nic}" existe déjà dans votre agence (${profile.city}).\n\nExpédition existante: ${existingParcel.trackingId}\nExpéditeur: ${existingParcel.sender?.name || '—'}\n\n❌ NE PAS DOUBLER L'EXPÉDITION!\n\nLe N° EXP sera effacé.`)
+
+        // Effacer le N° EXP dupliqué
+        setForm((prev: any) => ({ ...prev, senderNic: '' }))
+
+        // Remettre le focus sur le champ pour resaisir
+        setTimeout(() => {
+          const nicField = document.getElementById('senderNic')
+          if (nicField) nicField.focus()
+        }, 100)
+
+        return true
+      }
+      return false
+    } catch (error) {
+      console.error('Erreur vérification NIC:', error)
+      return false
+    }
+  }
+
+  // Pas de filtre - tous les clients sont disponibles
 
   // Intercepter la création du colis pour afficher la modal de confirmation
   useEffect(() => {
@@ -157,6 +221,19 @@ export default function NewTab() {
     }
   }, [showConfirmModal])
 
+  // Écouter les changements de date de travail
+  useEffect(() => {
+    const handleDateChange = () => {
+      setForm((prev: any) => ({
+        ...prev,
+        operationDate: todayStr()
+      }))
+    }
+
+    window.addEventListener('working-date-changed', handleDateChange)
+    return () => window.removeEventListener('working-date-changed', handleDateChange)
+  }, [])
+
   const handleVoiceResult = (field: string, value: string) => {
     setForm((prev: any) => ({
       ...prev,
@@ -165,7 +242,6 @@ export default function NewTab() {
   }
 
   const handleClientFound = (client: Client, isSender: boolean) => {
-    console.log('🎉 Remplissage automatique du client:', client.name, isSender ? 'Expéditeur' : 'Destinataire')
 
     if (isSender) {
       // Remplir les champs expéditeur
@@ -175,7 +251,7 @@ export default function NewTab() {
         senderTel: client.tel,
         senderAddress: client.address || '',
         senderCity: client.city || profile?.city || '',
-        senderNic: client.nic || '',
+        // senderNic: NE PAS auto-remplir - chaque expédition a son propre N° EXP
       }))
     } else {
       // Remplir les champs destinataire
@@ -194,7 +270,6 @@ export default function NewTab() {
 
   // 🤖 Remplissage en masse via IA
   const handleBulkFill = (data: Record<string, any>) => {
-    console.log('🤖 Remplissage IA en masse:', data)
 
     setForm((prev: any) => {
       const updated = { ...prev }
@@ -419,19 +494,23 @@ export default function NewTab() {
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Poids (kg)</label>
                   <input
-                    type="number"
-                    step="0.1"
+                    type="text"
+                    inputMode="decimal"
                     value={editableParcel.weight || ''}
-                    onChange={(e) => setEditableParcel({ ...editableParcel, weight: e.target.value })}
+                    onChange={(e) => setEditableParcel({ ...editableParcel, weight: normalizeDecimal(e.target.value) })}
                     className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Nombre de colis</label>
                   <input
-                    type="number"
+                    type="text"
+                    inputMode="numeric"
                     value={editableParcel.nbColis || 1}
-                    onChange={(e) => setEditableParcel({ ...editableParcel, nbColis: e.target.value })}
+                    onChange={(e) => {
+                      const value = e.target.value.replace(/[^0-9]/g, '')
+                      setEditableParcel({ ...editableParcel, nbColis: value })
+                    }}
                     className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
                   />
                 </div>
@@ -447,20 +526,26 @@ export default function NewTab() {
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Prix (DH)</label>
                   <input
-                    type="number"
-                    step="0.1"
+                    type="text"
+                    inputMode="decimal"
                     value={editableParcel.price || ''}
-                    onChange={(e) => setEditableParcel({ ...editableParcel, price: parseFloat(e.target.value) || 0 })}
+                    onChange={(e) => {
+                      const normalized = normalizeDecimal(e.target.value)
+                      setEditableParcel({ ...editableParcel, price: parseFloat(normalized) || 0 })
+                    }}
                     className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
                   />
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Retour fond (DH)</label>
                   <input
-                    type="number"
-                    step="0.1"
+                    type="text"
+                    inputMode="decimal"
                     value={editableParcel.codAmount || 0}
-                    onChange={(e) => setEditableParcel({ ...editableParcel, codAmount: parseFloat(e.target.value) || 0 })}
+                    onChange={(e) => {
+                      const normalized = normalizeDecimal(e.target.value)
+                      setEditableParcel({ ...editableParcel, codAmount: parseFloat(normalized) || 0 })
+                    }}
                     className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
                   />
                 </div>
@@ -496,7 +581,7 @@ export default function NewTab() {
         className="space-y-4 mt-4"
         tabIndex={0}
         onKeyDown={(e) => {
-          if (e.ctrlKey && e.key === 'Enter') {
+          if (e.key === 'Enter') {
             e.preventDefault()
             handleNewParcel()
           }
@@ -528,14 +613,18 @@ export default function NewTab() {
 
           {/* Type de service */}
           <div className="flex gap-4 px-3 py-1.5 border-b border-gray-200 bg-gray-50">
-            {ALL_SERVICE_TYPES.filter(t => t.key !== 'retour_bl').map(st => (
-              <label key={st.key} className="flex items-center gap-1 text-[10px] font-semibold">
-                <span className={`w-3 h-3 border border-gray-400 rounded-sm flex items-center justify-center text-[8px] ${createdParcel.serviceType === st.key ? 'bg-blue-600 border-blue-600 text-white' : ''}`}>
-                  {createdParcel.serviceType === st.key ? '✓' : ''}
-                </span>
-                {st.label}
-              </label>
-            ))}
+            {ALL_SERVICE_TYPES.filter(t => t.key !== 'retour_bl').map(st => {
+              const types = createdParcel.serviceType?.split(',').filter(Boolean) || []
+              const isSelected = types.includes(st.key)
+              return (
+                <label key={st.key} className="flex items-center gap-1 text-[10px] font-semibold">
+                  <span className={`w-3 h-3 border border-gray-400 rounded-sm flex items-center justify-center text-[8px] ${isSelected ? 'bg-blue-600 border-blue-600 text-white' : ''}`}>
+                    {isSelected ? '✓' : ''}
+                  </span>
+                  {st.label}
+                </label>
+              )
+            })}
             <label className="flex items-center gap-1 text-[10px] font-semibold">
               <span className={`w-3 h-3 border border-gray-400 rounded-sm flex items-center justify-center text-[8px] ${createdParcel.hasRetourBL ? 'bg-blue-600 border-blue-600 text-white' : ''}`}>
                 {createdParcel.hasRetourBL ? '✓' : ''}
@@ -663,36 +752,189 @@ export default function NewTab() {
           </div>
         </div>
       </div>
-      <form onSubmit={handleSubmit} className="p-6 space-y-6">
-        {/* Date d'opération + Micro - MODERNE */}
-        <section className="transform transition-all hover:scale-[1.02]">
-          <div className="flex items-center gap-3 bg-gradient-to-r from-purple-50 to-pink-50 border-2 border-purple-200 rounded-2xl px-4 py-3 shadow-sm hover:shadow-md transition-all">
-            <div className="bg-white p-2 rounded-xl shadow-sm">
-              <span className="text-2xl" title="Date d'opération">📅</span>
-            </div>
-            <input
-              type="date"
-              value={form.operationDate}
-              max={todayStr()}
-              onChange={f('operationDate')}
-              className="flex-1 bg-transparent text-sm font-bold text-purple-700 outline-none"
-            />
-            {form.operationDate !== todayStr() && (
-              <button type="button" onClick={() => setForm((p: any) => ({ ...p, operationDate: todayStr() }))}
-                className="text-xs text-blue-500 hover:text-blue-700 font-medium transition">
-                Aujourd'hui
-              </button>
-            )}
-            {/* 🤖 Micro IA - Mode vocal intelligent */}
-            <VoiceInputAI
-              onResult={handleVoiceResult}
-              onBulkFill={handleBulkFill}
-              onClientFound={handleClientFound}
-            />
-          </div>
-        </section>
+      <form onSubmit={handleSubmit} autoComplete="off" className="p-4 space-y-2">
+        {/* Date + Micro IA - Version compacte */}
+        <div className="flex items-center gap-2 bg-purple-50 border border-purple-200 rounded-lg px-3 py-1.5">
+          <span className="text-lg">📅</span>
+          <input
+            type="date"
+            value={form.operationDate}
+            max={todayStr()}
+            onChange={f('operationDate')}
+            className="flex-1 bg-transparent text-xs font-bold text-purple-700 outline-none"
+          />
+          {form.operationDate !== todayStr() && (
+            <button type="button" onClick={() => setForm((p: any) => ({ ...p, operationDate: todayStr() }))}
+              className="text-xs text-blue-500 hover:text-blue-700 font-medium">Aujourd'hui</button>
+          )}
+          {/* VoiceInputAI désactivé temporairement pour optimiser les performances */}
+          {/* <VoiceInputAI onResult={handleVoiceResult} onBulkFill={handleBulkFill} onClientFound={handleClientFound} /> */}
+        </div>
 
-        {error && <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {error}</div>}
+        {error && <div className="bg-red-50 border border-red-200 text-red-600 p-2 rounded-lg text-xs">⚠️ {error}</div>}
+
+        {/* GRID 2 COLONNES : Expéditeur + Destinataire */}
+        <div className="grid grid-cols-2 gap-3">
+          {/* COLONNE 1 : EXPÉDITEUR */}
+          <section className="bg-pink-50 border border-pink-200 rounded-lg p-3">
+            <h3 className="text-xs font-bold text-pink-700 mb-2 flex items-center gap-1.5">
+              <span className="text-base">📤</span> Expéditeur
+            </h3>
+            <div className="space-y-2">
+              <input
+                ref={nexpInputRef}
+                id="senderNic"
+                placeholder="N EXP"
+                value={form.senderNic}
+                onChange={f('senderNic')}
+                onBlur={(e) => checkDuplicateNic(e.target.value)}
+                onKeyDown={handleKeyNav}
+                className={inputCls}
+              />
+              <input
+                id="senderName"
+                placeholder="Nom complet…"
+                value={form.senderName}
+                onChange={f('senderName')}
+                onKeyDown={handleKeyNav}
+                className={inputCls}
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  id="senderTel"
+                  placeholder="Téléphone"
+                  value={form.senderTel}
+                  onChange={f('senderTel')}
+                  onKeyDown={handleKeyNav}
+                  className={inputCls}
+                />
+                <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-gray-200 bg-gray-100 text-xs font-semibold text-gray-700">
+                  <MapPin className="w-3 h-3 text-gray-400 shrink-0" />
+                  <span className="truncate">{form.senderCity || '—'}</span>
+                </div>
+              </div>
+              <input
+                id="senderAddress"
+                placeholder="Adresse"
+                value={form.senderAddress}
+                onChange={f('senderAddress')}
+                onKeyDown={handleKeyNav}
+                className={inputCls}
+              />
+            </div>
+          </section>
+
+          {/* COLONNE 2 : DESTINATAIRE */}
+          <section className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+            <h3 className="text-xs font-bold text-blue-700 mb-2 flex items-center gap-1.5">
+              <span className="text-base">📥</span> Destinataire
+            </h3>
+            <div className="space-y-2">
+              <div className="relative">
+                <select
+                  id="receiverCity"
+                  required
+                  value={form.receiverCity}
+                  onChange={e => setForm((p: any) => ({
+                    ...p,
+                    receiverCity: e.target.value,
+                    receiverClientId: '',
+                    receiverName: '',
+                    receiverTel: '',
+                    receiverAddress: '',
+                    deliverySectorId: '',
+                    deliveryDriverId: '',
+                  }))}
+                  onKeyDown={handleKeyNav}
+                  className={selectCls}
+                >
+                  <option value="">Ville de destination</option>
+                  {CITIES.map(c => <option key={c}>{c}</option>)}
+                </select>
+                <ChevronDown className="absolute right-2 top-2.5 w-3 h-3 text-gray-400 pointer-events-none" />
+              </div>
+              <input
+                id="receiverName"
+                placeholder="Nom complet…"
+                value={form.receiverName}
+                onChange={f('receiverName')}
+                onKeyDown={handleKeyNav}
+                className={inputCls}
+              />
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  id="receiverTel"
+                  placeholder="Téléphone"
+                  value={form.receiverTel}
+                  onChange={f('receiverTel')}
+                  onKeyDown={handleKeyNav}
+                  className={inputCls}
+                />
+                <input
+                  id="receiverAddress"
+                  placeholder="Adresse"
+                  value={form.receiverAddress}
+                  onChange={f('receiverAddress')}
+                  onKeyDown={handleKeyNav}
+                  className={inputCls}
+                />
+              </div>
+
+              {/* En gare - Version compacte */}
+              <label className="flex items-center gap-2 px-2 py-1.5 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer text-xs">
+                <input
+                  type="checkbox"
+                  checked={form.enGare || false}
+                  onChange={e => setForm((p: any) => ({
+                    ...p,
+                    enGare: e.target.checked,
+                    deliverySectorId: e.target.checked ? '' : p.deliverySectorId,
+                    deliveryDriverId: e.target.checked ? '' : p.deliveryDriverId,
+                  }))}
+                  onKeyDown={handleKeyNav}
+                  className="w-3.5 h-3.5 text-orange-600 border border-amber-300 rounded"
+                />
+                <span className="text-base">🚉</span>
+                <span className="font-bold text-amber-900 flex-1">En gare</span>
+                {form.enGare && <span className="px-2 py-0.5 bg-orange-500 text-white rounded text-xs font-bold">✓</span>}
+              </label>
+
+              {/* Secteur/Livreur - Version compacte */}
+              {form.receiverCity && !form.enGare && (destinationSectors || []).length > 0 && (
+                <div className="space-y-1.5">
+                  <div className="relative">
+                    <select
+                      value={form.deliverySectorId}
+                      onChange={e => setForm((p: any) => ({ ...p, deliverySectorId: e.target.value, deliveryDriverId: '' }))}
+                      onKeyDown={handleKeyNav}
+                      className={selectCls}
+                    >
+                      <option value="">Secteur</option>
+                      {(destinationSectors || []).map((s: any) => (
+                        <option key={s.id} value={s.id}>{s.code}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-2 top-2.5 w-3 h-3 text-gray-400 pointer-events-none" />
+                  </div>
+                  <div className="relative">
+                    <select
+                      value={form.deliveryDriverId}
+                      onChange={f('deliveryDriverId')}
+                      onKeyDown={handleKeyNav}
+                      className={selectCls}
+                    >
+                      <option value="">Livreur</option>
+                      {(destinationDrivers || []).map((d: any) => (
+                        <option key={d.id} value={d.id}>{d.name}</option>
+                      ))}
+                    </select>
+                    <ChevronDown className="absolute right-2 top-2.5 w-3 h-3 text-gray-400 pointer-events-none" />
+                  </div>
+                </div>
+              )}
+            </div>
+          </section>
+        </div>
 
         {/* Client lié - CACHÉ pour gagner de l'espace */}
         <section className="hidden">
@@ -750,578 +992,240 @@ export default function NewTab() {
           )}
         </section>
 
-        <div className="border-t border-dashed border-gray-200" />
-
-        <section className="bg-white rounded-2xl p-5 shadow-lg border-2 border-pink-100 transform transition-all hover:shadow-xl">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="bg-gradient-to-br from-pink-400 to-rose-500 p-3 rounded-xl shadow-md">
-              <span className="text-2xl">📤</span>
-            </div>
-            <h3 className="text-lg font-bold bg-gradient-to-r from-pink-600 to-purple-600 bg-clip-text text-transparent">Expéditeur</h3>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            <input
-              ref={nexpInputRef}
-              id="senderNic"
-              placeholder="N EXP"
-              value={form.senderNic}
-              onChange={f('senderNic')}
-              onKeyDown={handleKeyNav}
-              className={`${inputCls} col-span-2`}
-            />
-
-            {/* Autocomplétion expéditeur */}
-            <div className="col-span-2">
-              <ClientAutocomplete
-                type="expediteur"
-                searchFunction={searchExpediteurs}
-                filterCity={profile?.city}
-                value={form.senderName}
-                onChange={(value) => setForm((p: any) => ({ ...p, senderName: value }))}
-                onSelect={(client: Client | null) => {
-                  if (client) {
-                    setForm((p: any) => ({
-                      ...p,
-                      senderName: client.name,
-                      senderTel: client.tel,
-                      senderAddress: client.address,
-                      senderCity: client.city,
-                      deliverySectorId: client.secteurId || '',
-                    }))
-                  }
-                }}
-                onKeyDown={handleKeyNav}
-                placeholder="Nom complet (ou chercher un expéditeur…)"
-                className={inputCls}
-              />
-            </div>
-
-            <input
-              id="senderTel"
-              required
-              placeholder="Téléphone"
-              value={form.senderTel}
-              onChange={f('senderTel')}
-              onKeyDown={handleKeyNav}
-              className={inputCls}
-            />
-            <div className="flex items-center gap-2 px-3 py-2.5 rounded-xl border border-gray-200 bg-gray-100 text-sm font-semibold text-gray-700">
-              <MapPin className="w-4 h-4 text-gray-400 shrink-0" />
-              {form.senderCity || '—'}
-            </div>
-            <input
-              id="senderAddress"
-              placeholder="Adresse"
-              value={form.senderAddress}
-              onChange={f('senderAddress')}
-              onKeyDown={handleKeyNav}
-              className={`${inputCls} col-span-2`}
-            />
-          </div>
-        </section>
-
-        <div className="relative py-4">
-          <div className="absolute inset-0 flex items-center">
-            <div className="w-full border-t-2 border-dashed border-purple-200"></div>
-          </div>
-          <div className="relative flex justify-center">
-            <span className="bg-gradient-to-r from-pink-50 via-purple-50 to-blue-50 px-4 text-2xl">💝</span>
-          </div>
-        </div>
-
-        <section className="bg-white rounded-2xl p-5 shadow-lg border-2 border-blue-100 transform transition-all hover:shadow-xl">
-          <div className="flex items-center gap-3 mb-4">
-            <div className="bg-gradient-to-br from-blue-400 to-indigo-500 p-3 rounded-xl shadow-md">
-              <span className="text-2xl">📥</span>
-            </div>
-            <h3 className="text-lg font-bold bg-gradient-to-r from-blue-600 to-indigo-600 bg-clip-text text-transparent">Destinataire</h3>
-          </div>
-          <div className="grid grid-cols-2 gap-3">
-            {/* Ville de destination - PREMIER CHAMP */}
-            <div className="relative col-span-2">
-              <select
-                id="receiverCity"
-                required
-                value={form.receiverCity}
-                onChange={e => setForm((p: any) => ({
-                  ...p,
-                  receiverCity: e.target.value,
-                  receiverClientId: '',
-                  receiverName: '',
-                  receiverTel: '',
-                  receiverAddress: '',
-                  deliverySectorId: '',
-                  deliveryDriverId: '',
-                }))}
-                onKeyDown={handleKeyNav}
-                className={selectCls}
-              >
-                <option value="">Ville de destination</option>
-                {CITIES.map(c => <option key={c}>{c}</option>)}
-              </select>
-              <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-gray-400 pointer-events-none" />
-            </div>
-            {/* Autocomplétion destinataire */}
-            <div className="col-span-2">
-              <ClientAutocomplete
-                type="destinataire"
-                searchFunction={searchDestinataires}
-                filterCity={form.receiverCity || undefined}
-                value={form.receiverName}
-                onChange={(value) => setForm((p: any) => ({ ...p, receiverName: value, receiverClientId: '' }))}
-                onSelect={(client: Client | null) => {
-                  if (client) {
-                    setForm((p: any) => ({
-                      ...p,
-                      receiverName: client.name,
-                      receiverTel: client.tel,
-                      receiverAddress: client.address,
-                      receiverCity: client.city,
-                      receiverClientId: client.id, // Lien vers le client destinataire
-                      deliverySectorId: client.secteurId || '',
-                      deliveryDriverId: client.livreurIds?.[0] || '',
-                    }))
-                  }
-                }}
-                onKeyDown={handleKeyNav}
-                placeholder="Nom complet (ou chercher un destinataire…)"
-                className={inputCls}
-              />
-            </div>
-            <input
-              id="receiverTel"
-              required
-              placeholder="Téléphone"
-              value={form.receiverTel}
-              onChange={f('receiverTel')}
-              onKeyDown={handleKeyNav}
-              className={inputCls}
-            />
-            <input
-              id="receiverAddress"
-              required={!form.deliveryDriverId && !form.deliverySectorId && !form.enGare}
-              placeholder={form.deliveryDriverId || form.deliverySectorId || form.enGare ? "Adresse (optionnel)" : "Adresse"}
-              value={form.receiverAddress}
-              onChange={f('receiverAddress')}
-              onKeyDown={handleKeyNav}
-              className={inputCls}
-            />
-
-            {/* Option En gare */}
-            <div className="col-span-2">
-              <label className="flex items-center gap-3 px-4 py-3 bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-amber-200 rounded-xl cursor-pointer hover:shadow-md transition-all group">
-                <input
-                  type="checkbox"
-                  checked={form.enGare || false}
-                  onChange={e => setForm((p: any) => ({
-                    ...p,
-                    enGare: e.target.checked,
-                    deliverySectorId: e.target.checked ? '' : p.deliverySectorId,
-                    deliveryDriverId: e.target.checked ? '' : p.deliveryDriverId,
-                  }))}
-                  onKeyDown={handleKeyNav}
-                  className="w-5 h-5 text-orange-600 border-2 border-amber-300 rounded focus:ring-orange-500 focus:ring-2"
-                />
-                <div className="flex-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-2xl">🚉</span>
-                    <span className="font-bold text-amber-900 group-hover:text-orange-600 transition-colors">
-                      Livraison en gare
-                    </span>
-                  </div>
-                  <p className="text-xs text-amber-700 mt-1">
-                    Le colis sera récupéré par le destinataire à la gare. L'adresse n'est pas nécessaire.
-                  </p>
-                </div>
-                {form.enGare && (
-                  <div className="px-3 py-1.5 bg-orange-500 text-white rounded-lg font-bold text-xs shadow-md">
-                    ACTIVÉ
-                  </div>
-                )}
-              </label>
-            </div>
-
-            {form.receiverCity && !form.enGare && (
-              <div className="col-span-2 bg-purple-50 border border-purple-100 rounded-xl p-3 space-y-3">
-                <div>
-                  <p className="text-xs font-bold text-purple-700 uppercase tracking-wide">Secteur de livraison destination</p>
-                  <p className="text-xs text-purple-500 mt-0.5">Choisissez selon l'adresse du client à {form.receiverCity}.</p>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  <div className="relative">
-                    <select
-                      value={form.deliverySectorId}
-                      onChange={e => setForm((p: any) => ({
-                        ...p,
-                        deliverySectorId: e.target.value,
-                        deliveryDriverId: '',
-                      }))}
-                      onKeyDown={handleKeyNav}
-                      className={selectCls}
-                    >
-                      <option value="">Secteur à choisir par destination</option>
-                      {(destinationSectors || []).map((s: any) => (
-                        <option key={s.id} value={s.id}>{s.code}{s.name && s.name !== s.code ? ` - ${s.name}` : ''}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-gray-400 pointer-events-none" />
-                  </div>
-                  <div className="relative">
-                    <select
-                      value={form.deliveryDriverId}
-                      onChange={f('deliveryDriverId')}
-                      onKeyDown={handleKeyNav}
-                      className={selectCls}
-                    >
-                      <option value="">Livreur de destination</option>
-                      {(destinationDrivers || []).map((d: any) => (
-                        <option key={d.id} value={d.id}>{d.name}{d.tel ? ` - ${d.tel}` : ''}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-3 top-3.5 w-4 h-4 text-gray-400 pointer-events-none" />
-                  </div>
-                </div>
-                {(destinationSectors || []).length === 0 && (
-                  <p className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
-                    Aucun secteur enregistré pour cette ville. L'agence destination pourra assigner le livreur après réception.
-                  </p>
-                )}
-              </div>
-            )}
-          </div>
-        </section>
-
-        <div className="border-t border-dashed border-gray-200" />
-
-        <section>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Détails</h3>
-          <div className="grid grid-cols-2 gap-3">
+        {/* Détails du colis */}
+        <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+          <h3 className="text-xs font-bold text-gray-700 mb-2 flex items-center gap-1.5">
+            <span className="text-base">📦</span> Détails du colis
+          </h3>
+          <div className="grid grid-cols-2 gap-2 mb-2">
             <input
               id="weight"
-              type="number"
-              step="0.1"
-              min="0.1"
-              placeholder="Poids (kg) — optionnel"
+              type="text"
+              inputMode="decimal"
+              placeholder="Poids (kg)"
               value={form.weight}
-              onChange={f('weight')}
+              onChange={(e) => {
+                const normalized = normalizeDecimal(e.target.value)
+                setForm({ ...form, weight: normalized })
+              }}
               onKeyDown={handleKeyNav}
               className={inputCls}
             />
             <input
               id="nbColis"
               required
-              type="number"
-              min="1"
-              step="1"
-              placeholder="Nb de colis"
+              type="text"
+              inputMode="numeric"
+              placeholder="Nb colis"
               value={form.nbColis}
-              onChange={f('nbColis')}
+              onChange={(e) => {
+                // Accepter seulement les chiffres entiers
+                const value = e.target.value.replace(/[^0-9]/g, '')
+                setForm({ ...form, nbColis: value })
+              }}
               onKeyDown={handleKeyNav}
               className={inputCls}
             />
-            <div className="col-span-2">
-              <p className="text-xs text-gray-500 mb-1.5">Nature de marchandise</p>
-              <div className="grid grid-cols-4 gap-2">
-                {[
-                  { key: 'Palette', label: 'Palette', emoji: '📦' },
-                  { key: 'Colis',   label: 'Colis',   emoji: '📮' },
-                  { key: 'Bagages', label: 'Bagages', emoji: '🧳' },
-                  { key: 'Autres',  label: 'Autres',  emoji: '✏️' },
-                ].map(({ key, label, emoji }) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setForm((p: any) => ({ ...p, natureOfGoods: key === p.natureOfGoods ? '' : key }))}
-                    onKeyDown={handleKeyNav}
-                    className={`flex flex-col items-center justify-center gap-1 py-2 rounded-xl border text-xs font-medium transition-all
-                      ${form.natureOfGoods === key
-                        ? 'bg-blue-600 border-blue-600 text-white shadow'
-                        : 'bg-white border-gray-200 text-gray-600 hover:border-blue-400'}`}
-                  >
-                    <span className="text-lg">{emoji}</span>
-                    {label}
-                  </button>
-                ))}
-              </div>
-              {form.natureOfGoods === 'Autres' && (
-                <input
-                  placeholder="Précisez la nature…"
-                  value={form.natureOfGoodsCustom || ''}
-                  onChange={e => setForm((p: any) => ({ ...p, natureOfGoodsCustom: e.target.value }))}
-                  onKeyDown={handleKeyNav}
-                  className={`${inputCls} mt-2`}
-                />
-              )}
-            </div>
           </div>
-        </section>
-
-        <div className="border-t border-dashed border-gray-200" />
-
-        <section>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Type de port</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-            {SERVICE_TYPES.map(st => (
+          <div className="grid grid-cols-4 gap-2">
+            {[
+              { key: 'Palette', emoji: '📦', label: 'Palette' },
+              { key: 'Colis',   emoji: '📮', label: 'Colis' },
+              { key: 'Bagages', emoji: '🧳', label: 'Bagages' },
+              { key: 'Autres',  emoji: '✏️', label: 'Autres' },
+            ].map(({ key, emoji, label }) => (
               <button
+                key={key}
                 type="button"
-                key={st.key}
-                onClick={() => setForm((p: any) => ({ ...p, serviceType: st.key, codAmount: st.key === 'simple' ? '' : p.codAmount }))}
+                onClick={() => setForm((p: any) => ({ ...p, natureOfGoods: key === p.natureOfGoods ? '' : key }))}
                 onKeyDown={handleKeyNav}
-                className={`py-2.5 rounded-xl border-2 text-xs font-bold transition ${
-                  form.serviceType === st.key
-                    ? 'bg-blue-600 border-blue-500 text-white'
-                    : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-gray-300'
+                className={`flex flex-col items-center justify-center py-2 rounded-lg border text-xs font-medium transition ${
+                  form.natureOfGoods === key
+                    ? 'bg-blue-600 border-blue-600 text-white'
+                    : 'bg-white border-gray-200 text-gray-600 hover:border-blue-400'
                 }`}
               >
-                {st.label}
+                <span className="text-lg">{emoji}</span>
+                <span className="mt-0.5">{label}</span>
               </button>
             ))}
           </div>
-
-          {/* Checkbox Retour BL */}
-          <label className="mt-3 flex items-center gap-2 text-sm font-medium text-gray-700 cursor-pointer">
+          {form.natureOfGoods === 'Autres' && (
             <input
-              type="checkbox"
-              checked={form.hasRetourBL}
-              onChange={e => setForm((p: any) => ({ ...p, hasRetourBL: e.target.checked }))}
+              placeholder="Précisez la nature…"
+              value={form.natureOfGoodsCustom || ''}
+              onChange={e => setForm((p: any) => ({ ...p, natureOfGoodsCustom: e.target.value }))}
               onKeyDown={handleKeyNav}
-              className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+              className={`${inputCls} mt-2`}
             />
-            <span>🧾 Retour BL (bon de livraison)</span>
-          </label>
-
-          {form.serviceType !== 'simple' ? (
-            <div className="mt-3">
-              <input
-                id="codAmount"
-                type="number"
-                min="0"
-                placeholder="RETOUR FOND (DH)"
-                value={form.codAmount}
-                onChange={f('codAmount')}
-                onKeyDown={handleKeyNav}
-                className={inputCls}
-              />
-            </div>
-          ) : (
-            <p className="mt-3 text-xs text-gray-500 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
-              Simple : aucun RETOUR FOND à encaisser.
-            </p>
           )}
-        </section>
+        </div>
 
-        <div className="border-t border-dashed border-gray-200" />
+        {/* Type de service */}
+        <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+          <h3 className="text-xs font-bold text-green-700 mb-2 flex items-center gap-1.5">
+            <span className="text-base">🏷️</span> Type de service
+          </h3>
+          <div className="grid grid-cols-4 gap-2 mb-2">
+            {SERVICE_TYPES.map(st => {
+              const types = form.serviceType?.split(',').filter(Boolean) || []
+              const isSelected = types.includes(st.key)
+              const canMultiSelect = st.key === 'cheque' || st.key === 'traite'
 
-        {/* Frais de port */}
-        <section>
-          <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wider mb-3">Frais de port</h3>
-          <div className="grid grid-cols-2 gap-2">
-            {[
-              { key: 'port_paye', label: 'Port Payé', desc: 'Expéditeur paie',   active: 'bg-blue-600 border-blue-500 text-white',    activeDesc: 'text-blue-100'   },
-              { key: 'port_du',   label: 'Port Dû',   desc: 'Destinataire paie', active: 'bg-orange-500 border-orange-400 text-white', activeDesc: 'text-orange-100' },
-            ].map(pt => {
-              const isActive = pt.key === 'port_paye'
-                ? (form.portType === 'port_paye' || form.portType === 'port_en_compte')
-                : form.portType === pt.key
               return (
-                <button type="button" key={pt.key}
-                  onClick={() => setForm((p: any) => ({
-                    ...p,
-                    portType: pt.key,
-                    shipmentMode: pt.key === 'port_du' && p.portType === 'port_en_compte' ? 'personal' : p.shipmentMode,
-                  }))}
+                <button
+                  type="button"
+                  key={st.key}
+                  onClick={() => setForm((p: any) => {
+                    const currentTypes = p.serviceType?.split(',').filter(Boolean) || []
+                    let newTypes: string[]
+
+                    if (st.key === 'simple' || st.key === 'especes') {
+                      // Simple/Espèces: désélectionner tout et sélectionner uniquement celui-ci
+                      newTypes = [st.key]
+                    } else if (st.key === 'cheque' || st.key === 'traite') {
+                      // Chèque/Traite: gestion multi-sélection
+                      const hasSimpleOrEspeces = currentTypes.some(t => t === 'simple' || t === 'especes')
+                      if (hasSimpleOrEspeces) {
+                        // Si simple/especes est sélectionné, le remplacer par cheque/traite
+                        newTypes = [st.key]
+                      } else if (isSelected) {
+                        // Décocher
+                        newTypes = currentTypes.filter(t => t !== st.key)
+                        if (newTypes.length === 0) newTypes = ['simple'] // Par défaut simple si tout décoché
+                      } else {
+                        // Cocher (ajouter à la liste)
+                        newTypes = [...currentTypes.filter(t => t === 'cheque' || t === 'traite'), st.key]
+                      }
+                    } else {
+                      newTypes = [st.key]
+                    }
+
+                    const newServiceType = newTypes.join(',')
+                    return {
+                      ...p,
+                      serviceType: newServiceType,
+                      codAmount: newTypes.every(t => t === 'simple') ? '' : p.codAmount
+                    }
+                  })}
                   onKeyDown={handleKeyNav}
-                  className={`py-3 px-2 rounded-xl border-2 text-xs font-bold transition text-left ${isActive ? pt.active : 'bg-gray-50 border-gray-200 text-gray-600 hover:border-gray-300'}`}>
-                  {pt.label}
-                  <p className={`text-xs font-normal mt-0.5 ${isActive ? pt.activeDesc : 'text-gray-400'}`}>{pt.desc}</p>
+                  className={`flex flex-col items-center justify-center py-2 rounded-lg border text-xs font-bold transition ${
+                    isSelected
+                      ? 'bg-green-600 border-green-500 text-white'
+                      : 'bg-white border-gray-200 text-gray-600'
+                  }`}
+                >
+                  <span className="text-lg">{st.emoji}</span>
+                  <span className="mt-0.5">{st.label}</span>
+                  {canMultiSelect && isSelected && <span className="text-[10px] mt-0.5">✓</span>}
                 </button>
               )
             })}
           </div>
-          <div className="mt-3">
-            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5">
-              Montant du port manuel
+          <div className="grid grid-cols-2 gap-2">
+            <label className="flex items-center gap-1.5 px-2 py-1.5 bg-white border border-gray-200 rounded-lg cursor-pointer text-xs">
+              <input
+                type="checkbox"
+                checked={form.hasRetourBL}
+                onChange={e => setForm((p: any) => ({ ...p, hasRetourBL: e.target.checked }))}
+                onKeyDown={handleKeyNav}
+                className="w-3.5 h-3.5 text-green-600 border-gray-300 rounded"
+              />
+              <span className="font-medium text-gray-700">🧾 Retour BL</span>
             </label>
+            {form.serviceType !== 'simple' && !form.serviceType?.includes('simple') && (
+              <input
+                id="codAmount"
+                type="text"
+                inputMode="decimal"
+                placeholder="RETOUR FOND (DH)"
+                value={form.codAmount}
+                onChange={(e) => {
+                  const normalized = normalizeDecimal(e.target.value)
+                  setForm({ ...form, codAmount: normalized })
+                }}
+                onKeyDown={handleKeyNav}
+                className={inputCls}
+              />
+            )}
+          </div>
+        </div>
+
+        {/* Frais de port */}
+        <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
+          <h3 className="text-xs font-bold text-orange-700 mb-2 flex items-center gap-1.5">
+            <span className="text-base">💰</span> Frais de port
+          </h3>
+          <div className="grid grid-cols-3 gap-2 mb-2">
+            {[
+              { key: 'port_paye', emoji: '💵', label: 'Port Payé', active: 'bg-blue-600 text-white' },
+              { key: 'port_du',   emoji: '🧾', label: 'Port Dû', active: 'bg-orange-500 text-white' },
+              { key: 'port_en_compte', emoji: '🏢', label: 'En Compte', active: 'bg-purple-600 text-white' },
+            ].map(pt => (
+              <button type="button" key={pt.key}
+                onClick={() => {
+                  setForm((p: any) => {
+                    const updates: any = {
+                      portType: pt.key,
+                      shipmentMode: pt.key === 'port_en_compte' ? 'client' : (pt.key === 'port_du' && p.portType === 'port_en_compte' ? 'personal' : p.shipmentMode),
+                      portPayeMethod: pt.key === 'port_paye' ? 'espece' : p.portPayeMethod,
+                    }
+
+                    // Si "En Compte" est sélectionné et qu'il y a un expéditeur
+                    if (pt.key === 'port_en_compte' && p.senderName && p.senderName.trim() !== '') {
+                      // Automatiquement définir l'expéditeur comme client en compte
+                      updates.clientName = p.senderName
+                      updates.clientId = p.clientId || '' // Garder l'ID si déjà présent
+                    }
+
+                    return { ...p, ...updates }
+                  })
+                }}
+                onKeyDown={handleKeyNav}
+                className={`flex flex-col items-center justify-center py-2 rounded-lg border text-xs font-bold transition ${form.portType === pt.key ? pt.active : 'bg-white border-gray-200 text-gray-600'}`}>
+                <span className="text-lg">{pt.emoji}</span>
+                <span className="mt-0.5">{pt.label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
             <input
               required
-              type="number"
-              min="0"
-              step="0.5"
-              placeholder={form.portType === 'port_du' ? 'Montant à payer par le destinataire (DH)' : 'Montant du port payé (DH)'}
+              type="text"
+              inputMode="decimal"
+              placeholder="Montant (DH)"
               value={form.portPrice}
-              onChange={e => setForm((p: any) => ({ ...p, portPrice: e.target.value, portPayeMontant: p.portType === 'port_paye' ? e.target.value : p.portPayeMontant }))}
+              onChange={e => {
+                const normalized = normalizeDecimal(e.target.value)
+                setForm((p: any) => ({ ...p, portPrice: normalized, portPayeMontant: p.portType === 'port_paye' ? normalized : p.portPayeMontant }))
+              }}
               onKeyDown={handleKeyNav}
               className={inputCls}
             />
-            <p className="text-[11px] text-gray-400 mt-1">
-              Le tarif automatique est désactivé : ce montant sera utilisé comme prix du port.
-            </p>
+            {form.portType === 'port_paye' && (
+              <select
+                value={form.portPayeMethod || 'espece'}
+                onChange={e => setForm((p: any) => ({ ...p, portPayeMethod: e.target.value }))}
+                onKeyDown={handleKeyNav}
+                className={selectCls}
+              >
+                <option value="espece">💵 Espèce</option>
+                <option value="cheque">📋 Chèque</option>
+              </select>
+            )}
           </div>
-          {/* Sous-menu Port Payé */}
-          {(form.portType === 'port_paye' || form.portType === 'port_en_compte') && (
-            <div className="mt-2 space-y-2 pl-1">
-              <div className="grid grid-cols-3 gap-2">
-                {[
-                  { key: 'espece',  label: '💵 Espèce',    ptype: 'port_paye' },
-                  { key: 'cheque',  label: '📋 Chèque',    ptype: 'port_paye' },
-                  { key: 'compte',  label: '🏢 En Compte', ptype: 'port_en_compte' },
-                ].map(m => {
-                  const isSelected = m.key === 'compte'
-                    ? form.portType === 'port_en_compte'
-                    : form.portType === 'port_paye' && form.portPayeMethod === m.key
-                  return (
-                    <button type="button" key={m.key}
-                      onClick={() => setForm((p: any) => ({
-                        ...p,
-                        portType: m.ptype,
-                        portPayeMethod: m.key !== 'compte' ? m.key : p.portPayeMethod,
-                        portPayeMontant: m.key === 'compte' ? '' : p.portPayeMontant,
-                        shipmentMode: m.key === 'compte' ? 'client' : (p.portType === 'port_en_compte' ? 'personal' : p.shipmentMode),
-                      }))}
-                      onKeyDown={handleKeyNav}
-                      className={`py-2 px-1 rounded-xl border text-xs font-semibold transition text-center ${isSelected ? (m.key === 'compte' ? 'bg-purple-100 border-purple-500 text-purple-700' : 'bg-blue-100 border-blue-500 text-blue-700') : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-blue-300'}`}>
-                      {m.label}
-                    </button>
-                  )
-                })}
-              </div>
-            </div>
-          )}
           {form.clientId && form.portType === 'port_paye' && price > 0 && (
-            <div
-              className={`mt-2 flex items-center gap-2 cursor-pointer rounded-xl px-3 py-2 border transition ${
-                form.autoDebit ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-gray-50'
-              }`}
-              onClick={() => setForm((p: any) => ({ ...p, autoDebit: !p.autoDebit }))}>
-              <div className={`w-5 h-5 rounded border-2 flex items-center justify-center shrink-0 transition ${
-                form.autoDebit ? 'bg-blue-600 border-blue-600' : 'border-gray-300'
-              }`}>
-                {form.autoDebit && <Check className="w-3 h-3 text-white" />}
-              </div>
-              <p className="text-sm text-gray-600">
-                Débiter <strong>{form.clientName}</strong> de <strong>{price} DH</strong> automatiquement
-              </p>
-            </div>
+            <label className={`flex items-center gap-1.5 cursor-pointer px-2 py-1.5 border rounded-lg text-xs mt-2 ${form.autoDebit ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-white'}`}>
+              <input
+                type="checkbox"
+                checked={form.autoDebit}
+                onChange={e => setForm((p: any) => ({ ...p, autoDebit: e.target.checked }))}
+                className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded"
+              />
+              <span className="text-gray-600 font-medium">Débiter {form.clientName} ({price} DH)</span>
+            </label>
           )}
-
-          {/* Compte client */}
-          {form.portType === 'port_en_compte' && (
-            <div className="mt-3 border border-purple-200 rounded-xl p-3 bg-purple-50">
-              <p className="text-xs font-semibold text-purple-700 mb-2">Compte client <span className="text-red-500">*</span></p>
-              {form.clientId ? (
-                <div className="flex items-center justify-between bg-white border border-purple-200 rounded-lg px-3 py-2.5">
-                  <div>
-                    <span className="text-sm font-semibold text-purple-800">👤 {form.clientName}</span>
-                    {(() => {
-                      const cl = clients.find((c: any) => c.id === form.clientId)
-                      return cl ? (
-                        <span className="ml-2 text-xs text-gray-500">
-                          Solde : <span className={cl.balance > 0 ? 'text-orange-600 font-medium' : 'text-gray-400'}>{(cl.balance || 0).toFixed(2)} DH</span>
-                        </span>
-                      ) : null
-                    })()}
-                  </div>
-                  <button type="button"
-                    onClick={() => { setForm((p: any) => ({ ...p, clientId: '', clientName: '' })); setInlineNewClient(null) }}
-                    className="text-purple-400 hover:text-purple-700 transition p-1">
-                    <X className="w-4 h-4" />
-                  </button>
-                </div>
-              ) : !inlineNewClient ? (
-                <>
-                  <div className="relative">
-                    <Search className="absolute left-3 top-2.5 w-3.5 h-3.5 text-gray-400" />
-                    <input
-                      type="text" value={clientSearch}
-                      onChange={e => setClientSearch(e.target.value)}
-                      placeholder="Rechercher un client…"
-                      className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm bg-white focus:border-purple-400 focus:outline-none"
-                    />
-                  </div>
-                  {(() => {
-                    const list = clientSearch.trim()
-                      ? (clients as any[]).filter((c: any) => {
-                          const s = clientSearch.toLowerCase()
-                          return c.name?.toLowerCase().includes(s) || c.tel?.includes(s)
-                        })
-                      : (clients as any[]).filter((c: any) => c.accountType === 'compte')
-                    return (
-                      <div className="mt-1 max-h-36 overflow-y-auto rounded-lg border border-gray-100 bg-white">
-                        {(list as any[]).slice(0, 6).map((c: any) => (
-                          <button type="button" key={c.id}
-                            onMouseDown={e => { e.preventDefault(); selectExistingClient(c) }}
-                            className="w-full flex items-center gap-2 px-3 py-2 hover:bg-purple-50 text-left border-b border-gray-50 last:border-0 transition">
-                            <div className="w-6 h-6 bg-purple-100 rounded-full flex items-center justify-center text-purple-700 font-bold text-xs shrink-0">
-                              {c.name?.charAt(0)?.toUpperCase()}
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <p className="text-sm font-medium text-gray-800 truncate">{c.name}</p>
-                              <p className="text-xs text-gray-400">{c.city}{c.tel && ` · ${c.tel}`}</p>
-                            </div>
-                            <span className={`text-xs font-medium shrink-0 ${(c.balance || 0) > 0 ? 'text-orange-500' : 'text-gray-400'}`}>{(c.balance || 0).toFixed(0)} DH</span>
-                          </button>
-                        ))}
-                        {list.length === 0 && (
-                          <p className="text-xs text-gray-400 text-center py-3">Aucun client trouvé</p>
-                        )}
-                      </div>
-                    )
-                  })()}
-                  <button type="button"
-                    onClick={() => setInlineNewClient({ name: '', tel: '', city: '', loading: false, error: '' })}
-                    className="mt-2 w-full flex items-center justify-center gap-1.5 text-xs text-purple-600 font-semibold hover:bg-purple-100 py-2 rounded-lg border border-dashed border-purple-300 transition">
-                    <Plus className="w-3.5 h-3.5" /> Nouveau client en compte
-                  </button>
-                </>
-              ) : (
-                <div className="bg-white border border-purple-200 rounded-lg p-3 space-y-2">
-                  <p className="text-xs font-semibold text-purple-700">Nouveau client en compte</p>
-                  {inlineNewClient.error && <p className="text-xs text-red-500">{inlineNewClient.error}</p>}
-                  <input
-                    type="text" placeholder="Nom complet *"
-                    value={inlineNewClient.name}
-                    onChange={e => setInlineNewClient((m: any) => ({ ...m, name: e.target.value }))}
-                    className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-purple-400 focus:outline-none"
-                  />
-                  <div className="grid grid-cols-2 gap-2">
-                    <input
-                      type="text" placeholder="Téléphone"
-                      value={inlineNewClient.tel}
-                      onChange={e => setInlineNewClient((m: any) => ({ ...m, tel: e.target.value }))}
-                      className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-purple-400 focus:outline-none"
-                    />
-                    <div className="relative">
-                      <select
-                        value={inlineNewClient.city}
-                        onChange={e => setInlineNewClient((m: any) => ({ ...m, city: e.target.value }))}
-                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:border-purple-400 focus:outline-none appearance-none bg-white">
-                        <option value="">Ville *</option>
-                        {CITIES.map(c => <option key={c}>{c}</option>)}
-                      </select>
-                      <ChevronDown className="absolute right-2.5 top-2.5 w-3.5 h-3.5 text-gray-400 pointer-events-none" />
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <button type="button"
-                      onClick={() => setInlineNewClient(null)}
-                      className="py-2 text-xs border border-gray-200 rounded-lg text-gray-500 font-semibold hover:bg-gray-50 transition">
-                      Annuler
-                    </button>
-                    <button type="button"
-                      onClick={handleCreateInlineClient}
-                      disabled={inlineNewClient.loading}
-                      className="py-2 text-xs bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white rounded-lg font-semibold transition flex items-center justify-center gap-1.5">
-                      {inlineNewClient.loading
-                        ? <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                        : <><Check className="w-3.5 h-3.5" /> Créer & sélectionner</>
-                      }
-                    </button>
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-        </section>
+        </div>
 
         <button type="submit" disabled={loading}
           onKeyDown={handleKeyNav}

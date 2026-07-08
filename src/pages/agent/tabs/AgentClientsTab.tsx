@@ -31,7 +31,7 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
     address: '',
     city: agencyCity,
     nic: '',
-    accountType: 'cash',
+    accountType: 'compte',
     remise: 0,
     isExpediteur: false,
     isDestinataire: false,
@@ -39,6 +39,12 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
     secteurName: '',
     livreurIds: [] as string[],
   })
+
+  // 📝 Helper pour afficher un message temporaire
+  const showTempMsg = (type: string, text: string, duration = 3000) => {
+    setMsg({ type, text })
+    setTimeout(() => setMsg(null), duration)
+  }
 
   useEffect(() => {
     const unsubClients = subscribeClients((data: any[]) => {
@@ -110,16 +116,16 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
       await updateClient(clientId, editForm)
       setEditingId(null)
       setShowEditModal(false)
-      setMsg({ type: 'success', text: '✅ Client mis à jour' })
+      showTempMsg('success', '✅ Client mis à jour')
     } catch (error: any) {
-      setMsg({ type: 'error', text: '❌ ' + error.message })
+      showTempMsg('error', '❌ ' + error.message, 5000)
     }
   }
 
   const handleDelete = async (clientId: string) => {
     if (deleteConfirm !== clientId) {
       setDeleteConfirm(clientId)
-      setMsg({ type: 'info', text: '⚠️ Cliquez encore une fois pour confirmer la suppression' })
+      showTempMsg('info', '⚠️ Cliquez encore une fois pour confirmer la suppression', 3000)
       setTimeout(() => setDeleteConfirm(null), 3000)
       return
     }
@@ -127,10 +133,10 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
       setMsg({ type: 'info', text: '🔄 Suppression en cours...' })
       await deleteClient(clientId)
       setDeleteConfirm(null)
-      setMsg({ type: 'success', text: '✅ Client supprimé avec succès' })
+      showTempMsg('success', '✅ Client supprimé avec succès')
     } catch (error: any) {
       console.error('Erreur suppression client:', error)
-      setMsg({ type: 'error', text: '❌ Erreur: ' + (error.message || 'Impossible de supprimer') })
+      showTempMsg('error', '❌ Erreur: ' + (error.message || 'Impossible de supprimer'), 5000)
       setDeleteConfirm(null)
     }
   }
@@ -151,16 +157,17 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
         address: '',
         city: agencyCity,
         nic: '',
-        accountType: 'cash',
+        accountType: 'compte',
         remise: 0,
         isExpediteur: false,
         isDestinataire: false,
-        secteur: '',
+        secteurId: '',
+        secteurName: '',
         livreurIds: [],
       })
-      setMsg({ type: 'success', text: '✅ Client créé' })
+      showTempMsg('success', '✅ Client créé')
     } catch (error: any) {
-      setMsg({ type: 'error', text: '❌ ' + error.message })
+      showTempMsg('error', '❌ ' + error.message, 5000)
     }
   }
 
@@ -188,19 +195,16 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
     )
 
     if (realLivreurs.length === validLivreurs.length) {
-      setMsg({ type: 'info', text: 'ℹ️ Aucun ID invalide à nettoyer' })
+      showTempMsg('info', 'ℹ️ Aucun ID invalide à nettoyer', 3000)
       return
     }
 
     try {
       await updateClient(selectedClient.id, { livreurIds: realLivreurs })
       setSelectedClient({ ...selectedClient, livreurIds: realLivreurs })
-      setMsg({
-        type: 'success',
-        text: `✅ ${validLivreurs.length - realLivreurs.length} ID(s) invalide(s) supprimé(s)`
-      })
+      showTempMsg('success', `✅ ${validLivreurs.length - realLivreurs.length} ID(s) invalide(s) supprimé(s)`)
     } catch (error: any) {
-      setMsg({ type: 'error', text: '❌ Erreur: ' + error.message })
+      showTempMsg('error', '❌ Erreur: ' + error.message, 5000)
     }
   }
 
@@ -215,11 +219,11 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
 
     try {
       await updateClient(selectedClient.id, { livreurIds: newLivreurIds })
-      setMsg({ type: 'success', text: '✅ Livreur principal mis à jour' })
+      showTempMsg('success', '✅ Livreur principal mis à jour')
       // Mettre à jour le client sélectionné
       setSelectedClient({ ...selectedClient, livreurIds: newLivreurIds })
     } catch (error: any) {
-      setMsg({ type: 'error', text: '❌ Erreur: ' + error.message })
+      showTempMsg('error', '❌ Erreur: ' + error.message, 5000)
     }
   }
 
@@ -235,7 +239,7 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
       await updateClient(selectedClient.id, { livreurIds: newLivreurIds })
       setSelectedClient({ ...selectedClient, livreurIds: newLivreurIds })
     } catch (error: any) {
-      setMsg({ type: 'error', text: '❌ Erreur: ' + error.message })
+      showTempMsg('error', '❌ Erreur: ' + error.message, 5000)
     }
   }
 
@@ -253,7 +257,7 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
       await updateClient(selectedClient.id, { livreurIds: newLivreurIds })
       setSelectedClient({ ...selectedClient, livreurIds: newLivreurIds })
     } catch (error: any) {
-      setMsg({ type: 'error', text: '❌ Erreur: ' + error.message })
+      showTempMsg('error', '❌ Erreur: ' + error.message, 5000)
     }
   }
 
@@ -383,20 +387,11 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold mb-2">Téléphone *</label>
+                  <label className="block text-sm font-semibold mb-2">Téléphone</label>
                   <input
                     value={newForm.tel}
                     onChange={(e) => setNewForm({ ...newForm, tel: e.target.value })}
                     placeholder="0612345678"
-                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold mb-2">Email</label>
-                  <input
-                    value={newForm.email}
-                    onChange={(e) => setNewForm({ ...newForm, email: e.target.value })}
-                    placeholder="email@exemple.com"
                     className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
                   />
                 </div>
@@ -492,7 +487,7 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
 
               <button
                 onClick={handleCreate}
-                disabled={!newForm.name || !newForm.tel}
+                disabled={!newForm.name}
                 className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Créer le client
@@ -524,21 +519,11 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
                   />
                 </div>
                 <div>
-                  <label className="block text-sm font-semibold mb-2">Téléphone *</label>
+                  <label className="block text-sm font-semibold mb-2">Téléphone</label>
                   <input
                     value={editForm.tel}
                     onChange={(e) => setEditForm({ ...editForm, tel: e.target.value })}
                     placeholder="06xxxxxxxx"
-                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold mb-2">Email</label>
-                  <input
-                    type="email"
-                    value={editForm.email}
-                    onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
-                    placeholder="email@exemple.com"
                     className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
                   />
                 </div>
@@ -662,7 +647,7 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
 
               <button
                 onClick={() => handleSave(editingId)}
-                disabled={!editForm.name || !editForm.tel}
+                disabled={!editForm.name}
                 className="w-full px-4 py-3 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 Enregistrer les modifications

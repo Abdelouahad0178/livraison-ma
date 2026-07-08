@@ -14,6 +14,28 @@ export default function AdminEditParcelModal({
 }: AdminEditParcelModalProps) {
   if (!adminEditModal) return null
 
+  // Navigation avec Entrée entre les inputs
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      const target = e.target as HTMLElement
+      const form = target.closest('form')
+      if (!form) return
+
+      const focusables = Array.from(
+        form.querySelectorAll('input:not([type="hidden"]), select, textarea, button[type="submit"]')
+      ).filter((el: any) => !el.disabled && el.offsetParent !== null) as HTMLElement[]
+
+      const currentIndex = focusables.indexOf(target)
+      if (currentIndex >= 0 && currentIndex < focusables.length - 1) {
+        focusables[currentIndex + 1].focus()
+      } else if (currentIndex === focusables.length - 1) {
+        // Dernier champ : soumettre le formulaire
+        handleAdminEditSave()
+      }
+    }
+  }
+
   return (
     <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50 p-4">
       <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-2xl shadow-2xl max-h-[92vh] flex flex-col">
@@ -33,7 +55,7 @@ export default function AdminEditParcelModal({
         </div>
 
         {/* Body */}
-        <div className="overflow-y-auto flex-1 p-5 space-y-5">
+        <form autoComplete="off" onKeyDown={handleKeyDown} className="overflow-y-auto flex-1 p-5 space-y-5">
           {adminEditModal.error && (
             <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {adminEditModal.error}</div>
           )}
@@ -165,6 +187,21 @@ export default function AdminEditParcelModal({
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400" />
               </div>
               <div>
+                <label className="block text-xs text-gray-500 mb-1">Type de port</label>
+                <div className="relative">
+                  <select
+                    value={adminEditModal.form.portType || 'port_paye'}
+                    onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, portType: e.target.value } }))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400 bg-white appearance-none pr-8"
+                  >
+                    <option value="port_paye">✅ Port payé</option>
+                    <option value="port_du">📮 Port dû</option>
+                    <option value="port_en_compte">💼 En compte</option>
+                  </select>
+                  <ChevronDown className="w-4 h-4 text-gray-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+                </div>
+              </div>
+              <div>
                 <label className="block text-xs text-gray-500 mb-1">RETOUR FOND (DH)</label>
                 <input type="number" min="0" step="0.01" value={adminEditModal.form.codAmount}
                   onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, codAmount: e.target.value } }))}
@@ -243,14 +280,14 @@ export default function AdminEditParcelModal({
               </div>
             </div>
           )}
-        </div>
+        </form>
 
         {/* Footer */}
         <div className="p-5 border-t shrink-0 grid grid-cols-2 gap-3">
-          <button onClick={() => setAdminEditModal(null)}
+          <button type="button" onClick={() => setAdminEditModal(null)}
             className="py-2.5 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition text-sm"
           >Annuler</button>
-          <button onClick={handleAdminEditSave} disabled={adminEditModal.loading}
+          <button type="button" onClick={handleAdminEditSave} disabled={adminEditModal.loading}
             className="py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white font-semibold transition text-sm disabled:opacity-50 flex items-center justify-center gap-2"
           >
             {adminEditModal.loading

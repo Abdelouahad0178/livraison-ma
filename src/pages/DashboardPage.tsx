@@ -207,10 +207,14 @@ export default function DashboardPage() {
     const curr = timeSeries[n - 1]
     const prev = timeSeries[n - 2]
     const delta = (a: any, b: any) => b === 0 ? null : Math.round(((a - b) / b) * 100)
+
+    // S'assurer que les valeurs sont valides (pas undefined, null ou négatives)
+    const safe = (val: any) => Math.max(0, val || 0)
+
     return {
-      crees:   { curr: curr.crees,   prev: prev.crees,   pct: delta(curr.crees,   prev.crees)   },
-      livres:  { curr: curr.livres,  prev: prev.livres,  pct: delta(curr.livres,  prev.livres)  },
-      revenue: { curr: curr.revenue, prev: prev.revenue, pct: delta(curr.revenue, prev.revenue) },
+      crees:   { curr: safe(curr?.crees),   prev: safe(prev?.crees),   pct: delta(safe(curr?.crees),   safe(prev?.crees))   },
+      livres:  { curr: safe(curr?.livres),  prev: safe(prev?.livres),  pct: delta(safe(curr?.livres),  safe(prev?.livres))  },
+      revenue: { curr: safe(curr?.revenue), prev: safe(prev?.revenue), pct: delta(safe(curr?.revenue), safe(prev?.revenue)) },
     }
   }, [timeSeries])
 
@@ -242,17 +246,25 @@ export default function DashboardPage() {
 
   // ── Top agents & drivers from stats ───────────────────────────────────────
   const topAgents = useMemo(() =>
-    agentStats.slice(0, 5).map(a => {
-      const user = users.find(u => u.id === a.id)
-      return { name: user?.name || a.id, city: user?.city || '—', created: a.created || 0, livres: a.livres || 0 }
-    })
+    agentStats
+      .map(a => {
+        const user = users.find(u => u.uid === a.id || u.id === a.id)
+        if (!user) return null // Exclure les agents supprimés
+        return { name: user.name || user.email || '—', city: user.city || '—', created: a.created || 0, livres: a.livres || 0 }
+      })
+      .filter(Boolean)
+      .slice(0, 5)
   , [agentStats, users])
 
   const topDrivers = useMemo(() =>
-    driverStats.slice(0, 5).map(d => {
-      const user = users.find(u => u.id === d.id)
-      return { name: user?.name || d.id, city: user?.city || '—', deliveries: d.deliveries || 0, livres: d.livres || 0 }
-    })
+    driverStats
+      .map(d => {
+        const user = users.find(u => u.uid === d.id || u.id === d.id)
+        if (!user) return null // Exclure les chauffeurs supprimés
+        return { name: user.name || user.email || '—', city: user.city || '—', deliveries: d.deliveries || 0, livres: d.livres || 0 }
+      })
+      .filter(Boolean)
+      .slice(0, 5)
   , [driverStats, users])
 
   const VIEW_OPTS = [

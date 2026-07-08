@@ -492,14 +492,19 @@ export async function ensurePortalClient({ uid, email, name, tel, city, address,
 
 // Recherche clients expéditeurs avec autocomplétion
 // Pour l'instant, tous les clients peuvent être expéditeurs
-export async function searchExpediteurs(searchTerm: string, filterCity?: string): Promise<Client[]> {
+export async function searchExpediteurs(searchTerm: string, filterCity?: string, onlyEnCompte?: boolean): Promise<Client[]> {
   const normalizedSearch = searchTerm.toLowerCase().trim()
   if (!normalizedSearch) return []
 
   // Rechercher dans Firestore (clients réguliers enregistrés par chef d'agence)
   const q = query(collection(db, 'clients'), limit(200))
   const snap = await getDocs(q)
-  const firestoreClients = snap.docs.map(d => ({ id: d.id, ...d.data() } as Client))
+  let firestoreClients = snap.docs.map(d => ({ id: d.id, ...d.data() } as Client))
+
+  // 💼 Filtrer seulement les clients "en compte" si demandé
+  if (onlyEnCompte) {
+    firestoreClients = firestoreClients.filter(c => c.accountType === 'compte')
+  }
 
   // Rechercher dans les clients locaux (clients de passage)
   const { searchLocalClients } = await import('../utils/localClients')

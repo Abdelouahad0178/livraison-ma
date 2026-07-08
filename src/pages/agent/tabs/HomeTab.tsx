@@ -1,21 +1,24 @@
-import { useMemo } from 'react'
-import { Plus, Package, MapPin, Wallet, MessageCircle, Printer, LayoutGrid, Truck, ArrowRight, TrendingUp, Clock, CheckCircle } from 'lucide-react'
+import { useMemo, useState, useEffect } from 'react'
+import { Plus, Package, MapPin, Wallet, MessageCircle, Printer, LayoutGrid, Truck, ArrowRight, TrendingUp, Clock, CheckCircle, Banknote, X, Building2 } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import { STATUSES, STATUS_COLORS } from '../../../firebase/constants'
-import { todayStr, parcelDate, entryDate, filterByDate } from '../../../utils/dateFilter'
+import { parcelDate, entryDate, filterByDate } from '../../../utils/dateFilter'
+import { getWorkingDateStr } from '../../../utils/workingDate'
 import { HERO_STAT_CARD, HERO_CARD, HERO_BUTTON } from '../../../styles/heroTheme'
+import { subscribeClients } from '../../../firebase/clients'
 
-const EMPTY_FORM = {
+// Fonction pour obtenir un formulaire vide avec la date de travail ACTUELLE
+const getEmptyForm = () => ({
   senderName: '', senderNic: '', senderAddress: '', senderTel: '', senderCity: '',
   receiverName: '', receiverAddress: '', receiverTel: '', receiverCity: '',
-  weight: '', nbColis: '1', natureOfGoods: '', natureOfGoodsCustomPrice: '', codAmount: '',
+  weight: '', nbColis: '', natureOfGoods: '', natureOfGoodsCustomPrice: '', codAmount: '',
   serviceType: 'simple', shipmentMode: 'personal',
   portType: 'port_paye', portPayeMethod: '', portPayeMontant: '',
   portPrice: '',
   clientId: '', clientName: '', autoDebit: false,
   deliverySectorId: '', deliveryDriverId: '',
-  operationDate: todayStr(),
-}
+  operationDate: getWorkingDateStr(), // Date de travail ACTUELLE à chaque appel
+})
 
 const dateFilterLabel = (preset: string) => ({
   all: 'Tout', today: "Aujourd'hui", week: '7 derniers jours', month: 'Ce mois',
@@ -29,6 +32,27 @@ export default function HomeTab() {
     datePreset, dateFrom, dateTo,
     accurateStats, uid,
   } = useAgentCtx()
+
+  // État pour modal détails ports payés
+  const [portPayeModal, setPortPayeModal] = useState<{ open: boolean; parcels: any[] }>({
+    open: false,
+    parcels: []
+  })
+
+  // État pour modal clients en compte
+  const [enCompteModal, setEnCompteModal] = useState<{ open: boolean; clients: any[] }>({
+    open: false,
+    clients: []
+  })
+
+  // État pour charger les clients
+  const [clients, setClients] = useState<any[]>([])
+
+  // Charger les clients
+  useEffect(() => {
+    const unsub = subscribeClients(setClients)
+    return () => unsub()
+  }, [])
 
   const homeChefStats = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0)
@@ -130,7 +154,7 @@ export default function HomeTab() {
 
         {/* Actions rapides - HERO AI STYLE */}
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
-          <button onClick={() => { setCreatedParcel(null); setForm({...EMPTY_FORM, senderCity: profile?.city||'', operationDate: todayStr()}); setTab('new') }}
+          <button onClick={() => { setCreatedParcel(null); setForm({...getEmptyForm(), senderCity: profile?.city||''}); setTab('new') }}
             className="group bg-white rounded-2xl shadow-md hover:shadow-xl transition-all duration-300 border border-gray-100 overflow-hidden"
             style={{ minHeight: 160 }}>
             <div className="p-6 flex flex-col items-start h-full justify-between">
@@ -192,11 +216,51 @@ export default function HomeTab() {
           {[
             { label: 'Feuille de charge', sub: 'Planning chauffeurs', icon: Printer, iconBg: 'bg-blue-100', iconColor: 'text-blue-600', tab: 'charge' },
             { label: 'Secteurs & Bons',   sub: 'Équipes · Ramassage',  icon: LayoutGrid, iconBg: 'bg-indigo-100', iconColor: 'text-indigo-600', tab: 'secteurs' },
+            {
+              label: 'Ports Payés',
+              sub: (() => {
+                const agencyCity = profile?.city
+                const total = parcels.reduce((sum: number, p: any) => {
+                  const isOrigin = p.originCity === agencyCity || p.sender?.city === agencyCity
+                  return sum + (p.portType === 'port_paye' && isOrigin ? (p.price || 0) : 0)
+                }, 0)
+                return `${total.toLocaleString('fr-MA')} DH`
+              })(),
+              icon: Banknote,
+              iconBg: 'bg-blue-100',
+              iconColor: 'text-blue-600',
+              action: 'portPaye'
+            },
+            {
+              label: 'En Compte',
+              sub: (() => {
+                const enCompteClients = clients.filter((c: any) => c.accountType === 'compte' && c.city === profile?.city)
+                return `${enCompteClients.length} société${enCompteClients.length > 1 ? 's' : ''}`
+              })(),
+              icon: Building2,
+              iconBg: 'bg-purple-100',
+              iconColor: 'text-purple-600',
+              action: 'enCompte'
+            },
             { label: 'Port dû',           sub: 'Versements livreurs', icon: Truck, iconBg: 'bg-orange-100', iconColor: 'text-orange-600', tab: 'drivers' },
             { label: 'Ma Caisse',         sub: 'Mouvements financiers', icon: Wallet, iconBg: 'bg-green-100', iconColor: 'text-green-600', tab: 'caisse' },
             { label: 'Modif. clients',     sub: `${modRequests.filter((m: any) => m.status === 'pending').length} demande(s) en attente`, icon: MessageCircle, iconBg: 'bg-amber-100', iconColor: 'text-amber-600', tab: 'modifications' },
-          ].map(l => (
-            <button key={l.tab} onClick={() => setTab(l.tab)}
+          ].map((l, idx) => (
+            <button key={l.tab || l.action || idx} onClick={() => {
+              if (l.action === 'portPaye') {
+                const agencyCity = profile?.city
+                const portPayeParcels = parcels.filter((p: any) => {
+                  const isOrigin = p.originCity === agencyCity || p.sender?.city === agencyCity
+                  return p.portType === 'port_paye' && isOrigin
+                })
+                setPortPayeModal({ open: true, parcels: portPayeParcels })
+              } else if (l.action === 'enCompte') {
+                const enCompteClients = clients.filter((c: any) => c.accountType === 'compte' && c.city === profile?.city)
+                setEnCompteModal({ open: true, clients: enCompteClients })
+              } else if (l.tab) {
+                setTab(l.tab)
+              }
+            }}
               className="group flex items-center gap-4 bg-white border border-gray-100 shadow-md hover:shadow-lg rounded-2xl px-5 py-4 transition-all duration-200 hover:border-gray-200">
               <div className={`w-12 h-12 ${l.iconBg} rounded-xl flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform`}>
                 <l.icon className={`w-5 h-5 ${l.iconColor}`} />
@@ -248,6 +312,203 @@ export default function HomeTab() {
             </div>
           </div>
         )}
+
+        {/* ── MODAL PORTS PAYÉS ── */}
+        {portPayeModal.open && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setPortPayeModal({ open: false, parcels: [] })}>
+            <div className="bg-white rounded-2xl w-full max-w-6xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+              {/* Header */}
+              <div className="flex items-center justify-between p-6 border-b border-gray-200">
+                <div>
+                  <h3 className="font-bold text-xl text-gray-800">Ports Payés</h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {portPayeModal.parcels.length} expédition{portPayeModal.parcels.length > 1 ? 's' : ''} • Total: {' '}
+                    <span className="font-black text-blue-700">
+                      {portPayeModal.parcels.reduce((sum: number, p: any) => sum + (p.price || 0), 0).toLocaleString('fr-MA')} DH
+                    </span>
+                  </p>
+                </div>
+                <button
+                  onClick={() => setPortPayeModal({ open: false, parcels: [] })}
+                  className="p-2 hover:bg-gray-100 rounded-xl transition"
+                >
+                  <X className="w-6 h-6 text-gray-500" />
+                </button>
+              </div>
+
+              {/* Table */}
+              <div className="flex-1 overflow-auto p-6">
+                {portPayeModal.parcels.length === 0 ? (
+                  <div className="text-center py-12 text-gray-400">
+                    <Package className="w-16 h-16 mx-auto mb-3 opacity-30" />
+                    <p className="text-sm">Aucune expédition trouvée</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-100 sticky top-0">
+                        <tr>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-700">N° EXP</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-700">Tracking ID</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-700">Date</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-700">Expéditeur</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-700">Ville Origine</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-700">Destinataire</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-700">Ville Destination</th>
+                          <th className="px-4 py-3 text-right font-semibold text-gray-700">Port</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {portPayeModal.parcels.map((p: any, idx: number) => (
+                          <tr key={p.id || idx} className="border-b border-gray-100 hover:bg-gray-50 transition">
+                            <td className="px-4 py-3 font-mono text-xs">{p.senderNic || p.sender?.nic || '-'}</td>
+                            <td className="px-4 py-3 font-mono text-xs text-blue-600">{p.trackingId || '-'}</td>
+                            <td className="px-4 py-3 text-xs text-gray-600">
+                              {p.workDate || (p.createdAt?.toDate ? p.createdAt.toDate().toLocaleDateString('fr-FR') : '-')}
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="text-xs font-medium text-gray-800">{p.senderName || p.sender?.name || '-'}</div>
+                              <div className="text-xs text-gray-500">{p.senderTel || p.sender?.tel || ''}</div>
+                            </td>
+                            <td className="px-4 py-3 text-xs text-gray-600">{p.originCity || p.sender?.city || '-'}</td>
+                            <td className="px-4 py-3">
+                              <div className="text-xs font-medium text-gray-800">{p.receiverName || p.receiver?.name || '-'}</div>
+                              <div className="text-xs text-gray-500">{p.receiverTel || p.receiver?.tel || ''}</div>
+                            </td>
+                            <td className="px-4 py-3 text-xs text-gray-600">{p.destinationCity || p.receiver?.city || '-'}</td>
+                            <td className="px-4 py-3 text-right">
+                              <span className="font-bold text-blue-700">
+                                {(p.price || 0).toLocaleString('fr-MA')} DH
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot className="bg-gray-50 sticky bottom-0">
+                        <tr>
+                          <td colSpan={7} className="px-4 py-3 text-right font-bold text-gray-700">TOTAL:</td>
+                          <td className="px-4 py-3 text-right">
+                            <span className="text-lg font-black text-blue-700">
+                              {portPayeModal.parcels.reduce((sum: number, p: any) => sum + (p.price || 0), 0).toLocaleString('fr-MA')} DH
+                            </span>
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="p-6 border-t border-gray-200">
+                <button
+                  onClick={() => setPortPayeModal({ open: false, parcels: [] })}
+                  className="w-full py-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold transition"
+                >
+                  Fermer
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── MODAL CLIENTS EN COMPTE ── */}
+        {enCompteModal.open && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setEnCompteModal({ open: false, clients: [] })}>
+            <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
+              {/* Header */}
+              <div className="flex items-center justify-between p-6 border-b border-gray-200">
+                <div>
+                  <h3 className="font-bold text-xl text-gray-800">Clients En Compte</h3>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {enCompteModal.clients.length} société{enCompteModal.clients.length > 1 ? 's' : ''} • Solde total: {' '}
+                    <span className="font-black text-purple-700">
+                      {enCompteModal.clients.reduce((sum: number, c: any) => sum + (c.balance || 0), 0).toLocaleString('fr-MA')} DH
+                    </span>
+                  </p>
+                </div>
+                <button
+                  onClick={() => setEnCompteModal({ open: false, clients: [] })}
+                  className="p-2 hover:bg-gray-100 rounded-xl transition"
+                >
+                  <X className="w-6 h-6 text-gray-500" />
+                </button>
+              </div>
+
+              {/* Table */}
+              <div className="flex-1 overflow-auto p-6">
+                {enCompteModal.clients.length === 0 ? (
+                  <div className="text-center py-12 text-gray-400">
+                    <Building2 className="w-16 h-16 mx-auto mb-3 opacity-30" />
+                    <p className="text-sm">Aucun client en compte trouvé</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-100 sticky top-0">
+                        <tr>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-700">Société</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-700">Contact</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-700">Ville</th>
+                          <th className="px-4 py-3 text-left font-semibold text-gray-700">Adresse</th>
+                          <th className="px-4 py-3 text-right font-semibold text-gray-700">Solde</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {enCompteModal.clients.map((c: any, idx: number) => (
+                          <tr key={c.id || idx} className="border-b border-gray-100 hover:bg-purple-50 transition">
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-2">
+                                <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center shrink-0">
+                                  <span className="text-purple-700 font-bold text-sm">{c.name?.charAt(0)?.toUpperCase()}</span>
+                                </div>
+                                <div>
+                                  <div className="font-medium text-gray-800">{c.name || '-'}</div>
+                                  {c.nic && <div className="text-xs text-gray-500">N° EXP: {c.nic}</div>}
+                                </div>
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="text-xs text-gray-800">{c.tel || '-'}</div>
+                              {c.email && <div className="text-xs text-gray-500">{c.email}</div>}
+                            </td>
+                            <td className="px-4 py-3 text-xs text-gray-600">{c.city || '-'}</td>
+                            <td className="px-4 py-3 text-xs text-gray-600">{c.address || '-'}</td>
+                            <td className="px-4 py-3 text-right">
+                              <span className={`font-bold ${(c.balance || 0) > 0 ? 'text-orange-600' : 'text-gray-400'}`}>
+                                {(c.balance || 0).toLocaleString('fr-MA')} DH
+                              </span>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                      <tfoot className="bg-gray-50 sticky bottom-0">
+                        <tr>
+                          <td colSpan={4} className="px-4 py-3 text-right font-bold text-gray-700">SOLDE TOTAL:</td>
+                          <td className="px-4 py-3 text-right">
+                            <span className="text-lg font-black text-purple-700">
+                              {enCompteModal.clients.reduce((sum: number, c: any) => sum + (c.balance || 0), 0).toLocaleString('fr-MA')} DH
+                            </span>
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="p-6 border-t border-gray-200">
+                <button
+                  onClick={() => setEnCompteModal({ open: false, clients: [] })}
+                  className="w-full py-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold transition"
+                >
+                  Fermer
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     )
   }
@@ -296,7 +557,12 @@ export default function HomeTab() {
       {/* Deux grands boutons */}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mt-2">
         <button
-          onClick={() => { setCreatedParcel(null); setForm({ ...EMPTY_FORM, senderCity: profile?.city || '', operationDate: todayStr() }); setTab('new') }}
+          onClick={() => {
+            console.log('🆕 Bouton Nouveau colis cliqué');
+            setCreatedParcel(null);
+            setForm({ ...getEmptyForm(), senderCity: profile?.city || '' });
+            setTab('new');
+          }}
           className="group relative overflow-hidden rounded-3xl shadow-xl transition-all duration-300 hover:scale-[1.02] hover:shadow-2xl active:scale-[0.98]"
           style={{ minHeight: 200 }}
         >
@@ -340,6 +606,9 @@ export default function HomeTab() {
         </button>
       </div>
 
+      {/* Sections réservées au chef d'agence et agent (pas aide_agent) */}
+      {profile?.role !== 'aide_agent' && (
+        <>
       {/* Raccourci Ma Caisse */}
       <button onClick={() => setTab('caisse')}
         className="w-full flex items-center justify-between bg-white border border-gray-100 shadow-sm hover:shadow-md rounded-2xl px-4 py-3.5 transition">
@@ -426,6 +695,8 @@ export default function HomeTab() {
             </table>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   )

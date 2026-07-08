@@ -64,7 +64,6 @@ export default function VoiceInputAI({ onResult, onBulkFill, onClientFound }: Vo
       setInterimTranscript(interim)
 
       if (final) {
-        console.log('🎤 Texte final:', final)
         accumulatedTextRef.current += ' ' + final
         setTranscript(accumulatedTextRef.current.trim())
       }
@@ -84,13 +83,11 @@ export default function VoiceInputAI({ onResult, onBulkFill, onClientFound }: Vo
         // Le micro redémarrera automatiquement via onend
       } else if (event.error === 'no-speech') {
         // Aucun son détecté - afficher un message d'aide
-        console.log('ℹ️ Aucun son détecté - vérifier le microphone')
         setError('🎤 Aucune parole détectée. Parlez PLUS FORT et vérifiez votre micro.')
         setTimeout(() => setError(''), 4000)
         // Le micro redémarrera automatiquement
       } else if (event.error === 'aborted') {
         // Arrêt normal - ne rien faire
-        console.log('ℹ️ Reconnaissance arrêtée')
       } else {
         // Autres erreurs
         console.warn('⚠️ Erreur reconnaissance vocale:', event.error)
@@ -102,7 +99,6 @@ export default function VoiceInputAI({ onResult, onBulkFill, onClientFound }: Vo
     recognition.onend = () => {
       // Redémarrage automatique si le micro est censé être actif
       if (isListeningRef.current) {
-        console.log('🔄 Redémarrage automatique du micro...')
         setTimeout(() => {
           try {
             if (recognitionRef.current && isListeningRef.current) {
@@ -165,7 +161,6 @@ export default function VoiceInputAI({ onResult, onBulkFill, onClientFound }: Vo
 
     try {
       const result = await extractParcelDataFromSpeech(transcript, apiKey)
-      console.log('✅ Extraction réussie:', result)
       setExtracted(result)
 
       // Initialiser les données éditables avec les données extraites

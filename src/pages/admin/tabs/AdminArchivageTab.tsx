@@ -79,7 +79,7 @@ export default function AdminArchivageTab() {
         city: selectedCity === 'Toutes' ? null : selectedCity
       })
 
-      setArchiveResult({ success: true, ...result.data })
+      setArchiveResult({ success: true, ...(result.data as Record<string, any>) })
       await loadStats()
     } catch (error: any) {
       setArchiveResult({ success: false, error: error.message })
@@ -168,7 +168,7 @@ export default function AdminArchivageTab() {
         olderThanDays: deleteAll ? null : parseInt(daysInput)
       })
 
-      setDeleteResult({ success: true, ...result.data })
+      setDeleteResult({ success: true, ...(result.data as Record<string, any>) })
       await loadStats()
       setArchivedParcels([])
     } catch (error: any) {

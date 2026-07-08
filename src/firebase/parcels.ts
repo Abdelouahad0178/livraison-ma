@@ -1,4 +1,4 @@
-
+﻿
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, getDoc,
   query, where, orderBy, getDocs, onSnapshot, limit, startAfter, getCountFromServer,
@@ -11,8 +11,8 @@ import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
 import { addPayment } from './clients'
 
 export const FIRESTORE_PAGE_LIMITS = {
-  adminLiveParcels: 300,
-  adminNextParcels: 100,
+  adminLiveParcels: 50000,  // Charge initiale très élevée pour Admin
+  adminNextParcels: 10000,  // Pages suivantes si besoin
   users: 500,
   clients: 500,
 }
@@ -48,6 +48,32 @@ export const isInReturnCircuit = (parcel: any) => {
          parcel.status === 'Retour finalisé'
 }
 const DESTINATION_VISIBLE_STATUSES = ['En transit', 'Arrivé en agence', 'En cours de livraison', 'Livré', 'Retourné']
+
+/**
+ * 📅 Calcule la date de travail (workDate) basée sur l'heure de création
+ * Session de travail: 8h00 → 6h00 du lendemain
+ * Exemple: 01/07 8h→minuit + 02/07 minuit→6h = workDate 02/07
+ */
+function calculateWorkDate(timestamp?: Date | string): string {
+  const date = timestamp ? new Date(timestamp) : new Date()
+  const hours = date.getHours()
+
+  // Entre 8h00 et minuit → workDate = DEMAIN (fin de session)
+  if (hours >= 8) {
+    const workDate = new Date(date)
+    workDate.setDate(workDate.getDate() + 1)
+    return workDate.toISOString().split('T')[0]
+  }
+
+  // Entre minuit et 6h00 → workDate = AUJOURD'HUI (déjà dans le lendemain)
+  if (hours < 6) {
+    return date.toISOString().split('T')[0]
+  }
+
+  // Entre 6h00 et 8h00 → période de transition, utiliser aujourd'hui
+  return date.toISOString().split('T')[0]
+}
+
 export function isParcelVisibleInDestinationAgency(parcel: Partial<Parcel> = {}) {
   // Les retours ne vont PAS dans Arrivages, ils vont dans Retours
   // On utilise wasReturned pour identifier les retours
@@ -184,6 +210,7 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     }],
     photoUrl:             '',
     createdAt:            opDate,
+    workDate:             calculateWorkDate(data.operationDate || historyTs), // 📅 Date de travail (gère sessions de nuit)
     agentId:              data.agentId            || null,
     agentName:            data.agentName          || null,
     chauffeurId:          data.chauffeurId        || null,
@@ -205,8 +232,9 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     destinationAgentName: hasLocalDeliveryDriver ? (data.agentName || null) : null,
     deliveryAssignedAt:   hasLocalDeliveryDriver ? historyTs : null,
     deliveryAssignedBy:   hasLocalDeliveryDriver ? (data.agentName || '') : '',
+    deliveryMethod:       data.deliveryMethod || 'domicile',  // 🚉 Mode de livraison (gare ou domicile)
     codStatus:            hasCod ? 'pending' : null,
-    codPaymentType:       null,
+    codPaymentType:       hasCod ? 'especes' : null,  // Mode de paiement par défaut pour COD
     codCollectedAt:       null,
     codCollectedBy:       null,
     codRemisAt:           null,
@@ -232,6 +260,24 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     hasRetourBL:          data.hasRetourBL === true,  // ⭐ Retour BL obligatoire
   }
   const ref = await addDoc(collection(db, 'parcels'), parcel)
+
+  // 💼 Si client "en compte" (société), ajouter le montant au solde
+  if (data.clientId) {
+    try {
+      const clientRef = doc(db, 'clients', data.clientId as string)
+      const clientSnap = await getDoc(clientRef)
+
+      // Vérifier que le client a accountType === 'compte'
+      if (clientSnap.exists() && clientSnap.data().accountType === 'compte') {
+        await updateDoc(clientRef, {
+          balance: increment(parcel.price)
+        })
+      }
+    } catch (err) {
+      console.error('Erreur mise à jour solde client:', err)
+    }
+  }
+
   // NOUVELLE POLITIQUE : Toujours créer le client destinataire (pas d'attente de validation)
   let receiverClientId = null
   try {
@@ -509,8 +555,6 @@ export async function validateParcelEntry(parcelId: any, chefId: any, chefName: 
 
 // Validation de l'arrivée d'un colis en transit retour ? Arrivé en agence
 export async function validateReturnArrival(parcel: any) {
-  console.log('🔍 validateReturnArrival - Colis:', parcel.id)
-  console.log('📊 Statut actuel:', parcel.status)
 
   const now = new Date().toISOString()
   const updateData: any = {
@@ -528,11 +572,9 @@ export async function validateReturnArrival(parcel: any) {
     updateData.arrivedNbColis = deleteField()
   }
 
-  console.log('📝 Données de mise à jour:', updateData)
 
   try {
     await updateDoc(doc(db, 'parcels', parcel.id), updateData)
-    console.log('✅ Mise à jour réussie')
   } catch (error: any) {
     console.error('❌ Erreur Firestore:', error)
     console.error('Code:', error.code)
@@ -673,19 +715,12 @@ export async function archiveAllParcels(olderThanDays = 90) {
   return { archived: docs.length }
 }
 export function subscribeAllParcels(callback: any, onError: (err?: any) => void = () => {}, days = 0, pageSize = FIRESTORE_PAGE_LIMITS.adminLiveParcels) {
-  // Si days > 0, filtrer par date, sinon récupérer tous les colis
-  const q = days > 0
-    ? query(
-        collection(db, 'parcels'),
-        where('createdAt', '>=', daysAgoTimestamp(days)),
-        orderBy('createdAt', 'desc'),
-        limit(pageSize)
-      )
-    : query(
-        collection(db, 'parcels'),
-        orderBy('createdAt', 'desc'),
-        limit(pageSize)
-      )
+  // Version ORIGINALE simplifiée - celle qui marchait avant
+  const q = query(
+    collection(db, 'parcels'),
+    orderBy('createdAt', 'desc'),
+    limit(pageSize)
+  )
 
   return onSnapshot(q, snap => {
     const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
@@ -732,8 +767,8 @@ export function subscribeAgentParcels(agentId: any, callback: any, onError: (err
   }
 
   const since = daysAgoTimestamp(60)
-  const q1 = query(collection(db, 'parcels'), where('agentId', '==', agentId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(50))
-  const q2 = query(collection(db, 'parcels'), where('destinationAgentId', '==', agentId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(50))
+  const q1 = query(collection(db, 'parcels'), where('agentId', '==', agentId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(2000))
+  const q2 = query(collection(db, 'parcels'), where('destinationAgentId', '==', agentId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(2000))
 
   const unsub1 = onSnapshot(q1, snap => { created = snap.docs.map(d => ({ id: d.id, ...d.data() })); merge() }, onError)
   const unsub2 = onSnapshot(q2, snap => { claimed  = snap.docs.map(d => ({ id: d.id, ...d.data() })); merge() }, onError)
@@ -798,8 +833,8 @@ export function subscribeAgencyParcels(city: any, callback: any, onError: (err?:
   }
 
   const since = daysAgoTimestamp(60)
-  const q1 = query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(50))
-  const q2 = query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(50))
+  const q1 = query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(2000))
+  const q2 = query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(2000))
 
   const unsub1 = onSnapshot(q1, snap => { created = snap.docs.map(d => ({ id: d.id, ...d.data() })); merge() }, onError)
   const unsub2 = onSnapshot(q2, snap => {
@@ -1031,6 +1066,63 @@ export async function getRealParcelsStats() {
   } catch (error) {
     console.error('Erreur stats colis:', error)
     return { total: 0, enCours: 0, livres: 0, retournes: 0 }
+  }
+}
+
+// Recherche par N° EXP dans TOUTE la base (pas de limite)
+export async function searchParcelByTrackingGlobal(trackingId: string) {
+  try {
+    const q = query(
+      collection(db, 'parcels'),
+      where('trackingId', '>=', trackingId.toUpperCase()),
+      where('trackingId', '<=', trackingId.toUpperCase() + ''),
+      limit(100) // Max 100 résultats pour éviter surcharge
+    )
+    const snapshot = await getDocs(q)
+    return snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
+  } catch (error) {
+    console.error('Erreur recherche tracking:', error)
+    return []
+  }
+}
+
+// ⚡ Recherche ULTRA-RAPIDE par N° EXP (optimisée avec index Firestore)
+export async function searchParcelByNicOptimized(nic: string) {
+  try {
+    const nicUpper = nic.toUpperCase().trim()
+    const startTime = performance.now()
+
+    // 1️⃣ Match EXACT sur senderNic (le plus rapide avec index)
+    const exactQuery = query(
+      collection(db, 'parcels'),
+      where('senderNic', '==', nicUpper),
+      limit(1)
+    )
+    const exactSnap = await getDocs(exactQuery)
+
+    if (!exactSnap.empty) {
+      const duration = (performance.now() - startTime).toFixed(0)
+      console.log(`⚡ Match exact trouvé en ${duration}ms`)
+      return exactSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+    }
+
+    // 2️⃣ Si pas de match exact, chercher par préfixe (max 50 résultats)
+    const prefixQuery = query(
+      collection(db, 'parcels'),
+      where('senderNic', '>=', nicUpper),
+      where('senderNic', '<', nicUpper + ''),
+      orderBy('senderNic'),
+      limit(50)
+    )
+    const prefixSnap = await getDocs(prefixQuery)
+
+    const duration = (performance.now() - startTime).toFixed(0)
+    console.log(`⚡ ${prefixSnap.size} résultats trouvés en ${duration}ms`)
+    return prefixSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+
+  } catch (error) {
+    console.error('❌ Erreur recherche N° EXP:', error)
+    return []
   }
 }
 

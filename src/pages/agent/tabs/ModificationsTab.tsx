@@ -26,7 +26,7 @@ export default function ModificationsTab() {
   const legacyRequests = modRequests.filter((r: any) => !r.type || r.type !== 'expediteur_to_transporteur')
 
   // Handler pour les demandes du nouveau workflow
-  const handleApproveWorkflow = async (req: any) => {
+  const handleApproveWorkflow = async (req: Record<string, any>) => {
     const note = (agentNotes[req.id] || '').trim()
     try {
       await approveModificationRequest(req.id, {
@@ -41,7 +41,7 @@ export default function ModificationsTab() {
     }
   }
 
-  const handleRejectWorkflow = async (req: any) => {
+  const handleRejectWorkflow = async (req: Record<string, any>) => {
     const reason = (agentNotes[req.id] || '').trim()
     if (!reason) {
       alert('⚠️ Vous devez indiquer une raison pour refuser')
@@ -60,7 +60,7 @@ export default function ModificationsTab() {
     }
   }
 
-  const renderRequest = (req: any, isWorkflow: boolean) => {
+  const renderRequest = (req: Record<string, any>, isWorkflow: boolean) => {
     const st = MOD_STATUS[req.status] || MOD_STATUS.pending
     const modType = MOD_TYPES.find(t => t.key === req.modificationType)
     const isPending = req.status === 'pending'
@@ -155,8 +155,8 @@ export default function ModificationsTab() {
         </div>
       ) : (
         <div className="divide-y divide-gray-100">
-          {workflowRequests.map(req => renderRequest(req, true))}
-          {legacyRequests.map(req => renderRequest(req, false))}
+          {workflowRequests.map((req: Record<string, any>) => renderRequest(req, true))}
+          {legacyRequests.map((req: Record<string, any>) => renderRequest(req, false))}
         </div>
       )}
     </div>

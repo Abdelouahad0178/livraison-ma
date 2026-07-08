@@ -19,7 +19,6 @@ const FIELD_MAPPINGS: Record<string, string> = {
   'téléphone expé': 'senderTel',
   'tel expéditeur': 'senderTel',
   'tel expé': 'senderTel',
-  'numéro expéditeur': 'senderTel',
   'adresse expéditeur': 'senderAddress',
   'adresse expé': 'senderAddress',
   'ville expéditeur': 'senderCity',
@@ -157,7 +156,6 @@ export default function VoiceInput({ onResult, onClientFound, isListening, setIs
       const target = e.target as HTMLElement
       if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA')) {
         const input = target as HTMLInputElement
-        console.log('🎯 Nouveau focus:', input.placeholder || input.name)
 
         // Toujours mettre à jour si le micro est actif
         if (isListening) {
@@ -169,8 +167,6 @@ export default function VoiceInput({ onResult, onClientFound, isListening, setIs
           setTranscript('')
           setInterimTranscript('')
 
-          console.log('✅ Input capturé pour dictée:', input.placeholder || input.name)
-          console.log('🔄 Transcription réinitialisée pour nouveau champ')
         }
       }
     }
@@ -214,17 +210,13 @@ export default function VoiceInput({ onResult, onClientFound, isListening, setIs
       setInterimTranscript(interim)
 
       if (final) {
-        console.log('🎙️ Texte final reçu:', final)
         const cleaned = cleanText(final)
-        console.log('🧹 Texte après cleanText:', cleaned)
 
-        // Vérifier l'état de focusedInput
-        console.log('📍 État focusedInput:', focusedInputRef.current ? (focusedInputRef.current.placeholder || focusedInputRef.current.name) : 'NULL')
+        // Vérifier l'état de focusedInput : 'NULL')
 
         parseAndFillForm(cleaned)
 
         // PAS DE REDÉMARRAGE - continuous = true garde le micro actif !
-        console.log('✅ Micro reste actif en continu')
       }
     }
 
@@ -254,7 +246,6 @@ export default function VoiceInput({ onResult, onClientFound, isListening, setIs
     }
 
     recognition.onend = () => {
-      console.log('Recognition ended')
       // NE PAS redémarrer ici - le redémarrage se fait dans onresult après succès
     }
 
@@ -294,8 +285,6 @@ export default function VoiceInput({ onResult, onClientFound, isListening, setIs
     const parentSection = input.closest('section')?.textContent?.toLowerCase() || ''
     const isDestinataireSection = parentSection.includes('destinataire')
     const isExpediteurSection = parentSection.includes('expéditeur')
-
-    console.log('🔍 Section détectée:', isExpediteurSection ? 'EXPÉDITEUR' : isDestinataireSection ? 'DESTINATAIRE' : 'INCONNUE')
 
     // Mapping pour les noms complets
     if (placeholder.includes('nom complet') || placeholder.includes('nom') || placeholder.includes('chercher')) {
@@ -376,18 +365,13 @@ export default function VoiceInput({ onResult, onClientFound, isListening, setIs
   const parseAndFillForm = (text: string) => {
     // Éviter de traiter plusieurs fois le même texte
     if (text === lastProcessedTextRef.current) {
-      console.log('⏭️ Texte déjà traité, ignoré')
       return
     }
 
-    console.log('🎤 Texte reçu:', text)
-
     // Nettoyer et corriger le texte
     const cleanedValue = cleanText(text)
-    console.log('✨ Texte nettoyé:', cleanedValue)
 
     if (!cleanedValue) {
-      console.log('❌ Texte vide après nettoyage')
       return
     }
 
@@ -396,17 +380,14 @@ export default function VoiceInput({ onResult, onClientFound, isListening, setIs
 
     // Si on a un input focalisé
     if (focusedInputRef.current) {
-      console.log('✅ Input focalisé:', focusedInputRef.current.placeholder || focusedInputRef.current.name)
 
       // Essayer de trouver le nom du champ
       const fieldName = getFieldNameFromInput(focusedInputRef.current)
 
       if (fieldName) {
-        console.log('✅ Champ identifié:', fieldName)
 
         // 🔍 RECHERCHE AUTOMATIQUE DE CLIENT si c'est un champ nom
         if ((fieldName === 'senderName' || fieldName === 'receiverName') && onClientFound) {
-          console.log('🔍 Recherche du client:', cleanedValue)
           const isSender = fieldName === 'senderName'
           const searchFunc = isSender ? searchExpediteurs : searchDestinataires
 
@@ -414,12 +395,10 @@ export default function VoiceInput({ onResult, onClientFound, isListening, setIs
           searchFunc(cleanedValue).then(clients => {
             if (clients.length > 0) {
               const client = clients[0]
-              console.log('✅ Client trouvé:', client.name)
               onClientFound(client, isSender)
               setSuccess(`✅ ${client.name} - ${client.tel}`)
               setTimeout(() => setSuccess(''), 2000)
             } else {
-              console.log('❌ Client non trouvé')
               // Si pas trouvé, juste remplir le nom
               onResult(fieldName, cleanedValue)
               setSuccess(`✓ ${cleanedValue}`)
@@ -441,11 +420,9 @@ export default function VoiceInput({ onResult, onClientFound, isListening, setIs
       }
 
       // Si aucun champ détecté, afficher erreur
-      console.log('❌ Champ non identifié:', focusedInputRef.current.placeholder)
       setError('Champ non reconnu')
       setTimeout(() => setError(''), 2000)
     } else {
-      console.log('⚠️ Aucun input focalisé')
     }
 
     // Sinon, utiliser le mapping comme fallback
@@ -456,7 +433,6 @@ export default function VoiceInput({ onResult, onClientFound, isListening, setIs
         const afterTrigger = text.substring(triggerIndex + trigger.length).trim()
         if (afterTrigger) {
           const cleanedValue = cleanText(afterTrigger)
-          console.log(`✅ Mapping utilisé: ${trigger} → ${field}`)
           onResult(field, cleanedValue)
           setSuccess(`✓ ${cleanedValue}`)
           setTimeout(() => {
@@ -467,8 +443,6 @@ export default function VoiceInput({ onResult, onClientFound, isListening, setIs
         }
       }
     }
-
-    console.log('ℹ️ Pas de mapping trouvé, texte ignoré')
   }
 
   const toggleListening = () => {
@@ -479,7 +453,6 @@ export default function VoiceInput({ onResult, onClientFound, isListening, setIs
 
     if (!isListening) {
       // Démarrer l'écoute
-      console.log('🎤 Micro activé - cliquez sur un input pour commencer')
       setTargetInputName('👉 Cliquez sur un input pour commencer')
 
       // Vérifier si un input est déjà focalisé
@@ -487,7 +460,6 @@ export default function VoiceInput({ onResult, onClientFound, isListening, setIs
       if (activeElement && (activeElement.tagName === 'INPUT' || activeElement.tagName === 'TEXTAREA')) {
         focusedInputRef.current = activeElement
         setTargetInputName(activeElement.placeholder || activeElement.name || 'Champ actif')
-        console.log('✅ Input déjà focalisé:', activeElement.placeholder || activeElement.name)
       }
 
       // Réinitialiser les textes
@@ -496,7 +468,6 @@ export default function VoiceInput({ onResult, onClientFound, isListening, setIs
       setInterimTranscript('')
     } else {
       // Arrêter l'écoute
-      console.log('🛑 Micro désactivé')
       focusedInputRef.current = null
       setTargetInputName('')
     }

@@ -335,3 +335,238 @@ export async function printBonRamassage(nexpCodes: any[], batchRef: string, sect
   const win = window.open('', '_blank', 'width=900,height=1100')
   if (win) { win.document.write(html); win.document.close() }
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// IMPRESSION ADMIN DES EXPÉDITIONS (avec tri par agence/statut)
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+export function printAdminExpeditions(
+  parcels: any[],
+  groupBy: 'agency' | 'status' | 'none',
+  title = 'Liste des Expéditions'
+): void {
+  if (!parcels.length) {
+    alert('Aucune expédition à imprimer')
+    return
+  }
+
+  const logoUrl = window.location.origin + '/LOGO.jpg'
+  const printDate = new Date().toLocaleDateString('fr-MA', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  })
+
+  const STATUS_COLORS: Record<string, { bg: string; text: string }> = {
+    'Initialisé': { bg: '#f3f4f6', text: '#374151' },
+    'En transit': { bg: '#dbeafe', text: '#1d4ed8' },
+    'Arrivé en agence': { bg: '#ede9fe', text: '#6d28d9' },
+    'En cours de livraison': { bg: '#ffedd5', text: '#c2410c' },
+    'Livré': { bg: '#dcfce7', text: '#15803d' },
+    'Retourné': { bg: '#fee2e2', text: '#b91c1c' },
+  }
+
+  // Fonction pour formater une date
+  const formatDate = (p: any) => {
+    if (p.createdAt?.toDate) return p.createdAt.toDate().toLocaleDateString('fr-MA')
+    if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp).toLocaleDateString('fr-MA')
+    return '—'
+  }
+
+  // Fonction pour générer une ligne du tableau
+  const parcelRow = (p: any, idx: number) => {
+    const status = STATUS_COLORS[p.status] || STATUS_COLORS['Initialisé']
+    return `
+      <tr style="background-color: ${idx % 2 === 0 ? '#ffffff' : '#f9fafb'}">
+        <td style="text-align:center;font-weight:bold;color:#555">${idx + 1}</td>
+        <td style="font-family:monospace;font-weight:bold;color:#1d4ed8;font-size:7.5pt">${p.senderNic || p.sender?.nic || '—'}</td>
+        <td style="font-size:7pt;color:#6b7280">${formatDate(p)}</td>
+        <td>
+          <strong style="font-size:8pt">${p.sender?.name || '—'}</strong><br>
+          <span style="color:#6b7280;font-size:6.5pt">${p.sender?.tel || ''}</span>
+        </td>
+        <td>
+          <strong style="font-size:8pt">${p.receiver?.name || '—'}</strong><br>
+          <span style="color:#6b7280;font-size:6.5pt">${p.receiver?.city || ''} · ${p.receiver?.tel || ''}</span>
+        </td>
+        <td style="text-align:center;font-weight:bold">${p.weight || '—'} kg</td>
+        <td style="text-align:right;font-weight:bold;color:${p.portType === 'port_paye' ? '#1d4ed8' : p.portType === 'port_du' ? '#c2410c' : '#7c3aed'}">
+          ${p.price || 0} DH
+        </td>
+        <td style="text-align:right;font-weight:bold;color:#c2410c">
+          ${p.codAmount > 0 ? p.codAmount + ' DH' : '—'}
+        </td>
+        <td>
+          <span style="background-color:${status.bg};color:${status.text};padding:2px 6px;border-radius:4px;font-size:7pt;font-weight:bold;white-space:nowrap">
+            ${p.status}
+          </span>
+        </td>
+      </tr>
+    `
+  }
+
+  // Grouper les expéditions
+  let groups: { title: string; parcels: any[] }[] = []
+
+  if (groupBy === 'agency') {
+    const byAgency: Record<string, any[]> = {}
+    parcels.forEach(p => {
+      const city = p.receiver?.city || p.destinationCity || 'Non défini'
+      if (!byAgency[city]) byAgency[city] = []
+      byAgency[city].push(p)
+    })
+    groups = Object.keys(byAgency)
+      .sort()
+      .map(city => ({ title: `Agence : ${city}`, parcels: byAgency[city] }))
+  } else if (groupBy === 'status') {
+    const byStatus: Record<string, any[]> = {}
+    parcels.forEach(p => {
+      const status = p.status || 'Non défini'
+      if (!byStatus[status]) byStatus[status] = []
+      byStatus[status].push(p)
+    })
+    groups = Object.keys(byStatus)
+      .sort()
+      .map(status => ({ title: `Statut : ${status}`, parcels: byStatus[status] }))
+  } else {
+    groups = [{ title: '', parcels }]
+  }
+
+  // Générer le HTML pour chaque groupe
+  const groupsHTML = groups
+    .map(group => {
+      const totalPort = group.parcels.reduce((sum, p) => sum + (p.price || 0), 0)
+      const totalCod = group.parcels.reduce((sum, p) => sum + (p.codAmount || 0), 0)
+
+      return `
+        <div style="page-break-inside:avoid;margin-bottom:20px">
+          ${group.title ? `<h2 style="font-size:11pt;color:#1e40af;margin:12px 0 8px;padding-bottom:4px;border-bottom:2px solid #1e40af">${group.title}</h2>` : ''}
+          <table style="width:100%;border-collapse:collapse">
+            <thead>
+              <tr>
+                <th style="width:24px">N°</th>
+                <th style="width:70px">N° EXP</th>
+                <th style="width:60px">Date</th>
+                <th style="width:120px">Expéditeur</th>
+                <th style="width:130px">Destinataire</th>
+                <th style="width:45px">Poids</th>
+                <th style="width:60px">Port</th>
+                <th style="width:60px">COD</th>
+                <th style="width:90px">Statut</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${group.parcels.map((p, i) => parcelRow(p, i)).join('')}
+              <tr style="background-color:#dbeafe;font-weight:bold">
+                <td colspan="6" style="text-align:right;padding:6px;color:#1e40af">TOTAL — ${group.parcels.length} colis</td>
+                <td style="text-align:right;color:#1e40af">${totalPort.toFixed(2)} DH</td>
+                <td style="text-align:right;color:#c2410c">${totalCod.toFixed(2)} DH</td>
+                <td></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      `
+    })
+    .join('')
+
+  const totalParcels = parcels.length
+  const totalPort = parcels.reduce((sum, p) => sum + (p.price || 0), 0)
+  const totalCod = parcels.reduce((sum, p) => sum + (p.codAmount || 0), 0)
+
+  const html = `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>${title.replace(/ /g, '-')}-${printDate.replace(/ /g, '-')}</title>
+  <style>
+    @page { size: A4 landscape; margin: 12mm; }
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; font-size: 8pt; color: #111; margin: 0; padding: 0; }
+    table { border-collapse: collapse; width: 100%; }
+    th {
+      border: 1px solid #1e3a8a;
+      padding: 5px 6px;
+      background-color: #1e40af;
+      color: #fff;
+      font-weight: bold;
+      font-size: 7.5pt;
+      text-align: left;
+      white-space: nowrap;
+    }
+    td {
+      border: 1px solid #d1d5db;
+      padding: 4px 6px;
+      vertical-align: middle;
+      font-size: 7.5pt;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border: 2px solid #1e40af;
+      margin-bottom: 16px;
+      background: linear-gradient(to bottom, #ffffff, #f0f9ff);
+    }
+    .header-left img { height: 38px; object-fit: contain; margin-bottom: 4px; }
+    .header-left .company { font-size: 10pt; font-weight: bold; color: #1e40af; letter-spacing: 0.5px; }
+    .header-left .contact { font-size: 7pt; color: #374151; margin-top: 2px; }
+    .header-center { text-align: center; }
+    .header-center .title { font-size: 16pt; font-weight: bold; color: #1e40af; letter-spacing: 1px; }
+    .header-center .subtitle { font-size: 8.5pt; color: #374151; margin-top: 4px; }
+    .header-right { text-align: right; font-size: 8.5pt; }
+    .header-right div { margin: 2px 0; }
+    .summary {
+      display: flex;
+      justify-content: space-around;
+      padding: 10px;
+      background: #dbeafe;
+      border: 2px solid #1e40af;
+      border-radius: 8px;
+      margin-top: 16px;
+      font-weight: bold;
+      color: #1e40af;
+      font-size: 10pt;
+    }
+    @media print { button { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <img src="${logoUrl}" onerror="this.style.display='none'">
+      <div class="company">BG EXPRESS</div>
+      <div class="contact">N°19, Rue 5, Hay Tissir2 – Casablanca</div>
+      <div class="contact">☎ 0522 62 92 89 | 📱 0661 97 86 12</div>
+      <div class="contact">✉ bgexpress2019@gmail.com</div>
+    </div>
+    <div class="header-center">
+      <div class="title">${title}</div>
+      <div class="subtitle">Document imprimé le ${printDate}</div>
+    </div>
+    <div class="header-right">
+      <div><strong>Nombre d'expéditions :</strong> ${totalParcels}</div>
+      <div><strong>Total Port :</strong> ${totalPort.toFixed(2)} DH</div>
+      <div><strong>Total COD :</strong> ${totalCod.toFixed(2)} DH</div>
+    </div>
+  </div>
+
+  ${groupsHTML}
+
+  <div class="summary">
+    <div>📦 Total : ${totalParcels} expéditions</div>
+    <div>💰 Port Total : ${totalPort.toFixed(2)} DH</div>
+    <div>💵 COD Total : ${totalCod.toFixed(2)} DH</div>
+  </div>
+
+  <script>window.onload = function(){ window.print(); }<\/script>
+</body>
+</html>`
+
+  const win = window.open('', '_blank', 'width=1200,height=800')
+  if (win) {
+    win.document.write(html)
+    win.document.close()
+  }
+}
