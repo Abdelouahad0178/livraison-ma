@@ -517,8 +517,8 @@ export default function AdminPage() {
 
     // 📊 Chargement avec limites optimisées
     // - Recherche : 5000 colis max (pour couvrir plus de données)
-    // - Par défaut : 2000 colis (nécessaire pour filtres COD)
-    const loadLimit = hasSearch ? 5000 : 2000
+    // - Par défaut : 5000 colis (nécessaire pour filtres COD)
+    const loadLimit = 5000
 
     console.log(`📦 Chargement ${loadLimit} colis (recherche: ${hasSearch ? 'OUI' : 'NON'}, filtre: ${hasFilter ? 'OUI' : 'NON'})`)
 
