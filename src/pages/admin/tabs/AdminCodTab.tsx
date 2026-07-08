@@ -60,74 +60,252 @@ export default function AdminCodTab({
   handleReplyAgentCodRequest,
   resolveAgentCodRequest,
 }: AdminCodTabProps) {
+  // Calculer les villes avec COD
+  const citiesWithCod = Array.from(new Set(
+    codDateFiltered.map((p: any) => p.destinationCity || p.receiver?.city).filter(Boolean)
+  )).sort()
+
+  const [selectedCity, setSelectedCity] = React.useState<string>('all')
+  const [selectedPaymentType, setSelectedPaymentType] = React.useState<string>('all')
+
+  // Filtrer par ville et type de paiement
+  const cityAndPaymentFiltered = React.useMemo(() => {
+    let filtered = codDateFiltered
+
+    if (selectedCity !== 'all') {
+      filtered = filtered.filter((p: any) =>
+        (p.destinationCity === selectedCity || p.receiver?.city === selectedCity)
+      )
+    }
+
+    if (selectedPaymentType !== 'all') {
+      filtered = filtered.filter((p: any) => p.codPaymentType === selectedPaymentType)
+    }
+
+    return filtered
+  }, [codDateFiltered, selectedCity, selectedPaymentType])
+
+  // Calculer les stats par ville
+  const statsByCity = React.useMemo(() => {
+    const stats: Record<string, { total: number; count: number; byType: Record<string, { total: number; count: number }> }> = {}
+
+    codDateFiltered.forEach((p: any) => {
+      const city = p.destinationCity || p.receiver?.city || 'Autre'
+      const amount = parseFloat(p.codAmount) || 0
+      const paymentType = p.codPaymentType || 'non_defini'
+
+      if (!stats[city]) {
+        stats[city] = { total: 0, count: 0, byType: {} }
+      }
+
+      stats[city].total += amount
+      stats[city].count += 1
+
+      if (!stats[city].byType[paymentType]) {
+        stats[city].byType[paymentType] = { total: 0, count: 0 }
+      }
+
+      stats[city].byType[paymentType].total += amount
+      stats[city].byType[paymentType].count += 1
+    })
+
+    return stats
+  }, [codDateFiltered])
+
   return (
     <div className="mt-4 space-y-6">
 
-      {/* Filtre date RETOUR FOND */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-        <div className="flex flex-wrap gap-2 items-center">
-          <Calendar className="w-4 h-4 text-gray-400 shrink-0" />
-          {[
-            { key: 'all',    label: 'Tout' },
-            { key: 'today',  label: "Aujourd'hui" },
-            { key: 'week',   label: '7 derniers jours' },
-            { key: 'month',  label: 'Ce mois' },
-            { key: 'custom', label: 'Personnalisé' },
-          ].map(({ key, label }) => (
-            <button key={key} onClick={() => setCodDatePreset(key)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                codDatePreset === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >{label}</button>
-          ))}
-          {codDatePreset === 'custom' && (
-            <div className="flex items-center gap-2 ml-1">
-              <input type="date" value={codDateFrom} onChange={e => setCodDateFrom(e.target.value)}
-                className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500" />
-              <span className="text-gray-400 text-xs">→</span>
-              <input type="date" value={codDateTo} onChange={e => setCodDateTo(e.target.value)}
-                className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500" />
+      {/* FILTRES : Date + Ville + Mode de paiement */}
+      <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl border-2 border-green-200 shadow-lg p-6">
+        <h3 className="font-black text-green-800 mb-4 flex items-center gap-2 text-lg">
+          <Filter className="w-5 h-5" />
+          Filtres RETOUR FOND
+        </h3>
+
+        <div className="space-y-4">
+          {/* Filtre date */}
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-2 uppercase">📅 Période</label>
+            <div className="flex flex-wrap gap-2 items-center">
+              {[
+                { key: 'all',    label: 'Tout' },
+                { key: 'today',  label: "Aujourd'hui" },
+                { key: 'week',   label: '7 derniers jours' },
+                { key: 'month',  label: 'Ce mois' },
+                { key: 'custom', label: 'Personnalisé' },
+              ].map(({ key, label }) => (
+                <button key={key} onClick={() => setCodDatePreset(key)}
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+                    codDatePreset === key ? 'bg-green-600 text-white shadow-md' : 'bg-white text-gray-700 hover:bg-green-100 border border-gray-200'
+                  }`}
+                >{label}</button>
+              ))}
+              {codDatePreset === 'custom' && (
+                <div className="flex items-center gap-2 ml-2">
+                  <input type="date" value={codDateFrom} onChange={e => setCodDateFrom(e.target.value)}
+                    className="border-2 border-green-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-green-500" />
+                  <span className="text-gray-400 text-sm font-bold">→</span>
+                  <input type="date" value={codDateTo} onChange={e => setCodDateTo(e.target.value)}
+                    className="border-2 border-green-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-green-500" />
+                </div>
+              )}
             </div>
-          )}
-          <span className="ml-auto text-xs text-gray-400 bg-gray-100 rounded-lg px-2 py-1">
-            {codDateFiltered.length} colis RETOUR FOND
-          </span>
+          </div>
+
+          {/* Filtre par ville */}
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-2 uppercase">🏙️ Ville de destination</label>
+            <div className="flex flex-wrap gap-2">
+              <button
+                onClick={() => setSelectedCity('all')}
+                className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+                  selectedCity === 'all' ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-gray-700 hover:bg-blue-100 border border-gray-200'
+                }`}
+              >
+                Toutes les villes
+              </button>
+              {citiesWithCod.map(city => (
+                <button
+                  key={city}
+                  onClick={() => setSelectedCity(city)}
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition ${
+                    selectedCity === city ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-gray-700 hover:bg-blue-100 border border-gray-200'
+                  }`}
+                >
+                  {city}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Filtre par mode de paiement */}
+          <div>
+            <label className="block text-xs font-bold text-gray-700 mb-2 uppercase">💳 Mode de paiement</label>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { key: 'all', label: 'Tous', emoji: '📋' },
+                ...COD_PAYMENT_TYPES
+              ].map(pt => (
+                <button
+                  key={pt.key}
+                  onClick={() => setSelectedPaymentType(pt.key)}
+                  className={`px-4 py-2 rounded-lg text-sm font-semibold transition flex items-center gap-2 ${
+                    selectedPaymentType === pt.key ? 'bg-purple-600 text-white shadow-md' : 'bg-white text-gray-700 hover:bg-purple-100 border border-gray-200'
+                  }`}
+                >
+                  <span>{pt.emoji}</span>
+                  {pt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Compteur de résultats */}
+          <div className="flex items-center justify-between pt-3 border-t border-green-200">
+            <span className="text-sm font-bold text-green-800">
+              📦 {cityAndPaymentFiltered.length} colis RETOUR FOND
+            </span>
+            <span className="text-lg font-black text-green-700">
+              {fmt(cityAndPaymentFiltered.reduce((s: any, p: any) => s + (parseFloat(p.codAmount) || 0), 0))} DH
+            </span>
+          </div>
         </div>
       </div>
 
-      {/* KPIs RETOUR FOND */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-        {[
-          { label: 'En attente',   value: fmt(codStatsFiltered.pendingDH),   sub: `${codDateFiltered.filter((p: any) => !p.codStatus || p.codStatus === 'pending').length} colis`,          bg: 'bg-yellow-50',  text: 'text-yellow-700',  border: 'border-yellow-200',  emoji: '⏳' },
-          { label: 'Collecté',     value: fmt(codStatsFiltered.collectedDH), sub: `${codDateFiltered.filter((p: any) => p.codStatus === 'collected').length} colis`,                       bg: 'bg-blue-50',    text: 'text-blue-700',    border: 'border-blue-200',    emoji: '💰' },
-          { label: 'Remis agence', value: fmt(codStatsFiltered.remisDH),     sub: `${codDateFiltered.filter((p: any) => p.codStatus === 'remis' && !p.codSenderPaid).length} colis`,         bg: 'bg-orange-50',  text: 'text-orange-700',  border: 'border-orange-200',  emoji: '🔄' },
-          { label: 'Réglé',        value: fmt(codStatsFiltered.regleDH),     sub: `${codDateFiltered.filter((p: any) => p.codSenderPaid).length} colis`,                                bg: 'bg-green-50',   text: 'text-green-700',   border: 'border-green-200',   emoji: '✅' },
-        ].map(({ label, value, sub, bg, text, border, emoji }) => (
-          <div key={label} className={`${bg} border ${border} rounded-2xl p-5`}>
-            <div className="flex items-start justify-between">
-              <div>
-                <p className={`text-sm font-semibold ${text} mb-1`}>{emoji} {label}</p>
-                <p className={`text-3xl font-black ${text}`}>{value} <span className="text-lg">DH</span></p>
-                <p className={`text-xs ${text} opacity-70 mt-1`}>{sub}</p>
+      {/* RÉPARTITION PAR MODE DE PAIEMENT - Section principale */}
+      <div className="bg-white border-2 border-purple-200 rounded-2xl p-6 shadow-lg">
+        <h3 className="font-black text-purple-800 mb-5 flex items-center gap-2 text-lg">
+          <Banknote className="w-6 h-6" />
+          Répartition par Mode de Paiement
+        </h3>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {COD_PAYMENT_TYPES.map(pt => {
+            const filtered = cityAndPaymentFiltered.filter((p: any) => p.codPaymentType === pt.key)
+            const total = filtered.reduce((s: any, p: any) => s + (parseFloat(p.codAmount) || 0), 0)
+            const count = filtered.length
+
+            return (
+              <div key={pt.key} className={`${pt.bg} border-2 ${pt.text} border-current/30 rounded-xl p-5 hover:shadow-lg transition`}>
+                <div className="flex items-center gap-3 mb-3">
+                  <span className="text-3xl">{pt.emoji}</span>
+                  <span className={`text-sm font-bold ${pt.text} uppercase`}>{pt.label}</span>
+                </div>
+                <p className={`text-4xl font-black ${pt.text} mb-1`}>{fmt(total)}</p>
+                <p className="text-sm font-semibold text-gray-500">DH</p>
+                <div className="mt-3 pt-3 border-t border-current/20">
+                  <p className={`text-xs font-semibold ${pt.text} opacity-80`}>
+                    📦 {count} colis
+                  </p>
+                </div>
               </div>
-            </div>
+            )
+          })}
+        </div>
+
+        {/* Totaux généraux */}
+        <div className="mt-6 pt-6 border-t-2 border-purple-200">
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+            {(() => {
+              const pending = cityAndPaymentFiltered.filter((p: any) => !p.codStatus || p.codStatus === 'pending')
+              const collected = cityAndPaymentFiltered.filter((p: any) => p.codStatus === 'collected')
+              const remis = cityAndPaymentFiltered.filter((p: any) => p.codStatus === 'remis' && !p.codSenderPaid)
+              const settled = cityAndPaymentFiltered.filter((p: any) => p.codSenderPaid)
+
+              return [
+                { label: 'En attente', parcels: pending, bg: 'bg-yellow-50', text: 'text-yellow-700', border: 'border-yellow-200', emoji: '⏳' },
+                { label: 'Collecté', parcels: collected, bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200', emoji: '💰' },
+                { label: 'Remis agence', parcels: remis, bg: 'bg-orange-50', text: 'text-orange-700', border: 'border-orange-200', emoji: '🔄' },
+                { label: 'Réglé', parcels: settled, bg: 'bg-green-50', text: 'text-green-700', border: 'border-green-200', emoji: '✅' },
+              ].map(({ label, parcels, bg, text, border, emoji }) => (
+                <div key={label} className={`${bg} border ${border} rounded-xl p-4`}>
+                  <p className={`text-xs font-bold ${text} mb-2`}>{emoji} {label}</p>
+                  <p className={`text-2xl font-black ${text}`}>{fmt(parcels.reduce((s: any, p: any) => s + (parseFloat(p.codAmount) || 0), 0))} DH</p>
+                  <p className={`text-xs ${text} opacity-70 mt-1`}>{parcels.length} colis</p>
+                </div>
+              ))
+            })()}
           </div>
-        ))}
+        </div>
       </div>
 
-      {/* By payment type */}
-      {codStatsFiltered.byType.length > 0 && (
-        <div className="bg-white border border-gray-100 rounded-2xl p-5 shadow-sm">
-          <h3 className="font-bold text-gray-700 mb-4 text-sm uppercase tracking-wider">Répartition par mode de paiement</h3>
-          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-            {codStatsFiltered.byType.map((pt: any) => (
-              <div key={pt.key} className={`${pt.bg} border border-current/20 rounded-xl p-4`}>
-                <div className="flex items-center gap-2 mb-2">
-                  <span className="text-xl">{pt.emoji}</span>
-                  <span className={`text-sm font-semibold ${pt.text}`}>{pt.label}</span>
+      {/* STATISTIQUES PAR VILLE */}
+      {Object.keys(statsByCity).length > 1 && (
+        <div className="bg-white border-2 border-blue-200 rounded-2xl p-6 shadow-lg">
+          <h3 className="font-black text-blue-800 mb-5 flex items-center gap-2 text-lg">
+            🏙️ Répartition par Ville
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+            {Object.entries(statsByCity)
+              .sort(([, a]: any, [, b]: any) => b.total - a.total)
+              .map(([city, stats]: [string, any]) => (
+              <div key={city} className="bg-gradient-to-br from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-4">
+                <h4 className="font-bold text-blue-900 mb-3">{city}</h4>
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-600">Total:</span>
+                    <span className="text-xl font-black text-blue-700">{fmt(stats.total)} DH</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-600">Colis:</span>
+                    <span className="text-sm font-bold text-blue-600">{stats.count}</span>
+                  </div>
+                  {Object.keys(stats.byType).length > 0 && (
+                    <div className="pt-2 border-t border-blue-200 mt-2">
+                      <p className="text-xs font-semibold text-gray-500 mb-1">Par mode:</p>
+                      {Object.entries(stats.byType).map(([type, typeStats]: [string, any]) => {
+                        const pt = COD_PAYMENT_TYPES.find(t => t.key === type)
+                        return (
+                          <div key={type} className="flex items-center justify-between text-xs">
+                            <span className="text-gray-600">
+                              {pt?.emoji} {pt?.label || type}:
+                            </span>
+                            <span className="font-bold">{fmt(typeStats.total)} DH ({typeStats.count})</span>
+                          </div>
+                        )
+                      })}
+                    </div>
+                  )}
                 </div>
-                <p className={`text-2xl font-black ${pt.text}`}>{fmt(pt.total)} DH</p>
-                <p className={`text-xs ${pt.text} opacity-70 mt-0.5`}>{pt.count} colis</p>
               </div>
             ))}
           </div>
