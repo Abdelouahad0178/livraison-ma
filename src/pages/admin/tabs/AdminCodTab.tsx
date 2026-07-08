@@ -328,28 +328,13 @@ export default function AdminCodTab({
 
       {/* RETOUR FOND Table */}
       <div className="bg-white border border-gray-100 rounded-2xl shadow-sm overflow-hidden">
-        <div className="p-4 border-b border-gray-100 flex flex-wrap gap-3 items-center">
-          <div className="relative flex-1 min-w-48">
+        <div className="p-4 border-b border-gray-100">
+          <div className="relative">
             <Search className="absolute left-3 top-2.5 w-4 h-4 text-gray-400" />
             <input value={codSearch} onChange={e => setCodSearch(e.target.value)}
               placeholder="Rechercher tracking, N EXP, client, ville..."
               className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-xl text-sm focus:border-blue-500 focus:outline-none"
             />
-          </div>
-          <div className="flex gap-2 flex-wrap">
-            {[
-              { key: 'all',       label: 'Tous' },
-              { key: 'especes',   label: '💵 Contre espèces' },
-              { key: 'cheque',    label: '📝 Contre chèque' },
-              { key: 'traite',    label: '📄 Contre traite' },
-              { key: 'autres',    label: '📋 Autres' },
-            ].map(({ key, label }) => (
-              <button key={key} onClick={() => setCodFilter(key)}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                  codFilter === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                }`}
-              >{label}</button>
-            ))}
           </div>
         </div>
 
@@ -373,7 +358,9 @@ export default function AdminCodTab({
                   : p.codSentToSource && !p.codReceivedBySource
                   ? { label: 'En transit source', bg: 'bg-blue-100',   text: 'text-blue-700',   dot: 'bg-blue-500'   }
                   : COD_STATUS[p.codStatus || 'pending']
-                const cpt = COD_PAYMENT_TYPES.find((t: any) => t.key === p.codPaymentType)
+                // Normaliser le type de paiement (avec et sans accents)
+                const normalizedType = p.codPaymentType === 'chèque' ? 'cheque' : p.codPaymentType === 'espèces' ? 'especes' : p.codPaymentType
+                const cpt = COD_PAYMENT_TYPES.find((t: any) => t.key === normalizedType)
                 const openReq = agentCodRequests.find((r: any) => r.parcelId === p.id && r.status !== 'resolved')
                 return (
                   <tr key={p.id} className="hover:bg-gray-50 transition">
