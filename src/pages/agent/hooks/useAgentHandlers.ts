@@ -154,6 +154,44 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     }
   }
 
+  // ⭐ Assignation en masse à un livreur
+  const handleBulkAssignDriver = async (assignableParcels: any) => {
+    const { bulkAssignSelectedIds, bulkAssignDriverId, bulkAssignSectorId, setBulkAssignError, setBulkAssignBusy, setBulkAssignSelectedIds, setBulkAssignDriverId, setBulkAssignSectorId } = s.current
+    setBulkAssignError('')
+    if (!bulkAssignDriverId) {
+      setBulkAssignError('Sélectionnez un livreur.')
+      return
+    }
+    const selectedParcels = bulkAssignSelectedIds
+      .map((id: any) => assignableParcels.find((p: any) => p.id === id))
+      .filter(Boolean)
+    if (selectedParcels.length === 0) {
+      setBulkAssignError('Sélectionnez au moins un colis à assigner.')
+      return
+    }
+    setBulkAssignBusy(true)
+    try {
+      // Assigner chaque colis au livreur
+      for (const parcel of selectedParcels) {
+        await assignDeliveryDriver(
+          parcel.id,
+          bulkAssignDriverId,
+          bulkAssignSectorId || '',
+          '' // vehicleId optionnel
+        )
+      }
+      // Réinitialiser après succès
+      setBulkAssignSelectedIds([])
+      setBulkAssignDriverId('')
+      setBulkAssignSectorId('')
+    } catch (err: any) {
+      console.error('handleBulkAssignDriver:', err)
+      setBulkAssignError(err?.message || 'Erreur lors de l\'assignation groupée.')
+    } finally {
+      setBulkAssignBusy(false)
+    }
+  }
+
   const handleAssignDelivery = async () => {
     const { deliveryModal, setDeliveryModal, drivers, allSectors, vehicles, profile } = s.current
     const { parcel, sectorId, driverId, vehicleId } = deliveryModal
@@ -1378,35 +1416,29 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     if (!form.senderName || form.senderName.trim() === '') {
       errors.push('❌ Nom expéditeur')
     }
-    if (!form.senderAddress || form.senderAddress.trim() === '') {
-      errors.push('❌ Adresse expéditeur')
-    }
-    if (!form.senderTel || form.senderTel.trim() === '') {
-      errors.push('❌ Téléphone expéditeur')
-    }
+    // ✅ Adresse et téléphone expéditeur optionnels
 
     if (!form.receiverName || form.receiverName.trim() === '') {
       errors.push('❌ Nom destinataire')
     }
-    // Adresse obligatoire seulement si aucun livreur/secteur n'est choisi ET que ce n'est pas "En gare"
-    if ((!form.deliveryDriverId && !form.deliverySectorId && !form.enGare) && (!form.receiverAddress || form.receiverAddress.trim() === '')) {
-      errors.push('❌ Adresse destinataire')
-    }
-    if (!form.receiverTel || form.receiverTel.trim() === '') {
-      errors.push('❌ Téléphone destinataire')
-    }
+    // ✅ Adresse et téléphone destinataire optionnels
 
     if (errors.length > 0) {
       setError('⚠️ CHAMPS OBLIGATOIRES MANQUANTS:\n\n' + errors.join('\n'))
       return
     }
 
-    if (form.portType === 'port_en_compte' && !form.clientId) {
-      setError('Sélectionnez ou créez un client en compte avant de valider.')
+    if (form.portType === 'port_en_compte' && !form.clientName && !form.senderName) {
+      setError('⚠️ Veuillez saisir un nom d\'expéditeur pour le mode "En Compte".')
       return
     }
-    if (form.shipmentMode === 'client' && !form.clientId) {
-      setError('Selectionnez un client existant ou passez en envoi personnel.')
+    // Si En Compte mais pas de clientId, utiliser le nom de l'expéditeur comme client
+    if (form.portType === 'port_en_compte' && !form.clientId && form.senderName) {
+      form.clientName = form.senderName
+    }
+    // Validation shipmentMode 'client' : accepter clientName OU clientId
+    if (form.shipmentMode === 'client' && !form.clientId && !form.clientName) {
+      setError('Veuillez saisir un nom de client ou sélectionner un client existant.')
       return
     }
     setLoading(true)
@@ -1422,7 +1454,32 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         return
       }
       const selectedDeliverySector = allSectors.find((sec: any) => sec.id === form.deliverySectorId)
-      const selectedDeliveryDriver = drivers.find((d: any) => d.id === form.deliveryDriverId)
+      let selectedDeliveryDriver = drivers.find((d: any) => d.id === form.deliveryDriverId)
+
+      // 🚉 Assignation automatique au livreur-gare si "Livraison en gare"
+      if (form.enGare && form.receiverCity) {
+        try {
+          const { collection, query, where, getDocs } = await import('firebase/firestore')
+          const { db } = await import('../../../firebase/config')
+
+          const gareDriverQuery = query(
+            collection(db, 'users'),
+            where('role', '==', 'livreur-gare'),
+            where('city', '==', form.receiverCity)
+          )
+          const gareDriverSnap = await getDocs(gareDriverQuery)
+
+          if (!gareDriverSnap.empty) {
+            const gareDriver = gareDriverSnap.docs[0].data()
+            selectedDeliveryDriver = {
+              id: gareDriverSnap.docs[0].id,
+              name: gareDriver.name || gareDriver.email || 'Livreur gare'
+            }
+          }
+        } catch (err) {
+          console.error('❌ Erreur recherche livreur-gare:', err)
+        }
+      }
 
       // Sauvegarder les clients de passage localement (si ce ne sont pas des clients Firestore)
       const { saveLocalClient } = await import('../../../utils/localClients')
@@ -1447,6 +1504,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         })
       }
 
+      // Le portType est choisi manuellement par l'agent via le formulaire
+      // (port_paye, port_du, ou port_en_compte)
+      const autoPortType = form.portType || 'port_paye'; // Par défaut port_paye si non spécifié
+
       const { createParcel } = await import('../../../firebase/firestore')
       const parcel = await createParcel({
         sender:        { name: form.senderName, nic: form.senderNic, address: form.senderAddress, tel: form.senderTel, city: form.senderCity },
@@ -1457,9 +1518,9 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         serviceType:   form.serviceType,
         codAmount:     form.serviceType === 'simple' || form.serviceType === 'retour_bl' ? 0 : (parseFloat(form.codAmount) || 0),
         price,
-        portType:        form.portType,
-        portPayeMethod:  form.portType === 'port_paye' ? (form.portPayeMethod || '') : '',
-        portPayeMontant: form.portType === 'port_paye' ? (parseFloat(form.portPayeMontant) || 0) : 0,
+        portType:        autoPortType,
+        portPayeMethod:  autoPortType === 'port_paye' ? (form.portPayeMethod || 'espece') : '',
+        portPayeMontant: autoPortType === 'port_paye' ? (parseFloat(form.portPayeMontant) || 0) : 0,
         customerMode:    form.shipmentMode,
         clientId:        form.clientId   || null,
         clientName:      form.clientName || null,
@@ -1470,10 +1531,12 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         deliverySectorName:   selectedDeliverySector?.name || '',
         deliveryDriverId:     selectedDeliveryDriver?.id || null,
         deliveryDriverName:   selectedDeliveryDriver?.name || null,
+        deliveryAssignedAt:   (form.enGare && selectedDeliveryDriver) ? new Date().toISOString() : null,
+        deliveryAssignedBy:   (form.enGare && selectedDeliveryDriver) ? 'Système (auto-gare)' : null,
         operationDate:        form.operationDate || null,
         agentRole:            profile?.role || 'agent',
         hasRetourBL:          form.hasRetourBL || false,  // ⭐ Retour BL obligatoire
-        enGare:               form.enGare || false,       // 🚉 Livraison en gare
+        deliveryMethod:       form.enGare ? 'gare' : 'domicile',  // 🚉 Mode de livraison
       })
 
       // Créer automatiquement un compte portail pour les particuliers
@@ -1487,7 +1550,6 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
             nic: form.senderNic || ''
           })
           if (result.success && !result.alreadyExists) {
-            console.log(`✅ Compte portail créé pour ${form.senderName}: ${result.email} / ${result.password}`)
           }
         } catch (err: any) {
           console.error('❌ Erreur création compte portail particulier:', err)
@@ -1508,7 +1570,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
           })
         } catch (err: any) { console.error('addPayment:', err) }
       }
-      if (form.portType === 'port_en_compte' && form.clientId && (parcel.price as number) > 0) {
+      if (autoPortType === 'port_en_compte' && form.clientId && (parcel.price as number) > 0) {
         try {
           await addPayment({
             clientId:    form.clientId,
@@ -1586,16 +1648,11 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   }
 
   const handleDeleteClick = (parcel: any) => {
-    console.log('🗑️ handleDeleteClick appelé', { parcel })
     const { canEditParcelDetails, setDeleteConfirm } = s.current
-    console.log('🔍 canEditParcelDetails:', canEditParcelDetails)
-    console.log('🔍 setDeleteConfirm:', setDeleteConfirm)
 
     if (canEditParcelDetails(parcel)) {
-      console.log('✅ Autorisation OK - ouverture modal')
       setDeleteConfirm(parcel)
     } else {
-      console.log('❌ Pas autorisé')
       window.alert('Lecture seule : seul le createur de ce bon peut le supprimer.')
     }
   }
@@ -1740,14 +1797,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     setReturnReasonModal((m: any) => ({ ...m, loading: true }))
     setReturningParcelId(returnReasonModal.parcel.id)
     try {
-      console.log('🔥 TENTATIVE RETOUR:', {
-        parcelId: returnReasonModal.parcel.id,
-        trackingId: returnReasonModal.parcel.trackingId,
-        currentStatus: returnReasonModal.parcel.status,
-        note
-      })
       await markParcelAsReturned(returnReasonModal.parcel, { note })
-      console.log('✅ RETOUR RÉUSSI!')
       setReturnReasonModal(null)
     } catch (e: any) {
       console.error('❌ ERREUR RETOUR:', e)
@@ -2205,6 +2255,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     // Transport / Assignment
     handleAssignTransport,
     handleBulkLoadTransport,
+    handleBulkAssignDriver,
     handleAssignDelivery,
     handleChefPointParcel,
     // COD Collect

@@ -838,6 +838,11 @@ export default function ParcelsTab() {
                     <span className="text-sm font-bold text-gray-700">
                       {tableFilteredParcels.length} expédition{tableFilteredParcels.length > 1 ? 's' : ''}
                     </span>
+                    {portTypeFilter !== 'all' && (
+                      <span className="ml-2 px-2 py-1 rounded-full text-[10px] font-bold bg-blue-600 text-white">
+                        Filtre: {portTypeFilter === 'port_paye' ? '✅ Port payé' : portTypeFilter === 'port_du' ? '📮 Port dû' : '💼 En compte'}
+                      </span>
+                    )}
                   </div>
                   <div className="flex items-center gap-6">
                     <div className="flex items-center gap-2">
