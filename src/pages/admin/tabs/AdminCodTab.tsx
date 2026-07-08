@@ -435,8 +435,8 @@ export default function AdminCodTab({
                   : p.codSentToSource && !p.codReceivedBySource
                   ? { label: 'En transit source', bg: 'bg-blue-100',   text: 'text-blue-700',   dot: 'bg-blue-500'   }
                   : COD_STATUS[p.codStatus || 'pending']
-                // Normaliser le type de paiement (avec et sans accents, majuscules/minuscules)
-                const paymentType = (p.codPaymentType || '').toLowerCase().trim()
+                // Normaliser le type de paiement (utiliser serviceType en priorité, puis codPaymentType)
+                const paymentType = (p.serviceType || p.codPaymentType || '').toLowerCase().trim()
                 // Fonction pour retirer les accents
                 const removeAccents = (str: string) => str.normalize('NFD').replace(/[̀-ͯ]/g, '')
                 const normalizedPayment = removeAccents(paymentType)
@@ -479,7 +479,7 @@ export default function AdminCodTab({
                     <td className="px-4 py-3">
                       {cpt
                         ? <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${(cpt as any).bg} ${(cpt as any).text}`}>{(cpt as any).emoji} {(cpt as any).label}</span>
-                        : <span className="text-red-500 text-xs font-mono">"{p.codPaymentType}"</span>
+                        : <span className="text-gray-300 text-xs">—</span>
                       }
                     </td>
                     {/* Statut RETOUR FOND */}

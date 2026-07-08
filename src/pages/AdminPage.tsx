@@ -709,10 +709,15 @@ export default function AdminPage() {
   const filteredCod = useMemo(() => {
     if (!Array.isArray(codDateFiltered)) return []
     let list = codDateFiltered
-    if (codFilter === 'especes')   list = list.filter((p: any) => p.codPaymentType === 'especes' || p.codPaymentType === 'espèces')
-    if (codFilter === 'cheque')    list = list.filter((p: any) => p.codPaymentType === 'cheque' || p.codPaymentType === 'chèque')
-    if (codFilter === 'traite')    list = list.filter((p: any) => p.codPaymentType === 'traite')
-    if (codFilter === 'autres')    list = list.filter((p: any) => p.codPaymentType && !['especes', 'espèces', 'cheque', 'chèque', 'traite'].includes(p.codPaymentType))
+    // Utiliser serviceType en priorité, puis codPaymentType
+    const getPaymentType = (p: any) => (p.serviceType || p.codPaymentType || '').toLowerCase()
+    if (codFilter === 'especes')   list = list.filter((p: any) => getPaymentType(p).includes('espece'))
+    if (codFilter === 'cheque')    list = list.filter((p: any) => getPaymentType(p).includes('cheque'))
+    if (codFilter === 'traite')    list = list.filter((p: any) => getPaymentType(p).includes('traite'))
+    if (codFilter === 'autres')    list = list.filter((p: any) => {
+      const pt = getPaymentType(p)
+      return pt && !pt.includes('espece') && !pt.includes('cheque') && !pt.includes('traite')
+    })
     if (codSearch) {
       const q = codSearch.toLowerCase()
       list = list.filter((p: any) =>
