@@ -479,7 +479,7 @@ export default function AdminCodTab({
                     <td className="px-4 py-3">
                       {cpt
                         ? <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${(cpt as any).bg} ${(cpt as any).text}`}>{(cpt as any).emoji} {(cpt as any).label}</span>
-                        : <span className="text-gray-300 text-xs">—</span>
+                        : <span className="text-gray-300 text-xs" title={`Raw: "${p.codPaymentType}" (${typeof p.codPaymentType})`}>—</span>
                       }
                     </td>
                     {/* Statut RETOUR FOND */}
