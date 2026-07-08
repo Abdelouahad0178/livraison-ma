@@ -442,30 +442,131 @@ export default function AdminCodTab({
                     <head>
                       <title>RETOUR FOND - ${new Date().toLocaleDateString('fr-MA')}</title>
                       <style>
-                        body { font-family: Arial, sans-serif; margin: 20px; }
-                        h1 { text-align: center; color: #1e40af; margin-bottom: 10px; }
-                        .info { text-align: center; margin-bottom: 20px; font-size: 12px; color: #666; }
-                        table { width: 100%; border-collapse: collapse; font-size: 11px; }
-                        th { background: #f3f4f6; padding: 8px; text-align: left; border: 1px solid #d1d5db; font-weight: bold; }
-                        td { padding: 6px 8px; border: 1px solid #e5e7eb; }
-                        tr:nth-child(even) { background: #f9fafb; }
-                        .total { margin-top: 20px; text-align: right; font-size: 14px; font-weight: bold; }
+                        * { margin: 0; padding: 0; box-sizing: border-box; }
+                        body {
+                          font-family: 'Segoe UI', Arial, sans-serif;
+                          padding: 20px;
+                          color: #1f2937;
+                        }
+                        .header {
+                          text-align: center;
+                          margin-bottom: 30px;
+                          padding-bottom: 15px;
+                          border-bottom: 3px solid #3b82f6;
+                        }
+                        h1 {
+                          font-size: 24px;
+                          color: #1e40af;
+                          margin-bottom: 8px;
+                          font-weight: 700;
+                        }
+                        .info {
+                          font-size: 11px;
+                          color: #6b7280;
+                          line-height: 1.6;
+                        }
+                        table {
+                          width: 100%;
+                          border-collapse: collapse;
+                          margin-bottom: 20px;
+                          box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                        }
+                        thead {
+                          background: linear-gradient(to bottom, #3b82f6, #2563eb);
+                          color: white;
+                        }
+                        th {
+                          padding: 12px 8px;
+                          text-align: left;
+                          font-weight: 600;
+                          font-size: 10px;
+                          text-transform: uppercase;
+                          letter-spacing: 0.5px;
+                          border: 2px solid #1e40af;
+                        }
+                        tbody tr {
+                          border-bottom: 1px solid #e5e7eb;
+                        }
+                        tbody tr:nth-child(odd) {
+                          background: #f9fafb;
+                        }
+                        tbody tr:nth-child(even) {
+                          background: white;
+                        }
+                        tbody tr:hover {
+                          background: #eff6ff;
+                        }
+                        td {
+                          padding: 10px 8px;
+                          font-size: 10px;
+                          border-left: 1px solid #e5e7eb;
+                          border-right: 1px solid #e5e7eb;
+                        }
+                        td:first-child {
+                          font-weight: 600;
+                          color: #1e40af;
+                        }
+                        .footer {
+                          margin-top: 25px;
+                          padding: 15px;
+                          background: linear-gradient(to right, #fef3c7, #fde68a);
+                          border: 2px solid #f59e0b;
+                          border-radius: 8px;
+                        }
+                        .totals {
+                          display: flex;
+                          justify-content: space-between;
+                          align-items: center;
+                        }
+                        .total-label {
+                          font-size: 14px;
+                          font-weight: 600;
+                          color: #92400e;
+                        }
+                        .total-amount {
+                          font-size: 20px;
+                          font-weight: 700;
+                          color: #b45309;
+                        }
+                        .summary {
+                          display: grid;
+                          grid-template-columns: repeat(2, 1fr);
+                          gap: 10px;
+                          margin-top: 10px;
+                          padding-top: 10px;
+                          border-top: 1px solid #f59e0b;
+                        }
+                        .summary-item {
+                          font-size: 11px;
+                          color: #78350f;
+                        }
                         @media print {
-                          body { margin: 10px; }
+                          body { padding: 10px; }
                           table { page-break-inside: auto; }
+                          thead { display: table-header-group; }
                           tr { page-break-inside: avoid; page-break-after: auto; }
+                          .footer { page-break-inside: avoid; }
                         }
                       </style>
                     </head>
                     <body>
-                      <h1>📋 RETOUR FOND</h1>
-                      <div class="info">
-                        Date d'impression : ${new Date().toLocaleString('fr-MA')}<br>
-                        Nombre de colis : ${filteredCod.length}
+                      <div class="header">
+                        <h1>📋 RETOUR FOND (COD)</h1>
+                        <div class="info">
+                          <strong>Date d'impression :</strong> ${new Date().toLocaleString('fr-MA')}<br>
+                          <strong>Nombre de colis :</strong> ${filteredCod.length}
+                        </div>
                       </div>
                       ${printContent.innerHTML}
-                      <div class="total">
-                        Total : ${fmt(filteredCod.reduce((s: any, p: any) => s + (parseFloat(p.codAmount) || 0), 0))} DH
+                      <div class="footer">
+                        <div class="totals">
+                          <span class="total-label">💰 TOTAL GÉNÉRAL</span>
+                          <span class="total-amount">${fmt(filteredCod.reduce((s: any, p: any) => s + (parseFloat(p.codAmount) || 0), 0))} DH</span>
+                        </div>
+                        <div class="summary">
+                          <div class="summary-item">📦 Colis : ${filteredCod.length}</div>
+                          <div class="summary-item">💵 Montant moyen : ${fmt((filteredCod.reduce((s: any, p: any) => s + (parseFloat(p.codAmount) || 0), 0) / filteredCod.length) || 0)} DH</div>
+                        </div>
                       </div>
                     </body>
                   </html>
