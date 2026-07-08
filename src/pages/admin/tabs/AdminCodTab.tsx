@@ -437,12 +437,17 @@ export default function AdminCodTab({
                   : COD_STATUS[p.codStatus || 'pending']
                 // Normaliser le type de paiement (avec et sans accents, majuscules/minuscules)
                 const paymentType = (p.codPaymentType || '').toLowerCase().trim()
+                // Fonction pour retirer les accents
+                const removeAccents = (str: string) => str.normalize('NFD').replace(/[̀-ͯ]/g, '')
+                const normalizedPayment = removeAccents(paymentType)
+
                 const normalizedType =
-                  paymentType === 'chèque' || paymentType === 'cheque' ? 'cheque' :
-                  paymentType === 'espèces' || paymentType === 'especes' ? 'especes' :
-                  paymentType === 'traite' ? 'traite' :
-                  p.codPaymentType
-                const cpt = COD_PAYMENT_TYPES.find((t: any) => t.key === normalizedType)
+                  normalizedPayment.includes('cheque') ? 'cheque' :
+                  normalizedPayment.includes('espece') ? 'especes' :
+                  normalizedPayment.includes('traite') ? 'traite' :
+                  normalizedPayment.includes('bon') && normalizedPayment.includes('livraison') ? 'bon_livraison' :
+                  null
+                const cpt = normalizedType ? COD_PAYMENT_TYPES.find((t: any) => t.key === normalizedType) : null
                 const openReq = agentCodRequests.find((r: any) => r.parcelId === p.id && r.status !== 'resolved')
                 return (
                   <tr key={p.id} className="hover:bg-gray-50 transition">
