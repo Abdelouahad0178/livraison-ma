@@ -68,6 +68,27 @@ export default function AdminCodTab({
 
   const [selectedCity, setSelectedCity] = React.useState<string>('all')
   const [selectedPaymentType, setSelectedPaymentType] = React.useState<string>('all')
+  const [selectedParcels, setSelectedParcels] = React.useState<Set<string>>(new Set())
+
+  // Sélectionner/désélectionner tout
+  const toggleSelectAll = () => {
+    if (selectedParcels.size === filteredCod.length) {
+      setSelectedParcels(new Set())
+    } else {
+      setSelectedParcels(new Set(filteredCod.map((p: any) => p.id)))
+    }
+  }
+
+  // Sélectionner/désélectionner un colis
+  const toggleSelectParcel = (id: string) => {
+    const newSelected = new Set(selectedParcels)
+    if (newSelected.has(id)) {
+      newSelected.delete(id)
+    } else {
+      newSelected.add(id)
+    }
+    setSelectedParcels(newSelected)
+  }
 
   // Fonction pour normaliser le type de paiement
   const normalizePaymentType = (p: any) => {
@@ -427,11 +448,22 @@ export default function AdminCodTab({
           </div>
 
           {/* Bouton Imprimer */}
-          <div className="flex justify-end pt-3 border-t border-gray-100">
+          <div className="flex justify-between items-center pt-3 border-t border-gray-100">
+            {selectedParcels.size > 0 && (
+              <span className="text-sm font-semibold text-purple-700 bg-purple-50 px-3 py-1 rounded-lg">
+                ✓ {selectedParcels.size} colis sélectionné{selectedParcels.size > 1 ? 's' : ''}
+              </span>
+            )}
             <button
               onClick={() => {
-                const printContent = document.getElementById('cod-table-print')
-                if (!printContent) return
+                const parcelsToprint = selectedParcels.size > 0
+                  ? filteredCod.filter((p: any) => selectedParcels.has(p.id))
+                  : filteredCod
+
+                if (parcelsToprint.length === 0) {
+                  alert('Aucun colis à imprimer')
+                  return
+                }
 
                 const printWindow = window.open('', '_blank')
                 if (!printWindow) return
@@ -554,7 +586,7 @@ export default function AdminCodTab({
                         <h1>📋 RETOUR FOND (COD)</h1>
                         <div class="info">
                           <strong>Date d'impression :</strong> ${new Date().toLocaleString('fr-MA')}<br>
-                          <strong>Nombre de colis :</strong> ${filteredCod.length}
+                          <strong>Nombre de colis :</strong> ${parcelsToprint.length}
                         </div>
                       </div>
                       <table>
@@ -572,7 +604,7 @@ export default function AdminCodTab({
                           </tr>
                         </thead>
                         <tbody>
-                          ${filteredCod.map((p: any) => {
+                          ${parcelsToprint.map((p: any) => {
                             const getDateExp = () => {
                               if (p.workDate) return new Date(p.workDate).toLocaleDateString('fr-MA')
                               if (p.createdAt?.toDate) return p.createdAt.toDate().toLocaleDateString('fr-MA')
@@ -595,30 +627,28 @@ export default function AdminCodTab({
                               if (p.codStatus === 'remis') return 'Remis agence'
                               return 'En attente'
                             }
-                            return \`
-                              <tr>
-                                <td>\${p.sender?.nic || '—'}</td>
-                                <td>\${getDateExp()}</td>
-                                <td>\${p.receiver?.name || '—'}</td>
-                                <td>\${p.receiver?.city || '—'}</td>
-                                <td style="text-align: right; font-weight: 600;">\${p.codAmount} DH</td>
-                                <td>\${getPaymentType()}</td>
-                                <td>\${getStatus()}</td>
-                                <td>\${p.codCollectedBy || '—'}</td>
-                                <td>\${p.codCollectedAt ? new Date(p.codCollectedAt).toLocaleDateString('fr-MA') : '—'}</td>
-                              </tr>
-                            \`
+                            return '<tr>' +
+                              '<td>' + (p.sender?.nic || '—') + '</td>' +
+                              '<td>' + getDateExp() + '</td>' +
+                              '<td>' + (p.receiver?.name || '—') + '</td>' +
+                              '<td>' + (p.receiver?.city || '—') + '</td>' +
+                              '<td style="text-align: right; font-weight: 600;">' + p.codAmount + ' DH</td>' +
+                              '<td>' + getPaymentType() + '</td>' +
+                              '<td>' + getStatus() + '</td>' +
+                              '<td>' + (p.codCollectedBy || '—') + '</td>' +
+                              '<td>' + (p.codCollectedAt ? new Date(p.codCollectedAt).toLocaleDateString('fr-MA') : '—') + '</td>' +
+                            '</tr>'
                           }).join('')}
                         </tbody>
                       </table>
                       <div class="footer">
                         <div class="totals">
                           <span class="total-label">💰 TOTAL GÉNÉRAL</span>
-                          <span class="total-amount">${fmt(filteredCod.reduce((s: any, p: any) => s + (parseFloat(p.codAmount) || 0), 0))} DH</span>
+                          <span class="total-amount">${fmt(parcelsToprint.reduce((s: any, p: any) => s + (parseFloat(p.codAmount) || 0), 0))} DH</span>
                         </div>
                         <div class="summary">
-                          <div class="summary-item">📦 Colis : ${filteredCod.length}</div>
-                          <div class="summary-item">💵 Montant moyen : ${fmt((filteredCod.reduce((s: any, p: any) => s + (parseFloat(p.codAmount) || 0), 0) / filteredCod.length) || 0)} DH</div>
+                          <div class="summary-item">📦 Colis : ${parcelsToprint.length}</div>
+                          <div class="summary-item">💵 Montant moyen : ${fmt((parcelsToprint.reduce((s: any, p: any) => s + (parseFloat(p.codAmount) || 0), 0) / parcelsToprint.length) || 0)} DH</div>
                         </div>
                       </div>
                     </body>
@@ -643,6 +673,14 @@ export default function AdminCodTab({
           <table id="cod-table-print" className="w-full text-sm min-w-205">
             <thead>
               <tr className="bg-gray-50 border-b border-gray-100">
+                <th className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap w-12">
+                  <input
+                    type="checkbox"
+                    checked={filteredCod.length > 0 && selectedParcels.size === filteredCod.length}
+                    onChange={toggleSelectAll}
+                    className="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500 cursor-pointer"
+                  />
+                </th>
                 {['N° EXP','Date expédition','Destinataire','Ville','Montant RETOUR FOND','Mode paiement','Statut RETOUR FOND','Collecté par','Date collecte'].map(h => (
                   <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                 ))}
@@ -650,7 +688,7 @@ export default function AdminCodTab({
             </thead>
             <tbody className="divide-y divide-gray-50">
               {filteredCod.length === 0 ? (
-                <tr><td colSpan={9} className="px-4 py-12 text-center text-gray-400">💳 Aucun remboursement trouvé</td></tr>
+                <tr><td colSpan={10} className="px-4 py-12 text-center text-gray-400">💳 Aucun remboursement trouvé</td></tr>
               ) : filteredCod.map((p: any) => {
                 const cs  = p.codSenderPaid
                   ? { label: 'Réglé ✓',          bg: 'bg-green-100',  text: 'text-green-700',  dot: 'bg-green-500'  }
@@ -674,7 +712,16 @@ export default function AdminCodTab({
                 const cpt = normalizedType ? COD_PAYMENT_TYPES.find((t: any) => t.key === normalizedType) : null
                 const openReq = agentCodRequests.find((r: any) => r.parcelId === p.id && r.status !== 'resolved')
                 return (
-                  <tr key={p.id} className="hover:bg-gray-50 transition">
+                  <tr key={p.id} className={`hover:bg-gray-50 transition ${selectedParcels.has(p.id) ? 'bg-purple-50' : ''}`}>
+                    {/* Checkbox */}
+                    <td className="px-4 py-3">
+                      <input
+                        type="checkbox"
+                        checked={selectedParcels.has(p.id)}
+                        onChange={() => toggleSelectParcel(p.id)}
+                        className="w-4 h-4 text-purple-600 border-gray-300 rounded focus:ring-purple-500 cursor-pointer"
+                      />
+                    </td>
                     {/* N° EXP */}
                     <td className="px-4 py-3">
                       <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg font-semibold">{p.sender?.nic || '—'}</span>
