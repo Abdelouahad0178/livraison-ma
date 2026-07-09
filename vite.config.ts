@@ -47,7 +47,7 @@ export default defineConfig({
   },
   optimizeDeps: {
     include: ['react', 'react-dom', 'react-router-dom'],
-    exclude: ['html5-qrcode', 'recharts'],
+    exclude: ['html5-qrcode'],
     esbuildOptions: undefined, // Désactiver l'ancien esbuild
   },
   plugins: [

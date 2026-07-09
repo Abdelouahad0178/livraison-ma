@@ -9,29 +9,14 @@ import { getFunctions, httpsCallable } from 'firebase/functions'
 import { auth, db } from '../firebase/config'
 import CompanyContact from '../components/CompanyContact'
 import LiveClock from '../components/LiveClock'
-import {
-  AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
-  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
-} from 'recharts'
+import { Line, Bar, Doughnut } from 'react-chartjs-2'
+import '../utils/chartConfig' // Enregistre les composants Chart.js
+import { CHART_COLORS, PIE_COLORS, defaultChartOptions, pieChartOptions } from '../utils/chartConfig'
 import {
   ArrowLeft, TrendingUp, Package, CheckCircle, Clock,
   RotateCcw, Banknote, Wallet, Users, Truck, MapPin, Calendar, RefreshCw, Database
 } from 'lucide-react'
 import { fmt } from '../utils/formatNumber'
-
-const CHART_COLORS = {
-  crees:     '#3b82f6',
-  livres:    '#10b981',
-  retournes: '#ef4444',
-  enCours:   '#f97316',
-  revenue:   '#f59e0b',
-  cod:       '#8b5cf6',
-}
-
-const PIE_COLORS = [
-  '#3b82f6','#10b981','#f97316','#ef4444','#8b5cf6',
-  '#f59e0b','#06b6d4','#84cc16','#ec4899','#6366f1',
-]
 
 // Map flat stats/global field keys to display labels
 const STATUS_KEY_LABELS = {
@@ -94,23 +79,24 @@ function buildTimeSeriesFromStats(dailyStats: any, view: any) {
   })
 }
 
-// ── Custom tooltip ─────────────────────────────────────────────────────────
-const CustomTooltip = ({ active, payload, label }: any = {}) => {
-  if (!active || !payload?.length) return null
-  return (
-    <div className="bg-white border border-gray-100 shadow-lg rounded-xl px-4 py-3 text-sm">
-      <p className="font-bold text-gray-700 mb-2">{label}</p>
-      {payload.map((e: any) => (
-        <div key={e.name} className="flex items-center gap-2">
-          <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: e.color }} />
-          <span className="text-gray-600 capitalize">{e.name}</span>
-          <span className="font-bold text-gray-800 ml-auto pl-4">
-            {e.name === 'revenue' || e.name === 'cod' ? fmt(e.value) + ' DH' : e.value}
-          </span>
-        </div>
-      ))}
-    </div>
-  )
+// ── Helpers Chart.js ───────────────────────────────────────────────────────
+const hexToRgba = (hex: string, alpha: number) => {
+  const r = parseInt(hex.slice(1, 3), 16)
+  const g = parseInt(hex.slice(3, 5), 16)
+  const b = parseInt(hex.slice(5, 7), 16)
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+// Tooltip callback : montants en DH pour revenue / cod
+const dhTooltipCallbacks = {
+  callbacks: {
+    label: (ctx: any) => {
+      if (ctx.dataset.label === 'revenue' || ctx.dataset.label === 'cod') {
+        return ctx.dataset.label + ': ' + fmt(ctx.parsed.y) + ' DH'
+      }
+      return ctx.dataset.label + ': ' + ctx.parsed.y
+    },
+  },
 }
 
 export default function DashboardPage() {
@@ -252,7 +238,7 @@ export default function DashboardPage() {
         if (!user) return null // Exclure les agents supprimés
         return { name: user.name || user.email || '—', city: user.city || '—', created: a.created || 0, livres: a.livres || 0 }
       })
-      .filter(Boolean)
+      .filter((a): a is NonNullable<typeof a> => a !== null)
       .slice(0, 5)
   , [agentStats, users])
 
@@ -263,7 +249,7 @@ export default function DashboardPage() {
         if (!user) return null // Exclure les chauffeurs supprimés
         return { name: user.name || user.email || '—', city: user.city || '—', deliveries: d.deliveries || 0, livres: d.livres || 0 }
       })
-      .filter(Boolean)
+      .filter((d): d is NonNullable<typeof d> => d !== null)
       .slice(0, 5)
   , [driverStats, users])
 
@@ -273,6 +259,123 @@ export default function DashboardPage() {
     { key: 'month', label: '12 mois' },
     { key: 'year',  label: '4 ans' },
   ]
+
+  // ── Chart.js : évolution des colis (aires empilées visuellement) ─────────
+  const evolutionData = {
+    labels: timeSeries.map(t => t.label),
+    datasets: (['crees', 'livres', 'retournes', 'enCours'] as const).map(key => ({
+      label: key,
+      data: timeSeries.map((t: any) => t[key]),
+      borderColor: CHART_COLORS[key],
+      backgroundColor: hexToRgba(CHART_COLORS[key], 0.1),
+      fill: true,
+      tension: 0.3,
+      borderWidth: 2,
+      pointRadius: 0,
+      pointHoverRadius: 4,
+    })),
+  }
+
+  const evolutionOptions = {
+    ...defaultChartOptions,
+    interaction: { mode: 'index' as const, intersect: false },
+  }
+
+  // ── Chart.js : volume par agence ──────────────────────────────────────────
+  const cityVolumeData = {
+    labels: cityStats.map(c => c.city),
+    datasets: [
+      { label: 'Total',     data: cityStats.map(c => c.total),     backgroundColor: CHART_COLORS.crees,     borderRadius: 4 },
+      { label: 'livres',    data: cityStats.map(c => c.livres),    backgroundColor: CHART_COLORS.livres,    borderRadius: 4 },
+      { label: 'retournes', data: cityStats.map(c => c.retournes), backgroundColor: CHART_COLORS.retournes, borderRadius: 4 },
+    ],
+  }
+
+  const cityVolumeOptions = {
+    ...defaultChartOptions,
+    scales: {
+      ...defaultChartOptions.scales,
+      x: {
+        ...defaultChartOptions.scales.x,
+        ticks: { ...defaultChartOptions.scales.x.ticks, maxRotation: 25, minRotation: 25 },
+      },
+    },
+  }
+
+  // ── Chart.js : revenus par agence ─────────────────────────────────────────
+  const cityRevenueData = {
+    labels: cityStats.map(c => c.city),
+    datasets: [
+      { label: 'revenue', data: cityStats.map(c => c.revenue), backgroundColor: CHART_COLORS.revenue, borderRadius: 4 },
+      { label: 'cod',     data: cityStats.map(c => c.cod),     backgroundColor: CHART_COLORS.cod,     borderRadius: 4 },
+    ],
+  }
+
+  const cityRevenueOptions = {
+    ...defaultChartOptions,
+    plugins: {
+      ...defaultChartOptions.plugins,
+      tooltip: { ...defaultChartOptions.plugins.tooltip, ...dhTooltipCallbacks },
+    },
+    scales: {
+      ...defaultChartOptions.scales,
+      x: {
+        ...defaultChartOptions.scales.x,
+        ticks: { ...defaultChartOptions.scales.x.ticks, maxRotation: 25, minRotation: 25 },
+      },
+      y: {
+        ...defaultChartOptions.scales.y,
+        ticks: { ...defaultChartOptions.scales.y.ticks, callback: (v: any) => fmt(v) },
+      },
+    },
+  }
+
+  // ── Chart.js : donut répartition des statuts ──────────────────────────────
+  const statusData = {
+    labels: statusDist.map(s => s.name),
+    datasets: [{
+      data: statusDist.map(s => s.value),
+      backgroundColor: statusDist.map((_, i) => PIE_COLORS[i % PIE_COLORS.length]),
+      borderColor: '#ffffff',
+      borderWidth: 2,
+    }],
+  }
+
+  const statusOptions = {
+    ...pieChartOptions,
+    cutout: '60%',
+    plugins: {
+      ...pieChartOptions.plugins,
+      tooltip: {
+        ...pieChartOptions.plugins.tooltip,
+        callbacks: { label: (ctx: any) => ctx.label + ': ' + ctx.parsed + ' colis' },
+      },
+    },
+  }
+
+  // ── Chart.js : revenus & COD dans le temps ────────────────────────────────
+  const timeRevenueData = {
+    labels: timeSeries.map(t => t.label),
+    datasets: [
+      { label: 'revenue', data: timeSeries.map(t => t.revenue), backgroundColor: CHART_COLORS.revenue, borderRadius: 4 },
+      { label: 'cod',     data: timeSeries.map(t => t.cod),     backgroundColor: CHART_COLORS.cod,     borderRadius: 4 },
+    ],
+  }
+
+  const timeRevenueOptions = {
+    ...defaultChartOptions,
+    plugins: {
+      ...defaultChartOptions.plugins,
+      tooltip: { ...defaultChartOptions.plugins.tooltip, ...dhTooltipCallbacks },
+    },
+    scales: {
+      ...defaultChartOptions.scales,
+      y: {
+        ...defaultChartOptions.scales.y,
+        ticks: { ...defaultChartOptions.scales.y.ticks, callback: (v: any) => fmt(v) },
+      },
+    },
+  }
 
   if (loading) return (
     <div className="min-h-screen bg-gray-50 flex items-center justify-center">
@@ -365,27 +468,9 @@ export default function DashboardPage() {
               ))}
             </div>
           </div>
-          <ResponsiveContainer width="100%" height={280}>
-            <AreaChart data={timeSeries} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
-              <defs>
-                {Object.entries(CHART_COLORS).map(([k, c]) => (
-                  <linearGradient key={k} id={`grad-${k}`} x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%"  stopColor={c} stopOpacity={0.15} />
-                    <stop offset="95%" stopColor={c} stopOpacity={0} />
-                  </linearGradient>
-                ))}
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={35} />
-              <Tooltip content={<CustomTooltip /> as any} />
-              <Legend wrapperStyle={{ fontSize: 12, paddingTop: 12 }} />
-              <Area type="monotone" dataKey="crees"     stroke={CHART_COLORS.crees}     fill={`url(#grad-crees)`}     strokeWidth={2} dot={false} />
-              <Area type="monotone" dataKey="livres"    stroke={CHART_COLORS.livres}    fill={`url(#grad-livres)`}    strokeWidth={2} dot={false} />
-              <Area type="monotone" dataKey="retournes" stroke={CHART_COLORS.retournes} fill={`url(#grad-retournes)`} strokeWidth={2} dot={false} />
-              <Area type="monotone" dataKey="enCours"   stroke={CHART_COLORS.enCours}   fill={`url(#grad-enCours)`}   strokeWidth={2} dot={false} />
-            </AreaChart>
-          </ResponsiveContainer>
+          <div style={{ height: '280px' }}>
+            <Line data={evolutionData} options={evolutionOptions as any} />
+          </div>
         </div>
 
         {/* ── COMPARISON PÉRIODE COURANTE / PRÉCÉDENTE ──────────────────── */}
@@ -443,30 +528,13 @@ export default function DashboardPage() {
           {cityStats.length === 0 ? (
             <p className="text-center text-gray-400 py-12">Aucune donnée</p>
           ) : (
-            <ResponsiveContainer width="100%" height={280}>
+            <div style={{ height: '280px' }}>
               {cityTab === 'volume' ? (
-                <BarChart data={cityStats} margin={{ top: 5, right: 5, left: 0, bottom: 20 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="city" tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} angle={-25} textAnchor="end" />
-                  <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={35} />
-                  <Tooltip content={<CustomTooltip /> as any} />
-                  <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
-                  <Bar dataKey="total"     fill={CHART_COLORS.crees}     radius={[4,4,0,0]} name="Total" />
-                  <Bar dataKey="livres"    fill={CHART_COLORS.livres}    radius={[4,4,0,0]} name="livres" />
-                  <Bar dataKey="retournes" fill={CHART_COLORS.retournes} radius={[4,4,0,0]} name="retournes" />
-                </BarChart>
+                <Bar data={cityVolumeData} options={cityVolumeOptions as any} />
               ) : (
-                <BarChart data={cityStats} margin={{ top: 5, right: 5, left: 0, bottom: 20 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                  <XAxis dataKey="city" tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} angle={-25} textAnchor="end" />
-                  <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={55} tickFormatter={v => fmt(v)} />
-                  <Tooltip content={<CustomTooltip /> as any} />
-                  <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
-                  <Bar dataKey="revenue" fill={CHART_COLORS.revenue} radius={[4,4,0,0]} name="revenue" />
-                  <Bar dataKey="cod"     fill={CHART_COLORS.cod}     radius={[4,4,0,0]} name="cod" />
-                </BarChart>
+                <Bar data={cityRevenueData} options={cityRevenueOptions as any} />
               )}
-            </ResponsiveContainer>
+            </div>
           )}
         </div>
 
@@ -477,18 +545,9 @@ export default function DashboardPage() {
           <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
             <h2 className="font-bold text-gray-800 mb-1">Répartition des statuts</h2>
             <p className="text-xs text-gray-400 mb-4">{fmt(globalStats?.total || 0)} colis (stats agrégées)</p>
-            <ResponsiveContainer width="100%" height={240}>
-              <PieChart>
-                <Pie data={statusDist} cx="50%" cy="50%" innerRadius={55} outerRadius={90}
-                  dataKey="value" nameKey="name" paddingAngle={2}>
-                  {statusDist.map((_, i) => (
-                    <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                  ))}
-                </Pie>
-                <Tooltip formatter={(v, n) => [v + ' colis', n]} />
-                <Legend wrapperStyle={{ fontSize: 11 }} />
-              </PieChart>
-            </ResponsiveContainer>
+            <div style={{ height: '240px' }}>
+              <Doughnut data={statusData} options={statusOptions as any} />
+            </div>
           </div>
 
           {/* Taux de livraison par agence */}
@@ -518,17 +577,9 @@ export default function DashboardPage() {
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
           <h2 className="font-bold text-gray-800 mb-1">Évolution des revenus & RETOUR FOND</h2>
           <p className="text-xs text-gray-400 mb-4">Montants en DH sur la même période sélectionnée</p>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={timeSeries} margin={{ top: 5, right: 5, left: 0, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis dataKey="label" tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} />
-              <YAxis tick={{ fontSize: 11, fill: '#9ca3af' }} tickLine={false} axisLine={false} width={55} tickFormatter={v => fmt(v)} />
-              <Tooltip content={<CustomTooltip /> as any} />
-              <Legend wrapperStyle={{ fontSize: 12, paddingTop: 8 }} />
-              <Bar dataKey="revenue" fill={CHART_COLORS.revenue} radius={[4,4,0,0]} name="revenue" />
-              <Bar dataKey="cod"     fill={CHART_COLORS.cod}     radius={[4,4,0,0]} name="cod" />
-            </BarChart>
-          </ResponsiveContainer>
+          <div style={{ height: '220px' }}>
+            <Bar data={timeRevenueData} options={timeRevenueOptions as any} />
+          </div>
         </div>
 
         {/* ── TOP AGENTS & CHAUFFEURS ────────────────────────────────────── */}
