@@ -259,6 +259,8 @@ export default function AgentPage() {
   const [loadingParcels, setLoadingParcels] = useState(false)
   const [pendingAideParcels, setPendingAideParcels] = useState<any[]>([])
   const [search, setSearch]             = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [isSearchActive, setIsSearchActive] = useState(false)
   // Utiliser 'all' par défaut pour voir tous les colis, pas seulement ceux du jour de travail
   const [datePreset, setDatePreset]     = useState('all')
   const [dateFrom, setDateFrom]         = useState('')

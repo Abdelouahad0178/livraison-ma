@@ -78,6 +78,8 @@ export default function DirectorPage() {
   const [cityFilter,    setCityFilter]   = useState('Toutes')
   const [statusFilter,  setStatusFilter] = useState('Tous')
   const [search,        setSearch]       = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [isSearchActive, setIsSearchActive] = useState(false)
   const [datePreset,    setDatePreset]   = useState('all')
   const [dateFrom,      setDateFrom]     = useState('')
   const [dateTo,        setDateTo]       = useState('')
@@ -145,6 +147,20 @@ export default function DirectorPage() {
   ]
   const availableTabs = TAB_MAP.filter(t => t.key === 'messages' || hasPermission(t.key))
 
+  // ⚡ Détecter si recherche active pour charger plus de colis
+  useEffect(() => {
+    const hasSearch = debouncedSearch.trim() !== ''
+    setIsSearchActive(hasSearch)
+  }, [debouncedSearch])
+
+  // ⚡ Debounce de la recherche
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(search)
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [search])
+
   useEffect(() => {
     const uid = auth.currentUser?.uid
     if (!uid) return
@@ -155,14 +171,25 @@ export default function DirectorPage() {
       },
       err => console.warn('DirectorPage user profile listener error:', err.code)
     )
+    return () => { unsubProfile() }
+  }, [])
+
+  useEffect(() => {
     setLoading(true)
-    const unsubParcels = subscribeAllParcels((data: any) => { setParcels(data); setLoading(false) }, console.error, 0, 1000)
+    // Recherche active : 10000 colis pour trouver anciens colis
+    // Par défaut : 500 colis pour chargement rapide
+    const loadLimit = isSearchActive ? 10000 : 500
+    const unsubParcels = subscribeAllParcels((data: any) => { setParcels(data); setLoading(false) }, console.error, 0, loadLimit)
+    return () => { unsubParcels() }
+  }, [isSearchActive])
+
+  useEffect(() => {
     const unsubUsers   = subscribeAllUsers(setUsers)
     const unsubCaisse   = subscribeAllCaisse(setCaisseEntries)
     const unsubClotures = subscribeAllCaisseClotures(setCaisseClotures)
     const unsubRemarks  = subscribeAllCaissierRemarks(setAllRemarks)
     const unsubClientMessages = subscribeAllClientMessages(setClientMessages)
-    return () => { unsubProfile(); unsubParcels(); unsubUsers(); unsubCaisse(); unsubClotures(); unsubRemarks(); unsubClientMessages() }
+    return () => { unsubUsers(); unsubCaisse(); unsubClotures(); unsubRemarks(); unsubClientMessages() }
   }, [])
 
   useEffect(() => {

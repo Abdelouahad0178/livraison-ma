@@ -70,6 +70,8 @@ export default function CentralCollectorPage() {
   const [deposits, setDeposits] = useState<any[]>([])
   const [payments, setPayments] = useState<any[]>([])
   const [query, setQuery] = useState('')
+  const [debouncedQuery, setDebouncedQuery] = useState('')
+  const [isSearchActive, setIsSearchActive] = useState(false)
   const [cityFilter, setCityFilter] = useState('all')
   const [datePreset, setDatePreset] = useState('all')
   const [dateFrom, setDateFrom] = useState('')
@@ -83,6 +85,20 @@ export default function CentralCollectorPage() {
   const [editPaymentModal, setEditPaymentModal] = useState<any>(null)
   const [deletePaymentId, setDeletePaymentId] = useState('')
 
+  // ⚡ Détecter si recherche active pour charger plus de colis
+  useEffect(() => {
+    const hasSearch = debouncedQuery.trim() !== ''
+    setIsSearchActive(hasSearch)
+  }, [debouncedQuery])
+
+  // ⚡ Debounce de la recherche
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(query)
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [query])
+
   useEffect(() => {
     const uid = auth.currentUser?.uid
     if (!uid) return
@@ -95,11 +111,18 @@ export default function CentralCollectorPage() {
 
   useEffect(() => {
     const onError = (err: any) => console.error('CentralCollectorPage:', err)
-    const unsubParcels = subscribeAllParcels(setParcels, onError, 0, 1000)
+    // Recherche active : 10000 colis pour trouver anciens colis
+    // Par défaut : 500 colis pour chargement rapide
+    const loadLimit = isSearchActive ? 10000 : 500
+    const unsubParcels = subscribeAllParcels(setParcels, onError, 0, loadLimit)
+    return () => { unsubParcels() }
+  }, [isSearchActive])
+
+  useEffect(() => {
+    const onError = (err: any) => console.error('CentralCollectorPage:', err)
     const unsubDeposits = subscribeAllCentralCodDeposits(setDeposits, onError)
     const unsubPayments = subscribeAllCentralSupplierPayments(setPayments, onError)
     return () => {
-      unsubParcels()
       unsubDeposits()
       unsubPayments()
     }
