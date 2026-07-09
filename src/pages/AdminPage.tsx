@@ -329,6 +329,7 @@ export default function AdminPage() {
   const [driverFilter,     setDriverFilter]     = useState('Tous')
   const [search,        setSearch]        = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
+  const [isSearchActive, setIsSearchActive] = useState(false) // Pour recharger plus de colis quand recherche active
   const [statusModal,       setStatusModal]       = useState<any>(null)
   const [returnModal,       setReturnModal]       = useState<any>(null)
   const [returnParcelModal, setReturnParcelModal] = useState<any>(null) // { parcel, loading, result, error }
@@ -481,6 +482,12 @@ export default function AdminPage() {
   const setActivityDateTo = setAdminDateTo
   const periodLabel = formatPeriod(adminDatePreset, adminDateFrom, adminDateTo)
 
+  // ⚡ Détecter si recherche active pour charger plus de colis
+  useEffect(() => {
+    const hasSearch = debouncedSearch.trim() !== ''
+    setIsSearchActive(hasSearch)
+  }, [debouncedSearch])
+
   // ⚡ Debounce de la recherche - temps réel pour meilleure UX
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -507,20 +514,16 @@ export default function AdminPage() {
     return () => { unsubParcels(); unsubUsers(); unsubLocks(); unsubTariffs(); unsubClientMessages(); unsubSectors(); unsubCentralCash(); unsubReglements(); unsubRapports() }
   }, [])
 
-  // Charger les colis - uniquement si filtre ou recherche actif
+  // Charger les colis - recharge quand recherche active pour trouver colis anciens
   useEffect(() => {
-    // ✋ Vérifier si un filtre/recherche est actif
-    const hasSearch = search.trim() !== ''
-    const hasFilter = cityFilter !== 'Toutes' || driverFilter !== 'Tous' || statusFilter.length > 0 || serviceTypeFilter.length > 0 || portTypeFilter.length > 0
-
     setLoading(true)
 
     // 📊 Chargement avec limites optimisées
-    // - Recherche/Filtre actif : 5000 colis max (pour couvrir plus de données)
-    // - Par défaut : 300 colis (affichage limité à 100 lignes de toute façon)
-    const loadLimit = (hasSearch || hasFilter) ? 5000 : 300
+    // - Recherche active : 10000 colis max (pour trouver même les colis anciens)
+    // - Par défaut : 500 colis (chargement rapide de la page)
+    const loadLimit = isSearchActive ? 10000 : 500
 
-    console.log(`📦 Chargement ${loadLimit} colis (recherche: ${hasSearch ? 'OUI' : 'NON'}, filtre: ${hasFilter ? 'OUI' : 'NON'})`)
+    console.log(`📦 Chargement ${loadLimit} colis (recherche active: ${isSearchActive ? 'OUI' : 'NON'})`)
 
     const unsubParcels = subscribeAllParcels(
       (data: any, lastSnap: any) => {
@@ -538,7 +541,7 @@ export default function AdminPage() {
     )
 
     return () => unsubParcels()
-  }, []) // Filtrage 100% côté client avec Fuse - pas besoin de recréer le listener
+  }, [isSearchActive]) // Recharge seulement quand on passe de "pas de recherche" à "recherche active"
 
   // Charger les vrais compteurs au montage uniquement (économie forfait gratuit)
   const loadRealStats = async () => {
