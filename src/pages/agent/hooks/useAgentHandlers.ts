@@ -1276,8 +1276,15 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 </body>
 </html>`
 
-    const win = window.open('', '_blank', 'width=700,height=900')
-    if (win) { win.document.write(ticketHtml); win.document.close() }
+    // Créer un Blob URL pour que le document soit partageable via WhatsApp
+    const blob = new Blob([ticketHtml], { type: 'text/html' })
+    const blobUrl = URL.createObjectURL(blob)
+    const win = window.open(blobUrl, '_blank', 'width=700,height=900')
+
+    // Nettoyer l'URL après 30 secondes
+    if (win) {
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 30000)
+    }
   }
 
   // ── Driver management ─────────────────────────────────────────────────────
