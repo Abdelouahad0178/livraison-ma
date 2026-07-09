@@ -156,7 +156,7 @@ export default function DirectorPage() {
       err => console.warn('DirectorPage user profile listener error:', err.code)
     )
     setLoading(true)
-    const unsubParcels = subscribeAllParcels((data: any) => { setParcels(data); setLoading(false) })
+    const unsubParcels = subscribeAllParcels((data: any) => { setParcels(data); setLoading(false) }, console.error, 0, 1000)
     const unsubUsers   = subscribeAllUsers(setUsers)
     const unsubCaisse   = subscribeAllCaisse(setCaisseEntries)
     const unsubClotures = subscribeAllCaisseClotures(setCaisseClotures)

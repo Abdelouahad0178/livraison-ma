@@ -516,9 +516,9 @@ export default function AdminPage() {
     setLoading(true)
 
     // 📊 Chargement avec limites optimisées
-    // - Recherche : 5000 colis max (pour couvrir plus de données)
-    // - Par défaut : 5000 colis (nécessaire pour filtres COD)
-    const loadLimit = 5000
+    // - Recherche/Filtre actif : 5000 colis max (pour couvrir plus de données)
+    // - Par défaut : 300 colis (affichage limité à 100 lignes de toute façon)
+    const loadLimit = (hasSearch || hasFilter) ? 5000 : 300
 
     console.log(`📦 Chargement ${loadLimit} colis (recherche: ${hasSearch ? 'OUI' : 'NON'}, filtre: ${hasFilter ? 'OUI' : 'NON'})`)
 
@@ -538,7 +538,7 @@ export default function AdminPage() {
     )
 
     return () => unsubParcels()
-  }, [search, cityFilter, driverFilter, statusFilter, serviceTypeFilter])
+  }, []) // Filtrage 100% côté client avec Fuse - pas besoin de recréer le listener
 
   // Charger les vrais compteurs au montage uniquement (économie forfait gratuit)
   const loadRealStats = async () => {

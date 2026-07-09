@@ -95,7 +95,7 @@ export default function CentralCollectorPage() {
 
   useEffect(() => {
     const onError = (err: any) => console.error('CentralCollectorPage:', err)
-    const unsubParcels = subscribeAllParcels(setParcels, onError)
+    const unsubParcels = subscribeAllParcels(setParcels, onError, 0, 1000)
     const unsubDeposits = subscribeAllCentralCodDeposits(setDeposits, onError)
     const unsubPayments = subscribeAllCentralSupplierPayments(setPayments, onError)
     return () => {

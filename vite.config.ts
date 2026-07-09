@@ -17,10 +17,10 @@ export default defineConfig({
   build: {
     rollupOptions: {
       output: {
-        // Ajouter un hash unique pour forcer le rechargement
-        entryFileNames: `assets/[name]-[hash]-${Date.now()}.js`,
-        chunkFileNames: `assets/[name]-[hash]-${Date.now()}.js`,
-        assetFileNames: `assets/[name]-[hash]-${Date.now()}.[ext]`,
+        // Le [hash] Rollup change automatiquement quand le contenu change
+        entryFileNames: 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash].[ext]',
         manualChunks: {
           react: ['react', 'react-dom', 'react-router-dom'],
           firebaseCore: ['firebase/app'],
@@ -42,6 +42,9 @@ export default defineConfig({
     cssCodeSplit: true,
     sourcemap: false,
   },
+  esbuild: {
+    drop: ['console', 'debugger'], // Retirer console.log en production
+  },
   optimizeDeps: {
     include: ['react', 'react-dom', 'react-router-dom'],
     exclude: ['html5-qrcode', 'recharts'],
@@ -57,8 +60,8 @@ export default defineConfig({
         cleanupOutdatedCaches: true,
         skipWaiting: true,
         clientsClaim: true,
-        // Force le rechargement en changeant la version
-        cacheId: `bg-express-v${Date.now()}`,
+        // Workbox gère l'invalidation par révision automatiquement
+        cacheId: 'bg-express',
         globPatterns: ['**/*.{css,html,ico,png,jpg,svg,woff,woff2}'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/__/, /\/[^/?]+\.[^/]+$/],
