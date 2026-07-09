@@ -1,4 +1,4 @@
-import { useRef, useState, useEffect, useCallback } from 'react'
+import { useRef, useState, useEffect, useCallback, useMemo } from 'react'
 import { signOut } from 'firebase/auth'
 import { Suspense, lazy } from 'react'
 import { auth, db } from '../firebase/config'
@@ -65,6 +65,14 @@ const STATUS_ORDER = [
   'Initialisé', 'Livré', 'Retourné'
 ]
 
+// Fonction pure sortie du composant : évite de la recréer à chaque render
+const sortByStatus = (list: any) =>
+  [...list].sort((a, b) => {
+    const ia = STATUS_ORDER.indexOf(a.status)
+    const ib = STATUS_ORDER.indexOf(b.status)
+    return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
+  })
+
 const statusLabelForDriverTab = (status: any, driverTab: any) =>
   driverTab === 'transport' && status === 'Arrivé en agence'
     ? 'Arrivé en agence de destination'
@@ -91,6 +99,8 @@ export default function DriverPage() {
   const [dateFrom, setDateFrom]           = useState('')
   const [dateTo, setDateTo]               = useState('')
   const [missionSearch, setMissionSearch] = useState('')
+  // Valeur débouncée de la recherche : le filtrage full-text coûteux n'est relancé que 500ms après la dernière frappe
+  const [debouncedMissionSearch, setDebouncedMissionSearch] = useState('')
   const [parcelStatusFilter, setParcelStatusFilter] = useState('all')
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards') // Vue cartes ou tableau
   const [bulkSelectedIds, setBulkSelectedIds] = useState<any[]>([])
@@ -142,13 +152,6 @@ export default function DriverPage() {
   const workerLabel = isLivreur ? 'Livreur' : 'Chauffeur'
   const isDeliveryView = driverTab === 'delivery'
 
-  const sortByStatus = (list: any) =>
-    [...list].sort((a, b) => {
-      const ia = STATUS_ORDER.indexOf(a.status)
-      const ib = STATUS_ORDER.indexOf(b.status)
-      return (ia === -1 ? 99 : ia) - (ib === -1 ? 99 : ib)
-    })
-
   useEffect(() => {
     if (!uid) return
     const unsubProfile = onSnapshot(
@@ -175,6 +178,12 @@ export default function DriverPage() {
     if (normalizeRole(profile?.role) === 'livreur') setDriverTab('delivery')
   }, [profile?.role])
 
+  // Debounce de la recherche missions (500ms)
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedMissionSearch(missionSearch), 500)
+    return () => clearTimeout(timer)
+  }, [missionSearch])
+
   const resolveDeliveryManagerName = (deliveries: any) => {
     const explicitNames = [...new Set(deliveries
       .map((p: any) => p.deliveryAssignedBy || p.destinationAgentName || p.agentName)
@@ -198,7 +207,8 @@ export default function DriverPage() {
   }
 
   // Mise à jour statut depuis la liste
-  const handleStatusSave = async () => {
+  // useCallback : handler utilisé dans le JSX du modal, référence stable entre renders
+  const handleStatusSave = useCallback(async () => {
     if (!statusModal) return
     const { parcel, status, codPaymentType, note } = statusModal
     const name = profile?.name || workerLabel
@@ -249,9 +259,10 @@ export default function DriverPage() {
     } catch {
       setStatusModal((m: any) => ({ ...m, loading: false, error: 'Erreur lors de la mise à jour.' }))
     }
-  }
+  }, [statusModal, profile?.name, workerLabel, uid])
 
-  const handleRejectDelivery = async () => {
+  // useCallback : référence stable pour le bouton du modal de refus
+  const handleRejectDelivery = useCallback(async () => {
     if (!rejectModal?.parcel) return
     const { parcel, note } = rejectModal
     const name = profile?.name || workerLabel
@@ -271,7 +282,7 @@ export default function DriverPage() {
     } catch (err: any) {
       setRejectModal((m: any) => ({ ...m, loading: false, error: err?.message || 'Erreur lors du retour.' }))
     }
-  }
+  }, [rejectModal, profile?.name, workerLabel])
 
   // Scanner
   const startScan = async () => {
@@ -316,7 +327,8 @@ export default function DriverPage() {
     setScanLoading(false)
   }
 
-  const handleScanUpdate = async () => {
+  // useCallback : référence stable pour le bouton de mise à jour après scan
+  const handleScanUpdate = useCallback(async () => {
     if (!scannedParcel || !newStatus) return
     setScanLoading(true)
     try {
@@ -331,48 +343,134 @@ export default function DriverPage() {
     } finally {
       setScanLoading(false)
     }
-  }
+  }, [scannedParcel, newStatus])
+
+  // Compteurs des badges du header : un seul calcul par changement de données
+  // (auparavant chaque filter() était réexécuté ~8x par render entre affichages desktop et mobile)
+  const headerCounts = useMemo(() => {
+    const isActiveMission = (p: any) => !['Livré', 'Retourné'].includes(p.status)
+    const activeTransport = parcels.filter(isActiveMission).length
+    const activeDelivery  = deliveryParcels.filter(isActiveMission).length
+    const pendingPortDu   = myPortDuTxs.filter((t: any) => t.status === 'pending').length
+    const activeCod       = deliveryParcels.filter((p: any) =>
+      parseFloat(p.codAmount || 0) > 0 && ['collected', 'remis'].includes(p.codStatus || '')
+    ).length
+    return { activeTransport, activeDelivery, activeMissions: activeTransport + activeDelivery, pendingPortDu, activeCod }
+  }, [parcels, deliveryParcels, myPortDuTxs])
+
+  // Section "Mes COD" : chaîne de filtres + tri + 3 reduce, mémorisée pour éviter
+  // le recalcul complet à chaque render (la section vivait dans une IIFE du JSX)
+  const codData = useMemo(() => {
+    // Helper pour obtenir le statut d'un COD
+    const getCodStatusKey = (p: any) => {
+      if (p.codSenderPaid) return 'paid'
+      if (p.codReceivedByChef) return 'received'
+      if (p.codRemisBy || p.codStatus === 'remis') return 'remis'
+      if (p.codStatus === 'collected') return 'collected'
+      return 'pending'
+    }
+
+    // Tous les COD du livreur
+    let myCodParcels = deliveryParcels
+      .filter(p => parseFloat(p.codAmount || 0) > 0)
+
+    // Appliquer les filtres
+    // 1. Recherche par tracking ou nom
+    if (codSearchQuery.trim()) {
+      const q = codSearchQuery.toLowerCase()
+      myCodParcels = myCodParcels.filter(p =>
+        p.trackingId?.toLowerCase().includes(q) ||
+        p.receiver?.name?.toLowerCase().includes(q)
+      )
+    }
+
+    // 2. Filtre par statut
+    if (codStatusFilter !== 'all') {
+      myCodParcels = myCodParcels.filter(p => getCodStatusKey(p) === codStatusFilter)
+    }
+
+    // 3. Filtre par type de paiement
+    if (codTypeFilter !== 'all') {
+      myCodParcels = myCodParcels.filter(p => p.codPaymentType === codTypeFilter)
+    }
+
+    // 4. Filtre par date
+    if (codDateFilter !== 'all') {
+      const now = new Date()
+      const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
+      const weekStart = new Date(now); weekStart.setDate(now.getDate() - 7); weekStart.setHours(0, 0, 0, 0)
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+
+      myCodParcels = myCodParcels.filter(p => {
+        const date = p.codCollectedAt?.toDate ? p.codCollectedAt.toDate() : new Date(p.codCollectedAt || 0)
+        if (codDateFilter === 'today') return date >= todayStart
+        if (codDateFilter === 'week') return date >= weekStart
+        if (codDateFilter === 'month') return date >= monthStart
+        return true
+      })
+    }
+
+    // Trier par date de collecte (plus récent en premier)
+    myCodParcels.sort((a, b) => {
+      const ta = a.codCollectedAt?.toDate ? a.codCollectedAt.toDate() : new Date(a.codCollectedAt || 0)
+      const tb = b.codCollectedAt?.toDate ? b.codCollectedAt.toDate() : new Date(b.codCollectedAt || 0)
+      return tb - ta
+    })
+
+    const totalCollected = myCodParcels.filter(p => ['collected', 'remis'].includes(p.codStatus || '')).reduce((s, p) => s + (parseFloat(p.codAmount) || 0), 0)
+    const totalReceived = myCodParcels.filter(p => p.codReceivedByChef).reduce((s, p) => s + (parseFloat(p.codAmount) || 0), 0)
+    const totalPaid = myCodParcels.filter(p => p.codSenderPaid).reduce((s, p) => s + (parseFloat(p.codAmount) || 0), 0)
+    const collectedCount = myCodParcels.filter(p => ['collected', 'remis'].includes(p.codStatus || '')).length
+    const receivedCount = myCodParcels.filter(p => p.codReceivedByChef).length
+
+    return { myCodParcels, totalCollected, totalReceived, totalPaid, collectedCount, receivedCount }
+  }, [deliveryParcels, codSearchQuery, codStatusFilter, codTypeFilter, codDateFilter])
 
   const activeList      = driverTab === 'transport' ? parcels : deliveryParcels
-  const doneStatuses    = driverTab === 'transport'
-    ? ['Arrivé en agence', 'Livré', 'Retourné']
-    : ['Livré', 'Retourné', 'Retour en transit', 'Retour finalisé']
-  const activeParcels   = activeList.filter(p => !doneStatuses.includes(p.status))
-  const doneParcels     = activeList.filter(p =>  doneStatuses.includes(p.status))
-  const byStatus        = filter === 'active' ? activeParcels
+  // Chaîne de filtrage coûteuse (statuts actifs/terminés, dates, statut colis, recherche full-text ~20 champs) :
+  // mémorisée pour ne recalculer qu'au changement des données ou des filtres, pas à chaque render
+  const { activeParcels, doneParcels, dateFilteredParcels, filteredParcels } = useMemo(() => {
+    const doneStatuses = driverTab === 'transport'
+      ? ['Arrivé en agence', 'Livré', 'Retourné']
+      : ['Livré', 'Retourné', 'Retour en transit', 'Retour finalisé']
+    const activeParcels = activeList.filter((p: any) => !doneStatuses.includes(p.status))
+    const doneParcels   = activeList.filter((p: any) =>  doneStatuses.includes(p.status))
+    const byStatus      = filter === 'active' ? activeParcels
                         : filter === 'done'   ? doneParcels
                         : activeList
-  const dateFilteredParcels = filterByDate(byStatus, datePreset, dateFrom, dateTo)
-  const missionQuery = missionSearch.trim().toLowerCase()
-  const statusFilteredParcels = parcelStatusFilter === 'all' ? dateFilteredParcels : dateFilteredParcels.filter((p: any) => p.status === parcelStatusFilter)
-  const filteredParcels = !missionQuery ? statusFilteredParcels : statusFilteredParcels.filter((p: any) => {
-    const codPayment = COD_PAYMENT_TYPES.find(t => t.key === p.codPaymentType)
-    const codState = COD_STATUS[p.codStatus || 'pending']
-    return [
-      p.trackingId,
-      p.status,
-      p.sender?.name,
-      p.sender?.nic,
-      p.sender?.tel,
-      p.sender?.city,
-      p.receiver?.name,
-      p.receiver?.tel,
-      p.receiver?.city,
-      p.destinationCity,
-      p.originCity,
-      p.chauffeurName,
-      p.deliveryDriverName,
-      p.serviceType,
-      p.portType,
-      p.portStatus,
-      p.weight,
-      p.price,
-      p.codAmount,
-      codPayment?.label,
-      codPayment?.key,
-      codState?.label,
-    ].filter(v => v !== undefined && v !== null).join(' ').toLowerCase().includes(missionQuery)
-  })
+    const dateFilteredParcels = filterByDate(byStatus, datePreset, dateFrom, dateTo)
+    const missionQuery = debouncedMissionSearch.trim().toLowerCase()
+    const statusFilteredParcels = parcelStatusFilter === 'all' ? dateFilteredParcels : dateFilteredParcels.filter((p: any) => p.status === parcelStatusFilter)
+    const filteredParcels = !missionQuery ? statusFilteredParcels : statusFilteredParcels.filter((p: any) => {
+      const codPayment = COD_PAYMENT_TYPES.find(t => t.key === p.codPaymentType)
+      const codState = COD_STATUS[p.codStatus || 'pending']
+      return [
+        p.trackingId,
+        p.status,
+        p.sender?.name,
+        p.sender?.nic,
+        p.sender?.tel,
+        p.sender?.city,
+        p.receiver?.name,
+        p.receiver?.tel,
+        p.receiver?.city,
+        p.destinationCity,
+        p.originCity,
+        p.chauffeurName,
+        p.deliveryDriverName,
+        p.serviceType,
+        p.portType,
+        p.portStatus,
+        p.weight,
+        p.price,
+        p.codAmount,
+        codPayment?.label,
+        codPayment?.key,
+        codState?.label,
+      ].filter(v => v !== undefined && v !== null).join(' ').toLowerCase().includes(missionQuery)
+    })
+    return { activeParcels, doneParcels, dateFilteredParcels, filteredParcels }
+  }, [activeList, driverTab, filter, datePreset, dateFrom, dateTo, parcelStatusFilter, debouncedMissionSearch])
 
   const handlePrintMyDeliveries = async () => {
     const deliveries = driverTab === 'delivery'
@@ -419,10 +517,18 @@ export default function DriverPage() {
       : parcel.deliveryDriverId === uid
   }
 
-  const bulkManageableParcels = filteredParcels.filter(canBulkManageParcel)
-  const selectedBulkParcels = bulkSelectedIds
-    .map(id => bulkManageableParcels.find((p: any) => p.id === id))
-    .filter(Boolean)
+  // Mémorisés : stabilisent les listes dérivées utilisées par handleBulkStatusSave (useCallback)
+  const bulkManageableParcels = useMemo(
+    () => filteredParcels.filter(canBulkManageParcel),
+    // canBulkManageParcel ne dépend que de driverTab et uid
+    [filteredParcels, driverTab, uid] // eslint-disable-line react-hooks/exhaustive-deps
+  )
+  const selectedBulkParcels = useMemo(
+    () => bulkSelectedIds
+      .map(id => bulkManageableParcels.find((p: any) => p.id === id))
+      .filter(Boolean),
+    [bulkSelectedIds, bulkManageableParcels]
+  )
   const allBulkSelected = bulkManageableParcels.length > 0 && selectedBulkParcels.length === bulkManageableParcels.length
   const bulkStatusOptions = driverTab === 'transport'
     ? ['Arrivé en agence', 'Retourné']
@@ -448,7 +554,8 @@ export default function DriverPage() {
     }
   }
 
-  const handleBulkStatusSave = async () => {
+  // useCallback : référence stable pour le bouton d'application groupée
+  const handleBulkStatusSave = useCallback(async () => {
     setBulkError('')
     if (selectedBulkParcels.length === 0) {
       setBulkError('Sélectionnez au moins un colis.')
@@ -494,7 +601,7 @@ export default function DriverPage() {
     } finally {
       setBulkBusy(false)
     }
-  }
+  }, [selectedBulkParcels, bulkStatus, profile?.name])
 
   // ── Signature électronique ───────────────────────────────────────────────────
 
@@ -765,9 +872,9 @@ export default function DriverPage() {
               className={`py-3 px-4 text-sm font-semibold border-b-2 transition ${tab === 'parcels' ? 'border-blue-500 text-blue-400' : 'border-transparent text-gray-400 hover:text-white'}`}
             >
               Mes missions
-              {(parcels.filter(p => !['Livré','Retourné'].includes(p.status)).length + deliveryParcels.filter(p => !['Livré','Retourné'].includes(p.status)).length) > 0 && (
+              {headerCounts.activeMissions > 0 && (
                 <span className="ml-2 bg-blue-600 text-white text-xs px-1.5 py-0.5 rounded-full">
-                  {parcels.filter(p => !['Livré','Retourné'].includes(p.status)).length + deliveryParcels.filter(p => !['Livré','Retourné'].includes(p.status)).length}
+                  {headerCounts.activeMissions}
                 </span>
               )}
             </button>
@@ -782,9 +889,9 @@ export default function DriverPage() {
               className={`py-3 px-4 text-sm font-semibold border-b-2 transition ${tab === 'portdu' ? 'border-orange-500 text-orange-400' : 'border-transparent text-gray-400 hover:text-white'}`}
             >
               📮 Ports dus
-              {myPortDuTxs.filter(t => t.status === 'pending').length > 0 && (
+              {headerCounts.pendingPortDu > 0 && (
                 <span className="ml-2 bg-orange-600 text-white text-xs px-1.5 py-0.5 rounded-full">
-                  {myPortDuTxs.filter(t => t.status === 'pending').length}
+                  {headerCounts.pendingPortDu}
                 </span>
               )}
             </button>
@@ -793,9 +900,9 @@ export default function DriverPage() {
               className={`py-3 px-4 text-sm font-semibold border-b-2 transition ${tab === 'cod' ? 'border-green-500 text-green-400' : 'border-transparent text-gray-400 hover:text-white'}`}
             >
               💰 Mes COD
-              {deliveryParcels.filter(p => parseFloat(p.codAmount || 0) > 0 && ['collected', 'remis'].includes(p.codStatus || '')).length > 0 && (
+              {headerCounts.activeCod > 0 && (
                 <span className="ml-2 bg-green-600 text-white text-xs px-1.5 py-0.5 rounded-full">
-                  {deliveryParcels.filter(p => parseFloat(p.codAmount || 0) > 0 && ['collected', 'remis'].includes(p.codStatus || '')).length}
+                  {headerCounts.activeCod}
                 </span>
               )}
             </button>
@@ -809,9 +916,9 @@ export default function DriverPage() {
               >
                 <Truck className="w-4 h-4" />
                 Mes missions
-                {(parcels.filter(p => !['Livré','Retourné'].includes(p.status)).length + deliveryParcels.filter(p => !['Livré','Retourné'].includes(p.status)).length) > 0 && (
+                {headerCounts.activeMissions > 0 && (
                   <span className="ml-auto bg-blue-600 text-white text-xs px-1.5 py-0.5 rounded-full">
-                    {parcels.filter(p => !['Livré','Retourné'].includes(p.status)).length + deliveryParcels.filter(p => !['Livré','Retourné'].includes(p.status)).length}
+                    {headerCounts.activeMissions}
                   </span>
                 )}
               </button>
@@ -826,9 +933,9 @@ export default function DriverPage() {
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'portdu' ? 'bg-orange-600/20 text-orange-400' : 'text-white hover:bg-gray-800'}`}
               >
                 <Banknote className="w-4 h-4" /> Ports dus
-                {myPortDuTxs.filter(t => t.status === 'pending').length > 0 && (
+                {headerCounts.pendingPortDu > 0 && (
                   <span className="ml-auto bg-orange-600 text-white text-xs px-1.5 py-0.5 rounded-full">
-                    {myPortDuTxs.filter(t => t.status === 'pending').length}
+                    {headerCounts.pendingPortDu}
                   </span>
                 )}
               </button>
@@ -837,9 +944,9 @@ export default function DriverPage() {
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'cod' ? 'bg-green-600/20 text-green-400' : 'text-white hover:bg-gray-800'}`}
               >
                 <Banknote className="w-4 h-4" /> 💰 Mes COD
-                {deliveryParcels.filter(p => parseFloat(p.codAmount || 0) > 0 && ['collected', 'remis'].includes(p.codStatus || '')).length > 0 && (
+                {headerCounts.activeCod > 0 && (
                   <span className="ml-auto bg-green-600 text-white text-xs px-1.5 py-0.5 rounded-full">
-                    {deliveryParcels.filter(p => parseFloat(p.codAmount || 0) > 0 && ['collected', 'remis'].includes(p.codStatus || '')).length}
+                    {headerCounts.activeCod}
                   </span>
                 )}
               </button>
@@ -872,9 +979,9 @@ export default function DriverPage() {
                   <Truck className="w-4 h-4" />
                   <span className="hidden sm:inline">Trajets inter-villes</span>
                   <span className="sm:hidden">Inter-villes</span>
-                  {parcels.filter(p => !['Livré','Retourné'].includes(p.status)).length > 0 && (
+                  {headerCounts.activeTransport > 0 && (
                     <span className={`text-xs px-1.5 py-0.5 rounded-full ${driverTab === 'transport' ? 'bg-white/20' : 'bg-gray-700'}`}>
-                      {parcels.filter(p => !['Livré','Retourné'].includes(p.status)).length}
+                      {headerCounts.activeTransport}
                     </span>
                   )}
                 </button>
@@ -885,9 +992,9 @@ export default function DriverPage() {
                   <Home className="w-4 h-4" />
                   <span className="hidden sm:inline">Livraisons locales</span>
                   <span className="sm:hidden">Locales</span>
-                  {deliveryParcels.filter(p => !['Livré','Retourné'].includes(p.status)).length > 0 && (
+                  {headerCounts.activeDelivery > 0 && (
                     <span className={`text-xs px-1.5 py-0.5 rounded-full ${driverTab === 'delivery' ? 'bg-white/20' : 'bg-gray-700'}`}>
-                      {deliveryParcels.filter(p => !['Livré','Retourné'].includes(p.status)).length}
+                      {headerCounts.activeDelivery}
                     </span>
                   )}
                 </button>
@@ -1902,61 +2009,8 @@ export default function DriverPage() {
 
         {/* ── MES COD ── */}
         {tab === 'cod' && (() => {
-          // Helper pour obtenir le statut d'un COD
-          const getCodStatusKey = (p: any) => {
-            if (p.codSenderPaid) return 'paid'
-            if (p.codReceivedByChef) return 'received'
-            if (p.codRemisBy || p.codStatus === 'remis') return 'remis'
-            if (p.codStatus === 'collected') return 'collected'
-            return 'pending'
-          }
-
-          // Tous les COD du livreur
-          let myCodParcels = deliveryParcels
-            .filter(p => parseFloat(p.codAmount || 0) > 0)
-
-          // Appliquer les filtres
-          // 1. Recherche par tracking ou nom
-          if (codSearchQuery.trim()) {
-            const q = codSearchQuery.toLowerCase()
-            myCodParcels = myCodParcels.filter(p =>
-              p.trackingId?.toLowerCase().includes(q) ||
-              p.receiver?.name?.toLowerCase().includes(q)
-            )
-          }
-
-          // 2. Filtre par statut
-          if (codStatusFilter !== 'all') {
-            myCodParcels = myCodParcels.filter(p => getCodStatusKey(p) === codStatusFilter)
-          }
-
-          // 3. Filtre par type de paiement
-          if (codTypeFilter !== 'all') {
-            myCodParcels = myCodParcels.filter(p => p.codPaymentType === codTypeFilter)
-          }
-
-          // 4. Filtre par date
-          if (codDateFilter !== 'all') {
-            const now = new Date()
-            const todayStart = new Date(now); todayStart.setHours(0, 0, 0, 0)
-            const weekStart = new Date(now); weekStart.setDate(now.getDate() - 7); weekStart.setHours(0, 0, 0, 0)
-            const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-
-            myCodParcels = myCodParcels.filter(p => {
-              const date = p.codCollectedAt?.toDate ? p.codCollectedAt.toDate() : new Date(p.codCollectedAt || 0)
-              if (codDateFilter === 'today') return date >= todayStart
-              if (codDateFilter === 'week') return date >= weekStart
-              if (codDateFilter === 'month') return date >= monthStart
-              return true
-            })
-          }
-
-          // Trier par date de collecte (plus récent en premier)
-          myCodParcels.sort((a, b) => {
-            const ta = a.codCollectedAt?.toDate ? a.codCollectedAt.toDate() : new Date(a.codCollectedAt || 0)
-            const tb = b.codCollectedAt?.toDate ? b.codCollectedAt.toDate() : new Date(b.codCollectedAt || 0)
-            return tb - ta
-          })
+          // Filtres, tri et totaux mémorisés au niveau du composant (voir codData)
+          const { myCodParcels, totalCollected, totalReceived, collectedCount, receivedCount } = codData
 
           const codStatusLabel = (p: any) => {
             if (p.codSenderPaid) return { label: '🎯 Règlé', bg: 'bg-purple-600', desc: 'Chef a payé l\'expéditeur', color: 'text-purple-300' }
@@ -1965,10 +2019,6 @@ export default function DriverPage() {
             if (p.codStatus === 'collected') return { label: '🟡 Collecté', bg: 'bg-yellow-600', desc: 'À verser au chef', color: 'text-yellow-300' }
             return { label: '⚪ En attente', bg: 'bg-gray-800', desc: 'À collecter', color: 'text-white' }
           }
-
-          const totalCollected = myCodParcels.filter(p => ['collected', 'remis'].includes(p.codStatus || '')).reduce((s, p) => s + (parseFloat(p.codAmount) || 0), 0)
-          const totalReceived = myCodParcels.filter(p => p.codReceivedByChef).reduce((s, p) => s + (parseFloat(p.codAmount) || 0), 0)
-          const totalPaid = myCodParcels.filter(p => p.codSenderPaid).reduce((s, p) => s + (parseFloat(p.codAmount) || 0), 0)
 
           const fmtDate = (ts: any) => {
             if (!ts) return '—'
@@ -1984,14 +2034,14 @@ export default function DriverPage() {
                   <p className="text-yellow-300 text-xs font-medium">Collectés (à verser)</p>
                   <p className="text-2xl font-black text-yellow-200">{fmt(totalCollected)} DH</p>
                   <p className="text-[10px] text-yellow-400/60">
-                    {myCodParcels.filter(p => ['collected', 'remis'].includes(p.codStatus || '')).length} colis
+                    {collectedCount} colis
                   </p>
                 </div>
                 <div className="bg-green-900/30 border border-green-700 rounded-xl p-3">
                   <p className="text-green-300 text-xs font-medium">Réceptionnés par chef</p>
                   <p className="text-2xl font-black text-green-200">{fmt(totalReceived)} DH</p>
                   <p className="text-[10px] text-green-400/60">
-                    {myCodParcels.filter(p => p.codReceivedByChef).length} colis
+                    {receivedCount} colis
                   </p>
                 </div>
               </div>
