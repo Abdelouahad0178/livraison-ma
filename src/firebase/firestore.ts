@@ -81,7 +81,11 @@ export {
   subscribeDriverOwnPortDuTransactions, deleteDriverPortDuTransaction,
   updateDriverPortDuTransaction, subscribeAllDriverPortDuTransactions,
   subscribeDriverPortDuTransactionsByCity,
-  createAdminTransferFromAgent, createAdminTransferFromCaissier, confirmAdminTransfer,
+  DRIVER_VERSEMENT_TYPES, DRIVER_VERSEMENT_PAYMENT_TYPES,
+  createDriverVersement, confirmDriverVersementChef, rejectDriverVersementChef,
+  subscribeDriverVersements, subscribeMyDriverVersements, subscribeAllDriverVersements,
+  createAdminTransferFromAgent, createAdminTransferFromCaissier, createAdminTransferFromChefAgence,
+  confirmAdminTransfer, rejectAdminTransfer,
   subscribeAdminTransfers, subscribeMyAdminTransfers, subscribeAdminTransfersByCity,
 } from './caisse'
 

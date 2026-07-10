@@ -79,12 +79,14 @@ export default function DriverGarePage() {
   const uid = auth.currentUser?.uid
 
   // Scanner de code-barres
-  useBarcodeScanner((code: string) => {
-    const found = parcels.find(p =>
-      p.trackingId?.toLowerCase() === code.toLowerCase() ||
-      p.receiver?.tel?.includes(code)
-    )
-    if (found) handleOpenSignature(found)
+  useBarcodeScanner({
+    onScan: (code: string) => {
+      const found = parcels.find(p =>
+        p.trackingId?.toLowerCase() === code.toLowerCase() ||
+        p.receiver?.tel?.includes(code)
+      )
+      if (found) handleOpenSignature(found)
+    }
   })
 
   useEffect(() => {

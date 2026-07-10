@@ -12,8 +12,10 @@ import {
   createCaisseRequest, subscribeAllCaisseRequests, completeRhSalaryCaisseRequest,
   subscribeAllDriverPortDuTransactions, addDriverPortDuTransaction, deleteDriverPortDuTransaction, updateDriverPortDuTransaction,
   confirmDriverVersement,
+  subscribeAdminTransfers, confirmAdminTransfer, rejectAdminTransfer,
   createCaisseEntry,
   adjustCentralCash, subscribeCentralCash,
+  subscribeAllAgencyCashes, updateAgencyCash,
   subscribeAllSectors,
   createReturnParcel,
   subscribeAllReglementsGlobal, subscribeAllRapportsGlobal,
@@ -55,6 +57,7 @@ import LiveClock from '../components/LiveClock'
 import WorkingDateIndicator from '../components/WorkingDateIndicator'
 
 const AdminCaisseTab = lazy(() => import('./admin/tabs/AdminCaisseTab'))
+const AdminVersementsTab = lazy(() => import('./admin/tabs/AdminVersementsTab'))
 const AdminBanqueTab = lazy(() => import('./admin/tabs/AdminBanqueTab'))
 const AdminReglementsTab = lazy(() => import('./admin/tabs/AdminReglementsTab'))
 const AdminUsersTab = lazy(() => import('./admin/tabs/AdminUsersTab'))
@@ -412,7 +415,9 @@ export default function AdminPage() {
   // Caisse
   const [caisseEntries,   setCaisseEntries]   = useState<any[]>([])
   const [allRhRequests,   setAllRhRequests]   = useState<any[]>([])
+  const [agencyCashes,    setAgencyCashes]    = useState<any[]>([])
   const [caisseClotures,  setCaisseClotures]  = useState<any[]>([])
+  const [adminTransfers,  setAdminTransfers]  = useState<any[]>([])
   const [caisseCityFilter, setCaisseCityFilter] = useState('Toutes')
   const [caisseTypeFilter, setCaisseTypeFilter] = useState('all')
   const [clotureModal,    setClotureModal]    = useState<any>(null)
@@ -508,10 +513,11 @@ export default function AdminPage() {
     const unsubClientMessages = subscribeAllClientMessages(setClientMessages)
     const unsubSectors        = subscribeAllSectors(setAllSectors)
     const unsubCentralCash    = subscribeCentralCash(setCentralCash)
+    const unsubAgencyCashes   = subscribeAllAgencyCashes(setAgencyCashes)
     // Règlements + Rapports : chargés d�s le montage (pas lazy) pour éviter le blank
     const unsubReglements     = subscribeAllReglementsGlobal(setAdminReglements, err => console.error('reglements:', err))
     const unsubRapports       = subscribeAllRapportsGlobal(setAdminRapports, err => console.error('rapports:', err))
-    return () => { unsubParcels(); unsubUsers(); unsubLocks(); unsubTariffs(); unsubClientMessages(); unsubSectors(); unsubCentralCash(); unsubReglements(); unsubRapports() }
+    return () => { unsubParcels(); unsubUsers(); unsubLocks(); unsubTariffs(); unsubClientMessages(); unsubSectors(); unsubCentralCash(); unsubAgencyCashes(); unsubReglements(); unsubRapports() }
   }, [])
 
   // Charger les colis - recharge quand recherche active pour trouver colis anciens
@@ -564,6 +570,9 @@ export default function AdminPage() {
         subscribeAllCaisseClotures(setCaisseClotures),
         subscribeAllCaissierRemarks(setAllRemarks),
       ]
+    }
+    if (mainTab === 'versements' && !started.versements) {
+      started.versements = [subscribeAdminTransfers(setAdminTransfers)]
     }
     // reglements/rapports: abonnés d�s le montage (voir useEffect de base)
     if (mainTab === 'banque' && !started.banque) {
@@ -1149,7 +1158,7 @@ export default function AdminPage() {
               </button>
               <span className="text-gray-200 font-light">/</span>
               <span className="text-sm font-bold text-blue-600">
-                {{ expeditions:'Expéditions', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', clients:'Clients', exports:'Exports', caisse:'Caisse', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires' }[mainTab] || mainTab}
+                {{ expeditions:'Expéditions', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', clients:'Clients', exports:'Exports', caisse:'Caisse', versements:'Versements Admin', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires' }[mainTab] || mainTab}
               </span>
             </div>
           )}
@@ -1176,6 +1185,7 @@ export default function AdminPage() {
                 { key: 'clients',     label: 'Clients',              icon: Users },
                 { key: 'exports',     label: 'Exports',              icon: Download },
                 { key: 'caisse',      label: 'Caisse',               icon: Wallet    },
+                { key: 'versements',  label: '💰 Versements Admin',  icon: Banknote  },
                 { key: 'employees',   label: 'Dossiers RH',          icon: FileText  },
                 { key: 'reglements',  label: 'Règlements',            icon: Banknote  },
                 { key: 'banque',      label: 'Banque RETOUR FOND',    icon: Building2 },
@@ -1481,6 +1491,8 @@ export default function AdminPage() {
             <AdminCaisseTab
               caisseEntries={caisseEntries}
               caisseClotures={caisseClotures}
+              agencyCashes={agencyCashes}
+              updateAgencyCash={updateAgencyCash}
               users={users}
               allRemarks={allRemarks}
               adminDatePreset={adminDatePreset}
@@ -1500,6 +1512,18 @@ export default function AdminPage() {
               setRemarkCityFilter={setRemarkCityFilter}
               remarkFilter={remarkFilter}
               setRemarkFilter={setRemarkFilter}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: VERSEMENTS ADMIN */}
+        {mainTab === 'versements' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminVersementsTab
+              adminTransfers={adminTransfers}
+              confirmAdminTransfer={confirmAdminTransfer}
+              rejectAdminTransfer={rejectAdminTransfer}
+              auth={auth}
             />
           </Suspense>
         )}

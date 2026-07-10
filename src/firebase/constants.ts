@@ -172,6 +172,7 @@ export const CAISSE_CATEGORIES = [
   { key: 'doc_agent', type: 'entree', label: 'Documents agent', emoji: '📄', color: 'bg-blue-100 text-blue-700' },
   { key: 'depot_agent', type: 'entree', label: 'Depot agent en agence', emoji: '🏦', color: 'bg-emerald-100 text-emerald-700' },
   { key: 'recuperation_caissier', type: 'entree', label: 'Recuperation du caissier', emoji: '💵', color: 'bg-green-100 text-green-700' },
+  { key: 'versement_livreur', type: 'entree', label: 'Versement livreur (Port dû / COD)', emoji: '🚚', color: 'bg-lime-100 text-lime-700' },
   { key: 'autre_entree', type: 'entree', label: 'Autre entrée', emoji: '➕', color: 'bg-teal-100 text-teal-700' },
   { key: 'remboursement_cod', type: 'sortie', label: 'Remboursement RETOUR FOND — Colis retourné', emoji: '↩️', color: 'bg-red-100 text-red-700' },
   { key: 'cod_sortie_source', type: 'sortie', label: 'RETOUR FOND envoyé agence source', emoji: '📤', color: 'bg-orange-100 text-orange-700' },

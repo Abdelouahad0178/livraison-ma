@@ -8,6 +8,9 @@ import {
   updateParcelStatus, remitCod, updateUser,
   subscribeAllCaisse, createCaisseCloture, subscribeAllCaisseClotures,
   subscribeAllCaissierRemarks, REMARK_TYPES, resolveRemark, deleteRemark,
+  subscribeAgencyCash,
+  subscribeDriverVersements, confirmDriverVersementChef, rejectDriverVersementChef,
+  subscribeAdminTransfers,
 } from '../firebase/firestore'
 import {
   subscribeAllClientMessages, resolveClientMessage, addClientMessageReply,
@@ -28,6 +31,9 @@ import {
 } from 'lucide-react'
 import CompanyContact from '../components/CompanyContact'
 import LiveClock from '../components/LiveClock'
+import VersementAdminModal from './director/components/VersementAdminModal'
+import DirectorVersementsTab from './director/tabs/DirectorVersementsTab'
+import DirectorCaisseTab from './director/tabs/DirectorCaisseTab'
 import { fmt } from '../utils/formatNumber'
 
 const parcelDate = (p: any) => {
@@ -116,6 +122,10 @@ export default function DirectorPage() {
   const [clotureModal,     setClotureModal]     = useState<any>(null)
   const [clotureLoading,   setClotureLoading]   = useState(false)
   const [clotureError,     setClotureError]     = useState('')
+  const [agencyCash,       setAgencyCash]       = useState<any>(null)
+  const [versementModal,   setVersementModal]   = useState(false)
+  const [driverVersements, setDriverVersements] = useState<any[]>([])
+  const [adminTransfers,   setAdminTransfers]   = useState<any[]>([])
 
   // ---- Remarques caissier
   const [allRemarks,       setAllRemarks]       = useState<any[]>([])
@@ -141,11 +151,16 @@ export default function DirectorPage() {
     { key: 'users',       label: 'Utilisateurs',        icon: Users     },
     { key: 'activity',    label: 'Activité',            icon: BarChart2 },
     { key: 'caisse',      label: 'Caisse',              icon: Wallet    },
+    { key: 'driver_versements', label: 'Versements Livreurs', icon: Banknote },
     { key: 'employees',   label: 'Dossiers RH',         icon: FileText  },
     { key: 'messages',    label: 'Messages clients',    icon: MessageCircle },
     { key: 'backups',     label: 'Sauvegardes',         icon: ShieldCheck },
   ]
-  const availableTabs = TAB_MAP.filter(t => t.key === 'messages' || hasPermission(t.key))
+  // 'driver_versements' est rattaché à la permission 'caisse' (module financier)
+  const availableTabs = TAB_MAP.filter(t =>
+    t.key === 'messages' ||
+    (t.key === 'driver_versements' ? hasPermission('caisse') : hasPermission(t.key))
+  )
 
   // ⚡ Détecter si recherche active pour charger plus de colis
   useEffect(() => {
@@ -189,7 +204,30 @@ export default function DirectorPage() {
     const unsubClotures = subscribeAllCaisseClotures(setCaisseClotures)
     const unsubRemarks  = subscribeAllCaissierRemarks(setAllRemarks)
     const unsubClientMessages = subscribeAllClientMessages(setClientMessages)
-    return () => { unsubUsers(); unsubCaisse(); unsubClotures(); unsubRemarks(); unsubClientMessages() }
+    const unsubDriverVersements = user?.city ? subscribeDriverVersements(user.city, setDriverVersements) : () => {}
+    const unsubAdminTransfers = user?.city ? subscribeAdminTransfers(setAdminTransfers) : () => {}
+
+    // Subscribe to agency cash for versement
+    let unsubAgencyCash: any = null
+    if (auth.currentUser) {
+      const userDoc = onSnapshot(doc(db, 'users', auth.currentUser.uid), (snap) => {
+        const userData = snap.data()
+        if (userData?.city) {
+          unsubAgencyCash = subscribeAgencyCash(userData.city, setAgencyCash)
+        }
+      })
+    }
+
+    return () => {
+      unsubUsers()
+      unsubCaisse()
+      unsubClotures()
+      unsubRemarks()
+      unsubClientMessages()
+      unsubDriverVersements()
+      unsubAdminTransfers()
+      if (unsubAgencyCash) unsubAgencyCash()
+    }
   }, [])
 
   useEffect(() => {
@@ -499,6 +537,12 @@ export default function DirectorPage() {
               <span className="hidden sm:flex items-center gap-1.5 text-xs text-green-600 font-medium">
                 <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" /> Temps réel
               </span>
+              <button
+                onClick={() => setVersementModal(true)}
+                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-orange-500 hover:bg-orange-600 text-white rounded-lg text-sm font-semibold transition"
+              >
+                <Banknote className="w-4 h-4" /> Versement Admin
+              </button>
               <button onClick={() => signOut(auth).then(() => navigate('/login'))}
                 className="hidden md:flex items-center gap-1.5 text-sm text-red-500 hover:text-red-600 transition">
                 <LogOut className="w-4 h-4" /> Déconnexion
@@ -590,6 +634,7 @@ export default function DirectorPage() {
             users:       { grad: 'from-indigo-500 via-indigo-600 to-blue-700',  desc: 'Gérer agents, chauffeurs, caissiers et salariés', stat: `${nonAdminUsers.length} membres` },
             activity:    { grad: 'from-purple-500 via-purple-600 to-violet-700', desc: "Suivi d'activité de l'équipe",        stat: `${nonAdminUsers.filter(u=>u.role==='agent').length} agents · ${nonAdminUsers.filter(u=>u.role==='chauffeur').length} chauffeurs · ${nonAdminUsers.filter(u=>u.role==='caissier').length} caissiers` },
             caisse:      { grad: 'from-teal-500 via-teal-600 to-cyan-700',      desc: 'Mouvements · Charges · Personnel',    stat: `${caisseEntries.length} mouvement(s)` },
+            driver_versements: { grad: 'from-lime-500 via-green-600 to-emerald-700', desc: 'Valider les versements Port Dû / COD des livreurs', stat: 'Espèces · Chèques · Virements' },
             employees:   { grad: 'from-rose-500 via-pink-600 to-fuchsia-700',  desc: 'CIN · CNSS · Contrats · Salaires',    stat: `${nonAdminUsers.length} employé(s)` },
             backups:     { grad: 'from-sky-500 via-blue-600 to-indigo-700',     desc: 'Exporter une sauvegarde complète',      stat: `${BACKUP_COLLECTIONS.length} collections` },
           }
@@ -1409,654 +1454,27 @@ export default function DirectorPage() {
         </div>
       )}
 
+
         {/* ══════════════ TAB: CAISSE ══════════════ */}
-        {mainTab === 'caisse' && hasPermission('caisse') && (() => {
-          const caisseDateFn = (e: any) => e.createdAt?.toDate ? e.createdAt.toDate() : new Date(e.createdAt || 0)
-          const caisseDateFiltered = caisseEntries.filter(e => {
-            if (datePreset === 'all') return true
-            const now = new Date()
-            let start: any = null, end: any = now
-            if (datePreset === 'today')  { start = new Date(); start.setHours(0,0,0,0) }
-            else if (datePreset === 'week')  { start = new Date(); start.setDate(now.getDate()-6); start.setHours(0,0,0,0) }
-            else if (datePreset === 'month') { start = new Date(now.getFullYear(), now.getMonth(), 1) }
-            else if (datePreset === 'custom') { start = dateFrom ? new Date(dateFrom) : null; end = dateTo ? new Date(dateTo+'T23:59:59') : now }
-            const d = caisseDateFn(e)
-            if (start && d < start) return false
-            if (end   && d > end)   return false
-            return true
-          })
-          const caisseFull = caisseDateFiltered
-            .filter(e => caisseCityFilter === 'Toutes' || e.city === caisseCityFilter)
-            .filter(e => caisseTypeFilter === 'all' || e.type === caisseTypeFilter)
-          const totalEntrees = caisseFull.filter(e => e.type === 'entree').reduce((s, e) => s + (e.amount || 0), 0)
-          const totalSorties = caisseFull.filter(e => e.type === 'sortie').reduce((s, e) => s + (e.amount || 0), 0)
-          const solde = totalEntrees - totalSorties
-          const cities = [...new Set(caisseEntries.map(e => e.city).filter(Boolean))].sort()
-          const catBreakdown = CAISSE_CATEGORIES.map(cat => ({
-            ...cat,
-            total: caisseFull.filter(e => e.category === cat.key).reduce((s, e) => s + (e.amount || 0), 0),
-            count: caisseFull.filter(e => e.category === cat.key).length,
-          })).filter(c => c.total > 0)
-
-          const lastClotureForCity = (city: any) => caisseClotures
-            .filter(c => c.city === city)
-            .sort((a, b) => {
-              const da  = a.closedAt?.toDate ? a.closedAt.toDate() : new Date(a.closedAt || 0)
-              const db2 = b.closedAt?.toDate ? b.closedAt.toDate() : new Date(b.closedAt || 0)
-              return db2 - da
-            })[0] || null
-
-          const allEntrees    = caisseDateFiltered.filter(e => e.type === 'entree').reduce((s, e) => s + (e.amount || 0), 0)
-          const allSorties    = caisseDateFiltered.filter(e => e.type === 'sortie').reduce((s, e) => s + (e.amount || 0), 0)
-          const allSolde      = allEntrees - allSorties
-          const citySummaries = cities.map(agCity => {
-            const cityEs = caisseDateFiltered.filter(e => e.city === agCity)
-            const ent    = cityEs.filter(e => e.type === 'entree').reduce((s, e) => s + (e.amount || 0), 0)
-            const sor    = cityEs.filter(e => e.type === 'sortie').reduce((s, e) => s + (e.amount || 0), 0)
-            return { city: agCity, entrees: ent, sorties: sor, solde: ent - sor, count: cityEs.length, lastCloture: lastClotureForCity(agCity) }
-          })
-
-          const handleCloture = async () => {
-            if (!clotureModal.city) { setClotureError('Sélectionnez une ville.'); return }
-            setClotureLoading(true); setClotureError('')
-            try {
-              const last = lastClotureForCity(clotureModal.city)
-              const periodFrom = last?.periodTo || null
-              const toClose = caisseEntries
-                .filter(e => e.city === clotureModal.city)
-                .filter(e => {
-                  if (!periodFrom) return true
-                  const d = e.createdAt?.toDate ? e.createdAt.toDate() : new Date(e.createdAt || 0)
-                  return d > new Date(periodFrom)
-                })
-              const totalE = toClose.filter(e => e.type === 'entree').reduce((s, e) => s + (e.amount || 0), 0)
-              const totalS = toClose.filter(e => e.type === 'sortie').reduce((s, e) => s + (e.amount || 0), 0)
-              await createCaisseCloture({
-                city:         clotureModal.city,
-                closedBy:     profile?.name || 'Directeur',
-                closedById:   auth.currentUser?.uid,
-                periodFrom,
-                totalEntrees: totalE,
-                totalSorties: totalS,
-                solde:        totalE - totalS,
-                entriesCount: toClose.length,
-                note:         clotureModal.note,
-              })
-              _log('caisse_cloture', `Clôture de caisse — ${clotureModal.city}`, { city: clotureModal.city, solde: totalE - totalS })
-              setClotureModal(null)
-            } catch (err: any) { console.error('Cloture error:', err); setClotureError('Erreur : ' + (err?.message || err)) }
-            finally { setClotureLoading(false) }
-          }
-
-          return (
-            <div className="mt-4 space-y-5">
-
-              {/* ------ Caisse Centrale ------ */}
-              <div className="relative overflow-hidden bg-gradient-to-br from-teal-600 via-teal-700 to-cyan-800 rounded-3xl p-5 text-white shadow-xl">
-                <div className="absolute inset-0 opacity-10"
-                  style={{ backgroundImage: 'radial-gradient(circle at 85% 15%, white 0%, transparent 50%)' }} />
-                <div className="relative">
-                  <div className="flex items-start justify-between mb-5">
-                    <div>
-                      <p className="text-teal-200 text-xs font-medium uppercase tracking-wider">Vue globale</p>
-                      <h2 className="font-black text-xl mt-0.5">🏛️ Caisse Centrale</h2>
-                      <p className="text-teal-300 text-xs mt-1">{cities.length} agence(s) · {caisseEntries.length} mouvement(s)</p>
-                    </div>
-                    <div className="text-right">
-                      <p className="text-teal-200 text-xs">Solde global</p>
-                      <p className={`text-2xl font-black ${allSolde >= 0 ? 'text-white' : 'text-orange-300'}`}>
-                        {allSolde < 0 ? '−' : ''}{fmt(Math.abs(allSolde))} DH
-                      </p>
-                    </div>
-                  </div>
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="bg-white/15 backdrop-blur-sm rounded-2xl p-3">
-                      <p className="text-teal-200 text-xs mb-1">Total Entrées</p>
-                      <p className="text-lg font-black text-green-300">{fmt(allEntrees)} DH</p>
-                    </div>
-                    <div className="bg-white/15 backdrop-blur-sm rounded-2xl p-3">
-                      <p className="text-teal-200 text-xs mb-1">Total Sorties</p>
-                      <p className="text-lg font-black text-red-300">{fmt(allSorties)} DH</p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              {/* ------ Caisses par agence ------ */}
-              <div>
-                <div className="flex items-center gap-2 mb-3">
-                  <h3 className="text-sm font-bold text-gray-600 flex items-center gap-1.5">
-                    <MapPin className="w-4 h-4 text-gray-400" /> Caisses par agence
-                  </h3>
-                  {caisseCityFilter !== 'Toutes' && (
-                    <button onClick={() => { setCaisseCityFilter('Toutes'); setCaisseTypeFilter('all') }}
-                      className="ml-auto text-xs text-teal-600 font-semibold hover:underline">
-                      ← Toutes les agences
-                    </button>
-                  )}
-                </div>
-                {citySummaries.length === 0 ? (
-                  <div className="text-center py-10 text-gray-400 bg-white rounded-2xl border border-gray-100">
-                    <Wallet className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                    <p className="text-sm">Aucune agence avec des mouvements</p>
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    {citySummaries.map(({ city: agCity, entrees: agEnt, sorties: agSor, solde: agSolde, count: agCount, lastCloture: agLast }) => (
-                      <div key={agCity}
-                        onClick={() => { setCaisseCityFilter(caisseCityFilter === agCity ? 'Toutes' : agCity); setCaisseTypeFilter('all') }}
-                        className={`cursor-pointer rounded-2xl p-4 transition border-2 ${
-                          caisseCityFilter === agCity
-                            ? 'border-teal-500 bg-teal-50 shadow-md'
-                            : 'border-transparent bg-white shadow-sm hover:shadow-md hover:border-gray-100'
-                        }`}>
-                        <div className="flex items-center justify-between mb-1">
-                          <p className="font-bold text-gray-800 text-sm truncate">{agCity}</p>
-                          {caisseCityFilter === agCity && <div className="w-2.5 h-2.5 bg-teal-500 rounded-full shrink-0" />}
-                        </div>
-                        <p className="text-xs text-gray-400 mb-2">{agCount} mouv.</p>
-                        <div className="space-y-0.5">
-                          <p className="text-xs font-semibold text-green-600">↑ {fmt(agEnt)} DH</p>
-                          <p className="text-xs font-semibold text-red-500">↓ {fmt(agSor)} DH</p>
-                        </div>
-                        <p className={`text-base font-black mt-2 ${agSolde >= 0 ? 'text-teal-700' : 'text-orange-600'}`}>
-                          {agSolde < 0 ? '−' : ''}{fmt(Math.abs(agSolde))} DH
-                        </p>
-                        {agLast && (
-                          <p className="text-xs text-gray-400 mt-1.5 flex items-center gap-1">
-                            <Lock className="w-2.5 h-2.5 shrink-0" />
-                            {(() => { const d = agLast.closedAt?.toDate?.() || new Date(agLast.closedAt || 0); return d.toLocaleDateString('fr-MA') })()}
-                          </p>
-                        )}
-                        <button
-                          onClick={e => { e.stopPropagation(); setClotureModal({ city: agCity, note: '' }); setClotureError('') }}
-                          className="mt-3 w-full text-xs font-bold py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white transition flex items-center justify-center gap-1">
-                          <Lock className="w-3 h-3" /> Clôturer
-                        </button>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-
-              {/* ------ Détail agence sélectionnée ------ */}
-              {caisseCityFilter !== 'Toutes' && (
-                <div className="space-y-4">
-                  <div className="bg-white rounded-2xl border border-teal-200 shadow-sm p-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="w-8 h-8 bg-teal-100 rounded-xl flex items-center justify-center shrink-0">
-                        <MapPin className="w-4 h-4 text-teal-600" />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <p className="text-xs text-gray-400">Détail agence</p>
-                        <p className="font-black text-gray-800">{caisseCityFilter}</p>
-                      </div>
-                      <div className="flex items-center gap-1.5 flex-wrap">
-                        {[
-                          { key: 'all',    label: 'Tout',    cls: 'bg-teal-600'  },
-                          { key: 'entree', label: 'Entrées', cls: 'bg-green-600' },
-                          { key: 'sortie', label: 'Sorties', cls: 'bg-red-500'   },
-                        ].map(t => (
-                          <button key={t.key} onClick={() => setCaisseTypeFilter(t.key)}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-semibold transition ${
-                              caisseTypeFilter === t.key ? `${t.cls} text-white` : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                            }`}>{t.label}</button>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="bg-green-50 rounded-2xl p-4 text-center border border-white shadow-sm">
-                      <p className="text-xl font-black text-green-600">{fmt(totalEntrees)}</p>
-                      <p className="text-xs text-gray-500 mt-1">Entrées DH</p>
-                    </div>
-                    <div className="bg-red-50 rounded-2xl p-4 text-center border border-white shadow-sm">
-                      <p className="text-xl font-black text-red-600">{fmt(totalSorties)}</p>
-                      <p className="text-xs text-gray-500 mt-1">Sorties DH</p>
-                    </div>
-                    <div className={`${solde >= 0 ? 'bg-teal-50' : 'bg-orange-50'} rounded-2xl p-4 text-center border border-white shadow-sm`}>
-                      <p className={`text-xl font-black ${solde >= 0 ? 'text-teal-600' : 'text-orange-600'}`}>
-                        {solde < 0 ? '−' : ''}{fmt(Math.abs(solde))}
-                      </p>
-                      <p className="text-xs text-gray-500 mt-1">Solde DH</p>
-                    </div>
-                  </div>
-
-                  {catBreakdown.length > 0 && (
-                    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4">
-                      <h3 className="font-bold text-gray-700 text-sm mb-3">Répartition par catégorie</h3>
-                      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
-                        {catBreakdown.map(cat => (
-                          <div key={cat.key} className={`rounded-xl p-3 ${cat.color}`}>
-                            <p className="text-lg">{cat.emoji}</p>
-                            <p className="text-xs font-semibold mt-1">{cat.label}</p>
-                            <p className="text-sm font-black mt-0.5">{fmt(cat.total)} DH</p>
-                            <p className="text-xs opacity-70">{cat.count} opér.</p>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-
-                  <p className="text-xs text-gray-400 px-1">{caisseFull.length} mouvement(s)</p>
-
-                  {caisseFull.length === 0 ? (
-                    <div className="text-center py-10 text-gray-400 bg-white rounded-2xl border border-gray-100">
-                      <Wallet className="w-10 h-10 mx-auto mb-3 opacity-30" />
-                      <p className="text-sm">Aucun mouvement pour cette agence</p>
-                    </div>
-                  ) : (
-                    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                      <div className="divide-y divide-gray-50">
-                        {caisseFull.map(e => {
-                          const cat = CAISSE_CATEGORIES.find(c => c.key === e.category)
-                          const d = e.createdAt?.toDate ? e.createdAt.toDate() : new Date(e.createdAt || 0)
-                          return (
-                            <div key={e.id} className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50 transition">
-                              <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-base shrink-0 ${e.type === 'entree' ? 'bg-green-50' : 'bg-red-50'}`}>
-                                {cat?.emoji || '💱'}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm font-semibold text-gray-800 truncate">{e.description}</p>
-                                <p className="text-xs text-gray-400">
-                                  {cat?.label}
-                                  {e.agentName && ` · 🧑‍💼 ${e.agentName}`}
-                                  {e.staffName && ` · 👤 ${e.staffName}`}
-                                  {e.reference && ` · Réf: ${e.reference}`}
-                                </p>
-                              </div>
-                              <div className="text-right shrink-0">
-                                <p className={`text-sm font-black ${e.type === 'entree' ? 'text-green-600' : 'text-red-600'}`}>
-                                  {e.type === 'entree' ? '+' : '−'}{fmt(e.amount)} DH
-                                </p>
-                                <p className="text-xs text-gray-400">{d.toLocaleDateString('fr-MA')}</p>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )}
-
-                  {caisseClotures.filter(c => c.city === caisseCityFilter).length > 0 && (
-                    <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-                      <div className="px-4 py-3 border-b border-gray-50 flex items-center gap-2">
-                        <Lock className="w-4 h-4 text-teal-600" />
-                        <h3 className="font-bold text-gray-700 text-sm">Historique des clôtures</h3>
-                        <span className="ml-auto text-xs text-gray-400 bg-gray-100 px-2 py-0.5 rounded-full">
-                          {caisseClotures.filter(c => c.city === caisseCityFilter).length}
-                        </span>
-                      </div>
-                      <div className="divide-y divide-gray-50">
-                        {caisseClotures
-                          .filter(c => c.city === caisseCityFilter)
-                          .map(cl => {
-                            const dClosed = cl.closedAt?.toDate ? cl.closedAt.toDate() : new Date(cl.closedAt || 0)
-                            const dFrom   = cl.periodFrom ? new Date(cl.periodFrom) : null
-                            const fmtD = (d: any) => d.toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: '2-digit' })
-                            return (
-                              <div key={cl.id} className="px-4 py-3 hover:bg-gray-50 transition">
-                                <div className="flex items-start justify-between gap-3">
-                                  <div className="min-w-0">
-                                    <p className="text-xs font-bold text-gray-700">
-                                      {dFrom ? `${fmtD(dFrom)} → ${fmtD(dClosed)}` : `Début → ${fmtD(dClosed)}`}
-                                    </p>
-                                    <p className="text-xs text-gray-400 mt-0.5">Par {cl.closedBy} · {cl.entriesCount} opér.</p>
-                                    {cl.note && <p className="text-xs text-gray-500 italic mt-0.5">📝 {cl.note}</p>}
-                                  </div>
-                                  <div className="text-right shrink-0 space-y-0.5">
-                                    <p className="text-xs text-green-600 font-semibold">+{fmt(cl.totalEntrees)} DH</p>
-                                    <p className="text-xs text-red-500 font-semibold">−{fmt(cl.totalSorties)} DH</p>
-                                    <p className={`text-sm font-black ${cl.solde >= 0 ? 'text-teal-600' : 'text-orange-600'}`}>
-                                      {cl.solde < 0 ? '−' : ''}{fmt(Math.abs(cl.solde))} DH
-                                    </p>
-                                  </div>
-                                </div>
-                              </div>
-                            )
-                          })}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {/* ------ Remarques agents ------ */}
-              {(() => {
-                const openCount = allRemarks.filter(r => !r.resolved).length
-                const filteredR = allRemarks
-                  .filter(r => remarkCityFilter === 'Toutes' || r.city === remarkCityFilter)
-                  .filter(r =>
-                    remarkFilter === 'all'      ? true :
-                    remarkFilter === 'open'     ? !r.resolved :
-                    r.resolved
-                  )
-                return (
-                  <div className="space-y-3">
-                    <div className="flex items-center gap-3">
-                      <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${openCount > 0 ? 'bg-red-100' : 'bg-gray-100'}`}>
-                        <AlertTriangle className={`w-5 h-5 ${openCount > 0 ? 'text-red-500' : 'text-gray-400'}`} />
-                      </div>
-                      <div className="flex-1">
-                        <h3 className="font-bold text-gray-800 text-sm">Remarques agents</h3>
-                        <p className="text-xs text-gray-400">
-                          {openCount > 0
-                            ? <span className="text-red-500 font-semibold">{openCount} ouverte(s)</span>
-                            : <span className="text-green-600 font-semibold">Aucune ouverte ✓</span>
-                          }
-                          {allRemarks.length > 0 && ` · ${allRemarks.length} au total`}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="bg-white border border-gray-100 rounded-2xl p-3 space-y-2 shadow-sm">
-                      <div className="flex flex-wrap gap-1.5">
-                        {['Toutes', ...cities].map(c => (
-                          <button key={c} onClick={() => setRemarkCityFilter(c)}
-                            className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
-                              remarkCityFilter === c ? 'bg-red-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                            }`}
-                          >{c}</button>
-                        ))}
-                      </div>
-                      <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
-                        {[
-                          { key: 'open',     label: 'Ouvertes', count: allRemarks.filter(r => !r.resolved && (remarkCityFilter === 'Toutes' || r.city === remarkCityFilter)).length },
-                          { key: 'resolved', label: 'Résolues', count: allRemarks.filter(r => r.resolved  && (remarkCityFilter === 'Toutes' || r.city === remarkCityFilter)).length },
-                          { key: 'all',      label: 'Toutes',   count: allRemarks.filter(r =>               (remarkCityFilter === 'Toutes' || r.city === remarkCityFilter)).length },
-                        ].map(f => (
-                          <button key={f.key} onClick={() => setRemarkFilter(f.key)}
-                            className={`flex-1 py-1.5 rounded-lg text-xs font-semibold transition flex items-center justify-center gap-1 ${
-                              remarkFilter === f.key ? 'bg-red-500 text-white' : 'text-gray-500 hover:text-gray-700'
-                            }`}>
-                            {f.label}
-                            {f.count > 0 && <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-bold ${remarkFilter === f.key ? 'bg-white/30' : 'bg-gray-200'}`}>{f.count}</span>}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    {filteredR.length === 0 ? (
-                      <div className="text-center py-8 text-gray-400 bg-white rounded-2xl border border-gray-100">
-                        <AlertTriangle className="w-8 h-8 mx-auto mb-2 opacity-20" />
-                        <p className="text-sm">{remarkFilter === 'open' ? 'Aucune remarque ouverte ✓' : 'Aucune remarque'}</p>
-                      </div>
-                    ) : (
-                      <div className="space-y-2">
-                        {filteredR.map(r => {
-                          const rt = REMARK_TYPES.find(t => t.key === r.type) || (REMARK_TYPES as any).at(-1)
-                          const d  = r.createdAt?.toDate ? r.createdAt.toDate() : new Date(r.createdAt || 0)
-                          return (
-                            <div key={r.id} className={`bg-white rounded-2xl border shadow-sm overflow-hidden ${r.resolved ? 'border-green-100 opacity-75' : 'border-red-100'}`}>
-                              <div className={`px-4 py-3 flex items-center gap-3 ${r.resolved ? 'bg-green-50' : 'bg-red-50'}`}>
-                                <div className={`w-9 h-9 rounded-xl flex items-center justify-center text-lg shrink-0 border ${rt.color}`}>{rt.emoji}</div>
-                                <div className="flex-1 min-w-0">
-                                  <div className="flex items-center gap-2 flex-wrap">
-                                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full border ${rt.color}`}>{rt.label}</span>
-                                    {r.city && <span className="text-xs bg-teal-100 text-teal-700 border border-teal-200 px-2 py-0.5 rounded-full font-medium">📍 {r.city}</span>}
-                                    {r.resolved
-                                      ? <span className="text-xs bg-green-100 text-green-700 border border-green-200 px-2 py-0.5 rounded-full font-medium flex items-center gap-1"><CheckCircle2 className="w-3 h-3" /> Résolue</span>
-                                      : <span className="text-xs bg-red-100 text-red-700 border border-red-200 px-2 py-0.5 rounded-full font-medium">Ouverte</span>
-                                    }
-                                  </div>
-                                  <p className="text-xs text-gray-500 mt-0.5">
-                                    {d.toLocaleDateString('fr-MA', { day:'2-digit', month:'short', year:'2-digit', hour:'2-digit', minute:'2-digit' })}
-                                    {r.caissierName && ` · ${r.caissierName}`}
-                                  </p>
-                                </div>
-                                {r.amount > 0 && (
-                                  <div className="text-right shrink-0">
-                                    <p className="text-sm font-black text-red-600">−{fmt(r.amount)} DH</p>
-                                    <p className="text-xs text-gray-400">manquant</p>
-                                  </div>
-                                )}
-                              </div>
-                              <div className="px-4 py-3 space-y-1">
-                                {r.agentName && (
-                                  <p className="text-sm font-semibold text-gray-700">🧑‍💼 <span className="text-blue-700">{r.agentName}</span></p>
-                                )}
-                                <p className="text-sm text-gray-700">{r.description}</p>
-                                <div className="flex items-center gap-2 pt-1 border-t border-gray-50">
-                                  {!r.resolved && (
-                                    <button onClick={() => resolveRemark(r.id)}
-                                      className="flex items-center gap-1.5 text-xs bg-green-600 hover:bg-green-700 text-white px-3 py-1.5 rounded-lg font-semibold transition">
-                                      <CheckCircle2 className="w-3.5 h-3.5" /> Résoudre
-                                    </button>
-                                  )}
-                                  <button onClick={() => deleteRemark(r.id)}
-                                    className="flex items-center gap-1 text-xs text-red-400 hover:text-red-600 transition ml-auto">
-                                    <Trash2 className="w-3.5 h-3.5" /> Supprimer
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          )
-                        })}
-                      </div>
-                    )}
-                  </div>
-                )
-              })()}
-
-              {/* ------ Modal Clôture ------ */}
-              {clotureModal && (() => {
-                const last = clotureModal.city ? lastClotureForCity(clotureModal.city) : null
-                const periodFrom = last?.periodTo || null
-                const toClose = clotureModal.city
-                  ? caisseEntries
-                      .filter(e => e.city === clotureModal.city)
-                      .filter(e => {
-                        if (!periodFrom) return true
-                        const d = e.createdAt?.toDate ? e.createdAt.toDate() : new Date(e.createdAt || 0)
-                        return d > new Date(periodFrom)
-                      })
-                  : []
-                const totalE = toClose.filter(e => e.type === 'entree').reduce((s, e) => s + (e.amount || 0), 0)
-                const totalS = toClose.filter(e => e.type === 'sortie').reduce((s, e) => s + (e.amount || 0), 0)
-                const soldeM  = totalE - totalS
-                const fmtD = (d: any) => new Date(d).toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: 'numeric' })
-                return (
-                  <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50 p-4">
-                    <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md shadow-2xl">
-                      <div className="flex items-center justify-between p-5 border-b">
-                        <div className="flex items-center gap-2">
-                          <div className="w-9 h-9 bg-teal-600 rounded-xl flex items-center justify-center">
-                            <Lock className="w-5 h-5 text-white" />
-                          </div>
-                          <div>
-                            <h3 className="font-bold text-gray-800">Clôturer la caisse</h3>
-                            <p className="text-xs text-gray-400">{clotureModal.city || 'Sélectionnez une agence'}</p>
-                          </div>
-                        </div>
-                        <button onClick={() => setClotureModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
-                          <X className="w-5 h-5 text-gray-500" />
-                        </button>
-                      </div>
-                      <div className="p-5 space-y-4">
-                        {clotureError && (
-                          <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {clotureError}</div>
-                        )}
-                        <div>
-                          <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Agence *</label>
-                          <select
-                            value={clotureModal.city}
-                            onChange={e => setClotureModal((m: any) => ({ ...m, city: e.target.value }))}
-                            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-teal-500 focus:outline-none bg-gray-50"
-                          >
-                            <option value="">— Sélectionner une agence —</option>
-                            {cities.map(c => <option key={c}>{c}</option>)}
-                          </select>
-                        </div>
-                        {clotureModal.city && (
-                          <>
-                            <div className="bg-gray-50 rounded-xl p-3 text-xs text-gray-500 space-y-1">
-                              <p>📅 Période : <strong className="text-gray-700">{periodFrom ? fmtD(periodFrom) : 'Depuis le début'}</strong> → <strong className="text-gray-700">Aujourd'hui</strong></p>
-                              <p>📊 Opérations non clôturées : <strong className="text-gray-700">{toClose.length}</strong></p>
-                            </div>
-                            <div className="grid grid-cols-3 gap-2">
-                              <div className="bg-green-50 rounded-xl p-3 text-center">
-                                <p className="text-xs text-gray-500">Entrées</p>
-                                <p className="font-black text-green-600 text-sm">{fmt(totalE)} DH</p>
-                              </div>
-                              <div className="bg-red-50 rounded-xl p-3 text-center">
-                                <p className="text-xs text-gray-500">Sorties</p>
-                                <p className="font-black text-red-600 text-sm">{fmt(totalS)} DH</p>
-                              </div>
-                              <div className={`${soldeM >= 0 ? 'bg-teal-50' : 'bg-orange-50'} rounded-xl p-3 text-center`}>
-                                <p className="text-xs text-gray-500">Solde</p>
-                                <p className={`font-black text-sm ${soldeM >= 0 ? 'text-teal-600' : 'text-orange-600'}`}>{soldeM < 0 ? '−' : ''}{fmt(Math.abs(soldeM))} DH</p>
-                              </div>
-                            </div>
-                          </>
-                        )}
-                        <div>
-                          <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Note (optionnel)</label>
-                          <input
-                            placeholder="Remarque, observations..."
-                            value={clotureModal.note}
-                            onChange={e => setClotureModal((m: any) => ({ ...m, note: e.target.value }))}
-                            className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-teal-500 focus:outline-none bg-gray-50 focus:bg-white"
-                          />
-                        </div>
-                        <div className="grid grid-cols-2 gap-3 pt-1">
-                          <button onClick={() => setClotureModal(null)}
-                            className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition">
-                            Annuler
-                          </button>
-                          <button onClick={handleCloture} disabled={clotureLoading || !clotureModal.city}
-                            className="py-3 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white font-bold transition flex items-center justify-center gap-2">
-                            {clotureLoading
-                              ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Clôture...</>
-                              : <><Lock className="w-4 h-4" /> Clôturer</>
-                            }
-                          </button>
-                        </div>
-                        {clotureModal.city && toClose.length === 0 && (
-                          <p className="text-xs text-center text-amber-600 bg-amber-50 rounded-xl p-2">
-                            ⚠️ Aucune opération ouverte — la clôture sera enregistrée avec solde zéro.
-                          </p>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                )
-              })()}
-            </div>
-          )
-        })()}
-
-      {/* ------ MODAL ACTIVITÉ UTILISATEUR ------ */}
-      {userActivityModal && (() => {
-        const isAgent = userActivityModal.user.role === 'agent'
-        const isCashier = userActivityModal.user.role === 'caissier'
-        const list = isAgent
-          ? (userDetailTab === 'created' ? userActivityModal.created : userActivityModal.claimed)
-          : isCashier
-            ? (userDetailTab === 'entrees' ? userActivityModal.entrees : userDetailTab === 'sorties' ? userActivityModal.sorties : userActivityModal.entries)
-          : (userDetailTab === 'transport' ? userActivityModal.transports : userActivityModal.deliveries)
-        return (
-          <div className="fixed inset-0 bg-black/60 flex items-end sm:items-center justify-center z-50 p-0 sm:p-4">
-            <div className="bg-white sm:rounded-2xl w-full sm:max-w-3xl shadow-2xl h-full sm:h-auto sm:max-h-[90vh] flex flex-col">
-              <div className={`flex items-center gap-4 p-5 border-b shrink-0 ${isAgent ? 'bg-blue-50' : isCashier ? 'bg-teal-50' : 'bg-orange-50'}`}>
-                <div className={`w-12 h-12 rounded-2xl flex items-center justify-center text-2xl ${isAgent ? 'bg-blue-100' : isCashier ? 'bg-teal-100' : 'bg-orange-100'}`}>{isAgent ? '🧑‍💼' : isCashier ? '🏦' : '🚚'}</div>
-                <div className="flex-1 min-w-0">
-                  <h2 className="font-bold text-gray-800 text-lg truncate">{userActivityModal.user.name}</h2>
-                  <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                    <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${isAgent ? 'bg-blue-100 text-blue-700' : isCashier ? 'bg-teal-100 text-teal-700' : 'bg-orange-100 text-orange-700'}`}>{isAgent ? 'Agent' : isCashier ? 'Caissier' : 'Chauffeur'}</span>
-                    {userActivityModal.user.city && <span className="text-xs text-gray-500 flex items-center gap-1"><MapPin className="w-3 h-3" />{userActivityModal.user.city}</span>}
-                  </div>
-                </div>
-                <button onClick={() => setUserActivityModal(null)} className="p-2 hover:bg-white/60 rounded-xl transition shrink-0"><X className="w-5 h-5 text-gray-600" /></button>
-              </div>
-              <div className="flex-1 overflow-y-auto p-5 space-y-4">
-                <div className="flex bg-gray-100 rounded-xl p-1 gap-1">
-                  {isAgent ? (
-                    <>
-                      <button onClick={() => setUserDetailTab('created')} className={`flex-1 py-2 rounded-lg text-sm font-semibold transition ${userDetailTab === 'created' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500'}`}>📦 Créés ({userActivityModal.created.length})</button>
-                      <button onClick={() => setUserDetailTab('claimed')} className={`flex-1 py-2 rounded-lg text-sm font-semibold transition ${userDetailTab === 'claimed' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500'}`}>📬 Récupérés ({userActivityModal.claimed.length})</button>
-                    </>
-                  ) : isCashier ? (
-                    <>
-                      <button onClick={() => setUserDetailTab('entries')} className={`flex-1 py-2 rounded-lg text-sm font-semibold transition ${userDetailTab === 'entries' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500'}`}>Mouvements ({userActivityModal.entries.length})</button>
-                      <button onClick={() => setUserDetailTab('entrees')} className={`flex-1 py-2 rounded-lg text-sm font-semibold transition ${userDetailTab === 'entrees' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500'}`}>Entrées ({userActivityModal.entrees.length})</button>
-                      <button onClick={() => setUserDetailTab('sorties')} className={`flex-1 py-2 rounded-lg text-sm font-semibold transition ${userDetailTab === 'sorties' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500'}`}>Sorties ({userActivityModal.sorties.length})</button>
-                    </>
-                  ) : (
-                    <>
-                      <button onClick={() => setUserDetailTab('transport')} className={`flex-1 py-2 rounded-lg text-sm font-semibold transition ${userDetailTab === 'transport' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500'}`}>🚛 Transports ({userActivityModal.transports.length})</button>
-                      <button onClick={() => setUserDetailTab('delivery')} className={`flex-1 py-2 rounded-lg text-sm font-semibold transition ${userDetailTab === 'delivery' ? 'bg-white shadow-sm text-gray-800' : 'text-gray-500'}`}>🏠 Livraisons ({userActivityModal.deliveries.length})</button>
-                    </>
-                  )}
-                </div>
-                {list.length === 0 ? (
-                  <div className="text-center py-10 text-gray-400">📭 Aucun colis dans cette catégorie</div>
-                ) : isCashier ? (
-                  <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="bg-gray-50 border-b border-gray-100">
-                            {['Date','Type','Catégorie','Description','Montant'].map(h => (
-                              <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-50">
-                          {list.map((e: any) => {
-                            const isEntry = e.type === 'entree'
-                            const cat = CAISSE_CATEGORIES.find(c => c.key === e.category)
-                            return (
-                              <tr key={e.id} className="hover:bg-gray-50 transition">
-                                <td className="px-4 py-2.5 text-xs text-gray-400 whitespace-nowrap">{caisseEntryDate(e).toLocaleDateString('fr-MA', { day:'2-digit', month:'short', year:'2-digit', hour:'2-digit', minute:'2-digit' })}</td>
-                                <td className="px-4 py-2.5"><span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${isEntry ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>{isEntry ? 'Entrée' : 'Sortie'}</span></td>
-                                <td className="px-4 py-2.5 text-gray-700 font-medium whitespace-nowrap">{cat?.label || e.category || '—'}</td>
-                                <td className="px-4 py-2.5 text-gray-600">{e.description || e.reference || '—'}</td>
-                                <td className={`px-4 py-2.5 font-bold whitespace-nowrap ${isEntry ? 'text-green-600' : 'text-red-600'}`}>{isEntry ? '+' : '-'}{fmt(parseFloat(e.amount || 0) || 0)} DH</td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="bg-white border border-gray-100 rounded-2xl overflow-hidden">
-                    <div className="overflow-x-auto">
-                      <table className="w-full text-sm">
-                        <thead>
-                          <tr className="bg-gray-50 border-b border-gray-100">
-                            {['Tracking','Date','Expéditeur → Destinataire','Ville dest.','RETOUR FOND','Statut'].map(h => (
-                              <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody className="divide-y divide-gray-50">
-                          {list.map((p: any) => {
-                            const c = STATUS_COLORS[p.status] || STATUS_COLORS['Initialisé']
-                            const date = parcelDate(p).toLocaleDateString('fr-MA', { day:'2-digit', month:'short', year:'2-digit' })
-                            return (
-                              <tr key={p.id} className="hover:bg-gray-50 transition">
-                                <td className="px-4 py-2.5"><span className="font-mono text-xs text-purple-600 bg-purple-50 px-2 py-0.5 rounded-lg">{p.trackingId}</span></td>
-                                <td className="px-4 py-2.5 text-xs text-gray-400 whitespace-nowrap">{date}</td>
-                                <td className="px-4 py-2.5"><p className="text-sm font-medium text-gray-800">{p.sender?.name} → {p.receiver?.name}</p><p className="text-xs text-gray-400">{p.sender?.city} → {p.receiver?.city}</p></td>
-                                <td className="px-4 py-2.5 text-gray-600 font-medium whitespace-nowrap">{p.receiver?.city}</td>
-                                <td className="px-4 py-2.5">{p.codAmount > 0 ? <span className="text-orange-600 font-bold">{p.codAmount} DH</span> : <span className="text-gray-300">—</span>}</td>
-                                <td className="px-4 py-2.5"><span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${c.bg} ${c.text}`}><span className={`w-1.5 h-1.5 rounded-full ${c.dot}`} />{p.status}</span></td>
-                              </tr>
-                            )
-                          })}
-                        </tbody>
-                      </table>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-        )
-      })()}
-
+        {mainTab === 'caisse' && hasPermission('caisse') && (
+          <DirectorCaisseTab
+            user={user}
+            auth={auth}
+            profile={profile}
+            caisseEntries={caisseEntries}
+            caisseClotures={caisseClotures}
+            agencyCash={agencyCash}
+            driverVersements={driverVersements}
+            adminTransfers={adminTransfers}
+            confirmDriverVersementChef={confirmDriverVersementChef}
+            rejectDriverVersementChef={rejectDriverVersementChef}
+            datePreset={datePreset}
+            dateFrom={dateFrom}
+            dateTo={dateTo}
+            parcels={parcels}
+            drivers={users.filter((u: any) => u.role === 'livreur')}
+          />
+        )}
         {/* ══════════════ TAB: DOSSIERS RH ══════════════ */}
         {mainTab === 'employees' && hasPermission('employees') && (
           <div className="mt-4 space-y-4">
@@ -2177,6 +1595,19 @@ export default function DirectorPage() {
             </div>
           </div>
         )}
+
+        {/* ══════════════ TAB: VERSEMENTS LIVREURS ══════════════ */}
+        {mainTab === 'driver_versements' && hasPermission('caisse') && (
+          <DirectorVersementsTab profile={profile} />
+        )}
+
+        {/* Modal Versement Admin */}
+        <VersementAdminModal
+          isOpen={versementModal}
+          onClose={() => setVersementModal(false)}
+          user={profile || auth.currentUser}
+          agencyCash={agencyCash}
+        />
     </div>
   )
 }

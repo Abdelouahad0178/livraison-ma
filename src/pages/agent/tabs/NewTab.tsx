@@ -2,9 +2,10 @@ import { lazy, Suspense, useState, useEffect, useRef } from 'react'
 import { Calendar, Search, X, Plus, MapPin, ChevronDown, Check, MessageCircle, Printer } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import { CITIES } from '../../../firebase/constants'
+import type { Client } from '../../../firebase/clients'
 // Autocomplétion et reconnaissance vocale désactivées pour optimiser performances
 // import ClientAutocomplete from '../../../components/ClientAutocomplete'
-// import { searchExpediteurs, searchDestinataires, Client } from '../../../firebase/clients'
+// import { searchExpediteurs, searchDestinataires } from '../../../firebase/clients'
 // import VoiceInputAI from '../../../components/VoiceInputAI'
 import { collection, query, where, getDocs, limit } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
@@ -1085,17 +1086,17 @@ export default function NewTab() {
                       newTypes = [st.key]
                     } else if (st.key === 'cheque' || st.key === 'traite') {
                       // Chèque/Traite: gestion multi-sélection
-                      const hasSimpleOrEspeces = currentTypes.some(t => t === 'simple' || t === 'especes')
+                      const hasSimpleOrEspeces = currentTypes.some((t: string) => t === 'simple' || t === 'especes')
                       if (hasSimpleOrEspeces) {
                         // Si simple/especes est sélectionné, le remplacer par cheque/traite
                         newTypes = [st.key]
                       } else if (isSelected) {
                         // Décocher
-                        newTypes = currentTypes.filter(t => t !== st.key)
+                        newTypes = currentTypes.filter((t: string) => t !== st.key)
                         if (newTypes.length === 0) newTypes = ['simple'] // Par défaut simple si tout décoché
                       } else {
                         // Cocher (ajouter à la liste)
-                        newTypes = [...currentTypes.filter(t => t === 'cheque' || t === 'traite'), st.key]
+                        newTypes = [...currentTypes.filter((t: string) => t === 'cheque' || t === 'traite'), st.key]
                       }
                     } else {
                       newTypes = [st.key]

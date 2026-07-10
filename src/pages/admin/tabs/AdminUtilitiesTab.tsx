@@ -1,12 +1,13 @@
 import { useState } from 'react'
 import { db } from '../../../firebase/config'
 import { collection, query, where, getDocs, updateDoc, doc, deleteDoc } from 'firebase/firestore'
-import { AlertCircle, CheckCircle2, Wrench, Trash2 } from 'lucide-react'
+import { AlertCircle, CheckCircle2, Wrench, Trash2, Package } from 'lucide-react'
 import WorkingDateManager from '../../../components/WorkingDateManager'
 
 export default function AdminUtilitiesTab() {
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null)
+  const [msg, setMsg] = useState<{ type: 'success' | 'error' | ''; text: string }>({ type: '', text: '' })
   const [nicsToDelete, setNicsToDelete] = useState('')
   const [deleteLoading, setDeleteLoading] = useState(false)
   const [deleteResult, setDeleteResult] = useState<string>('')

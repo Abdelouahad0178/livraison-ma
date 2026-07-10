@@ -222,10 +222,11 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
         return
       }
 
-      if ((parcel.status === 'Livré' || parcel.status === 'Livré') && updates.status && updates.status !== parcel.status) {
-        setAdminEditModal((m: any) => ({ ...m, loading: false, error: 'Colis déjà livré : son statut est verrouillé.' }))
-        return
-      }
+      // ✅ ADMIN peut modifier le statut même si le colis est livré
+      // if ((parcel.status === 'Livré' || parcel.status === 'Livré') && updates.status && updates.status !== parcel.status) {
+      //   setAdminEditModal((m: any) => ({ ...m, loading: false, error: 'Colis déjà livré : son statut est verrouillé.' }))
+      //   return
+      // }
 
       // Statut → ajout historique si changé
       if (updates.status) {
@@ -415,10 +416,11 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
   const handleStatusUpdate = async () => {
     const { statusModal, setStatusModal } = s.current
     if (!statusModal) return
-    if ((statusModal.parcel?.status === 'Livré' || statusModal.parcel?.status === 'Livré') && statusModal.status !== statusModal.parcel.status) {
-      setStatusModal((m: any) => ({ ...m, error: 'Colis deja livre : son statut est verrouille.' }))
-      return
-    }
+    // ✅ ADMIN peut modifier le statut même si le colis est livré
+    // if ((statusModal.parcel?.status === 'Livré' || statusModal.parcel?.status === 'Livré') && statusModal.status !== statusModal.parcel.status) {
+    //   setStatusModal((m: any) => ({ ...m, error: 'Colis deja livre : son statut est verrouille.' }))
+    //   return
+    // }
     if (statusModal.status === 'Retourné' && !statusModal.returnReason) {
       setStatusModal((m: any) => ({ ...m, error: 'S?lectionnez le motif du retour.' }))
       return

@@ -48,7 +48,6 @@ import {
   subscribeClients, createClient, updateClient, addPayment,
   subscribeAgencyModificationRequests, resolveModificationRequest, deleteModificationRequest,
 } from '../firebase/clients'
-import { initWorkingDate } from '../utils/workingDate'
 import { subscribeVehicles } from '../firebase/vehicles'
 import { createBankDeposit, subscribeBankDepositsByCity } from '../firebase/bankDeposits'
 import {

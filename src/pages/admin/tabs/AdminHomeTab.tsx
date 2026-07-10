@@ -189,6 +189,12 @@ export default function AdminHomeTab({
       action: () => setMainTab('caisse'),
     },
     {
+      key: 'versements', label: '💰 Versements Admin', desc: 'Valider les versements espèces · chèques · virements',
+      icon: Banknote, grad: 'from-emerald-500 via-emerald-600 to-green-700',
+      glow: 'bg-emerald-50/80', stat: 'Confirmation des versements reçus',
+      action: () => setMainTab('versements'),
+    },
+    {
       key: 'employees', label: 'Dossiers RH', desc: 'CIN · CNSS · Contrats · Salaires',
       icon: FileText, grad: 'from-rose-500 via-pink-600 to-fuchsia-700',
       glow: 'bg-rose-50/80', stat: `${users.filter((u: any) => u.role !== 'admin').length} employé(s)`,

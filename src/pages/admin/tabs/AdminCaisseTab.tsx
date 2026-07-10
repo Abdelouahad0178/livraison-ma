@@ -2,7 +2,7 @@ import { auth } from '../../../firebase/config'
 import { createCaisseCloture, REMARK_TYPES, resolveRemark, deleteRemark } from '../../../firebase/firestore'
 import { deleteCaisseEntries } from '../../../firebase/caisse'
 import { CAISSE_CATEGORIES } from '../../../firebase/constants'
-import { MapPin, Wallet, Lock, Users, AlertTriangle, CheckCircle2, Trash2, X } from 'lucide-react'
+import { MapPin, Wallet, Lock, Users, AlertTriangle, CheckCircle2, Trash2, X, Settings } from 'lucide-react'
 import { fmt } from '../../../utils/formatNumber'
 import { useState } from 'react'
 
@@ -23,12 +23,24 @@ const filterByDate = (list: any, preset: any, from: any, to: any, getDate: any) 
 }
 
 export default function AdminCaisseTab({
-  caisseEntries, caisseClotures, users, allRemarks,
+  caisseEntries, caisseClotures, agencyCashes, updateAgencyCash, users, allRemarks,
   adminDatePreset, adminDateFrom, adminDateTo,
   caisseCityFilter, setCaisseCityFilter, caisseTypeFilter, setCaisseTypeFilter,
   clotureModal, setClotureModal, clotureLoading, setClotureLoading, clotureError, setClotureError,
   remarkCityFilter, setRemarkCityFilter, remarkFilter, setRemarkFilter,
 }: any) {
+  // 🔧 Modal Admin pour modifier solde caisse agence
+  const [editCashModal, setEditCashModal] = useState<any>(null)
+  const [editCashLoading, setEditCashLoading] = useState(false)
+  const [editCashError, setEditCashError] = useState('')
+
+  // 🔧 Modal pour réinitialiser toutes les caisses à 0
+  const [resetAllModal, setResetAllModal] = useState(false)
+  const [resetAllLoading, setResetAllLoading] = useState(false)
+
+  // Debug: vérifier si agencyCashes est chargé
+  console.log('🔍 AdminCaisseTab - agencyCashes:', agencyCashes)
+  console.log('🔍 AdminCaisseTab - updateAgencyCash:', typeof updateAgencyCash)
           const caisseDateFiltered = filterByDate(caisseEntries, adminDatePreset, adminDateFrom, adminDateTo,
             (e: any) => e.createdAt?.toDate ? e.createdAt.toDate() : new Date(e.createdAt || 0))
           const caisseFull = caisseDateFiltered
@@ -177,6 +189,68 @@ export default function AdminCaisseTab({
             }
           }
 
+          // 🔧 Handler pour modifier le solde d'une agence
+          const handleEditAgencyCash = async () => {
+            if (!editCashModal?.city) {
+              setEditCashError('Ville requise')
+              return
+            }
+
+            const solde = parseFloat(editCashModal.solde || 0)
+            const soldeEspeces = parseFloat(editCashModal.soldeEspeces || 0)
+            const soldeCheques = parseFloat(editCashModal.soldeCheques || 0)
+            const soldeVirement = parseFloat(editCashModal.soldeVirement || 0)
+
+            if (solde < 0 || soldeEspeces < 0 || soldeCheques < 0 || soldeVirement < 0) {
+              setEditCashError('Les montants ne peuvent pas être négatifs')
+              return
+            }
+
+            setEditCashLoading(true)
+            setEditCashError('')
+
+            try {
+              await updateAgencyCash(editCashModal.city, {
+                solde,
+                soldeEspeces,
+                soldeCheques,
+                soldeVirement,
+                lastUpdatedBy: auth.currentUser?.displayName || 'Admin',
+              })
+              setEditCashModal(null)
+              alert(`✅ Solde de ${editCashModal.city} modifié avec succès!`)
+            } catch (err: any) {
+              console.error('Edit cash error:', err)
+              setEditCashError(err?.message || 'Erreur lors de la modification')
+            } finally {
+              setEditCashLoading(false)
+            }
+          }
+
+          // Fonction pour réinitialiser TOUTES les caisses d'agence à 0
+          const handleResetAllCashes = async () => {
+            setResetAllLoading(true)
+            try {
+              const citiesToReset = citySummaries.map((s: any) => s.city)
+              for (const city of citiesToReset) {
+                await updateAgencyCash(city, {
+                  solde: 0,
+                  soldeEspeces: 0,
+                  soldeCheques: 0,
+                  soldeVirement: 0,
+                  lastUpdatedBy: auth.currentUser?.displayName || 'Admin',
+                })
+              }
+              setResetAllModal(false)
+              alert(`✅ Toutes les caisses (${citiesToReset.length} agences) ont été réinitialisées à 0!`)
+            } catch (err: any) {
+              console.error('Reset all error:', err)
+              alert(`❌ Erreur: ${err?.message || 'Impossible de réinitialiser'}`)
+            } finally {
+              setResetAllLoading(false)
+            }
+          }
+
           return (
             <div className="mt-4 space-y-5">
 
@@ -196,6 +270,7 @@ export default function AdminCaisseTab({
                       <p className={`text-2xl font-black ${allSolde >= 0 ? 'text-white' : 'text-orange-300'}`}>
                         {allSolde < 0 ? '−' : ''}{fmt(Math.abs(allSolde))} DH
                       </p>
+                      <p className="text-teal-300 text-xs mt-1">{agencyCashes?.length || 0} agence(s) active(s)</p>
                     </div>
                   </div>
                   <div className="grid grid-cols-2 gap-3">
@@ -208,6 +283,19 @@ export default function AdminCaisseTab({
                       <p className="text-lg font-black text-red-300">{fmt(allSorties)} DH</p>
                     </div>
                   </div>
+
+                  {/* 🔄 Bouton pour réinitialiser toutes les caisses */}
+                  {citySummaries.length > 0 && (
+                    <div className="mt-4">
+                      <button
+                        onClick={() => setResetAllModal(true)}
+                        className="w-full px-4 py-2.5 bg-red-500/90 hover:bg-red-600 text-white rounded-xl font-bold text-sm transition flex items-center justify-center gap-2"
+                      >
+                        <AlertTriangle className="w-4 h-4" />
+                        Réinitialiser toutes les caisses à 0
+                      </button>
+                    </div>
+                  )}
 
                   {/* 🧹 Bouton de nettoyage des entrées erronées */}
                   {erroneousEntries.length > 0 && (
@@ -267,13 +355,16 @@ export default function AdminCaisseTab({
                   </div>
                 ) : (
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                    {(citySummaries as any[]).map(({ city: agCity, entrees: agEnt, sorties: agSor, solde: agSolde, count: agCount, lastCloture: agLast }) => (
-                      <div key={agCity}
-                        onClick={() => { setCaisseCityFilter(caisseCityFilter === agCity ? 'Toutes' : agCity); setCaisseTypeFilter('all') }}
-                        className={`cursor-pointer rounded-2xl p-4 transition border-2 ${
-                          caisseCityFilter === agCity
-                            ? 'border-teal-500 bg-teal-50 shadow-md'
-                            : 'border-transparent bg-white shadow-sm hover:shadow-md hover:border-gray-100'
+                    {(citySummaries as any[]).map(({ city: agCity, entrees: agEnt, sorties: agSor, solde: agSolde, count: agCount, lastCloture: agLast }) => {
+                      const agencyCash = agencyCashes?.find((c: any) => c.city === agCity) || { solde: agSolde, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 }
+                      return (
+                      <div key={agCity} className="relative">
+                        <div
+                          onClick={() => { setCaisseCityFilter(caisseCityFilter === agCity ? 'Toutes' : agCity); setCaisseTypeFilter('all') }}
+                          className={`cursor-pointer rounded-2xl p-4 transition border-2 ${
+                            caisseCityFilter === agCity
+                              ? 'border-teal-500 bg-teal-50 shadow-md'
+                              : 'border-transparent bg-white shadow-sm hover:shadow-md hover:border-gray-100'
                         }`}>
                         <div className="flex items-center justify-between mb-1">
                           <p className="font-bold text-gray-800 text-sm truncate">{agCity}</p>
@@ -293,13 +384,35 @@ export default function AdminCaisseTab({
                             {(() => { const d = agLast.closedAt?.toDate?.() || new Date(agLast.closedAt || 0); return d.toLocaleDateString('fr-MA') })()}
                           </p>
                         )}
-                        <button
-                          onClick={e => { e.stopPropagation(); setClotureModal({ city: agCity, note: '' }); setClotureError('') }}
-                          className="mt-3 w-full text-xs font-bold py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white transition flex items-center justify-center gap-1">
-                          <Lock className="w-3 h-3" /> Clôturer
-                        </button>
+                        <div className="grid grid-cols-2 gap-2 mt-3">
+                          <button
+                            onClick={e => { e.stopPropagation(); setClotureModal({ city: agCity, note: '' }); setClotureError('') }}
+                            className="text-xs font-bold py-1.5 rounded-xl bg-teal-600 hover:bg-teal-700 text-white transition flex items-center justify-center gap-1">
+                            <Lock className="w-3 h-3" /> Clôturer
+                          </button>
+                          <button
+                            onClick={e => {
+                              e.stopPropagation()
+                              console.log('🔍 Modifier button clicked for:', agCity)
+                              console.log('🔍 agencyCash found:', agencyCash)
+                              console.log('🔍 agSolde calculated:', agSolde)
+                              console.log('🔍 All agencyCashes:', agencyCashes)
+                              setEditCashModal({
+                                city: agCity,
+                                solde: agencyCash.solde !== undefined ? agencyCash.solde : agSolde,
+                                soldeEspeces: agencyCash.soldeEspeces || 0,
+                                soldeCheques: agencyCash.soldeCheques || 0,
+                                soldeVirement: agencyCash.soldeVirement || 0,
+                              })
+                              setEditCashError('')
+                            }}
+                            className="text-xs font-bold py-1.5 rounded-xl bg-orange-500 hover:bg-orange-600 text-white transition flex items-center justify-center gap-1">
+                            <Settings className="w-3 h-3" /> Modifier
+                          </button>
+                        </div>
+                        </div>
                       </div>
-                    ))}
+                    )})}
                   </div>
                 )}
               </div>
@@ -721,6 +834,188 @@ export default function AdminCaisseTab({
                   </div>
                 )
               })()}
+
+              {/* 🔧 MODAL: Modifier solde caisse agence (Admin uniquement) */}
+              {editCashModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                  <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
+                    <div className="flex items-center justify-between mb-4">
+                      <div>
+                        <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                          <Settings className="w-5 h-5 text-orange-600" />
+                          Modifier solde caisse
+                        </h3>
+                        <p className="text-sm text-gray-500 mt-0.5">Agence: {editCashModal.city}</p>
+                      </div>
+                      <button onClick={() => setEditCashModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
+                        <X className="w-5 h-5 text-gray-500" />
+                      </button>
+                    </div>
+
+                    <div className="space-y-3 mb-4">
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-1">Solde total (DH)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={editCashModal.solde}
+                          onChange={e => setEditCashModal((m: any) => ({ ...m, solde: e.target.value }))}
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-orange-500 focus:outline-none"
+                          placeholder="0.00"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-1">Solde espèces (DH)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={editCashModal.soldeEspeces}
+                          onChange={e => setEditCashModal((m: any) => ({ ...m, soldeEspeces: e.target.value }))}
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-orange-500 focus:outline-none"
+                          placeholder="0.00"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-1">Solde chèques (DH)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={editCashModal.soldeCheques}
+                          onChange={e => setEditCashModal((m: any) => ({ ...m, soldeCheques: e.target.value }))}
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-orange-500 focus:outline-none"
+                          placeholder="0.00"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-700 mb-1">Solde virement (DH)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={editCashModal.soldeVirement}
+                          onChange={e => setEditCashModal((m: any) => ({ ...m, soldeVirement: e.target.value }))}
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-orange-500 focus:outline-none"
+                          placeholder="0.00"
+                        />
+                      </div>
+                      <div className="bg-orange-50 border border-orange-200 rounded-xl p-3">
+                        <div className="flex items-start gap-2">
+                          <AlertTriangle className="w-4 h-4 text-orange-600 shrink-0 mt-0.5" />
+                          <p className="text-xs text-orange-700">
+                            <strong>Attention:</strong> Vous pouvez modifier directement les soldes sans justification.
+                            Vous pouvez même mettre à 0 pour réinitialiser une caisse.
+                          </p>
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.preventDefault()
+                          e.stopPropagation()
+                          setEditCashModal((m: any) => ({
+                            ...m,
+                            solde: '0',
+                            soldeEspeces: '0',
+                            soldeCheques: '0',
+                            soldeVirement: '0'
+                          }))
+                        }}
+                        className="w-full text-xs font-semibold text-red-600 hover:text-red-700 py-2 bg-red-50 hover:bg-red-100 rounded-xl transition"
+                      >
+                        ⚠️ Réinitialiser à 0
+                      </button>
+                    </div>
+
+                    {editCashError && (
+                      <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700">
+                        {editCashError}
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        onClick={() => setEditCashModal(null)}
+                        className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition"
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        onClick={handleEditAgencyCash}
+                        disabled={editCashLoading}
+                        className="py-3 rounded-xl bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white font-bold transition flex items-center justify-center gap-2"
+                      >
+                        {editCashLoading ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            Sauvegarde...
+                          </>
+                        ) : (
+                          <>
+                            <Settings className="w-4 h-4" />
+                            Modifier
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* 🔄 MODAL: Réinitialiser toutes les caisses à 0 */}
+              {resetAllModal && (
+                <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+                  <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
+                    <div className="flex items-center gap-3 mb-4">
+                      <div className="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center">
+                        <AlertTriangle className="w-6 h-6 text-red-600" />
+                      </div>
+                      <div>
+                        <h3 className="font-bold text-gray-800">Réinitialiser toutes les caisses</h3>
+                        <p className="text-sm text-gray-500 mt-0.5">Cette action est irréversible</p>
+                      </div>
+                    </div>
+
+                    <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4">
+                      <p className="text-sm text-red-700 font-semibold mb-2">
+                        ⚠️ Attention : Vous êtes sur le point de réinitialiser TOUTES les caisses d'agence à 0
+                      </p>
+                      <p className="text-xs text-red-600">
+                        <strong>{citySummaries.length} agence(s)</strong> seront affectées. Tous les soldes (total, espèces, chèques, virements) seront mis à 0.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <button
+                        onClick={() => setResetAllModal(false)}
+                        disabled={resetAllLoading}
+                        className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition disabled:opacity-50"
+                      >
+                        Annuler
+                      </button>
+                      <button
+                        onClick={handleResetAllCashes}
+                        disabled={resetAllLoading}
+                        className="py-3 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold transition flex items-center justify-center gap-2"
+                      >
+                        {resetAllLoading ? (
+                          <>
+                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                            Réinitialisation...
+                          </>
+                        ) : (
+                          <>
+                            <AlertTriangle className="w-4 h-4" />
+                            Confirmer
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           )
 }

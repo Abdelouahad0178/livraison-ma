@@ -46,6 +46,7 @@ export async function createCaisseEntry(data: Record<string, unknown>): Promise<
     note:        data.note         || '',
     createdById:   data.createdById   || null,  // ⭐ NOUVEAU : ID du créateur
     createdByRole: data.createdByRole || null,  // ⭐ NOUVEAU : Rôle du créateur
+    cashAdjusted:  false,  // ✅ FIX C5: Tag pour tracer si agencyCashes a été ajusté
     createdAt:   serverTimestamp(),
   })
   return ref.id
@@ -606,7 +607,9 @@ export async function createCaisseEntryAtomic(entryData: any, adjustData: any) {
     const { nextSolde, nextEspeces, nextCheques, nextVirement } = _applyCashAdjust(cash, adjustData)
 
     const entryRef = doc(collection(db, 'caisseEntries'))
-    tx.set(entryRef, buildCaisseEntryPayload(entryData))
+    const payload = buildCaisseEntryPayload(entryData)
+    // ✅ FIX C5: Marquer que cette entrée a ajusté agencyCashes
+    tx.set(entryRef, { ...payload, cashAdjusted: true })
     tx.set(cashRef, {
       city: entryData.city,
       solde: nextSolde, soldeEspeces: nextEspeces,
@@ -622,22 +625,37 @@ export async function createCaisseEntryAtomic(entryData: any, adjustData: any) {
 // Supprime une entrée caisse ET ajuste le solde agence atomiquement.
 export async function deleteCaisseEntryAtomic(id: any, city: any, adjustData: any) {
   await runTransaction(db, async tx => {
+    // ✅ FIX C4: Lire l'entrée d'abord pour éviter double suppression
+    const entryRef = doc(db, 'caisseEntries', id)
+    const entrySnap = await tx.get(entryRef)
+    if (!entrySnap.exists()) {
+      throw new Error('Mouvement déjà supprimé.')
+    }
+
+    // ✅ FIX C5: Vérifier si l'entrée a ajusté agencyCashes lors de sa création
+    const entry = entrySnap.data()
+    const shouldAdjustCash = entry.cashAdjusted !== false  // Par défaut true pour rétro-compatibilité
+
     const cashRef  = doc(db, 'agencyCashes', city)
     const cashSnap = await tx.get(cashRef)
     const cash     = cashSnap.exists()
       ? cashSnap.data()
       : { solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 }
 
-    const { nextSolde, nextEspeces, nextCheques, nextVirement } = _applyCashAdjust(cash, adjustData)
+    // N'ajuster que si l'entrée avait ajusté à la création
+    if (shouldAdjustCash) {
+      const { nextSolde, nextEspeces, nextCheques, nextVirement } = _applyCashAdjust(cash, adjustData)
 
-    tx.delete(doc(db, 'caisseEntries', id))
-    tx.set(cashRef, {
-      city,
-      solde: nextSolde, soldeEspeces: nextEspeces,
-      soldeCheques: nextCheques, soldeVirement: nextVirement,
-      lastUpdatedAt: serverTimestamp(),
-      lastUpdatedBy: adjustData.lastUpdatedBy || 'System',
-    }, { merge: true })
+      tx.set(cashRef, {
+        city,
+        solde: nextSolde, soldeEspeces: nextEspeces,
+        soldeCheques: nextCheques, soldeVirement: nextVirement,
+        lastUpdatedAt: serverTimestamp(),
+        lastUpdatedBy: adjustData.lastUpdatedBy || 'System',
+      }, { merge: true })
+    }
+
+    tx.delete(entryRef)
   })
 }
 
@@ -917,6 +935,192 @@ export function subscribeDriverPortDuTransactionsByCity(city: any, callback: any
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// -- Versements Livreur → Chef d'agence (collection `driverVersements`) ------
+//
+// Workflow (identique au système de versements Chef → Admin) :
+//   1. Le livreur crée un versement (Port Dû ou COD)  → statut 'pending'
+//      Le montant est déduit immédiatement de son solde disponible côté UI
+//      (solde = collecté sur colis − versements pending/confirmed).
+//   2. Le chef d'agence VALIDE  → caisse agence créditée + entrée caisse
+//      (catégorie 'versement_livreur'), le tout dans une transaction atomique.
+//   3. Le chef d'agence REJETTE → statut 'rejected' + motif,
+//      le montant est automatiquement recrédité au livreur (les versements
+//      rejetés ne comptent plus dans la déduction du solde).
+// ═══════════════════════════════════════════════════════════════════════════
+
+export const DRIVER_VERSEMENT_TYPES = [
+  { key: 'port_du', label: 'Port Dû', emoji: '📮', color: 'orange' },
+  { key: 'cod',     label: 'COD',     emoji: '💰', color: 'green'  },
+]
+export const DRIVER_VERSEMENT_PAYMENT_TYPES = [
+  { key: 'especes',  label: 'Espèces',  emoji: '💵', color: 'green'  },
+  { key: 'cheque',   label: 'Chèque',   emoji: '📋', color: 'blue'   },
+  { key: 'virement', label: 'Virement', emoji: '🏦', color: 'purple' },
+]
+
+// Création d'un versement livreur (transaction atomique) — statut 'pending'
+export async function createDriverVersement(data: any): Promise<string> {
+  const amount = safeParseAmount(data.amount)
+  const type = data.type
+  const paymentType = data.paymentType || 'especes'
+
+  if (!data.driverId) throw new Error('Livreur invalide.')
+  if (!data.city) throw new Error('Agence invalide.')
+  if (!amount || amount <= 0) throw new Error('Le montant doit être supérieur à 0.')
+  if (!DRIVER_VERSEMENT_TYPES.some(t => t.key === type)) throw new Error('Type de versement invalide.')
+  if (!DRIVER_VERSEMENT_PAYMENT_TYPES.some(t => t.key === paymentType)) throw new Error('Mode de paiement invalide.')
+
+  return runTransaction(db, async tx => {
+    const versementRef = doc(collection(db, 'driverVersements'))
+    tx.set(versementRef, {
+      status:          'pending',
+      driverId:        data.driverId,
+      driverName:      data.driverName || 'Livreur',
+      city:            data.city,
+      type,                          // 'port_du' | 'cod'
+      paymentType,                   // 'especes' | 'cheque' | 'virement'
+      amount,
+      note:            data.note || '',
+      caisseEntryId:   null,
+      confirmedBy:     null,
+      confirmedById:   null,
+      confirmedAt:     null,
+      rejectedBy:      null,
+      rejectedById:    null,
+      rejectedAt:      null,
+      rejectionReason: '',
+      createdAt:       serverTimestamp(),
+    })
+    return versementRef.id
+  })
+}
+
+// Validation par le chef d'agence : crédite la caisse agence + crée l'entrée
+// caisse correspondante + met à jour le versement — tout atomique.
+// (Nom distinct de l'ancien confirmDriverVersement qui gère la collection legacy
+//  driverPortDuTransactions.)
+export async function confirmDriverVersementChef(id: any, confirmedBy: any, confirmedById: any) {
+  if (!id) throw new Error('Versement invalide.')
+  return runTransaction(db, async tx => {
+    const versementRef = doc(db, 'driverVersements', id)
+    const versementSnap = await tx.get(versementRef)
+    if (!versementSnap.exists()) throw new Error('Versement introuvable.')
+
+    const v = versementSnap.data()
+    if (v.status !== 'pending') throw new Error('Ce versement a déjà été traité.')
+
+    const amount = safeParseAmount(v.amount)
+    const city = v.city
+    const paymentType = v.paymentType || 'especes'
+    if (!city) throw new Error('Agence invalide.')
+    if (amount <= 0) throw new Error('Montant invalide.')
+
+    // 1. Créditer la caisse agence (solde global + solde du mode de paiement)
+    const cashRef = doc(db, 'agencyCashes', city)
+    const cashSnap = await tx.get(cashRef)
+    const cash = cashSnap.exists()
+      ? cashSnap.data()
+      : { solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 }
+    const { nextSolde, nextEspeces, nextCheques, nextVirement } = _applyCashAdjust(cash, {
+      soldeDelta:    amount,
+      especesDelta:  paymentType === 'especes'  ? amount : 0,
+      chequesDelta:  paymentType === 'cheque'   ? amount : 0,
+      virementDelta: paymentType === 'virement' ? amount : 0,
+    })
+    tx.set(cashRef, {
+      city,
+      solde: nextSolde, soldeEspeces: nextEspeces,
+      soldeCheques: nextCheques, soldeVirement: nextVirement,
+      lastUpdatedAt: serverTimestamp(),
+      lastUpdatedBy: confirmedBy || 'Chef Agence',
+    }, { merge: true })
+
+    // 2. Créer l'entrée caisse (traçabilité)
+    const typeLabel = DRIVER_VERSEMENT_TYPES.find(t => t.key === v.type)?.label || v.type
+    const payLabel  = DRIVER_VERSEMENT_PAYMENT_TYPES.find(t => t.key === paymentType)?.label || paymentType
+    const entryRef = doc(collection(db, 'caisseEntries'))
+    tx.set(entryRef, {
+      type:        'entree',
+      category:    'versement_livreur',
+      amount,
+      description: `Versement livreur ${v.driverName || ''} — ${typeLabel} (${payLabel})`,
+      reference:   id,
+      agentId:     v.driverId || null,
+      agentName:   v.driverName || null,
+      sourceAgentId: null, sourceAgentName: '',
+      staffId: null, staffName: null, staffRole: '',
+      salaryMonth: '',
+      paymentKind: paymentType,
+      city,
+      cashierId:   confirmedById || null,
+      cashierName: confirmedBy || '',
+      note:        v.note || '',
+      cashAdjusted: true,
+      createdAt:   serverTimestamp(),
+    })
+
+    // 3. Marquer le versement comme confirmé
+    tx.update(versementRef, {
+      status:        'confirmed',
+      confirmedBy:   confirmedBy || 'Chef Agence',
+      confirmedById: confirmedById || '',
+      confirmedAt:   serverTimestamp(),
+      caisseEntryId: entryRef.id,
+    })
+    return entryRef.id
+  })
+}
+
+// Rejet par le chef d'agence : statut 'rejected' + motif.
+// Le montant est recrédité au livreur automatiquement (un versement rejeté
+// n'est plus déduit de son solde disponible). Aucune caisse n'est touchée
+// puisque rien n'avait été encaissé.
+export async function rejectDriverVersementChef(id: any, rejectedBy: any, rejectedById: any, reason = '') {
+  if (!id) throw new Error('Versement invalide.')
+  return runTransaction(db, async tx => {
+    const versementRef = doc(db, 'driverVersements', id)
+    const versementSnap = await tx.get(versementRef)
+    if (!versementSnap.exists()) throw new Error('Versement introuvable.')
+
+    const v = versementSnap.data()
+    if (v.status !== 'pending') throw new Error('Ce versement a déjà été traité.')
+
+    tx.update(versementRef, {
+      status:          'rejected',
+      rejectedBy:      rejectedBy || 'Chef Agence',
+      rejectedById:    rejectedById || '',
+      rejectedAt:      serverTimestamp(),
+      rejectionReason: reason || '',
+    })
+  })
+}
+
+// Abonnement chef d'agence : tous les versements livreurs de sa ville
+// (tri côté client pour éviter un index composite Firestore)
+export function subscribeDriverVersements(city: any, callback: any, onError: (err?: any) => void = () => {}) {
+  const q = query(
+    collection(db, 'driverVersements'),
+    where('city', '==', city)
+  )
+  return onSnapshot(q, snap => callback(sortByCreatedDesc(snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[])), onError)
+}
+
+// Abonnement livreur : ses propres versements
+export function subscribeMyDriverVersements(driverId: any, callback: any, onError: (err?: any) => void = () => {}) {
+  const q = query(
+    collection(db, 'driverVersements'),
+    where('driverId', '==', driverId)
+  )
+  return onSnapshot(q, snap => callback(sortByCreatedDesc(snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[])), onError)
+}
+
+// Abonnement admin : tous les versements livreurs (toutes agences)
+export function subscribeAllDriverVersements(callback: any, onError: (err?: any) => void = () => {}) {
+  const q = query(collection(db, 'driverVersements'), orderBy('createdAt', 'desc'), limit(300))
+  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
+}
+
 // -- Transferts vers l'Admin --------------------------------------------------
 export async function createAdminTransferFromAgent(data: any) {
   const amount = parseFloat(data.amount) || 0
@@ -1000,12 +1204,110 @@ export async function createAdminTransferFromCaissier(data: any) {
     return transferRef.id
   })
 }
+export async function createAdminTransferFromChefAgence(data: any) {
+  const amount = parseFloat(data.amount) || 0
+  const paymentType = data.paymentType || 'especes' // especes, cheque, virement
+  if (!data.city || amount <= 0) throw new Error('Données invalides.')
+
+  return runTransaction(db, async tx => {
+    const cashRef  = doc(db, 'agencyCashes', data.city)
+    const cashSnap = await tx.get(cashRef)
+    const cash = cashSnap.exists()
+      ? cashSnap.data()
+      : { solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 }
+
+    const currentSolde = cash.solde || 0
+    const currentEspeces = cash.soldeEspeces || 0
+    const currentCheques = cash.soldeCheques || 0
+    const currentVirement = cash.soldeVirement || 0
+
+    // Vérifier le solde selon le type de paiement
+    if (paymentType === 'especes' && currentEspeces < amount) {
+      throw new Error('Solde espèces insuffisant.')
+    }
+    if (paymentType === 'cheque' && currentCheques < amount) {
+      throw new Error('Solde chèques insuffisant.')
+    }
+    if (paymentType === 'virement' && currentVirement < amount) {
+      throw new Error('Solde virement insuffisant.')
+    }
+
+    // Calculer nouveaux soldes
+    const nextSolde = currentSolde - amount
+    const nextEspeces = paymentType === 'especes' ? currentEspeces - amount : currentEspeces
+    const nextCheques = paymentType === 'cheque' ? currentCheques - amount : currentCheques
+    const nextVirement = paymentType === 'virement' ? currentVirement - amount : currentVirement
+
+    // Créer l'entrée de caisse (sortie)
+    const entryRef = doc(collection(db, 'caisseEntries'))
+    tx.set(entryRef, {
+      type: 'sortie',
+      category: 'remise_admin',
+      amount,
+      description: `Versement à l'Admin (${paymentType})`,
+      reference: '',
+      city: data.city,
+      agentId: data.fromId || null,
+      agentName: data.fromName || '',
+      cashierId: null,
+      cashierName: '',
+      sourceAgentId: null,
+      sourceAgentName: '',
+      staffId: null,
+      staffName: null,
+      paymentKind: paymentType,
+      note: data.note || '',
+      createdAt: serverTimestamp(),
+    })
+
+    // Mettre à jour la caisse de l'agence
+    tx.set(cashRef, {
+      city: data.city,
+      solde: nextSolde,
+      soldeEspeces: nextEspeces,
+      soldeCheques: nextCheques,
+      soldeVirement: nextVirement,
+      lastUpdatedAt: serverTimestamp(),
+      lastUpdatedBy: data.fromName || 'Chef Agence',
+    }, { merge: true })
+
+    // Créer le transfert en attente de validation
+    const transferRef = doc(collection(db, 'adminTransfers'))
+    tx.set(transferRef, {
+      fromRole: 'chef_agence',
+      fromId: data.fromId,
+      fromName: data.fromName,
+      city: data.city,
+      amount,
+      paymentType,
+      note: data.note || '',
+      caisseEntryId: entryRef.id,
+      status: 'pending',
+      confirmedBy: null,
+      confirmedById: null,
+      confirmedAt: null,
+      createdAt: serverTimestamp(),
+    })
+    return transferRef.id
+  })
+}
+
 export async function confirmAdminTransfer(id: any, confirmedBy: any, confirmedById: any) {
   return updateDoc(doc(db, 'adminTransfers', id), {
     status: 'confirmed',
     confirmedBy:   confirmedBy   || 'Admin',
     confirmedById: confirmedById || '',
     confirmedAt:   serverTimestamp(),
+  })
+}
+
+export async function rejectAdminTransfer(id: any, rejectedBy: any, rejectedById: any, reason: string) {
+  return updateDoc(doc(db, 'adminTransfers', id), {
+    status: 'rejected',
+    rejectedBy,
+    rejectedById,
+    rejectionReason: reason,
+    rejectedAt: serverTimestamp(),
   })
 }
 export function subscribeAdminTransfers(callback: any, onError: (err?: any) => void = () => {}) {

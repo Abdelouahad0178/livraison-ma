@@ -210,7 +210,7 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     }],
     photoUrl:             '',
     createdAt:            opDate,
-    workDate:             calculateWorkDate(data.operationDate || historyTs), // 📅 Date de travail (gère sessions de nuit)
+    workDate:             calculateWorkDate((data.operationDate as string | undefined) || historyTs), // 📅 Date de travail (gère sessions de nuit)
     agentId:              data.agentId            || null,
     agentName:            data.agentName          || null,
     chauffeurId:          data.chauffeurId        || null,
@@ -298,10 +298,10 @@ export async function updateParcelStatus(parcelId: string, status: string, extra
   if (parcelSnap.exists()) {
     const current = parcelSnap.data() as any
 
-    // RÈGLE 1: Un colis livré est verrouillé
-    if (isDeliveredStatus(current.status) && !isDeliveredStatus(status)) {
-      throw new Error('Ce colis est livre : son statut est verrouille. Demandez une modification a l admin ou au chef d agence.')
-    }
+    // ✅ RÈGLE 1 DÉSACTIVÉE: L'Admin peut modifier le statut même si le colis est livré
+    // if (isDeliveredStatus(current.status) && !isDeliveredStatus(status)) {
+    //   throw new Error('Ce colis est livre : son statut est verrouille. Demandez une modification a l admin ou au chef d agence.')
+    // }
 
     // RÈGLE 2: Un colis dans le circuit retour ne peut JAMAIS être marqué "Livré"
     if (isInReturnCircuit(current) && status === 'Livré') {

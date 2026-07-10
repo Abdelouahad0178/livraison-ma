@@ -8,6 +8,7 @@ import {
   updateParcelStatus, subscribeDriverParcels, subscribeDeliveryDriverParcels,
   collectCod, collectPortDu, rejectDeliveryAssignment,
   subscribeDriverOwnPortDuTransactions,
+  subscribeMyDriverVersements,
 } from '../firebase/firestore'
 import { findParcel } from '../firebase/parcelsRead'
 import { markParcelAsReturned } from '../firebase/parcels'
@@ -28,6 +29,7 @@ import CompanyContact from '../components/CompanyContact'
 import LiveClock from '../components/LiveClock'
 import { printDeliveryList } from '../utils/printDeliveryList'
 import SignatureViewerModal from '../components/SignatureViewerModal'
+import VersementChefModal from './driver/components/VersementChefModal'
 import { fmt } from '../utils/formatNumber'
 
 const QRCodeSVG = lazy(() => import('../components/QRCodeSvg'))
@@ -121,6 +123,10 @@ export default function DriverPage() {
   const [myPortDuTxs, setMyPortDuTxs]   = useState<any[]>([])
   const [users, setUsers]                 = useState<any[]>([])
 
+  // Versements au chef d'agence (Port Dû / COD)
+  const [myVersements, setMyVersements]       = useState<any[]>([])
+  const [versementModalOpen, setVersementModalOpen] = useState(false)
+
   // Filtres COD
   const [codSearchQuery, setCodSearchQuery] = useState('')
   const [codStatusFilter, setCodStatusFilter] = useState('all') // 'all' | 'collected' | 'remis' | 'received' | 'paid'
@@ -170,8 +176,9 @@ export default function DriverPage() {
       setDeliveryParcels(sortByStatus(data))
     })
     const unsubPortDu = subscribeDriverOwnPortDuTransactions(uid, setMyPortDuTxs)
+    const unsubVersements = subscribeMyDriverVersements(uid, setMyVersements)
     setUsers([])
-    return () => { unsubProfile(); unsubTransport(); unsubDelivery(); unsubPortDu() }
+    return () => { unsubProfile(); unsubTransport(); unsubDelivery(); unsubPortDu(); unsubVersements() }
   }, [uid])
 
   useEffect(() => {
@@ -357,6 +364,58 @@ export default function DriverPage() {
     ).length
     return { activeTransport, activeDelivery, activeMissions: activeTransport + activeDelivery, pendingPortDu, activeCod }
   }, [parcels, deliveryParcels, myPortDuTxs])
+
+  // Soldes disponibles pour versement au chef d'agence :
+  // Mémorisé pour cohérence avec les autres calculs optimisés (codData, filteredParcels)
+  // Recalcule uniquement quand deliveryParcels ou myVersements changent
+  const versementBalances = useMemo(() => {
+    // Helper : montant déjà versé (pending ou confirmed)
+    const versed = (type: string) => myVersements
+      .filter((v: any) => v.type === type && ['pending', 'confirmed'].includes(v.status))
+      .reduce((s: number, v: any) => s + (parseFloat(v.amount) || 0), 0)
+
+    // Port Dû collecté : même logique que dans l'onglet "Port Dû" qui fonctionne
+    const myPortDuParcels = deliveryParcels.filter((p: any) => p.portType === 'port_du' && p.portStatus === 'collected')
+    const portDuTotalCollected = myPortDuParcels.reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
+    const portDuReceivedByChef = myPortDuParcels
+      .filter((p: any) => p.portChefReceivedAt)
+      .reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
+    const portDuHeld = portDuTotalCollected - portDuReceivedByChef
+
+    // COD collecté : colis avec COD collecté par le livreur mais pas encore reçu par le chef
+    const codHeld = deliveryParcels
+      .filter((p: any) => {
+        const hasCod = parseFloat(p.codAmount || 0) > 0
+        const isCollected = ['collected_by_driver', 'collected_at_destination', 'collected', 'remis'].includes(p.codStatus || '')
+        const notReceivedByChef = !p.codReceivedByChef
+        return hasCod && isCollected && notReceivedByChef
+      })
+      .reduce((s: number, p: any) => s + (parseFloat(p.codAmount) || 0), 0)
+
+    const balances = {
+      port_du: Math.max(0, portDuHeld - versed('port_du')),
+      cod:     Math.max(0, codHeld - versed('cod')),
+      pendingCount: myVersements.filter((v: any) => v.status === 'pending').length,
+    }
+
+    // DEBUG: Log uniquement si les données ont changé (grâce au useMemo)
+    console.log('🔍 VERSEMENT BALANCES RECALCUL:', {
+      deliveryParcelsTotal: deliveryParcels.length,
+      myPortDuParcelsCount: myPortDuParcels.length,
+      portDuCollected: portDuTotalCollected,
+      portDuReceivedByChef,
+      portDuHeld,
+      versedPortDu: versed('port_du'),
+      finalPortDuBalance: balances.port_du,
+      codHeld,
+      versedCod: versed('cod'),
+      finalCodBalance: balances.cod,
+      myVersementsCount: myVersements.length,
+      timestamp: new Date().toLocaleTimeString()
+    })
+
+    return balances
+  }, [deliveryParcels, myVersements])
 
   // Section "Mes COD" : chaîne de filtres + tri + 3 reduce, mémorisée pour éviter
   // le recalcul complet à chaque render (la section vivait dans une IIFE du JSX)
@@ -851,6 +910,17 @@ export default function DriverPage() {
             <div className="flex items-center gap-2">
               <LiveClock className="text-white hidden sm:inline" />
               <button
+                onClick={() => setVersementModalOpen(true)}
+                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-orange-600 hover:bg-orange-700 text-white rounded-lg text-sm font-semibold transition"
+              >
+                <Banknote className="w-4 h-4" /> Versement au Chef
+                {versementBalances.pendingCount > 0 && (
+                  <span className="bg-white/25 text-white text-xs px-1.5 py-0.5 rounded-full">
+                    {versementBalances.pendingCount}
+                  </span>
+                )}
+              </button>
+              <button
                 onClick={() => signOut(auth).then(() => navigate('/login'))}
                 className="hidden md:flex items-center gap-1.5 text-sm text-red-400 hover:text-red-300 transition"
               >
@@ -947,6 +1017,17 @@ export default function DriverPage() {
                 {headerCounts.activeCod > 0 && (
                   <span className="ml-auto bg-green-600 text-white text-xs px-1.5 py-0.5 rounded-full">
                     {headerCounts.activeCod}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => { setVersementModalOpen(true); setMenuOpen(false) }}
+                className="w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold text-orange-400 hover:bg-gray-800 transition"
+              >
+                <Banknote className="w-4 h-4" /> Versement au Chef
+                {versementBalances.pendingCount > 0 && (
+                  <span className="ml-auto bg-orange-600 text-white text-xs px-1.5 py-0.5 rounded-full">
+                    {versementBalances.pendingCount}
                   </span>
                 )}
               </button>
@@ -1297,8 +1378,7 @@ export default function DriverPage() {
                               if (parcel && !['Livré','Retourné'].includes(parcel.status)) {
                                 try {
                                   const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
-                                  const codPaymentType = parcel.codAmount > 0 ? 'especes' : ''
-                                  await confirmDeliveryWithPaperReceipt(parcel.id, '', codPaymentType, isReturn)
+                                  await confirmDeliveryWithPaperReceipt(parcel.id, '', isReturn)
                                   successCount++
                                 } catch (err) {
                                   console.error(`Erreur validation ${parcel.trackingId}:`, err)
@@ -1524,8 +1604,7 @@ export default function DriverPage() {
                               if (parcel && !['Livré','Retourné'].includes(parcel.status)) {
                                 try {
                                   const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
-                                  const codPaymentType = parcel.codAmount > 0 ? 'especes' : ''
-                                  await confirmDeliveryWithPaperReceipt(parcel.id, '', codPaymentType, isReturn)
+                                  await confirmDeliveryWithPaperReceipt(parcel.id, '', isReturn)
                                   successCount++
                                 } catch (err) {
                                   console.error(`Erreur validation ${parcel.trackingId}:`, err)
@@ -3087,6 +3166,16 @@ export default function DriverPage() {
           </div>
         </div>
       )}
+
+      {/* ── MODAL VERSEMENT AU CHEF D'AGENCE ── */}
+      <VersementChefModal
+        isOpen={versementModalOpen}
+        onClose={() => setVersementModalOpen(false)}
+        uid={uid}
+        profile={profile}
+        balances={versementBalances}
+        myVersements={myVersements}
+      />
     </div>
   )
 }

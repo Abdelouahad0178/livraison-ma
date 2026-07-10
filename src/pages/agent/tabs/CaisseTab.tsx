@@ -1,4 +1,4 @@
-import React from 'react'
+import React, { useMemo, useEffect } from 'react'
 import { X, Check, Send, Lock, Banknote, Wallet, Search, Trash2, MessageCircle } from 'lucide-react'
 import { deleteCaisseEntry, deleteCaisseEntryAtomic, collectPortDu, updateParcelStatus } from '../../../firebase/firestore'
 import { createCaisseEntry } from '../../../firebase/caisse'
@@ -48,28 +48,47 @@ export default function CaisseTab() {
   // État pour la sélection multiple des ports dû
   const [selectedPortDu, setSelectedPortDu] = React.useState<Set<string>>(new Set())
   const [bulkCollecting, setBulkCollecting] = React.useState(false)
+  const bulkRef = React.useRef(false) // Protection race condition
 
-  // Tout le monde voit uniquement les entrées où il est directement impliqué (agentId ou cashierId)
-  // Pour éviter la double comptabilisation lors des transferts agent→caissier
-  const myEntries: any[] = agentEntries.filter((e: any) => e.cashierId === uid || e.agentId === uid)
+  // État pour l'historique des transferts admin (DOIT être au top-level pour Rules of Hooks)
+  const [showAllTransfers, setShowAllTransfers] = React.useState(false)
 
-  const dateFilteredEntries = filterByDate(myEntries, caisseDatePreset, caisseDateFrom, caisseDateTo, entryDate) as any[]
-  const caisseQuery = (debouncedCaisseSearch || '').trim().toLowerCase()
-  const filteredEntries = !caisseQuery ? dateFilteredEntries : dateFilteredEntries.filter(e => {
-    const cat = CAISSE_CATEGORIES.find(c => c.key === e.category)
-    return [
-      e.description,
-      e.reference,
-      e.staffName,
-      e.agentName,
-      e.cashierName,
-      e.note,
-      e.type,
-      e.category,
-      cat?.label,
-      e.amount,
-    ].some(v => String(v ?? '').toLowerCase().includes(caisseQuery))
-  })
+  // État pour la suppression (éviter double-clic)
+  const [deletingId, setDeletingId] = React.useState<string | null>(null)
+
+  // ✅ FIX M3: Memoize myEntries
+  const myEntries = useMemo(() =>
+    agentEntries.filter((e: any) => e.cashierId === uid || e.agentId === uid),
+    [agentEntries, uid]
+  )
+
+  // ✅ FIX M3: Memoize dateFilteredEntries
+  const dateFilteredEntries = useMemo(() =>
+    filterByDate(myEntries, caisseDatePreset, caisseDateFrom, caisseDateTo, entryDate) as any[],
+    [myEntries, caisseDatePreset, caisseDateFrom, caisseDateTo]
+  )
+
+  // ✅ FIX M3: Memoize filteredEntries (recherche coûteuse)
+  const filteredEntries = useMemo(() => {
+    const caisseQuery = (debouncedCaisseSearch || '').trim().toLowerCase()
+    if (!caisseQuery) return dateFilteredEntries
+
+    return dateFilteredEntries.filter(e => {
+      const cat = CAISSE_CATEGORIES.find(c => c.key === e.category)
+      return [
+        e.description,
+        e.reference,
+        e.staffName,
+        e.agentName,
+        e.cashierName,
+        e.note,
+        e.type,
+        e.category,
+        cat?.label,
+        e.amount,
+      ].some(v => String(v ?? '').toLowerCase().includes(caisseQuery))
+    })
+  }, [dateFilteredEntries, debouncedCaisseSearch])
 
   // 🔒 Fonction sécurisée pour parser les montants avec validation stricte
   const safeParseAmount = (value: any): number => {
@@ -78,32 +97,74 @@ export default function CaisseTab() {
     return (!isNaN(num) && isFinite(num) && num >= 0) ? num : 0
   }
 
-  const today = new Date(); today.setHours(0,0,0,0)
-  const todayE = myEntries.filter(e => {
-    const d = e.createdAt?.toDate ? e.createdAt.toDate() : new Date(e.createdAt || 0)
-    return d >= today
-  })
-  const todayEntrees = todayE.filter(e => e.type === 'entree').reduce((s, e) => s + safeParseAmount(e.amount), 0)
-  const todaySorties = todayE.filter(e => e.type === 'sortie').reduce((s, e) => s + safeParseAmount(e.amount), 0)
-  const totalToday   = Math.round((todayEntrees - todaySorties) * 100) / 100
+  // ✅ FIX M3: Memoize totaux aujourd'hui
+  const { todayEntrees, todaySorties, totalToday } = useMemo(() => {
+    const today = new Date(); today.setHours(0,0,0,0)
+    const todayE = myEntries.filter(e => {
+      const d = e.createdAt?.toDate ? e.createdAt.toDate() : new Date(e.createdAt || 0)
+      return d >= today
+    })
+    const entrees = todayE.filter(e => e.type === 'entree').reduce((s, e) => s + safeParseAmount(e.amount), 0)
+    const sorties = todayE.filter(e => e.type === 'sortie').reduce((s, e) => s + safeParseAmount(e.amount), 0)
+    return {
+      todayEntrees: entrees,
+      todaySorties: sorties,
+      totalToday: Math.round((entrees - sorties) * 100) / 100
+    }
+  }, [myEntries])
 
-  // Solde de la periode filtree
-  const periodEntrees = filteredEntries.filter(e => e.type === 'entree').reduce((s, e) => s + safeParseAmount(e.amount), 0)
-  const periodSorties = filteredEntries.filter(e => e.type === 'sortie').reduce((s, e) => s + safeParseAmount(e.amount), 0)
-  const soldeCaisse   = Math.round((periodEntrees - periodSorties) * 100) / 100
+  // ✅ FIX M3: Memoize solde période filtrée
+  const { periodEntrees, periodSorties, soldeCaisse } = useMemo(() => {
+    const entrees = filteredEntries.filter(e => e.type === 'entree').reduce((s, e) => s + safeParseAmount(e.amount), 0)
+    const sorties = filteredEntries.filter(e => e.type === 'sortie').reduce((s, e) => s + safeParseAmount(e.amount), 0)
+    return {
+      periodEntrees: entrees,
+      periodSorties: sorties,
+      soldeCaisse: Math.round((entrees - sorties) * 100) / 100
+    }
+  }, [filteredEntries])
 
-  const cashiers: any[] = agencyCashiers
-    .filter((c: any) => profile?.city && c.city === profile.city)
-    .sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''))
+  // ✅ FIX C6: Solde RÉEL pour les transferts (calculé sur TOUTES les entrées)
+  const remiseAmount = useMemo(() => {
+    const totalEntrees = myEntries.filter(e => e.type === 'entree').reduce((s, e) => s + safeParseAmount(e.amount), 0)
+    const totalSorties = myEntries.filter(e => e.type === 'sortie').reduce((s, e) => s + safeParseAmount(e.amount), 0)
+    return Math.max(0, Math.round((totalEntrees - totalSorties) * 100) / 100)
+  }, [myEntries])
 
-  const remiseAmount = Math.max(0, soldeCaisse)
-  const myRecoveryRequests = cashRecoveryRequests.filter((r: any) => r.agentId === uid)
-
-  const portDuPending = parcels.filter((p: any) =>
-    p.destinationAgentId === uid &&
-    p.portType === 'port_du' &&
-    p.portStatus !== 'collected'
+  // ✅ FIX M3: Memoize cashiers
+  const cashiers = useMemo(() =>
+    agencyCashiers
+      .filter((c: any) => profile?.city && c.city === profile.city)
+      .sort((a: any, b: any) => (a.name || '').localeCompare(b.name || '')),
+    [agencyCashiers, profile?.city]
   )
+
+  // ✅ FIX M3: Memoize recovery requests
+  const myRecoveryRequests = useMemo(() =>
+    cashRecoveryRequests.filter((r: any) => r.agentId === uid),
+    [cashRecoveryRequests, uid]
+  )
+
+  // ✅ FIX M3: Memoize port dû pending
+  const portDuPending = useMemo(() =>
+    parcels.filter((p: any) =>
+      p.destinationAgentId === uid &&
+      p.portType === 'port_du' &&
+      p.portStatus !== 'collected'
+    ),
+    [parcels, uid]
+  )
+
+  // ✅ FIX M6: Nettoyer selectedPortDu des IDs qui n'existent plus
+  useEffect(() => {
+    if (selectedPortDu.size > 0) {
+      const validIds = new Set(portDuPending.map((p: any) => p.id))
+      const filtered = new Set(Array.from(selectedPortDu).filter(id => validIds.has(id)))
+      if (filtered.size !== selectedPortDu.size) {
+        setSelectedPortDu(filtered)
+      }
+    }
+  }, [portDuPending, selectedPortDu])
 
   
   const fmtCat = (key: string) => CAISSE_CATEGORIES.find(c => c.key === key) || { emoji: '💱', label: key }
@@ -391,8 +452,8 @@ export default function CaisseTab() {
         {myAdminTransfers.length > 0 && (() => {
           const pending = myAdminTransfers.filter((t: any) => t.status === 'pending')
           const confirmed = myAdminTransfers.filter((t: any) => t.status === 'confirmed')
-          const [showAll, setShowAll] = React.useState(false)
-          const displayTransfers = showAll ? myAdminTransfers : myAdminTransfers.slice(0, 5)
+          // ✅ FIX C1: État remonté au top-level (Rules of Hooks)
+          const displayTransfers = showAllTransfers ? myAdminTransfers : myAdminTransfers.slice(0, 5)
 
           return (
             <>
@@ -402,12 +463,12 @@ export default function CaisseTab() {
                   <div className="text-center">
                     <p className="text-xs text-amber-600 font-medium mb-0.5">En attente</p>
                     <p className="text-lg font-black text-amber-700">{pending.length}</p>
-                    <p className="text-[10px] text-amber-500">{fmt(pending.reduce((s: number, t: any) => s + (t.amount || 0), 0))} DH</p>
+                    <p className="text-[10px] text-amber-500">{fmt(pending.reduce((s: number, t: any) => s + safeParseAmount(t.amount), 0))} DH</p>
                   </div>
                   <div className="text-center">
                     <p className="text-xs text-green-600 font-medium mb-0.5">✓ Confirmés</p>
                     <p className="text-lg font-black text-green-700">{confirmed.length}</p>
-                    <p className="text-[10px] text-green-500">{fmt(confirmed.reduce((s: number, t: any) => s + (t.amount || 0), 0))} DH</p>
+                    <p className="text-[10px] text-green-500">{fmt(confirmed.reduce((s: number, t: any) => s + safeParseAmount(t.amount), 0))} DH</p>
                   </div>
                 </div>
               )}
@@ -445,10 +506,10 @@ export default function CaisseTab() {
               {myAdminTransfers.length > 5 && (
                 <div className="border-t border-purple-50 px-4 py-2 text-center">
                   <button
-                    onClick={() => setShowAll(!showAll)}
+                    onClick={() => setShowAllTransfers(!showAllTransfers)}
                     className="text-xs text-purple-600 hover:text-purple-700 font-semibold"
                   >
-                    {showAll ? '↑ Voir moins' : `↓ Voir tout (${myAdminTransfers.length} transferts)`}
+                    {showAllTransfers ? '↑ Voir moins' : `↓ Voir tout (${myAdminTransfers.length} transferts)`}
                   </button>
                 </div>
               )}
@@ -559,44 +620,59 @@ export default function CaisseTab() {
               {selectedPortDu.size > 0 && (
                 <>
                   <span className="text-xs text-orange-700 font-semibold">
-                    {selectedPortDu.size} sélectionné(s) • Total: {portDuPending.filter((p: any) => selectedPortDu.has(p.id)).reduce((sum: number, p: any) => sum + safeParseAmount(p.price), 0).toFixed(2)} DH
+                    {selectedPortDu.size} sélectionné(s) • Total: {fmt(portDuPending.filter((p: any) => selectedPortDu.has(p.id)).reduce((sum: number, p: any) => sum + safeParseAmount(p.price), 0))} DH
                   </span>
                   <button
                     onClick={async () => {
-                      if (bulkCollecting) return
+                      // ✅ FIX C8: Protection race condition double-clic
+                      if (bulkRef.current) return
                       if (!window.confirm(`Encaisser ${selectedPortDu.size} port(s) dû en espèces ?`)) return
 
+                      bulkRef.current = true
                       setBulkCollecting(true)
                       try {
                         const name = profile?.name || 'Agent'
-                        for (const parcelId of selectedPortDu) {
+                        // ✅ FIX C3: Retirer chaque id du Set au fur et à mesure (éviter retry double)
+                        for (const parcelId of Array.from(selectedPortDu)) {
                           const parcel = portDuPending.find((p: any) => p.id === parcelId)
                           if (parcel) {
-                            // Encaisser le port dû
-                            await collectPortDu(parcel.id, name, uid || '')
-                            // Créer l'entrée de caisse
-                            await createCaisseEntry({
-                              type: 'entree',
-                              category: 'port_du',
-                              amount: parcel.price || 0,
-                              description: `Port dû — ${parcel.trackingId} (${parcel.receiver?.name})`,
-                              reference: parcel.trackingId,
-                              agentId: uid || '',
-                              agentName: name,
-                              city: profile?.city || parcel.receiver?.city || '',
-                              cashierId: uid || '',
-                              cashierName: name,
-                            })
-                            // Mettre à jour le statut du colis
-                            await updateParcelStatus(parcel.id, 'Livré', { note: 'Retrait en agence — port dû encaissé' })
+                            try {
+                              // Encaisser le port dû
+                              await collectPortDu(parcel.id, name, uid || '')
+                              // Créer l'entrée de caisse
+                              await createCaisseEntry({
+                                type: 'entree',
+                                category: 'port_du',
+                                amount: parcel.price || 0,
+                                description: `Port dû — ${parcel.trackingId} (${parcel.receiver?.name || 'Destinataire'})`,
+                                reference: parcel.trackingId,
+                                agentId: uid || '',
+                                agentName: name,
+                                city: profile?.city || parcel.receiver?.city || '',
+                                cashierId: uid || '',
+                                cashierName: name,
+                              })
+                              // Mettre à jour le statut du colis
+                              await updateParcelStatus(parcel.id, 'Livré', { note: 'Retrait en agence — port dû encaissé' })
+
+                              // Retirer du Set immédiatement après succès
+                              setSelectedPortDu(prev => {
+                                const next = new Set(prev)
+                                next.delete(parcelId)
+                                return next
+                              })
+                            } catch (err) {
+                              console.error(`Erreur encaissement ${parcel.trackingId}:`, err)
+                              // Continuer avec les autres mais garder celui-ci dans la sélection
+                            }
                           }
                         }
-                        setSelectedPortDu(new Set())
                       } catch (err) {
                         console.error('Erreur encaissement multiple:', err)
-                        alert('Erreur lors de l\'encaissement multiple. Veuillez réessayer.')
+                        alert('Erreur lors de l\'encaissement. Vérifiez les colis restants.')
                       } finally {
                         setBulkCollecting(false)
+                        bulkRef.current = false
                       }
                     }}
                     disabled={bulkCollecting}
@@ -642,7 +718,7 @@ export default function CaisseTab() {
                   <p className="text-xs text-gray-400 font-mono">{p.trackingId}</p>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-sm font-black text-orange-600">{p.price || 0} DH</span>
+                  <span className="text-sm font-black text-orange-600">{fmt(safeParseAmount(p.price))} DH</span>
                   <button
                     onClick={() => setPortCollectModal({ open: true, parcel: p, paymentType: 'especes', loading: false })}
                     className="flex items-center gap-1 text-xs bg-orange-500 hover:bg-orange-600 text-white px-2.5 py-1.5 rounded-lg font-semibold transition"
@@ -674,7 +750,7 @@ export default function CaisseTab() {
               }
             </button>
             <button
-              onClick={() => handleDeleteAgentOperations(agentEntries)}
+              onClick={() => handleDeleteAgentOperations(myEntries)}
               disabled={agentOpsDelete.loading || myEntries.length === 0}
               className="inline-flex items-center justify-center gap-1.5 bg-red-50 hover:bg-red-100 disabled:opacity-50 text-red-600 text-xs font-bold px-3 py-1.5 rounded-xl transition"
             >
@@ -762,6 +838,15 @@ export default function CaisseTab() {
                       <button
                         onClick={async () => {
                           if (!window.confirm('Supprimer ce mouvement ?')) return
+                          // ✅ FIX C2: Vérifier profile.city avant utilisation
+                          if (!profile?.city) {
+                            alert('Profil incomplet, impossible de supprimer.')
+                            return
+                          }
+                          // ✅ FIX C4: Protection double-clic
+                          if (deletingId === e.id) return
+                          setDeletingId(e.id)
+
                           const amount = safeParseAmount(e.amount)
                           const sign = e.type === 'entree' ? -1 : 1  // Annuler l'opération
                           try {
@@ -776,12 +861,15 @@ export default function CaisseTab() {
                                 lastUpdatedBy: profile?.name || 'Agent',
                               })
                             }
-                          } catch (err) {
+                          } catch (err: any) {
                             console.error('Erreur suppression:', err)
-                            alert('Erreur lors de la suppression.')
+                            alert(err.message || 'Erreur lors de la suppression.')
+                          } finally {
+                            setDeletingId(null)
                           }
                         }}
-                        className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-red-50 rounded-lg transition text-gray-300 hover:text-red-500"
+                        disabled={deletingId === e.id}
+                        className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-red-50 rounded-lg transition text-gray-300 hover:text-red-500 disabled:opacity-30"
                         title="Supprimer"
                       >
                         <Trash2 className="w-3.5 h-3.5" />
@@ -814,7 +902,7 @@ export default function CaisseTab() {
             <div className="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-4">
               <div className="flex items-center justify-between">
                 <span className="text-sm text-gray-600">Montant</span>
-                <span className="text-xl font-black text-orange-600">{portCollectModal.parcel?.price || 0} DH</span>
+                <span className="text-xl font-black text-orange-600">{fmt(safeParseAmount(portCollectModal.parcel?.price))} DH</span>
               </div>
             </div>
             <div className="grid grid-cols-2 gap-3">
