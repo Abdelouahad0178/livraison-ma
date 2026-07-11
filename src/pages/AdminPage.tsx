@@ -506,9 +506,7 @@ export default function AdminPage() {
     return () => clearTimeout(timer)
   }, [search])
 
-  // 🔍 RECHERCHE INTELLIGENTE PROGRESSIVE EN PARALLÈLE
-  // Lance searchParcels en parallèle de Fuse.js
-  // Utilisé uniquement si Fuse.js ne trouve rien dans les 2000
+  // 🔍 RECHERCHE HYBRIDE: Fuse.js (2000) + searchParcels (toute la base)
   useEffect(() => {
     if (!debouncedSearch || debouncedSearch.trim().length === 0) {
       setServerSearchResults(null)
@@ -517,31 +515,26 @@ export default function AdminPage() {
     }
 
     let cancelled = false
+    setIsSearching(true)
 
-    // Lancer recherche serveur après un délai (pour laisser Fuse.js d'abord)
-    const timer = setTimeout(() => {
-      setIsSearching(true)
-      searchParcels(debouncedSearch.trim(), { limit: 10000 })
-        .then(results => {
-          if (!cancelled) {
-            console.log(`🔍 Recherche COMPLÈTE: ${results.length} résultats dans toute la base`)
-            setServerSearchResults(results)
-            setIsSearching(false)
-          }
-        })
-        .catch(error => {
-          if (!cancelled) {
-            console.error('❌ Erreur recherche complète:', error)
-            setServerSearchResults(null)
-            setIsSearching(false)
-          }
-        })
-    }, 1000) // Attendre 1s pour laisser Fuse.js trouver d'abord
+    // Lancer recherche serveur immédiatement pour chercher dans TOUTE la base
+    searchParcels(debouncedSearch.trim(), { limit: 10000 })
+      .then(results => {
+        if (!cancelled) {
+          console.log(`✅ searchParcels: ${results.length} résultats dans TOUTE la base`)
+          setServerSearchResults(results)
+          setIsSearching(false)
+        }
+      })
+      .catch(error => {
+        if (!cancelled) {
+          console.error('❌ Erreur searchParcels:', error)
+          setServerSearchResults(null)
+          setIsSearching(false)
+        }
+      })
 
-    return () => {
-      cancelled = true
-      clearTimeout(timer)
-    }
+    return () => { cancelled = true }
   }, [debouncedSearch])
 
   // Subscriptions de base � ddémarrent au montage du composant
@@ -980,30 +973,25 @@ export default function AdminPage() {
   const filtered = useMemo(() => {
     if (!Array.isArray(periodParcels)) return []
 
-    // 🔍 RECHERCHE INTELLIGENTE PROGRESSIVE:
-    // 1️⃣ Cherche dans 2000 avec Fuse.js (rapide, local)
-    // 2️⃣ Si rien trouvé → utilise searchParcels (toute la base)
+    // 🔍 STRATÉGIE SIMPLE ET EFFICACE:
+    // 1️⃣ Si recherche serveur disponible → utiliser ça (TOUTE la base)
+    // 2️⃣ Sinon utiliser Fuse.js dans les 2000 chargés (fallback)
+    // 3️⃣ Sinon afficher tous les periodParcels
     let results = periodParcels
-    let fuseResults: any[] = []
 
-    // D'abord essayer Fuse.js dans les 2000 colis chargés
-    if (debouncedSearch && fuseIndex) {
-      const searchResults = fuseIndex.search(debouncedSearch.trim())
-      fuseResults = searchResults.map(r => r.item)
-      console.log(`🔍 Fuse.js dans ${periodParcels.length} colis: ${fuseResults.length} résultats`)
+    if (debouncedSearch) {
+      // Priorité 1: Recherche serveur (cherche dans TOUTE la base)
+      if (serverSearchResults !== null && serverSearchResults.length > 0) {
+        results = serverSearchResults
+        console.log(`✅ Affichage ${results.length} résultats de searchParcels (toute la base)`)
+      }
+      // Priorité 2: Fuse.js local (cherche dans 2000 chargés)
+      else if (fuseIndex) {
+        const searchResults = fuseIndex.search(debouncedSearch.trim())
+        results = searchResults.map(r => r.item)
+        console.log(`✅ Affichage ${results.length} résultats Fuse.js (${periodParcels.length} colis)`)
+      }
     }
-
-    // Si Fuse.js a trouvé des résultats → utiliser ça
-    if (fuseResults.length > 0) {
-      results = fuseResults
-      console.log(`✅ Utilisation résultats Fuse.js: ${results.length} colis`)
-    }
-    // Sinon, si recherche serveur disponible → utiliser ça (toute la base)
-    else if (debouncedSearch && serverSearchResults !== null) {
-      results = serverSearchResults
-      console.log(`✅ Utilisation recherche COMPLÈTE: ${results.length} colis dans toute la base`)
-    }
-    // Sinon garder periodParcels
 
     // Appliquer les autres filtres (ville, driver, statut)
     results = results.filter((p: any) => {
