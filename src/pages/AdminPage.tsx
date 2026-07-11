@@ -336,6 +336,17 @@ export default function AdminPage() {
   const [isSearchActive, setIsSearchActive] = useState(false) // Pour recharger plus de colis quand recherche active
   const [serverSearchResults, setServerSearchResults] = useState<any[] | null>(null) // Résultats recherche serveur
   const [isSearching, setIsSearching] = useState(false) // Loading state pour recherche
+  const [debugLogs, setDebugLogs] = useState<string[]>([]) // 🔍 Logs de debug visibles dans l'interface
+  const [showDebug, setShowDebug] = useState(true) // Toggle panneau debug
+
+  // 🔍 Helper pour ajouter des logs visibles
+  const addDebugLog = (message: string) => {
+    const timestamp = new Date().toLocaleTimeString('fr-FR')
+    const logEntry = `[${timestamp}] ${message}`
+    console.log(logEntry) // Aussi dans la console
+    setDebugLogs(prev => [...prev.slice(-20), logEntry]) // Garder seulement les 20 derniers
+  }
+
   const [statusModal,       setStatusModal]       = useState<any>(null)
   const [returnModal,       setReturnModal]       = useState<any>(null)
   const [returnParcelModal, setReturnParcelModal] = useState<any>(null) // { parcel, loading, result, error }
@@ -508,32 +519,37 @@ export default function AdminPage() {
 
   // 🔍 RECHERCHE SERVEUR: searchParcels dans toute la base
   useEffect(() => {
-    console.log(`🔍 useEffect recherche déclenché, terme: "${debouncedSearch}"`)
+    addDebugLog(`🔍 Recherche déclenchée: "${debouncedSearch}"`)
 
     if (!debouncedSearch || debouncedSearch.trim().length === 0) {
-      console.log('❌ Pas de terme de recherche, reset')
+      addDebugLog('❌ Pas de terme, reset')
       setServerSearchResults(null)
       setIsSearching(false)
+      setDebugLogs([]) // Clear logs quand pas de recherche
       return
     }
 
     let cancelled = false
     setIsSearching(true)
-    console.log(`🚀 Lancement searchParcels pour: "${debouncedSearch.trim()}"`)
+    addDebugLog(`🚀 Lancement searchParcels(limite: 50000)`)
 
     // Lancer recherche serveur immédiatement pour chercher dans TOUTE la base
     searchParcels(debouncedSearch.trim(), { limit: 50000 })
       .then(results => {
         if (!cancelled) {
-          console.log(`✅ searchParcels TERMINÉ: ${results.length} résultats dans TOUTE la base`)
-          console.log('📊 Premiers résultats:', results.slice(0, 3).map(p => p.trackingId))
+          addDebugLog(`✅ TERMINÉ: ${results.length} résultats`)
+          if (results.length > 0) {
+            addDebugLog(`📊 Premiers: ${results.slice(0, 3).map(p => p.trackingId).join(', ')}`)
+          } else {
+            addDebugLog(`⚠️ AUCUN résultat trouvé dans toute la base`)
+          }
           setServerSearchResults(results)
           setIsSearching(false)
         }
       })
       .catch(error => {
         if (!cancelled) {
-          console.error('❌ ERREUR searchParcels:', error)
+          addDebugLog(`❌ ERREUR: ${error.message || error}`)
           setServerSearchResults(null)
           setIsSearching(false)
         }
@@ -541,7 +557,6 @@ export default function AdminPage() {
 
     return () => {
       cancelled = true
-      console.log('🛑 useEffect recherche cleanup')
     }
   }, [debouncedSearch])
 
@@ -1289,6 +1304,41 @@ export default function AdminPage() {
       </header>
 
       <main className="max-w-7xl mx-auto p-4 pb-16">
+        {/* 🔍 PANNEAU DEBUG RECHERCHE */}
+        {showDebug && debugLogs.length > 0 && (
+          <div className="bg-yellow-50 border-2 border-yellow-300 rounded-2xl p-4 mb-4">
+            <div className="flex items-center justify-between mb-3">
+              <h3 className="text-sm font-bold text-yellow-900 flex items-center gap-2">
+                🔍 Logs de recherche en temps réel
+              </h3>
+              <button
+                onClick={() => setShowDebug(false)}
+                className="text-yellow-600 hover:text-yellow-800 text-xs font-semibold"
+              >
+                Masquer
+              </button>
+            </div>
+            <div className="bg-black text-green-400 rounded-xl p-3 font-mono text-xs space-y-1 max-h-64 overflow-y-auto">
+              {debugLogs.map((log, idx) => (
+                <div key={idx}>{log}</div>
+              ))}
+            </div>
+            <p className="mt-2 text-xs text-yellow-700">
+              💡 Ces logs montrent exactement ce qui se passe quand vous cherchez un colis.
+            </p>
+          </div>
+        )}
+        {!showDebug && debugLogs.length > 0 && (
+          <div className="mb-4">
+            <button
+              onClick={() => setShowDebug(true)}
+              className="text-xs text-yellow-600 hover:text-yellow-800 font-semibold"
+            >
+              🔍 Afficher les logs de recherche ({debugLogs.length})
+            </button>
+          </div>
+        )}
+
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 mb-4">
           <div className="flex flex-col lg:flex-row lg:items-center gap-3">
             <div className="flex items-center gap-2 min-w-0">
