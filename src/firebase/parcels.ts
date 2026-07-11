@@ -1163,105 +1163,54 @@ export async function searchParcels(
     const searchTerm = term.trim()
     const searchLimit = options.limit || 10000
     const startTime = performance.now()
+    const parcelsCol = collection(db, 'parcels')
 
-    // 1️⃣ Détection du type de recherche
-    const isTrackingId = /^LMA-?\d+$/i.test(searchTerm)
-    const isPhone = /^[\d\s\-\(\)\.]+$/.test(searchTerm) && searchTerm.replace(/\D/g, '').length >= 9
-    const isNic = /^\d+$/.test(searchTerm) && searchTerm.length <= 8
+    // 1) Normalisation du terme selon plusieurs formats possibles.
+    //    On NE se base PAS sur une classification exclusive (if/else if) :
+    //    on lance en parallèle TOUTES les requêtes plausibles puis on fusionne.
+    //    Chaque requête est un match EXACT sur un champ indexé (rapide, <100ms).
+    const trackingId = searchTerm.toUpperCase().replace(/[\s-]/g, '') // "LMA-123" / "lma 123" -> "LMA123"
+    const phone      = searchTerm.replace(/[\s\-\(\)\.]/g, '')         // "06 12 34 56 78" -> "0612345678"
+    const nicUpper   = searchTerm.toUpperCase().trim()                 // CIN alphanumérique (ex: "AB123456")
+    const nameLower  = searchTerm.toLowerCase().trim()
 
+    // 2) Construire dynamiquement la liste des requêtes candidates
+    const candidateQueries: Promise<any>[] = []
+
+    // Tracking ID : commence par "LMA"
+    if (/^LMA\d*$/.test(trackingId)) {
+      candidateQueries.push(getDocs(query(parcelsCol, where('trackingId', '==', trackingId), limit(searchLimit))))
+    }
+    // Téléphone : au moins 9 chiffres (couvre fixe + mobile)
+    if (/^\d{9,}$/.test(phone)) {
+      candidateQueries.push(getDocs(query(parcelsCol, where('senderTel', '==', phone), limit(searchLimit))))
+      candidateQueries.push(getDocs(query(parcelsCol, where('receiverTel', '==', phone), limit(searchLimit))))
+    }
+    // NIC / CIN : alphanumérique court (<= 12), et pas un tracking ID
+    if (/^[A-Z0-9]{1,12}$/.test(nicUpper) && !/^LMA/.test(nicUpper)) {
+      candidateQueries.push(getDocs(query(parcelsCol, where('senderNic', '==', nicUpper), limit(searchLimit))))
+    }
+    // Nom : dès qu'il y a au moins une lettre (évite les recherches inutiles sur du pur numérique)
+    if (/[a-zA-Zà-ÿ]/.test(searchTerm)) {
+      candidateQueries.push(getDocs(query(parcelsCol, where('senderNameLower', '==', nameLower), limit(searchLimit))))
+      candidateQueries.push(getDocs(query(parcelsCol, where('receiverNameLower', '==', nameLower), limit(searchLimit))))
+    }
+    // Sécurité : si aucun format ne correspond, on tente quand même tracking + nom
+    if (candidateQueries.length === 0) {
+      candidateQueries.push(getDocs(query(parcelsCol, where('trackingId', '==', trackingId), limit(searchLimit))))
+      candidateQueries.push(getDocs(query(parcelsCol, where('senderNameLower', '==', nameLower), limit(searchLimit))))
+    }
+
+    // 3) Exécuter en parallèle + fusionner + dédupliquer
+    const snapshots = await Promise.all(candidateQueries)
+    const uniqueIds = new Set<string>()
     let results: any[] = []
-
-    // 2️⃣ Recherche par Tracking ID (le plus fréquent)
-    if (isTrackingId) {
-      const trackingUpper = searchTerm.toUpperCase().replace(/-/g, '')
-      const q = query(
-        collection(db, 'parcels'),
-        where('trackingId', '==', trackingUpper),
-        limit(searchLimit)
-      )
-      const snapshot = await getDocs(q)
-      results = snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
-    }
-    // 3️⃣ Recherche par Téléphone
-    else if (isPhone) {
-      const phoneNormalized = searchTerm.replace(/[\s\-\(\)\.]/g, '')
-
-      // Chercher dans senderTel ET receiverTel
-      const senderQuery = query(
-        collection(db, 'parcels'),
-        where('senderTel', '==', phoneNormalized),
-        where('senderTel', '<=', phoneNormalized + ''),
-        limit(searchLimit)
-      )
-      const receiverQuery = query(
-        collection(db, 'parcels'),
-        where('receiverTel', '==', phoneNormalized),
-        where('receiverTel', '<=', phoneNormalized + ''),
-        limit(searchLimit)
-      )
-
-      const [senderSnap, receiverSnap] = await Promise.all([
-        getDocs(senderQuery),
-        getDocs(receiverQuery)
-      ])
-
-      const senderResults = senderSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-      const receiverResults = receiverSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-
-      // Fusionner et dédupliquer
-      const allResults = [...senderResults, ...receiverResults]
-      const uniqueIds = new Set<string>()
-      results = allResults.filter(p => {
-        if (uniqueIds.has(p.id)) return false
-        uniqueIds.add(p.id)
-        return true
-      })
-    }
-    // 4️⃣ Recherche par NIC (N° Expéditeur)
-    else if (isNic) {
-      const nicUpper = searchTerm.toUpperCase()
-      const q = query(
-        collection(db, 'parcels'),
-        where('senderNic', '==', nicUpper),
-        where('senderNic', '<=', nicUpper + ''),
-        limit(searchLimit)
-      )
-      const snapshot = await getDocs(q)
-      results = snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
-    }
-    // 5️⃣ Recherche par Nom (senderNameLower ou receiverNameLower)
-    else {
-      const nameLower = searchTerm.toLowerCase()
-
-      const senderQuery = query(
-        collection(db, 'parcels'),
-        where('senderNameLower', '==', nameLower),
-        where('senderNameLower', '<=', nameLower + ''),
-        limit(searchLimit)
-      )
-      const receiverQuery = query(
-        collection(db, 'parcels'),
-        where('receiverNameLower', '==', nameLower),
-        where('receiverNameLower', '<=', nameLower + ''),
-        limit(searchLimit)
-      )
-
-      const [senderSnap, receiverSnap] = await Promise.all([
-        getDocs(senderQuery),
-        getDocs(receiverQuery)
-      ])
-
-      const senderResults = senderSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-      const receiverResults = receiverSnap.docs.map(d => ({ id: d.id, ...d.data() }))
-
-      // Fusionner et dédupliquer
-      const allResults = [...senderResults, ...receiverResults]
-      const uniqueIds = new Set<string>()
-      results = allResults.filter(p => {
-        if (uniqueIds.has(p.id)) return false
-        uniqueIds.add(p.id)
-        return true
-      })
+    for (const snap of snapshots) {
+      for (const d of snap.docs) {
+        if (uniqueIds.has(d.id)) continue
+        uniqueIds.add(d.id)
+        results.push({ id: d.id, ...d.data() })
+      }
     }
 
     // 6️⃣ Filtrer par date si spécifié
