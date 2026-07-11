@@ -740,10 +740,19 @@ service cloud.firestore {
         && request.resource.data.status == 'pending'
         && request.resource.data.amount is number
         && request.resource.data.amount > 0;
-      // Validation / rejet par chef d'agence, agent (de la meme ville), directeur ou admin
-      allow update: if role() == 'admin' || role() == 'directeur'
+      // Modification par le créateur (livreur) si status == 'pending'
+      allow update: if (signedIn()
+          && resource.data.driverId == request.auth.uid
+          && resource.data.status == 'pending'
+          && request.resource.data.status == 'pending')
+        // OU validation / rejet par chef d'agence, agent (de la meme ville), directeur ou admin
+        || role() == 'admin' || role() == 'directeur'
         || ((role() == 'chef_agence' || role() == 'agent') && resource.data.city == userCity());
-      allow delete: if isAdmin();
+      // Suppression par le créateur (livreur) si status == 'pending' OU par admin
+      allow delete: if isAdmin()
+        || (signedIn()
+          && resource.data.driverId == request.auth.uid
+          && resource.data.status == 'pending');
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ VÃ©hicules, logs directeur
@@ -785,7 +794,18 @@ service cloud.firestore {
     match /adminTransfers/{id} {
       allow read:   if isStaff();
       allow create: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || role() == 'caissier';
-      allow update, delete: if isAdmin();
+      // Modification par le créateur si status == 'pending'
+      allow update: if (signedIn()
+          && resource.data.fromId == request.auth.uid
+          && resource.data.status == 'pending'
+          && request.resource.data.status == 'pending')
+        // OU par admin
+        || isAdmin();
+      // Suppression par le créateur si status == 'pending' OU par admin
+      allow delete: if isAdmin()
+        || (signedIn()
+          && resource.data.fromId == request.auth.uid
+          && resource.data.status == 'pending');
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Signatures de livraison (accÃ¨s public pour le destinataire)
