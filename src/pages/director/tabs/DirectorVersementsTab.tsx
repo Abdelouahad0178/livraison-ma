@@ -129,11 +129,12 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
       if (type === 'cod') {
         return p.codStatus === 'collected' && parseFloat(p.codAmount || 0) > 0
       } else {
-        return p.portDuStatus === 'collected' && parseFloat(p.portDuAmount || 0) > 0
+        // Pour Port Dû, le champ est portStatus (pas portDuStatus)
+        return p.portStatus === 'collected' && parseFloat(p.portDuAmount || 0) > 0
       }
     }).sort((a: any, b: any) => {
-      const dateA = a.codCollectedAt || a.portDuCollectedAt || a.deliveredAt || ''
-      const dateB = b.codCollectedAt || b.portDuCollectedAt || b.deliveredAt || ''
+      const dateA = a.codCollectedAt || a.portCollectedAt || a.deliveredAt || ''
+      const dateB = b.codCollectedAt || b.portCollectedAt || b.deliveredAt || ''
       return dateB.localeCompare(dateA)
     })
   }
@@ -612,7 +613,7 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
                       <tbody className="divide-y divide-gray-50">
                         {parcels.map((p: any) => {
                           const amount = v.type === 'cod' ? parseFloat(p.codAmount || 0) : parseFloat(p.portDuAmount || 0)
-                          const collectedDate = p.codCollectedAt || p.portDuCollectedAt || p.deliveredAt || ''
+                          const collectedDate = p.codCollectedAt || p.portCollectedAt || p.deliveredAt || ''
                           return (
                             <tr key={p.id} className="hover:bg-gray-50 transition">
                               <td className="px-3 py-2 font-mono text-xs font-semibold text-gray-800">{p.senderNic || p.sender?.nic || '—'}</td>
