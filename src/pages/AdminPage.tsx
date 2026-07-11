@@ -490,11 +490,11 @@ export default function AdminPage() {
   const setActivityDateTo = setAdminDateTo
   const periodLabel = formatPeriod(adminDatePreset, adminDateFrom, adminDateTo)
 
-  // ⚡ Détecter si recherche active pour charger plus de colis
-  useEffect(() => {
-    const hasSearch = debouncedSearch.trim() !== ''
-    setIsSearchActive(hasSearch)
-  }, [debouncedSearch])
+  // ⚡ DÉSACTIVÉ: Plus besoin de charger 2000 colis - searchParcels fait tout côté serveur
+  // useEffect(() => {
+  //   const hasSearch = debouncedSearch.trim() !== ''
+  //   setIsSearchActive(hasSearch)
+  // }, [debouncedSearch])
 
   // ⚡ Debounce de la recherche - temps réel pour meilleure UX
   useEffect(() => {
