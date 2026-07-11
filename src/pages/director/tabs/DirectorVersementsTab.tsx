@@ -613,7 +613,7 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
                           const collectedDate = p.codCollectedAt || p.portDuCollectedAt || p.deliveredAt || ''
                           return (
                             <tr key={p.id} className="hover:bg-gray-50 transition">
-                              <td className="px-3 py-2 font-semibold text-gray-800">{p.nexp || '—'}</td>
+                              <td className="px-3 py-2 font-semibold text-gray-800">{p.trackingId || '—'}</td>
                               <td className="px-3 py-2">
                                 <p className="font-medium text-gray-700">{p.receiver?.name || '—'}</p>
                                 <p className="text-xs text-gray-400">{p.receiver?.phone || ''}</p>
