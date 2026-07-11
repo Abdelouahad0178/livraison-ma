@@ -4,9 +4,10 @@ import {
   subscribeDriverVersements,
   confirmDriverVersementChef,
   rejectDriverVersementChef,
+  subscribeAgencyParcels,
 } from '../../../firebase/firestore'
 import { fmt } from '../../../utils/formatNumber'
-import { Banknote, CheckCircle2, X, Clock, Search, AlertTriangle } from 'lucide-react'
+import { Banknote, CheckCircle2, X, Clock, Search, AlertTriangle, Eye, Package } from 'lucide-react'
 import DateFilter from '../../agent/DateFilter'
 import { filterByDate } from '../../../utils/dateFilter'
 import type { DateFilterPreset } from '../../../types'
@@ -58,6 +59,8 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
   const [busyId, setBusyId] = useState<any>(null)
   const [actionError, setActionError] = useState('')
   const [rejectModal, setRejectModal] = useState<any>(null) // { versement, reason, loading, error }
+  const [detailsModal, setDetailsModal] = useState<any>(null) // { versement, loading }
+  const [allParcels, setAllParcels] = useState<any[]>([])
 
   const city = profile?.city
   const isExternal = versementsProp !== undefined
@@ -70,6 +73,15 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
     )
     return () => unsub()
   }, [city, isExternal])
+
+  // S'abonner aux colis de l'agence pour afficher les détails des expéditions
+  useEffect(() => {
+    if (!city) return
+    const unsub = subscribeAgencyParcels(city, setAllParcels, (err: any) =>
+      console.error('subscribeAgencyParcels:', err)
+    )
+    return () => unsub()
+  }, [city])
 
   // Base filtrée (type + paiement + période + recherche) — les stats reflètent ces filtres
   const baseFiltered = useMemo(() => {
@@ -108,6 +120,23 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
     if (statusFilter !== 'all') list = list.filter((v: any) => v.status === statusFilter)
     return [...list].sort((a, b) => versementDate(b).getTime() - versementDate(a).getTime())
   }, [baseFiltered, statusFilter])
+
+  // Récupérer les expéditions d'un livreur avec COD ou Port Dû collecté
+  const getDriverCollectedParcels = (driverId: string, type: 'cod' | 'port_du') => {
+    return allParcels.filter((p: any) => {
+      if (p.assignedDriverId !== driverId && p.deliveryDriverId !== driverId) return false
+      if (p.status !== 'Livré') return false
+      if (type === 'cod') {
+        return p.codStatus === 'collected' && parseFloat(p.codAmount || 0) > 0
+      } else {
+        return p.portDuStatus === 'collected' && parseFloat(p.portDuAmount || 0) > 0
+      }
+    }).sort((a: any, b: any) => {
+      const dateA = a.codCollectedAt || a.portDuCollectedAt || a.deliveredAt || ''
+      const dateB = b.codCollectedAt || b.portDuCollectedAt || b.deliveredAt || ''
+      return dateB.localeCompare(dateA)
+    })
+  }
 
   const handleConfirm = async (v: any) => {
     const typeLabel = TYPE_META[v.type]?.label || v.type
@@ -344,7 +373,7 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
             <table className="w-full text-sm">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  {['Date', 'Livreur', 'Type', 'Mode paiement', 'Montant', 'Note', 'Statut', 'Actions'].map(h => (
+                  {['Date', 'Livreur', 'Type', 'Mode paiement', 'Montant', 'Note', 'Statut', '', 'Actions'].map(h => (
                     <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                   ))}
                 </tr>
@@ -384,6 +413,14 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
                             {v.rejectedBy ? `par ${v.rejectedBy}` : ''}{v.rejectionReason ? ` — ${v.rejectionReason}` : ''}
                           </p>
                         )}
+                      </td>
+                      <td className="px-4 py-3">
+                        <button
+                          onClick={() => setDetailsModal({ versement: v })}
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-blue-200 text-blue-600 hover:bg-blue-50 text-xs font-bold transition whitespace-nowrap"
+                        >
+                          <Eye className="w-3.5 h-3.5" /> Détails
+                        </button>
                       </td>
                       <td className="px-4 py-3">
                         {v.status === 'pending' ? (
@@ -494,6 +531,140 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
           </div>
         </div>
       )}
+
+      {/* Modal détails expéditions */}
+      {detailsModal && (() => {
+        const v = detailsModal.versement
+        const t = TYPE_META[v.type] || { label: v.type, emoji: '📦', cls: 'bg-gray-100 text-gray-600' }
+        const parcels = getDriverCollectedParcels(v.driverId, v.type)
+        const totalCollected = parcels.reduce((sum: number, p: any) =>
+          sum + parseFloat(v.type === 'cod' ? (p.codAmount || 0) : (p.portDuAmount || 0)), 0
+        )
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl w-full max-w-5xl shadow-2xl max-h-[90vh] overflow-hidden flex flex-col">
+              {/* Header */}
+              <div className="p-6 border-b border-gray-100">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
+                      <Package className="w-6 h-6 text-blue-600" />
+                    </div>
+                    <div>
+                      <h3 className="font-bold text-gray-800">Détails des expéditions - {t.emoji} {t.label}</h3>
+                      <p className="text-sm text-gray-500">Livreur: {v.driverName} · Versement: {fmt(v.amount)} DH</p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setDetailsModal(null)}
+                    className="p-2 hover:bg-gray-100 rounded-xl transition"
+                  >
+                    <X className="w-5 h-5 text-gray-500" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Stats */}
+              <div className="px-6 py-4 bg-gradient-to-br from-blue-50 to-blue-100/50 border-b border-blue-100">
+                <div className="grid grid-cols-3 gap-4">
+                  <div className="text-center">
+                    <p className="text-xs font-semibold text-blue-600 uppercase">Total collecté</p>
+                    <p className="text-2xl font-black text-blue-700">{fmt(totalCollected)} DH</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-xs font-semibold text-blue-600 uppercase">Versement</p>
+                    <p className="text-2xl font-black text-blue-700">{fmt(v.amount)} DH</p>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-xs font-semibold text-blue-600 uppercase">Expéditions</p>
+                    <p className="text-2xl font-black text-blue-700">{parcels.length}</p>
+                  </div>
+                </div>
+                {totalCollected !== parseFloat(v.amount) && (
+                  <div className="mt-3 p-2 bg-amber-100 border border-amber-200 rounded-lg text-xs text-amber-700 text-center">
+                    ⚠️ Le montant versé ({fmt(v.amount)} DH) diffère du total collecté ({fmt(totalCollected)} DH)
+                  </div>
+                )}
+              </div>
+
+              {/* Liste des expéditions */}
+              <div className="flex-1 overflow-y-auto p-6">
+                {parcels.length === 0 ? (
+                  <div className="text-center py-12 text-gray-400">
+                    <Package className="w-12 h-12 mx-auto mb-3 opacity-25" />
+                    <p className="text-sm">Aucune expédition {t.label} collectée trouvée pour ce livreur</p>
+                  </div>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="bg-gray-50 border-b border-gray-100">
+                          <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">N° EXP</th>
+                          <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Tracking ID</th>
+                          <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Destinataire</th>
+                          <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Ville</th>
+                          <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Montant</th>
+                          <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Date livraison</th>
+                          <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Statut</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-gray-50">
+                        {parcels.map((p: any) => {
+                          const amount = v.type === 'cod' ? parseFloat(p.codAmount || 0) : parseFloat(p.portDuAmount || 0)
+                          const collectedDate = p.codCollectedAt || p.portDuCollectedAt || p.deliveredAt || ''
+                          return (
+                            <tr key={p.id} className="hover:bg-gray-50 transition">
+                              <td className="px-3 py-2 font-semibold text-gray-800">{p.nexp || '—'}</td>
+                              <td className="px-3 py-2 text-xs text-gray-500 font-mono">{p.trackingId || '—'}</td>
+                              <td className="px-3 py-2">
+                                <p className="font-medium text-gray-700">{p.receiver?.name || '—'}</p>
+                                <p className="text-xs text-gray-400">{p.receiver?.phone || ''}</p>
+                              </td>
+                              <td className="px-3 py-2 text-gray-600">{p.destinationCity || '—'}</td>
+                              <td className="px-3 py-2">
+                                <span className="font-black text-green-600">{fmt(amount)} DH</span>
+                              </td>
+                              <td className="px-3 py-2 text-xs text-gray-500">
+                                {collectedDate ? fmtDate(collectedDate) : '—'}
+                              </td>
+                              <td className="px-3 py-2">
+                                <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-green-100 text-green-700">
+                                  ✓ Collecté
+                                </span>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                      <tfoot>
+                        <tr className="bg-gray-50 border-t-2 border-gray-200">
+                          <td colSpan={4} className="px-3 py-2 text-right font-bold text-gray-700">TOTAL:</td>
+                          <td className="px-3 py-2">
+                            <span className="font-black text-lg text-green-700">{fmt(totalCollected)} DH</span>
+                          </td>
+                          <td colSpan={2} className="px-3 py-2 text-xs text-gray-500">
+                            {parcels.length} expédition(s)
+                          </td>
+                        </tr>
+                      </tfoot>
+                    </table>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="p-4 border-t border-gray-100 bg-gray-50">
+                <button
+                  onClick={() => setDetailsModal(null)}
+                  className="w-full py-2.5 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-white transition"
+                >
+                  Fermer
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
     </div>
   )
 }
