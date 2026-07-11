@@ -1161,7 +1161,7 @@ export async function searchParcels(
     if (!term || term.trim().length === 0) return []
 
     const searchTerm = term.trim()
-    const searchLimit = options.limit || 10000
+    const searchLimit = options.limit || 50000  // Chercher dans TOUTE la base
     const startTime = performance.now()
     const parcelsCol = collection(db, 'parcels')
 

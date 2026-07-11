@@ -518,7 +518,7 @@ export default function AdminPage() {
     setIsSearching(true)
 
     // Lancer recherche serveur immédiatement pour chercher dans TOUTE la base
-    searchParcels(debouncedSearch.trim(), { limit: 10000 })
+    searchParcels(debouncedSearch.trim(), { limit: 50000 })
       .then(results => {
         if (!cancelled) {
           console.log(`✅ searchParcels: ${results.length} résultats dans TOUTE la base`)
@@ -559,13 +559,18 @@ export default function AdminPage() {
   useEffect(() => {
     setLoading(true)
 
-    // 📊 Chargement intelligent progressif
-    // - Recherche active: 2000 colis pour Fuse.js local
-    // - Si pas trouvé dans 2000 → searchParcels cherche dans TOUTE la base
-    // - Sans recherche: 500 colis (rapide)
-    const loadLimit = isSearchActive ? 2000 : 500
+    // 📊 Chargement intelligent
+    // - SANS recherche: 500 colis (rapide, pour affichage normal)
+    // - AVEC recherche: Ne charge PAS de colis (on utilise SEULEMENT searchParcels qui cherche dans TOUTE la base)
+    if (isSearchActive) {
+      console.log(`🔍 Mode recherche: searchParcels cherche dans TOUTE la base (limite 50000)`)
+      setParcels([])
+      setLoading(false)
+      return () => {}
+    }
 
-    console.log(`📦 Chargement ${loadLimit} colis (recherche active: ${isSearchActive ? 'OUI' : 'NON'})`)
+    const loadLimit = 500
+    console.log(`📦 Chargement ${loadLimit} colis récents`)
 
     const unsubParcels = subscribeAllParcels(
       (data: any, lastSnap: any) => {
@@ -981,15 +986,17 @@ export default function AdminPage() {
 
     if (debouncedSearch) {
       // Priorité 1: Recherche serveur (cherche dans TOUTE la base)
-      if (serverSearchResults !== null && serverSearchResults.length > 0) {
+      // Si serverSearchResults !== null, c'est que searchParcels a répondu
+      // Même si c'est [], on l'affiche (0 résultats = vraiment rien trouvé dans toute la base)
+      if (serverSearchResults !== null) {
         results = serverSearchResults
         console.log(`✅ Affichage ${results.length} résultats de searchParcels (toute la base)`)
       }
-      // Priorité 2: Fuse.js local (cherche dans 2000 chargés)
+      // Priorité 2: Fuse.js local (cherche dans 2000 chargés) - SEULEMENT si searchParcels pas encore répondu
       else if (fuseIndex) {
         const searchResults = fuseIndex.search(debouncedSearch.trim())
         results = searchResults.map(r => r.item)
-        console.log(`✅ Affichage ${results.length} résultats Fuse.js (${periodParcels.length} colis)`)
+        console.log(`⚠️ Fuse.js temporaire: ${results.length} résultats (${periodParcels.length} colis) - searchParcels en cours...`)
       }
     }
 
