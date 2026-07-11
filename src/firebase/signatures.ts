@@ -109,7 +109,12 @@ export async function confirmDeliveryAfterSignature(parcelId: any, driverName: a
     })
   } else {
     // Signature normale : livraison au destinataire
-    await updateDoc(doc(db, 'parcels', parcelId), {
+    // Lire le colis pour vérifier s'il a un COD
+    const parcelSnap = await getDoc(doc(db, 'parcels', parcelId))
+    const parcel = parcelSnap.data()
+    const hasCod = parcel && parseFloat(parcel.codAmount || 0) > 0
+
+    const updates: any = {
       status: 'Livré',
       signatureToken: null,
       signatureConfirmedAt: now,
@@ -118,7 +123,15 @@ export async function confirmDeliveryAfterSignature(parcelId: any, driverName: a
         timestamp: now,
         note: `Livraison confirmée par signature électronique du destinataire - chauffeur : ${driverName}`,
       }),
-    })
+    }
+
+    // Si le colis a un COD, marquer le COD comme collecté
+    if (hasCod) {
+      updates.codStatus = 'collected'
+      updates.codCollectedAt = now
+    }
+
+    await updateDoc(doc(db, 'parcels', parcelId), updates)
   }
 }
 
@@ -173,7 +186,12 @@ export async function confirmDeliveryWithPaperReceipt(
     })
   } else {
     // Livraison normale avec bon papier
-    await updateDoc(doc(db, 'parcels', parcelId), {
+    // Lire le colis pour vérifier s'il a un COD
+    const parcelSnap = await getDoc(doc(db, 'parcels', parcelId))
+    const parcel = parcelSnap.data()
+    const hasCod = parcel && parseFloat(parcel.codAmount || 0) > 0
+
+    const updates: any = {
       status: 'Livré',
       signatureToken: null,
       signatureConfirmedAt: now,
@@ -183,6 +201,14 @@ export async function confirmDeliveryWithPaperReceipt(
         timestamp: now,
         note: `Livré avec bon papier signé manuellement par le destinataire - chauffeur : ${driverName}${note ? ` - ${note}` : ''}`,
       }),
-    })
+    }
+
+    // Si le colis a un COD, marquer le COD comme collecté
+    if (hasCod) {
+      updates.codStatus = 'collected'
+      updates.codCollectedAt = now
+    }
+
+    await updateDoc(doc(db, 'parcels', parcelId), updates)
   }
 }
