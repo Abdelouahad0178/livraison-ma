@@ -257,6 +257,10 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     // NOUVELLE POLITIQUE : Pas de validation nécessaire, enregistrement direct
     // Un colis est verrouillé pour aide-agent seulement si chargé (transportAssignedAt existe)
     aideEditUnlocked:     false,
+    // 🔍 Champ pour file validation (subscribePendingAideAgentParcels)
+    validatedByChef:      requiresChefValidation ? false : null,
+    // 🔍 Champ dénormalisé pour recherche rapide par NIC (searchParcelByNicOptimized)
+    senderNic:            (sender?.nic ? String(sender.nic).trim().toUpperCase() : ''),
     hasRetourBL:          data.hasRetourBL === true,  // ⭐ Retour BL obligatoire
   }
   const ref = await addDoc(collection(db, 'parcels'), parcel)
@@ -294,41 +298,46 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
 // Mise à jour de statut — non bloquant sur la géolocalisation
 export async function updateParcelStatus(parcelId: string, status: string, extra: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const parcelRef = doc(db, 'parcels', parcelId)
-  const parcelSnap = await getDoc(parcelRef)
-  if (parcelSnap.exists()) {
-    const current = parcelSnap.data() as any
 
-    // ✅ RÈGLE 1 DÉSACTIVÉE: L'Admin peut modifier le statut même si le colis est livré
-    // if (isDeliveredStatus(current.status) && !isDeliveredStatus(status)) {
-    //   throw new Error('Ce colis est livre : son statut est verrouille. Demandez une modification a l admin ou au chef d agence.')
-    // }
+  // 🔒 Transaction pour éviter race conditions sur circuit retour
+  await runTransaction(db, async tx => {
+    const parcelSnap = await tx.get(parcelRef)
+    if (parcelSnap.exists()) {
+      const current = parcelSnap.data() as any
 
-    // RÈGLE 2: Un colis dans le circuit retour ne peut JAMAIS être marqué "Livré"
-    if (isInReturnCircuit(current) && status === 'Livré') {
-      throw new Error('Un colis retourne ne peut pas etre marque comme Livre. Utilisez "Retour finalise" pour terminer le retour.')
+      // ✅ RÈGLE 1 DÉSACTIVÉE: L'Admin peut modifier le statut même si le colis est livré
+      // if (isDeliveredStatus(current.status) && !isDeliveredStatus(status)) {
+      //   throw new Error('Ce colis est livre : son statut est verrouille. Demandez une modification a l admin ou au chef d agence.')
+      // }
+
+      // RÈGLE 2: Un colis dans le circuit retour ne peut JAMAIS être marqué "Livré"
+      if (isInReturnCircuit(current) && status === 'Livré') {
+        throw new Error('Un colis retourne ne peut pas etre marque comme Livre. Utilisez "Retour finalise" pour terminer le retour.')
+      }
     }
-  }
-  const historyEntry = {
-    status,
-    timestamp: new Date().toISOString(),
-    ...extra
-  }
-  const patch: Record<string, any> = {
-    status,
-    history: arrayUnion(historyEntry)
-  }
 
-  if (status === 'En transit') {
-    patch.visibleInDestinationAgency = true
-    patch.shipmentLoadedAt = extra.shipmentLoadedAt || new Date().toISOString()
-  }
-  if (status === 'Arrivé en agence') {
-    patch.visibleInDestinationAgency = true
-    patch.destinationArrivedAt = extra.destinationArrivedAt || new Date().toISOString()
-  }
+    const historyEntry = {
+      status,
+      timestamp: new Date().toISOString(),
+      ...extra
+    }
+    const patch: Record<string, any> = {
+      status,
+      history: arrayUnion(historyEntry)
+    }
 
-  // Écriture Firestore immédiate — pas d'attente GPS
-  await updateDoc(parcelRef, patch)
+    if (status === 'En transit') {
+      patch.visibleInDestinationAgency = true
+      patch.shipmentLoadedAt = extra.shipmentLoadedAt || new Date().toISOString()
+    }
+    if (status === 'Arrivé en agence') {
+      patch.visibleInDestinationAgency = true
+      patch.destinationArrivedAt = extra.destinationArrivedAt || new Date().toISOString()
+    }
+
+    // Écriture Firestore immédiate — pas d'attente GPS
+    tx.update(parcelRef, patch)
+  })
 
   // Géolocalisation en arrière-plan (ne bloque pas la mise à jour)
   if (typeof navigator !== 'undefined' && navigator.geolocation) {
@@ -374,7 +383,13 @@ const PARCEL_SNAPSHOT_KEYS = [
 async function syncParcelSnapshotInArrivages(parcelId: any, data: any = {}) {
   if (!PARCEL_SNAPSHOT_KEYS.some(key => Object.prototype.hasOwnProperty.call(data, key))) return
 
-  const snap = await getDocs(collection(db, 'arrivages'))
+  // 🚀 Optimisation : query uniquement les arrivages contenant ce colis (array-contains)
+  // Au lieu de scanner TOUS les arrivages (O(N)), on ne charge que ceux concernés (O(1-5))
+  const arrQuery = query(
+    collection(db, 'arrivages'),
+    where('arrivedParcelIds', 'array-contains', parcelId)
+  )
+  const snap = await getDocs(arrQuery)
   const batches: any[] = []
   let batch = writeBatch(db)
   let count = 0

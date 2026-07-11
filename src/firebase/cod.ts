@@ -38,30 +38,54 @@ export async function collectCod(
 // Collecte directe par l'agence destination (client vient sur place) — passe directement à 'remis'
 export async function collectCodAtDestination(parcelId: string, paymentType: string, collectedBy: string) {
   const now = new Date().toISOString()
-  await updateDoc(doc(db, 'parcels', parcelId), {
-    codStatus:      'remis',
-    codPaymentType:  paymentType,
-    codCollectedAt:  now,
-    codCollectedBy:  collectedBy,
-    codRemisAt:      now,
-    codRemisBy:      collectedBy,
+  await runTransaction(db, async tx => {
+    const ref = doc(db, 'parcels', parcelId)
+    const snap = await tx.get(ref)
+    if (!snap.exists()) throw new Error('Colis introuvable.')
+    const data = snap.data()
+
+    // 🔒 GARDE : Éviter double-encaissement
+    if (data.codStatus === 'remis' || data.codStatus === 'regle') {
+      throw new Error('Ce COD a déjà été collecté.')
+    }
+
+    tx.update(ref, {
+      codStatus:      'remis',
+      codPaymentType:  paymentType,
+      codCollectedAt:  now,
+      codCollectedBy:  collectedBy,
+      codRemisAt:      now,
+      codRemisBy:      collectedBy,
+    })
   })
 }
 
 // Collecte directe par l'agence source (client vient sur place) — bypass étapes destination
 export async function collectCodAtSource(parcelId: string, paymentType: string, collectedBy: string) {
   const now = new Date().toISOString()
-  await updateDoc(doc(db, 'parcels', parcelId), {
-    codStatus:              'collected',
-    codPaymentType:          paymentType,
-    codCollectedAt:          now,
-    codCollectedBy:          collectedBy,
-    codSentToSource:         true,
-    codSentToSourceBy:       collectedBy,
-    codSentToSourceAt:       now,
-    codReceivedBySource:     true,
-    codReceivedBySourceBy:   collectedBy,
-    codReceivedBySourceAt:   now,
+  await runTransaction(db, async tx => {
+    const ref = doc(db, 'parcels', parcelId)
+    const snap = await tx.get(ref)
+    if (!snap.exists()) throw new Error('Colis introuvable.')
+    const data = snap.data()
+
+    // 🔒 GARDE : Éviter double-encaissement
+    if (data.codStatus === 'collected' || data.codStatus === 'remis' || data.codStatus === 'regle') {
+      throw new Error('Ce COD a déjà été collecté.')
+    }
+
+    tx.update(ref, {
+      codStatus:              'collected',
+      codPaymentType:          paymentType,
+      codCollectedAt:          now,
+      codCollectedBy:          collectedBy,
+      codSentToSource:         true,
+      codSentToSourceBy:       collectedBy,
+      codSentToSourceAt:       now,
+      codReceivedBySource:     true,
+      codReceivedBySourceBy:   collectedBy,
+      codReceivedBySourceAt:   now,
+    })
   })
 }
 export async function remitCod(parcelId: string, remittedBy: string, extraFields: DynamicData = {}): Promise<void> {

@@ -193,6 +193,10 @@ export async function validerRapport(rapportId: any, chefId: any, chefName: any,
     if (!rapportSnap.exists()) throw new Error('Rapport introuvable')
     const rapport = rapportSnap.data()
 
+    // 🔒 GARDE : Éviter double-validation (double-crédit de caisse)
+    if (rapport.status === 'valide') throw new Error('Rapport déjà validé.')
+    if (rapport.status !== 'soumis') throw new Error('Rapport non soumis.')
+
     const city         = rapport.agencyCity || ''
     if (!city) throw new Error('Ville manquante dans ce rapport. Contactez le pointeur.')
     const totalEspeces = parseFloat(rapport.totalEspeces) || 0

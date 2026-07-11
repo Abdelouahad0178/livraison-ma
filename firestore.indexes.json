@@ -326,7 +326,47 @@
         { "fieldPath": "status",          "order": "ASCENDING"  },
         { "fieldPath": "createdAt",       "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "caissierTransactions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "city",      "order": "ASCENDING"  },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "agentCashRecoveryRequests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "city",      "order": "ASCENDING"  },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "validatedByChef", "order": "ASCENDING"  },
+        { "fieldPath": "createdAt",       "order": "DESCENDING" }
+      ]
     }
   ],
-  "fieldOverrides": []
+  "fieldOverrides": [
+    {
+      "collectionGroup": "parcels",
+      "fieldPath": "history",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "arrivages",
+      "fieldPath": "arrivedColisDetail",
+      "indexes": []
+    },
+    {
+      "collectionGroup": "arrivages",
+      "fieldPath": "missingColisDetail",
+      "indexes": []
+    }
+  ]
 }
