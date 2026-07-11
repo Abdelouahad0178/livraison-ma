@@ -490,11 +490,12 @@ export default function AdminPage() {
   const setActivityDateTo = setAdminDateTo
   const periodLabel = formatPeriod(adminDatePreset, adminDateFrom, adminDateTo)
 
-  // ⚡ DÉSACTIVÉ: Plus besoin de charger 2000 colis - searchParcels fait tout côté serveur
-  // useEffect(() => {
-  //   const hasSearch = debouncedSearch.trim() !== ''
-  //   setIsSearchActive(hasSearch)
-  // }, [debouncedSearch])
+  // ⚡ Détecter si recherche active - MAIS sans charger 2000 colis
+  // On garde isSearchActive pour la logique, mais loadLimit reste à 500
+  useEffect(() => {
+    const hasSearch = debouncedSearch.trim() !== ''
+    setIsSearchActive(hasSearch)
+  }, [debouncedSearch])
 
   // ⚡ Debounce de la recherche - temps réel pour meilleure UX
   useEffect(() => {
@@ -557,10 +558,9 @@ export default function AdminPage() {
   useEffect(() => {
     setLoading(true)
 
-    // 📊 Chargement avec limites optimisées
-    // - Recherche active : 2000 colis max (équilibre rapidité/exhaustivité)
-    // - Par défaut : 500 colis (chargement rapide de la page)
-    const loadLimit = isSearchActive ? 2000 : 500
+    // 📊 Chargement optimisé: 500 colis max
+    // searchParcels côté serveur cherche dans TOUTE la base (pas besoin de charger 2000)
+    const loadLimit = 500
 
     console.log(`📦 Chargement ${loadLimit} colis (recherche active: ${isSearchActive ? 'OUI' : 'NON'})`)
 
