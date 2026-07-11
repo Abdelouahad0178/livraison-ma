@@ -600,7 +600,6 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
                       <thead>
                         <tr className="bg-gray-50 border-b border-gray-100">
                           <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">N° EXP</th>
-                          <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Tracking ID</th>
                           <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Destinataire</th>
                           <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Ville</th>
                           <th className="text-left px-3 py-2 text-xs font-semibold text-gray-500 uppercase">Montant</th>
@@ -615,7 +614,6 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
                           return (
                             <tr key={p.id} className="hover:bg-gray-50 transition">
                               <td className="px-3 py-2 font-semibold text-gray-800">{p.nexp || '—'}</td>
-                              <td className="px-3 py-2 text-xs text-gray-500 font-mono">{p.trackingId || '—'}</td>
                               <td className="px-3 py-2">
                                 <p className="font-medium text-gray-700">{p.receiver?.name || '—'}</p>
                                 <p className="text-xs text-gray-400">{p.receiver?.phone || ''}</p>
@@ -638,7 +636,7 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
                       </tbody>
                       <tfoot>
                         <tr className="bg-gray-50 border-t-2 border-gray-200">
-                          <td colSpan={4} className="px-3 py-2 text-right font-bold text-gray-700">TOTAL:</td>
+                          <td colSpan={3} className="px-3 py-2 text-right font-bold text-gray-700">TOTAL:</td>
                           <td className="px-3 py-2">
                             <span className="font-black text-lg text-green-700">{fmt(totalCollected)} DH</span>
                           </td>
