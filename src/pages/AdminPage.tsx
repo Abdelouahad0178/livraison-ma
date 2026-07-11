@@ -506,9 +506,12 @@ export default function AdminPage() {
     return () => clearTimeout(timer)
   }, [search])
 
-  // 🔍 RECHERCHE HYBRIDE: Fuse.js (2000) + searchParcels (toute la base)
+  // 🔍 RECHERCHE SERVEUR: searchParcels dans toute la base
   useEffect(() => {
+    console.log(`🔍 useEffect recherche déclenché, terme: "${debouncedSearch}"`)
+
     if (!debouncedSearch || debouncedSearch.trim().length === 0) {
+      console.log('❌ Pas de terme de recherche, reset')
       setServerSearchResults(null)
       setIsSearching(false)
       return
@@ -516,25 +519,30 @@ export default function AdminPage() {
 
     let cancelled = false
     setIsSearching(true)
+    console.log(`🚀 Lancement searchParcels pour: "${debouncedSearch.trim()}"`)
 
     // Lancer recherche serveur immédiatement pour chercher dans TOUTE la base
     searchParcels(debouncedSearch.trim(), { limit: 50000 })
       .then(results => {
         if (!cancelled) {
-          console.log(`✅ searchParcels: ${results.length} résultats dans TOUTE la base`)
+          console.log(`✅ searchParcels TERMINÉ: ${results.length} résultats dans TOUTE la base`)
+          console.log('📊 Premiers résultats:', results.slice(0, 3).map(p => p.trackingId))
           setServerSearchResults(results)
           setIsSearching(false)
         }
       })
       .catch(error => {
         if (!cancelled) {
-          console.error('❌ Erreur searchParcels:', error)
+          console.error('❌ ERREUR searchParcels:', error)
           setServerSearchResults(null)
           setIsSearching(false)
         }
       })
 
-    return () => { cancelled = true }
+    return () => {
+      cancelled = true
+      console.log('🛑 useEffect recherche cleanup')
+    }
   }, [debouncedSearch])
 
   // Subscriptions de base � ddémarrent au montage du composant

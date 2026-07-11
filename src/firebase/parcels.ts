@@ -1157,13 +1157,18 @@ export async function searchParcels(
     limit?: number
   } = {}
 ): Promise<any[]> {
+  console.log('🔍 searchParcels APPELÉ avec terme:', term, 'options:', options)
   try {
-    if (!term || term.trim().length === 0) return []
+    if (!term || term.trim().length === 0) {
+      console.log('❌ searchParcels: terme vide')
+      return []
+    }
 
     const searchTerm = term.trim()
     const searchLimit = options.limit || 50000  // Chercher dans TOUTE la base
     const startTime = performance.now()
     const parcelsCol = collection(db, 'parcels')
+    console.log('📝 Terme normalisé:', searchTerm, 'limite:', searchLimit)
 
     // 1) Normalisation du terme selon plusieurs formats possibles.
     //    On NE se base PAS sur une classification exclusive (if/else if) :
@@ -1177,29 +1182,38 @@ export async function searchParcels(
     // 2) Construire dynamiquement la liste des requêtes candidates
     const candidateQueries: Promise<any>[] = []
 
+    console.log('🔬 Détection:', { trackingId, phone, nicUpper, nameLower })
+
     // Tracking ID : commence par "LMA"
     if (/^LMA\d*$/.test(trackingId)) {
+      console.log('✅ Requête tracking ID:', trackingId)
       candidateQueries.push(getDocs(query(parcelsCol, where('trackingId', '==', trackingId), limit(searchLimit))))
     }
     // Téléphone : au moins 9 chiffres (couvre fixe + mobile)
     if (/^\d{9,}$/.test(phone)) {
+      console.log('✅ Requête téléphone:', phone)
       candidateQueries.push(getDocs(query(parcelsCol, where('senderTel', '==', phone), limit(searchLimit))))
       candidateQueries.push(getDocs(query(parcelsCol, where('receiverTel', '==', phone), limit(searchLimit))))
     }
     // NIC / CIN : alphanumérique court (<= 12), et pas un tracking ID
     if (/^[A-Z0-9]{1,12}$/.test(nicUpper) && !/^LMA/.test(nicUpper)) {
+      console.log('✅ Requête NIC:', nicUpper)
       candidateQueries.push(getDocs(query(parcelsCol, where('senderNic', '==', nicUpper), limit(searchLimit))))
     }
     // Nom : dès qu'il y a au moins une lettre (évite les recherches inutiles sur du pur numérique)
     if (/[a-zA-Zà-ÿ]/.test(searchTerm)) {
+      console.log('✅ Requête nom:', nameLower)
       candidateQueries.push(getDocs(query(parcelsCol, where('senderNameLower', '==', nameLower), limit(searchLimit))))
       candidateQueries.push(getDocs(query(parcelsCol, where('receiverNameLower', '==', nameLower), limit(searchLimit))))
     }
     // Sécurité : si aucun format ne correspond, on tente quand même tracking + nom
     if (candidateQueries.length === 0) {
+      console.log('⚠️ Aucun format détecté, requêtes fallback')
       candidateQueries.push(getDocs(query(parcelsCol, where('trackingId', '==', trackingId), limit(searchLimit))))
       candidateQueries.push(getDocs(query(parcelsCol, where('senderNameLower', '==', nameLower), limit(searchLimit))))
     }
+
+    console.log(`🚀 Lancement ${candidateQueries.length} requête(s) en parallèle...`)
 
     // 3) Exécuter en parallèle + fusionner + dédupliquer
     const snapshots = await Promise.all(candidateQueries)
