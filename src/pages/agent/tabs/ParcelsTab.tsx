@@ -174,6 +174,14 @@ export default function ParcelsTab() {
   // État pour afficher les expéditions livrées par d'autres agences
   const [showDeliveredByOthers, setShowDeliveredByOthers] = useState(false)
 
+  // État pour gérer les colonnes visibles
+  const [visibleColumns, setVisibleColumns] = useState({
+    nexp: true, date: true, statut: true, expediteur: true, telExp: true, villeExp: true,
+    destinataire: true, telDest: true, villeDest: true, adresse: true, service: true,
+    nbColis: true, poids: true, port: true, typePort: true, cod: true, livreur: true
+  })
+  const [showColumnSelector, setShowColumnSelector] = useState(false)
+
   // Sécurité : s'assurer que les tableaux ne sont jamais undefined
   const safeParcels = (() => {
     if (showDeliveredByOthers) {
@@ -549,6 +557,84 @@ export default function ParcelsTab() {
                     <Printer className="w-3.5 h-3.5" />
                     Imprimer
                   </button>
+
+                  {/* Bouton sélection colonnes */}
+                  <div className="relative">
+                    <button
+                      onClick={() => setShowColumnSelector(!showColumnSelector)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-purple-600 text-white hover:bg-purple-700 transition"
+                    >
+                      <Filter className="w-3.5 h-3.5" />
+                      Colonnes ({Object.values(visibleColumns).filter(Boolean).length})
+                    </button>
+
+                    {showColumnSelector && (
+                      <div className="absolute right-0 top-full mt-2 bg-white rounded-lg shadow-xl border border-gray-200 p-4 z-50 min-w-[280px]">
+                        <div className="flex items-center justify-between mb-3 pb-2 border-b">
+                          <h3 className="text-sm font-bold text-gray-700">Colonnes visibles</h3>
+                          <button
+                            onClick={() => setShowColumnSelector(false)}
+                            className="text-gray-400 hover:text-gray-600"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                        <div className="space-y-2 max-h-[400px] overflow-y-auto">
+                          {[
+                            { key: 'nexp', label: '📦 N° EXP' },
+                            { key: 'date', label: '📅 Date' },
+                            { key: 'statut', label: '🎯 Statut' },
+                            { key: 'expediteur', label: '📤 Expéditeur' },
+                            { key: 'telExp', label: '📞 Tél Exp.' },
+                            { key: 'villeExp', label: '🏙️ Ville Exp.' },
+                            { key: 'destinataire', label: '📥 Destinataire' },
+                            { key: 'telDest', label: '📞 Tél Dest.' },
+                            { key: 'villeDest', label: '🏙️ Ville Dest.' },
+                            { key: 'adresse', label: '📍 Adresse' },
+                            { key: 'service', label: '🔧 Service' },
+                            { key: 'nbColis', label: '📦 Nb Colis' },
+                            { key: 'poids', label: '⚖️ Poids' },
+                            { key: 'port', label: '💰 Port' },
+                            { key: 'typePort', label: '📋 Type Port' },
+                            { key: 'cod', label: '💵 COD' },
+                            { key: 'livreur', label: '🚚 Livreur' },
+                          ].map((col) => (
+                            <label key={col.key} className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 p-2 rounded">
+                              <input
+                                type="checkbox"
+                                checked={visibleColumns[col.key as keyof typeof visibleColumns]}
+                                onChange={(e) => setVisibleColumns(prev => ({ ...prev, [col.key]: e.target.checked }))}
+                                className="w-4 h-4 text-purple-600 rounded"
+                              />
+                              <span className="text-sm text-gray-700">{col.label}</span>
+                            </label>
+                          ))}
+                        </div>
+                        <div className="mt-3 pt-3 border-t flex gap-2">
+                          <button
+                            onClick={() => setVisibleColumns({
+                              nexp: true, date: true, statut: true, expediteur: true, telExp: true, villeExp: true,
+                              destinataire: true, telDest: true, villeDest: true, adresse: true, service: true,
+                              nbColis: true, poids: true, port: true, typePort: true, cod: true, livreur: true
+                            })}
+                            className="flex-1 px-2 py-1.5 text-xs font-semibold bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition"
+                          >
+                            Tout sélectionner
+                          </button>
+                          <button
+                            onClick={() => setVisibleColumns({
+                              nexp: false, date: false, statut: false, expediteur: false, telExp: false, villeExp: false,
+                              destinataire: false, telDest: false, villeDest: false, adresse: false, service: false,
+                              nbColis: false, poids: false, port: false, typePort: false, cod: false, livreur: false
+                            })}
+                            className="flex-1 px-2 py-1.5 text-xs font-semibold bg-gray-100 text-gray-700 rounded hover:bg-gray-200 transition"
+                          >
+                            Tout déselectionner
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
 
@@ -927,57 +1013,73 @@ export default function ParcelsTab() {
                           </div>
                         </th>
                       )}
-                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">
-                        <div className="flex items-center gap-2">
-                          <Package className="w-4 h-4" />
-                          N° EXP
-                        </div>
-                      </th>
-                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">
-                        <div className="flex items-center gap-2">
-                          <Calendar className="w-4 h-4" />
-                          Date
-                        </div>
-                      </th>
-                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">Statut</th>
-                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30 bg-blue-600/30">
-                        <div className="flex items-center gap-1">
-                          📤 Expéditeur
-                        </div>
-                      </th>
-                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30 bg-blue-600/30">Tél Exp.</th>
-                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30 bg-blue-600/30">Ville Exp.</th>
-                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">
-                        <div className="flex items-center gap-1">
-                          📥 Destinataire
-                        </div>
-                      </th>
-                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Tél Dest.</th>
-                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Ville Dest.</th>
-                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Adresse</th>
-                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30">Service</th>
-                      <th className="px-4 py-4 text-center font-bold whitespace-nowrap border-r border-purple-400/30">Nb Colis</th>
-                      <th className="px-4 py-4 text-center font-bold whitespace-nowrap border-r border-purple-400/30">Poids</th>
-                      <th className="px-4 py-4 text-right font-bold whitespace-nowrap border-r border-purple-400/30 bg-green-600/30">
-                        <div className="flex items-center justify-end gap-1">
-                          💰 Port
-                        </div>
-                      </th>
-                      <th className="px-4 py-4 text-center font-bold whitespace-nowrap border-r border-purple-400/30 bg-green-600/30">
-                        <div className="flex items-center justify-center gap-1">
-                          📋 Type Port
-                        </div>
-                      </th>
-                      <th className="px-4 py-4 text-right font-bold whitespace-nowrap border-r border-purple-400/30 bg-green-600/30">
-                        <div className="flex items-center justify-end gap-1">
-                          💵 COD
-                        </div>
-                      </th>
-                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30">
-                        <div className="flex items-center gap-1">
-                          🚚 Livreur
-                        </div>
-                      </th>
+                      {visibleColumns.nexp && (
+                        <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">
+                          <div className="flex items-center gap-2">
+                            <Package className="w-4 h-4" />
+                            N° EXP
+                          </div>
+                        </th>
+                      )}
+                      {visibleColumns.date && (
+                        <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">
+                          <div className="flex items-center gap-2">
+                            <Calendar className="w-4 h-4" />
+                            Date
+                          </div>
+                        </th>
+                      )}
+                      {visibleColumns.statut && <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">Statut</th>}
+                      {visibleColumns.expediteur && (
+                        <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30 bg-blue-600/30">
+                          <div className="flex items-center gap-1">
+                            📤 Expéditeur
+                          </div>
+                        </th>
+                      )}
+                      {visibleColumns.telExp && <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30 bg-blue-600/30">Tél Exp.</th>}
+                      {visibleColumns.villeExp && <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30 bg-blue-600/30">Ville Exp.</th>}
+                      {visibleColumns.destinataire && (
+                        <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">
+                          <div className="flex items-center gap-1">
+                            📥 Destinataire
+                          </div>
+                        </th>
+                      )}
+                      {visibleColumns.telDest && <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Tél Dest.</th>}
+                      {visibleColumns.villeDest && <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Ville Dest.</th>}
+                      {visibleColumns.adresse && <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Adresse</th>}
+                      {visibleColumns.service && <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30">Service</th>}
+                      {visibleColumns.nbColis && <th className="px-4 py-4 text-center font-bold whitespace-nowrap border-r border-purple-400/30">Nb Colis</th>}
+                      {visibleColumns.poids && <th className="px-4 py-4 text-center font-bold whitespace-nowrap border-r border-purple-400/30">Poids</th>}
+                      {visibleColumns.port && (
+                        <th className="px-4 py-4 text-right font-bold whitespace-nowrap border-r border-purple-400/30 bg-green-600/30">
+                          <div className="flex items-center justify-end gap-1">
+                            💰 Port
+                          </div>
+                        </th>
+                      )}
+                      {visibleColumns.typePort && (
+                        <th className="px-4 py-4 text-center font-bold whitespace-nowrap border-r border-purple-400/30 bg-green-600/30">
+                          <div className="flex items-center justify-center gap-1">
+                            📋 Type Port
+                          </div>
+                        </th>
+                      )}
+                      {visibleColumns.cod && (
+                        <th className="px-4 py-4 text-right font-bold whitespace-nowrap border-r border-purple-400/30 bg-green-600/30">
+                          <div className="flex items-center justify-end gap-1">
+                            💵 COD
+                          </div>
+                        </th>
+                      )}
+                      {visibleColumns.livreur && (
+                        <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30">
+                          <div className="flex items-center gap-1">
+                            🚚 Livreur
+                          </div>
+                        </th>
+                      )}
                       <th className="px-4 py-4 text-center font-bold whitespace-nowrap">Actions</th>
                     </tr>
                   </thead>
@@ -1035,104 +1137,139 @@ export default function ParcelsTab() {
                               )}
                             </td>
                           )}
-                          <td className="px-4 py-3 font-mono font-black text-blue-600 whitespace-nowrap text-sm border-r border-gray-100">
-                            {parcel.sender?.nic || '—'}</td>
-                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
-                            <span className="text-gray-600 font-medium">
-                              {parcel.createdAt ? new Date(parcel.createdAt.seconds * 1000).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
-                            <span className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm ${sc}`}>
-                              {parcel.status || 'Initialisé'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap max-w-[200px] truncate border-r border-gray-100 bg-blue-50/30">
-                            {parcel.sender?.name || '—'}
-                          </td>
-                          <td className="px-4 py-3 text-gray-600 font-mono whitespace-nowrap border-r border-gray-100 bg-blue-50/30">
-                            {parcel.sender?.tel || '—'}
-                          </td>
-                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100 bg-blue-50/30">
-                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-semibold">
-                              📍 {parcel.sender?.city || '—'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap max-w-[200px] truncate border-r border-gray-100 bg-pink-50/30">
-                            {parcel.receiver?.name || '—'}
-                          </td>
-                          <td className="px-4 py-3 text-gray-600 font-mono whitespace-nowrap border-r border-gray-100 bg-pink-50/30">
-                            {parcel.receiver?.tel || '—'}
-                          </td>
-                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100 bg-pink-50/30">
-                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-pink-100 text-pink-700 rounded-lg text-xs font-semibold">
-                              📍 {parcel.receiver?.city || parcel.destinationCity || '—'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-xs whitespace-nowrap max-w-[250px] truncate border-r border-gray-100 bg-pink-50/30">
-                            {parcel.enGare ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-gradient-to-r from-amber-100 to-orange-100 border border-amber-300 text-orange-700 rounded-lg font-bold">
-                                🚉 En gare
+                          {visibleColumns.nexp && (
+                            <td className="px-4 py-3 font-mono font-black text-blue-600 whitespace-nowrap text-sm border-r border-gray-100">
+                              {parcel.sender?.nic || '—'}
+                            </td>
+                          )}
+                          {visibleColumns.date && (
+                            <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
+                              <span className="text-gray-600 font-medium">
+                                {parcel.createdAt ? new Date(parcel.createdAt.seconds * 1000).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'}
                               </span>
-                            ) : (
-                              <span className="text-gray-600">{parcel.receiver?.address || '—'}</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
-                            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-100 text-purple-700 rounded-lg font-semibold">
-                              {serviceType?.emoji} {serviceType?.label || 'Simple'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-center border-r border-gray-100">
-                            <span className="inline-flex items-center justify-center w-8 h-8 bg-indigo-100 text-indigo-700 rounded-lg font-bold">
-                              {parcel.nbColis || 1}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-center border-r border-gray-100">
-                            <span className="text-gray-700 font-semibold">
-                              {parcel.weight ? `${parcel.weight} kg` : '—'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-100 bg-green-50/30">
-                            <span className="text-green-700 text-sm">
-                              {parcel.price ? `${parcel.price} DH` : '—'}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-center whitespace-nowrap border-r border-gray-100 bg-green-50/30">
-                            {parcel.portType === 'port_paye' ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-bold">
-                                ✅ Payé
+                            </td>
+                          )}
+                          {visibleColumns.statut && (
+                            <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
+                              <span className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm ${sc}`}>
+                                {parcel.status || 'Initialisé'}
                               </span>
-                            ) : parcel.portType === 'port_du' ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 rounded-lg text-xs font-bold">
-                                📮 Dû
+                            </td>
+                          )}
+                          {visibleColumns.expediteur && (
+                            <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap max-w-[200px] truncate border-r border-gray-100 bg-blue-50/30">
+                              {parcel.sender?.name || '—'}
+                            </td>
+                          )}
+                          {visibleColumns.telExp && (
+                            <td className="px-4 py-3 text-gray-600 font-mono whitespace-nowrap border-r border-gray-100 bg-blue-50/30">
+                              {parcel.sender?.tel || '—'}
+                            </td>
+                          )}
+                          {visibleColumns.villeExp && (
+                            <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100 bg-blue-50/30">
+                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-semibold">
+                                📍 {parcel.sender?.city || '—'}
                               </span>
-                            ) : parcel.portType === 'port_en_compte' ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-xs font-bold">
-                                💼 En compte
+                            </td>
+                          )}
+                          {visibleColumns.destinataire && (
+                            <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap max-w-[200px] truncate border-r border-gray-100 bg-pink-50/30">
+                              {parcel.receiver?.name || '—'}
+                            </td>
+                          )}
+                          {visibleColumns.telDest && (
+                            <td className="px-4 py-3 text-gray-600 font-mono whitespace-nowrap border-r border-gray-100 bg-pink-50/30">
+                              {parcel.receiver?.tel || '—'}
+                            </td>
+                          )}
+                          {visibleColumns.villeDest && (
+                            <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100 bg-pink-50/30">
+                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-pink-100 text-pink-700 rounded-lg text-xs font-semibold">
+                                📍 {parcel.receiver?.city || parcel.destinationCity || '—'}
                               </span>
-                            ) : (
-                              <span className="text-gray-400">—</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-100 bg-green-50/30">
-                            {parcel.codAmount && parcel.codAmount > 0 ? (
-                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 rounded-lg text-sm font-black">
-                                💰 {parcel.codAmount} DH
+                            </td>
+                          )}
+                          {visibleColumns.adresse && (
+                            <td className="px-4 py-3 text-xs whitespace-nowrap max-w-[250px] truncate border-r border-gray-100 bg-pink-50/30">
+                              {parcel.enGare ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-1 bg-gradient-to-r from-amber-100 to-orange-100 border border-amber-300 text-orange-700 rounded-lg font-bold">
+                                  🚉 En gare
+                                </span>
+                              ) : (
+                                <span className="text-gray-600">{parcel.receiver?.address || '—'}</span>
+                              )}
+                            </td>
+                          )}
+                          {visibleColumns.service && (
+                            <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
+                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-100 text-purple-700 rounded-lg font-semibold">
+                                {serviceType?.emoji} {serviceType?.label || 'Simple'}
                               </span>
-                            ) : (
-                              <span className="text-gray-400">—</span>
-                            )}
-                          </td>
-                          <td className="px-4 py-3 whitespace-nowrap max-w-[150px] truncate border-r border-gray-100">
-                            {driver?.name ? (
-                              <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded-lg font-semibold">
-                                🚚 {driver.name}
+                            </td>
+                          )}
+                          {visibleColumns.nbColis && (
+                            <td className="px-4 py-3 text-center border-r border-gray-100">
+                              <span className="inline-flex items-center justify-center w-8 h-8 bg-indigo-100 text-indigo-700 rounded-lg font-bold">
+                                {parcel.nbColis || 1}
                               </span>
-                            ) : (
-                              <span className="text-gray-400 text-xs">Non assigné</span>
-                            )}
-                          </td>
+                            </td>
+                          )}
+                          {visibleColumns.poids && (
+                            <td className="px-4 py-3 text-center border-r border-gray-100">
+                              <span className="text-gray-700 font-semibold">
+                                {parcel.weight ? `${parcel.weight} kg` : '—'}
+                              </span>
+                            </td>
+                          )}
+                          {visibleColumns.port && (
+                            <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-100 bg-green-50/30">
+                              <span className="text-green-700 text-sm">
+                                {parcel.price ? `${parcel.price} DH` : '—'}
+                              </span>
+                            </td>
+                          )}
+                          {visibleColumns.typePort && (
+                            <td className="px-4 py-3 text-center whitespace-nowrap border-r border-gray-100 bg-green-50/30">
+                              {parcel.portType === 'port_paye' ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-xs font-bold">
+                                  ✅ Payé
+                                </span>
+                              ) : parcel.portType === 'port_du' ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 rounded-lg text-xs font-bold">
+                                  📮 Dû
+                                </span>
+                              ) : parcel.portType === 'port_en_compte' ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-xs font-bold">
+                                  💼 En compte
+                                </span>
+                              ) : (
+                                <span className="text-gray-400">—</span>
+                              )}
+                            </td>
+                          )}
+                          {visibleColumns.cod && (
+                            <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-100 bg-green-50/30">
+                              {parcel.codAmount && parcel.codAmount > 0 ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 rounded-lg text-sm font-black">
+                                  💰 {parcel.codAmount} DH
+                                </span>
+                              ) : (
+                                <span className="text-gray-400">—</span>
+                              )}
+                            </td>
+                          )}
+                          {visibleColumns.livreur && (
+                            <td className="px-4 py-3 whitespace-nowrap max-w-[150px] truncate border-r border-gray-100">
+                              {driver?.name ? (
+                                <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded-lg font-semibold">
+                                  🚚 {driver.name}
+                                </span>
+                              ) : (
+                                <span className="text-gray-400 text-xs">Non assigné</span>
+                              )}
+                            </td>
+                          )}
                           <td className="px-4 py-3 whitespace-nowrap">
                             <div className="flex items-center justify-center gap-1.5">
                               <button
