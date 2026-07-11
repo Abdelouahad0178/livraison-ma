@@ -1,6 +1,6 @@
-import { useState } from 'react'
-import { Banknote, X, AlertTriangle } from 'lucide-react'
-import { createAdminTransferFromChefAgence } from '../../../firebase/firestore'
+import { useState, useEffect } from 'react'
+import { Banknote, X, AlertTriangle, Edit2 } from 'lucide-react'
+import { createAdminTransferFromChefAgence, updateAdminTransfer } from '../../../firebase/firestore'
 import { fmt } from '../../../utils/formatNumber'
 
 const VERSEMENT_TYPES = [
@@ -20,6 +20,7 @@ export default function VersementAdminModal({
   user,
   agencyCash,
   typeBalances, // optionnel : { port_du: number, cod: number } — soldes disponibles par type
+  editingTransfer, // Transfert en cours de modification
 }: any) {
   const [type, setType] = useState('port_du')
   const [amount, setAmount] = useState('')
@@ -28,6 +29,22 @@ export default function VersementAdminModal({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
+  // Pré-remplir les champs en mode édition
+  useEffect(() => {
+    if (editingTransfer) {
+      setType(editingTransfer.type || 'port_du')
+      setPaymentType(editingTransfer.paymentType || 'especes')
+      setAmount(String(editingTransfer.amount || ''))
+      setNote(editingTransfer.note || '')
+    } else {
+      setType('port_du')
+      setPaymentType('especes')
+      setAmount('')
+      setNote('')
+    }
+    setError('')
+  }, [editingTransfer, isOpen])
+
   const handleSubmit = async () => {
     const amt = parseFloat(amount)
     if (!amt || amt <= 0) {
@@ -35,38 +52,55 @@ export default function VersementAdminModal({
       return
     }
 
-    // Vérifier le solde disponible par type de versement (Port Dû / COD)
-    if (typeBalances) {
-      const availableForType = parseFloat(typeBalances[type]) || 0
-      if (amt > availableForType) {
-        const meta = VERSEMENT_TYPES.find(t => t.value === type)
-        setError(`Solde ${meta?.label} insuffisant (disponible : ${fmt(availableForType)} DH)`)
+    // Si on n'est pas en mode édition, vérifier les soldes
+    if (!editingTransfer) {
+      // Vérifier le solde disponible par type de versement (Port Dû / COD)
+      if (typeBalances) {
+        const availableForType = parseFloat(typeBalances[type]) || 0
+        if (amt > availableForType) {
+          const meta = VERSEMENT_TYPES.find(t => t.value === type)
+          setError(`Solde ${meta?.label} insuffisant (disponible : ${fmt(availableForType)} DH)`)
+          return
+        }
+      }
+
+      // Vérifier le solde disponible selon le type
+      const currentSolde = agencyCash?.[`solde${paymentType === 'especes' ? 'Especes' : paymentType === 'cheque' ? 'Cheques' : 'Virement'}`] || 0
+      if (amt > currentSolde) {
+        setError(`Solde ${PAYMENT_TYPES.find(p => p.value === paymentType)?.label} insuffisant`)
         return
       }
-    }
-
-    // Vérifier le solde disponible selon le type
-    const currentSolde = agencyCash?.[`solde${paymentType === 'especes' ? 'Especes' : paymentType === 'cheque' ? 'Cheques' : 'Virement'}`] || 0
-    if (amt > currentSolde) {
-      setError(`Solde ${PAYMENT_TYPES.find(p => p.value === paymentType)?.label} insuffisant`)
-      return
     }
 
     setLoading(true)
     setError('')
 
     try {
-      await createAdminTransferFromChefAgence({
-        city: user.city,
-        amount: amt,
-        paymentType,
-        type,
-        note: note.trim(),
-        fromId: user.uid,
-        fromName: user.displayName || user.name || 'Chef Agence',
-      })
+      if (editingTransfer) {
+        // Mode modification
+        await updateAdminTransfer(editingTransfer.id, {
+          type,
+          paymentType,
+          amount: amt,
+          note: note.trim(),
+        }, user.uid)
 
-      alert(`✅ Versement de ${fmt(amt)} DH soumis avec succès!\nEn attente de validation par l'Admin.`)
+        alert(`✅ Versement modifié avec succès!`)
+      } else {
+        // Mode création
+        await createAdminTransferFromChefAgence({
+          city: user.city,
+          amount: amt,
+          paymentType,
+          type,
+          note: note.trim(),
+          fromId: user.uid,
+          fromName: user.displayName || user.name || 'Chef Agence',
+        })
+
+        alert(`✅ Versement de ${fmt(amt)} DH soumis avec succès!\nEn attente de validation par l'Admin.`)
+      }
+
       setAmount('')
       setNote('')
       setPaymentType('especes')
@@ -92,11 +126,17 @@ export default function VersementAdminModal({
         <div className="p-6 border-b border-gray-100 shrink-0">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center">
-                <Banknote className="w-6 h-6 text-orange-600" />
+              <div className={`w-12 h-12 ${editingTransfer ? 'bg-blue-100' : 'bg-orange-100'} rounded-xl flex items-center justify-center`}>
+                {editingTransfer ? (
+                  <Edit2 className="w-6 h-6 text-blue-600" />
+                ) : (
+                  <Banknote className="w-6 h-6 text-orange-600" />
+                )}
               </div>
               <div>
-                <h3 className="font-bold text-gray-800">Versement à l'Admin</h3>
+                <h3 className="font-bold text-gray-800">
+                  {editingTransfer ? 'Modifier le versement' : 'Versement à l\'Admin'}
+                </h3>
                 <p className="text-sm text-gray-500">Agence {user.city}</p>
               </div>
             </div>
@@ -276,17 +316,26 @@ export default function VersementAdminModal({
             <button
               onClick={handleSubmit}
               disabled={loading || !amount || parseFloat(amount) <= 0}
-              className="py-3 rounded-xl bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white font-bold transition flex items-center justify-center gap-2"
+              className={`py-3 rounded-xl ${editingTransfer ? 'bg-blue-600 hover:bg-blue-700' : 'bg-orange-600 hover:bg-orange-700'} disabled:opacity-50 text-white font-bold transition flex items-center justify-center gap-2`}
             >
               {loading ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Envoi...
+                  {editingTransfer ? 'Mise à jour...' : 'Envoi...'}
                 </>
               ) : (
                 <>
-                  <Banknote className="w-4 h-4" />
-                  Verser
+                  {editingTransfer ? (
+                    <>
+                      <Edit2 className="w-4 h-4" />
+                      Mettre à jour
+                    </>
+                  ) : (
+                    <>
+                      <Banknote className="w-4 h-4" />
+                      Verser
+                    </>
+                  )}
                 </>
               )}
             </button>

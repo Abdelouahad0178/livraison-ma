@@ -1096,6 +1096,69 @@ export async function rejectDriverVersementChef(id: any, rejectedBy: any, reject
   })
 }
 
+// Modification d'un versement livreur (seulement si status === 'pending')
+export async function updateDriverVersement(id: string, data: any, updaterId: string) {
+  const amount = safeParseAmount(data.amount)
+  const type = data.type
+  const paymentType = data.paymentType || 'especes'
+
+  if (!id) throw new Error('Versement invalide.')
+  if (!amount || amount <= 0) throw new Error('Le montant doit être supérieur à 0.')
+  if (!DRIVER_VERSEMENT_TYPES.some(t => t.key === type)) throw new Error('Type de versement invalide.')
+  if (!DRIVER_VERSEMENT_PAYMENT_TYPES.some(t => t.key === paymentType)) throw new Error('Mode de paiement invalide.')
+
+  return runTransaction(db, async tx => {
+    const versementRef = doc(db, 'driverVersements', id)
+    const versementSnap = await tx.get(versementRef)
+    if (!versementSnap.exists()) throw new Error('Versement introuvable.')
+
+    const v = versementSnap.data()
+
+    // Vérifier que le statut est 'pending'
+    if (v.status !== 'pending') {
+      throw new Error('Seuls les versements en attente peuvent être modifiés.')
+    }
+
+    // Vérifier que c'est le créateur
+    if (v.driverId !== updaterId) {
+      throw new Error('Seul le créateur peut modifier ce versement.')
+    }
+
+    tx.update(versementRef, {
+      type,
+      paymentType,
+      amount,
+      note: data.note || '',
+      updatedAt: serverTimestamp(),
+    })
+  })
+}
+
+// Suppression d'un versement livreur (seulement si status === 'pending')
+export async function deleteDriverVersement(id: string, deleterId: string) {
+  if (!id) throw new Error('Versement invalide.')
+
+  return runTransaction(db, async tx => {
+    const versementRef = doc(db, 'driverVersements', id)
+    const versementSnap = await tx.get(versementRef)
+    if (!versementSnap.exists()) throw new Error('Versement introuvable.')
+
+    const v = versementSnap.data()
+
+    // Vérifier que le statut est 'pending'
+    if (v.status !== 'pending') {
+      throw new Error('Seuls les versements en attente peuvent être supprimés.')
+    }
+
+    // Vérifier que c'est le créateur
+    if (v.driverId !== deleterId) {
+      throw new Error('Seul le créateur peut supprimer ce versement.')
+    }
+
+    tx.delete(versementRef)
+  })
+}
+
 // Abonnement chef d'agence : tous les versements livreurs de sa ville
 // (tri côté client pour éviter un index composite Firestore)
 export function subscribeDriverVersements(city: any, callback: any, onError: (err?: any) => void = () => {}) {
@@ -1312,6 +1375,159 @@ export async function rejectAdminTransfer(id: any, rejectedBy: any, rejectedById
     rejectedAt: serverTimestamp(),
   })
 }
+
+// Modification d'un transfert admin (seulement si status === 'pending')
+export async function updateAdminTransfer(id: string, data: any, updaterId: string) {
+  const amount = parseFloat(data.amount) || 0
+  const paymentType = data.paymentType || 'especes'
+  const type = data.type === 'cod' ? 'cod' : 'port_du'
+
+  if (!id) throw new Error('Transfert invalide.')
+  if (amount <= 0) throw new Error('Le montant doit être supérieur à 0.')
+
+  return runTransaction(db, async tx => {
+    const transferRef = doc(db, 'adminTransfers', id)
+    const transferSnap = await tx.get(transferRef)
+    if (!transferSnap.exists()) throw new Error('Transfert introuvable.')
+
+    const transfer = transferSnap.data()
+
+    // Vérifier que le statut est 'pending'
+    if (transfer.status !== 'pending') {
+      throw new Error('Seuls les transferts en attente peuvent être modifiés.')
+    }
+
+    // Vérifier que c'est le créateur
+    if (transfer.fromId !== updaterId) {
+      throw new Error('Seul le créateur peut modifier ce transfert.')
+    }
+
+    const oldAmount = parseFloat(transfer.amount) || 0
+    const oldPaymentType = transfer.paymentType || 'especes'
+    const city = transfer.city
+
+    // Si le montant ou le type de paiement a changé, ajuster la caisse
+    if (oldAmount !== amount || oldPaymentType !== paymentType) {
+      const cashRef = doc(db, 'agencyCashes', city)
+      const cashSnap = await tx.get(cashRef)
+      const cash = cashSnap.exists()
+        ? cashSnap.data()
+        : { solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 }
+
+      // 1. Restaurer l'ancien montant
+      const { nextSolde: restoredSolde, nextEspeces: restoredEspeces, nextCheques: restoredCheques, nextVirement: restoredVirement } = _applyCashAdjust(cash, {
+        soldeDelta:    oldAmount,
+        especesDelta:  oldPaymentType === 'especes' ? oldAmount : 0,
+        chequesDelta:  oldPaymentType === 'cheque' ? oldAmount : 0,
+        virementDelta: oldPaymentType === 'virement' ? oldAmount : 0,
+      })
+
+      // 2. Déduire le nouveau montant
+      const { nextSolde, nextEspeces, nextCheques, nextVirement } = _applyCashAdjust(
+        { solde: restoredSolde, soldeEspeces: restoredEspeces, soldeCheques: restoredCheques, soldeVirement: restoredVirement },
+        {
+          soldeDelta:    -amount,
+          especesDelta:  paymentType === 'especes' ? -amount : 0,
+          chequesDelta:  paymentType === 'cheque' ? -amount : 0,
+          virementDelta: paymentType === 'virement' ? -amount : 0,
+        }
+      )
+
+      // Vérifier que le solde ne devient pas négatif
+      if (paymentType === 'especes' && nextEspeces < 0) throw new Error('Solde espèces insuffisant.')
+      if (paymentType === 'cheque' && nextCheques < 0) throw new Error('Solde chèques insuffisant.')
+      if (paymentType === 'virement' && nextVirement < 0) throw new Error('Solde virement insuffisant.')
+
+      tx.set(cashRef, {
+        city,
+        solde: nextSolde,
+        soldeEspeces: nextEspeces,
+        soldeCheques: nextCheques,
+        soldeVirement: nextVirement,
+        lastUpdatedAt: serverTimestamp(),
+      }, { merge: true })
+
+      // Mettre à jour l'entrée de caisse associée si elle existe
+      if (transfer.caisseEntryId) {
+        const entryRef = doc(db, 'caisseEntries', transfer.caisseEntryId)
+        tx.update(entryRef, {
+          amount,
+          paymentKind: paymentType,
+          updatedAt: serverTimestamp(),
+        })
+      }
+    }
+
+    // Mettre à jour le transfert
+    tx.update(transferRef, {
+      type,
+      paymentType,
+      amount,
+      note: data.note || '',
+      updatedAt: serverTimestamp(),
+    })
+  })
+}
+
+// Suppression d'un transfert admin (seulement si status === 'pending')
+export async function deleteAdminTransfer(id: string, deleterId: string) {
+  if (!id) throw new Error('Transfert invalide.')
+
+  return runTransaction(db, async tx => {
+    const transferRef = doc(db, 'adminTransfers', id)
+    const transferSnap = await tx.get(transferRef)
+    if (!transferSnap.exists()) throw new Error('Transfert introuvable.')
+
+    const transfer = transferSnap.data()
+
+    // Vérifier que le statut est 'pending'
+    if (transfer.status !== 'pending') {
+      throw new Error('Seuls les transferts en attente peuvent être supprimés.')
+    }
+
+    // Vérifier que c'est le créateur
+    if (transfer.fromId !== deleterId) {
+      throw new Error('Seul le créateur peut supprimer ce transfert.')
+    }
+
+    const amount = parseFloat(transfer.amount) || 0
+    const paymentType = transfer.paymentType || 'especes'
+    const city = transfer.city
+
+    // Restaurer le montant dans la caisse
+    const cashRef = doc(db, 'agencyCashes', city)
+    const cashSnap = await tx.get(cashRef)
+    const cash = cashSnap.exists()
+      ? cashSnap.data()
+      : { solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 }
+
+    const { nextSolde, nextEspeces, nextCheques, nextVirement } = _applyCashAdjust(cash, {
+      soldeDelta:    amount,
+      especesDelta:  paymentType === 'especes' ? amount : 0,
+      chequesDelta:  paymentType === 'cheque' ? amount : 0,
+      virementDelta: paymentType === 'virement' ? amount : 0,
+    })
+
+    tx.set(cashRef, {
+      city,
+      solde: nextSolde,
+      soldeEspeces: nextEspeces,
+      soldeCheques: nextCheques,
+      soldeVirement: nextVirement,
+      lastUpdatedAt: serverTimestamp(),
+    }, { merge: true })
+
+    // Supprimer l'entrée de caisse associée si elle existe
+    if (transfer.caisseEntryId) {
+      const entryRef = doc(db, 'caisseEntries', transfer.caisseEntryId)
+      tx.delete(entryRef)
+    }
+
+    // Supprimer le transfert
+    tx.delete(transferRef)
+  })
+}
+
 export function subscribeAdminTransfers(callback: any, onError: (err?: any) => void = () => {}) {
   const q = query(collection(db, 'adminTransfers'), orderBy('createdAt', 'desc'))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)

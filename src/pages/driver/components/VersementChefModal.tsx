@@ -1,6 +1,6 @@
 import { useState } from 'react'
-import { Banknote, X, AlertTriangle, Search } from 'lucide-react'
-import { createDriverVersement } from '../../../firebase/firestore'
+import { Banknote, X, AlertTriangle, Search, Edit2, Trash2 } from 'lucide-react'
+import { createDriverVersement, updateDriverVersement, deleteDriverVersement } from '../../../firebase/firestore'
 import { fmt } from '../../../utils/formatNumber'
 
 const VERSEMENT_TYPES = [
@@ -47,6 +47,7 @@ export default function VersementChefModal({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [editingVersement, setEditingVersement] = useState<any>(null) // Versement en cours de modification
   // Filtres de l'historique
   const [histStatus, setHistStatus] = useState('all') // all | pending | confirmed | rejected
   const [histType, setHistType] = useState('all')     // all | port_du | cod
@@ -93,7 +94,9 @@ export default function VersementChefModal({
       setError('Montant invalide')
       return
     }
-    if (amt > availableSolde) {
+
+    // Si on est en mode édition, pas besoin de vérifier le solde disponible
+    if (!editingVersement && amt > availableSolde) {
       setError(`Solde ${selectedType?.label} insuffisant (disponible : ${fmt(availableSolde)} DH)`)
       return
     }
@@ -101,21 +104,76 @@ export default function VersementChefModal({
     setLoading(true)
     setError('')
     try {
-      await createDriverVersement({
-        driverId:    uid,
-        driverName:  profile?.name || 'Livreur',
-        city:        profile?.city || '',
-        type,
-        paymentType,
-        amount:      amt,
-        note:        note.trim(),
-      })
-      setSuccess(`Versement de ${fmt(amt)} DH soumis. En attente de validation par le chef d'agence.`)
+      if (editingVersement) {
+        // Mode modification
+        await updateDriverVersement(editingVersement.id, {
+          type,
+          paymentType,
+          amount: amt,
+          note: note.trim(),
+        }, uid)
+        setSuccess(`Versement modifié avec succès!`)
+        setEditingVersement(null)
+      } else {
+        // Mode création
+        await createDriverVersement({
+          driverId:    uid,
+          driverName:  profile?.name || 'Livreur',
+          city:        profile?.city || '',
+          type,
+          paymentType,
+          amount:      amt,
+          note:        note.trim(),
+        })
+        setSuccess(`Versement de ${fmt(amt)} DH soumis. En attente de validation par le chef d'agence.`)
+      }
       setAmount('')
       setNote('')
+      setType('port_du')
+      setPaymentType('especes')
     } catch (err: any) {
-      console.error('createDriverVersement error:', err)
+      console.error('Versement error:', err)
       setError(err.message || 'Erreur lors du versement')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleEdit = (versement: any) => {
+    setEditingVersement(versement)
+    setType(versement.type)
+    setPaymentType(versement.paymentType)
+    setAmount(String(versement.amount))
+    setNote(versement.note || '')
+    setError('')
+    setSuccess('')
+    window.scrollTo({ top: 0, behavior: 'smooth' })
+  }
+
+  const handleCancelEdit = () => {
+    setEditingVersement(null)
+    setAmount('')
+    setNote('')
+    setType('port_du')
+    setPaymentType('especes')
+    setError('')
+    setSuccess('')
+  }
+
+  const handleDelete = async (versement: any) => {
+    if (!window.confirm(`Supprimer le versement de ${fmt(versement.amount)} DH ?`)) return
+
+    setLoading(true)
+    setError('')
+    try {
+      await deleteDriverVersement(versement.id, uid)
+      setSuccess('Versement supprimé avec succès!')
+      if (editingVersement?.id === versement.id) {
+        handleCancelEdit()
+      }
+    } catch (err: any) {
+      console.error('Delete error:', err)
+      setError(err.message || 'Erreur lors de la suppression')
     } finally {
       setLoading(false)
     }
@@ -128,11 +186,17 @@ export default function VersementChefModal({
           {/* Header */}
           <div className="flex items-center justify-between mb-5">
             <div className="flex items-center gap-3">
-              <div className="w-11 h-11 bg-orange-600/20 border border-orange-600/40 rounded-xl flex items-center justify-center">
-                <Banknote className="w-5 h-5 text-orange-400" />
+              <div className={`w-11 h-11 ${editingVersement ? 'bg-blue-600/20 border-blue-600/40' : 'bg-orange-600/20 border-orange-600/40'} border rounded-xl flex items-center justify-center`}>
+                {editingVersement ? (
+                  <Edit2 className="w-5 h-5 text-blue-400" />
+                ) : (
+                  <Banknote className="w-5 h-5 text-orange-400" />
+                )}
               </div>
               <div>
-                <h3 className="font-bold text-white">Versement au Chef</h3>
+                <h3 className="font-bold text-white">
+                  {editingVersement ? 'Modifier le versement' : 'Versement au Chef'}
+                </h3>
                 <p className="text-xs text-gray-400">Agence {profile?.city || '—'}</p>
               </div>
             </div>
@@ -140,6 +204,23 @@ export default function VersementChefModal({
               <X className="w-5 h-5 text-gray-400" />
             </button>
           </div>
+
+          {/* Mode édition - Bannière */}
+          {editingVersement && (
+            <div className="mb-4 p-3 bg-blue-950/40 border border-blue-800/60 rounded-xl">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs text-blue-200">
+                  ✏️ Modification du versement de <strong>{fmt(editingVersement.amount)} DH</strong>
+                </p>
+                <button
+                  onClick={handleCancelEdit}
+                  className="px-2 py-1 bg-blue-900/50 hover:bg-blue-900 rounded-lg text-[10px] font-semibold text-blue-300 transition"
+                >
+                  Annuler
+                </button>
+              </div>
+            </div>
+          )}
 
           {/* Type de versement */}
           <div className="mb-4">
@@ -291,26 +372,35 @@ export default function VersementChefModal({
           {/* Actions */}
           <div className="grid grid-cols-2 gap-3">
             <button
-              onClick={onClose}
+              onClick={editingVersement ? handleCancelEdit : onClose}
               disabled={loading}
               className="py-3 rounded-xl border border-gray-700 text-gray-300 font-semibold hover:bg-gray-800 transition disabled:opacity-50"
             >
-              Fermer
+              {editingVersement ? 'Annuler' : 'Fermer'}
             </button>
             <button
               onClick={handleSubmit}
               disabled={loading || !amount || parseFloat(amount) <= 0}
-              className="py-3 rounded-xl bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white font-bold transition flex items-center justify-center gap-2"
+              className={`py-3 rounded-xl ${editingVersement ? 'bg-blue-600 hover:bg-blue-700' : 'bg-orange-600 hover:bg-orange-700'} disabled:opacity-50 text-white font-bold transition flex items-center justify-center gap-2`}
             >
               {loading ? (
                 <>
                   <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Envoi...
+                  {editingVersement ? 'Mise à jour...' : 'Envoi...'}
                 </>
               ) : (
                 <>
-                  <Banknote className="w-4 h-4" />
-                  Verser
+                  {editingVersement ? (
+                    <>
+                      <Edit2 className="w-4 h-4" />
+                      Mettre à jour
+                    </>
+                  ) : (
+                    <>
+                      <Banknote className="w-4 h-4" />
+                      Verser
+                    </>
+                  )}
                 </>
               )}
             </button>
@@ -409,10 +499,12 @@ export default function VersementChefModal({
                   const badge = STATUS_BADGES[v.status] || STATUS_BADGES.pending
                   const vType = VERSEMENT_TYPES.find(t => t.value === v.type)
                   const vPay  = PAYMENT_TYPES.find(t => t.value === v.paymentType)
+                  const isPending = v.status === 'pending'
+                  const isEditing = editingVersement?.id === v.id
                   return (
-                    <div key={v.id} className="bg-gray-800/70 border border-gray-700/70 rounded-xl px-3 py-2">
+                    <div key={v.id} className={`bg-gray-800/70 border rounded-xl px-3 py-2 ${isEditing ? 'border-blue-500 bg-blue-900/20' : 'border-gray-700/70'}`}>
                       <div className="flex items-center justify-between gap-2">
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <p className="text-sm font-bold text-white">
                             {vType?.emoji} {fmt(v.amount)} DH
                             <span className="text-[10px] text-gray-400 font-medium ml-1.5">
@@ -420,10 +512,35 @@ export default function VersementChefModal({
                             </span>
                           </p>
                           <p className="text-[10px] text-gray-500">{fmtDate(v.createdAt)}</p>
+                          {v.note && (
+                            <p className="text-[10px] text-gray-400 mt-1 italic">Note: {v.note}</p>
+                          )}
                         </div>
-                        <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border shrink-0 ${badge.cls}`}>
-                          {badge.label}
-                        </span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-semibold border ${badge.cls}`}>
+                            {badge.label}
+                          </span>
+                          {isPending && (
+                            <div className="flex gap-1">
+                              <button
+                                onClick={() => handleEdit(v)}
+                                disabled={loading}
+                                className="p-1.5 bg-blue-600/20 hover:bg-blue-600/40 border border-blue-600/40 rounded-lg text-blue-300 transition disabled:opacity-50"
+                                title="Modifier"
+                              >
+                                <Edit2 className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={() => handleDelete(v)}
+                                disabled={loading}
+                                className="p-1.5 bg-red-600/20 hover:bg-red-600/40 border border-red-600/40 rounded-lg text-red-300 transition disabled:opacity-50"
+                                title="Supprimer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       </div>
                       {v.status === 'rejected' && v.rejectionReason && (
                         <p className="text-[11px] text-red-300 mt-1">Motif : {v.rejectionReason}</p>

@@ -1,11 +1,12 @@
 import { useMemo, useState } from 'react'
 import {
-  Truck, Banknote, Clock, CheckCircle2, X, Wallet, ArrowUpRight, Landmark,
+  Truck, Banknote, Clock, CheckCircle2, X, Wallet, ArrowUpRight, Landmark, Edit2, Trash2,
 } from 'lucide-react'
 import { auth } from '../../firebase/config'
 import { fmt } from '../../utils/formatNumber'
 import DirectorVersementsTab from './tabs/DirectorVersementsTab'
 import VersementAdminModal from './components/VersementAdminModal'
+import { deleteAdminTransfer } from '../../firebase/firestore'
 
 const PAYMENT_META: Record<string, { label: string, emoji: string }> = {
   especes:  { label: 'Espèces',  emoji: '💵' },
@@ -46,8 +47,31 @@ export default function DirectorCaisseSimple({
 }: any) {
   const [activeTab, setActiveTab] = useState<'livreurs' | 'admin'>('livreurs')
   const [versementAdminModal, setVersementAdminModal] = useState(false)
+  const [editingTransfer, setEditingTransfer] = useState<any>(null)
 
   const city = profile?.city
+
+  const handleEditTransfer = (transfer: any) => {
+    setEditingTransfer(transfer)
+    setVersementAdminModal(true)
+  }
+
+  const handleDeleteTransfer = async (transfer: any) => {
+    if (!window.confirm(`Supprimer le versement de ${fmt(transfer.amount)} DH vers l'Admin ?`)) return
+
+    try {
+      await deleteAdminTransfer(transfer.id, auth.currentUser?.uid || '')
+      alert('✅ Versement supprimé avec succès!')
+    } catch (err: any) {
+      console.error('Delete error:', err)
+      alert(`❌ Erreur: ${err.message}`)
+    }
+  }
+
+  const handleCloseModal = () => {
+    setVersementAdminModal(false)
+    setEditingTransfer(null)
+  }
 
   // ── Flux 1 : Livreurs → Chef ────────────────────────────────────────────────
   const livStats = useMemo(() => {
@@ -250,7 +274,7 @@ export default function DirectorCaisseSimple({
                 <table className="w-full text-sm">
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-100">
-                      {['Date', 'Type', 'Mode paiement', 'Montant', 'Note', 'Statut'].map(h => (
+                      {['Date', 'Type', 'Mode paiement', 'Montant', 'Note', 'Statut', 'Actions'].map(h => (
                         <th key={h} className="text-left px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">{h}</th>
                       ))}
                     </tr>
@@ -292,6 +316,26 @@ export default function DirectorCaisseSimple({
                               </p>
                             )}
                           </td>
+                          <td className="px-4 py-3">
+                            {t.status === 'pending' && (
+                              <div className="flex gap-1.5">
+                                <button
+                                  onClick={() => handleEditTransfer(t)}
+                                  className="p-1.5 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg text-blue-600 transition"
+                                  title="Modifier"
+                                >
+                                  <Edit2 className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteTransfer(t)}
+                                  className="p-1.5 bg-red-50 hover:bg-red-100 border border-red-200 rounded-lg text-red-600 transition"
+                                  title="Supprimer"
+                                >
+                                  <Trash2 className="w-3.5 h-3.5" />
+                                </button>
+                              </div>
+                            )}
+                          </td>
                         </tr>
                       )
                     })}
@@ -307,10 +351,11 @@ export default function DirectorCaisseSimple({
       {versementAdminModal && (
         <VersementAdminModal
           isOpen={versementAdminModal}
-          onClose={() => setVersementAdminModal(false)}
+          onClose={handleCloseModal}
           user={modalUser}
           agencyCash={agencyCash}
           typeBalances={{ port_du: availablePortDu, cod: availableCod }}
+          editingTransfer={editingTransfer}
         />
       )}
     </div>
