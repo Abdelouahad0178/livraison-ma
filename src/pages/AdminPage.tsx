@@ -21,6 +21,7 @@ import {
   subscribeAllReglementsGlobal, subscribeAllRapportsGlobal,
   getParcelsPage,
   searchParcelByNicOptimized,
+  searchParcels,
 } from '../firebase/firestore'
 import { deleteParcel, getRealParcelsStats } from '../firebase/parcels'
 import {
@@ -333,6 +334,8 @@ export default function AdminPage() {
   const [search,        setSearch]        = useState('')
   const [debouncedSearch, setDebouncedSearch] = useState('')
   const [isSearchActive, setIsSearchActive] = useState(false) // Pour recharger plus de colis quand recherche active
+  const [serverSearchResults, setServerSearchResults] = useState<any[] | null>(null) // Résultats recherche serveur
+  const [isSearching, setIsSearching] = useState(false) // Loading state pour recherche
   const [statusModal,       setStatusModal]       = useState<any>(null)
   const [returnModal,       setReturnModal]       = useState<any>(null)
   const [returnParcelModal, setReturnParcelModal] = useState<any>(null) // { parcel, loading, result, error }
@@ -501,6 +504,36 @@ export default function AdminPage() {
 
     return () => clearTimeout(timer)
   }, [search])
+
+  // 🔍 Recherche côté serveur - ULTRA-RAPIDE dans toute la base
+  useEffect(() => {
+    if (!debouncedSearch || debouncedSearch.trim().length === 0) {
+      setServerSearchResults(null)
+      setIsSearching(false)
+      return
+    }
+
+    let cancelled = false
+    setIsSearching(true)
+
+    searchParcels(debouncedSearch.trim(), { limit: 500 })
+      .then(results => {
+        if (!cancelled) {
+          console.log(`✅ Recherche serveur: ${results.length} résultats pour "${debouncedSearch}"`)
+          setServerSearchResults(results)
+          setIsSearching(false)
+        }
+      })
+      .catch(error => {
+        if (!cancelled) {
+          console.error('❌ Erreur recherche serveur:', error)
+          setServerSearchResults(null)
+          setIsSearching(false)
+        }
+      })
+
+    return () => { cancelled = true }
+  }, [debouncedSearch])
 
   // Subscriptions de base � ddémarrent au montage du composant
   useEffect(() => {
@@ -937,13 +970,19 @@ export default function AdminPage() {
   const filtered = useMemo(() => {
     if (!Array.isArray(periodParcels)) return []
 
-    // 🚀 OPTIMISATION: Utiliser Fuse.js pour recherche rapide
+    // 🔍 NOUVELLE APPROCHE: Recherche côté serveur ULTRA-RAPIDE dans toute la base
     let results = periodParcels
 
-    // Si recherche active, utiliser Fuse.js pour filtrage ultra-rapide
-    if (debouncedSearch && fuseIndex) {
+    // Si recherche côté serveur active → utiliser les résultats du serveur
+    if (serverSearchResults !== null) {
+      results = serverSearchResults
+      console.log(`🔍 Utilisation recherche serveur: ${results.length} résultats`)
+    }
+    // Sinon, si recherche active localement → utiliser Fuse.js (fallback)
+    else if (debouncedSearch && fuseIndex) {
       const searchResults = fuseIndex.search(debouncedSearch.trim())
       results = searchResults.map(r => r.item)
+      console.log(`🔍 Utilisation Fuse.js local: ${results.length} résultats`)
     }
 
     // Appliquer les autres filtres (ville, driver, statut)
@@ -1007,7 +1046,7 @@ export default function AdminPage() {
 
     // 🔢 Limiter à 100 expéditions maximum pour performance
     return results.slice(0, 100)
-  }, [periodParcels, cityFilter, driverFilter, statusFilter, serviceTypeFilter, debouncedSearch, fuseIndex])
+  }, [periodParcels, cityFilter, driverFilter, statusFilter, serviceTypeFilter, portTypeFilter, debouncedSearch, fuseIndex, serverSearchResults])
 
   const loadMoreParcels = async () => {
     if (!hasMore || loadingMore) return
