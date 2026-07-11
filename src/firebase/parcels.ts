@@ -259,8 +259,12 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     aideEditUnlocked:     false,
     // 🔍 Champ pour file validation (subscribePendingAideAgentParcels)
     validatedByChef:      requiresChefValidation ? false : null,
-    // 🔍 Champ dénormalisé pour recherche rapide par NIC (searchParcelByNicOptimized)
+    // 🔍 Champs dénormalisés pour recherche rapide
     senderNic:            (sender?.nic ? String(sender.nic).trim().toUpperCase() : ''),
+    senderTel:            (sender?.tel ? String(sender.tel).replace(/[\s\-\(\)\.]/g, '') : ''),
+    receiverTel:          (receiver?.tel ? String(receiver.tel).replace(/[\s\-\(\)\.]/g, '') : ''),
+    senderNameLower:      (sender?.name ? String(sender.name).toLowerCase().trim() : ''),
+    receiverNameLower:    (receiver?.name ? String(receiver.name).toLowerCase().trim() : ''),
     hasRetourBL:          data.hasRetourBL === true,  // ⭐ Retour BL obligatoire
   }
   const ref = await addDoc(collection(db, 'parcels'), parcel)
@@ -1137,6 +1141,147 @@ export async function searchParcelByNicOptimized(nic: string) {
 
   } catch (error) {
     console.error('❌ Erreur recherche N° EXP:', error)
+    return []
+  }
+}
+
+/**
+ * ⚡ Recherche intelligente multi-critères côté serveur
+ * Détecte automatiquement le type de recherche et utilise les index optimisés
+ */
+export async function searchParcels(
+  term: string,
+  options: {
+    dateFrom?: Date
+    dateTo?: Date
+    limit?: number
+  } = {}
+): Promise<any[]> {
+  try {
+    if (!term || term.trim().length === 0) return []
+
+    const searchTerm = term.trim()
+    const searchLimit = options.limit || 100
+    const startTime = performance.now()
+
+    // 1️⃣ Détection du type de recherche
+    const isTrackingId = /^LMA-?\d+$/i.test(searchTerm)
+    const isPhone = /^[\d\s\-\(\)\.]+$/.test(searchTerm) && searchTerm.replace(/\D/g, '').length >= 9
+    const isNic = /^\d+$/.test(searchTerm) && searchTerm.length <= 8
+
+    let results: any[] = []
+
+    // 2️⃣ Recherche par Tracking ID (le plus fréquent)
+    if (isTrackingId) {
+      const trackingUpper = searchTerm.toUpperCase().replace(/-/g, '')
+      const q = query(
+        collection(db, 'parcels'),
+        where('trackingId', '>=', trackingUpper),
+        where('trackingId', '<=', trackingUpper + ''),
+        limit(searchLimit)
+      )
+      const snapshot = await getDocs(q)
+      results = snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
+    }
+    // 3️⃣ Recherche par Téléphone
+    else if (isPhone) {
+      const phoneNormalized = searchTerm.replace(/[\s\-\(\)\.]/g, '')
+
+      // Chercher dans senderTel ET receiverTel
+      const senderQuery = query(
+        collection(db, 'parcels'),
+        where('senderTel', '>=', phoneNormalized),
+        where('senderTel', '<=', phoneNormalized + ''),
+        limit(searchLimit)
+      )
+      const receiverQuery = query(
+        collection(db, 'parcels'),
+        where('receiverTel', '>=', phoneNormalized),
+        where('receiverTel', '<=', phoneNormalized + ''),
+        limit(searchLimit)
+      )
+
+      const [senderSnap, receiverSnap] = await Promise.all([
+        getDocs(senderQuery),
+        getDocs(receiverQuery)
+      ])
+
+      const senderResults = senderSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+      const receiverResults = receiverSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+
+      // Fusionner et dédupliquer
+      const allResults = [...senderResults, ...receiverResults]
+      const uniqueIds = new Set<string>()
+      results = allResults.filter(p => {
+        if (uniqueIds.has(p.id)) return false
+        uniqueIds.add(p.id)
+        return true
+      })
+    }
+    // 4️⃣ Recherche par NIC (N° Expéditeur)
+    else if (isNic) {
+      const nicUpper = searchTerm.toUpperCase()
+      const q = query(
+        collection(db, 'parcels'),
+        where('senderNic', '>=', nicUpper),
+        where('senderNic', '<=', nicUpper + ''),
+        limit(searchLimit)
+      )
+      const snapshot = await getDocs(q)
+      results = snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
+    }
+    // 5️⃣ Recherche par Nom (senderNameLower ou receiverNameLower)
+    else {
+      const nameLower = searchTerm.toLowerCase()
+
+      const senderQuery = query(
+        collection(db, 'parcels'),
+        where('senderNameLower', '>=', nameLower),
+        where('senderNameLower', '<=', nameLower + ''),
+        limit(searchLimit)
+      )
+      const receiverQuery = query(
+        collection(db, 'parcels'),
+        where('receiverNameLower', '>=', nameLower),
+        where('receiverNameLower', '<=', nameLower + ''),
+        limit(searchLimit)
+      )
+
+      const [senderSnap, receiverSnap] = await Promise.all([
+        getDocs(senderQuery),
+        getDocs(receiverQuery)
+      ])
+
+      const senderResults = senderSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+      const receiverResults = receiverSnap.docs.map(d => ({ id: d.id, ...d.data() }))
+
+      // Fusionner et dédupliquer
+      const allResults = [...senderResults, ...receiverResults]
+      const uniqueIds = new Set<string>()
+      results = allResults.filter(p => {
+        if (uniqueIds.has(p.id)) return false
+        uniqueIds.add(p.id)
+        return true
+      })
+    }
+
+    // 6️⃣ Filtrer par date si spécifié
+    if (options.dateFrom || options.dateTo) {
+      results = results.filter(p => {
+        const pDate = p.createdAt?.toDate?.() || new Date(p.createdAt)
+        if (options.dateFrom && pDate < options.dateFrom) return false
+        if (options.dateTo && pDate > options.dateTo) return false
+        return true
+      })
+    }
+
+    const duration = (performance.now() - startTime).toFixed(0)
+    console.log(`⚡ searchParcels: ${results.length} résultats en ${duration}ms`)
+
+    return results.slice(0, searchLimit)
+
+  } catch (error) {
+    console.error('❌ Erreur searchParcels:', error)
     return []
   }
 }

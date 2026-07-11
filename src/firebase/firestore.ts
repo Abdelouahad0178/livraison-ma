@@ -34,7 +34,7 @@ export {
   subscribeAllParcels, getParcelsPage, subscribeAgentParcels, getMoreAgentParcels,
   getAccurateAgencyStats, subscribeAgencyInbox, subscribeAgencyParcels,
   subscribePendingAideAgentParcels, claimParcel, searchParcelByTrackingId, createReturnParcel,
-  searchParcelByTrackingGlobal, searchParcelByNicOptimized,
+  searchParcelByTrackingGlobal, searchParcelByNicOptimized, searchParcels,
 } from './parcels'
 
 export {
