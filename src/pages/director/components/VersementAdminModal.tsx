@@ -87,10 +87,10 @@ export default function VersementAdminModal({
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl">
-        <div className="p-6">
-          {/* Header */}
-          <div className="flex items-center justify-between mb-6">
+      <div className="bg-white rounded-2xl w-full max-w-md shadow-2xl max-h-[90vh] flex flex-col overflow-hidden">
+        {/* Header fixe */}
+        <div className="p-6 border-b border-gray-100 shrink-0">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center">
                 <Banknote className="w-6 h-6 text-orange-600" />
@@ -107,6 +107,36 @@ export default function VersementAdminModal({
               <X className="w-5 h-5 text-gray-500" />
             </button>
           </div>
+        </div>
+
+        {/* Contenu scrollable */}
+        <div className="flex-1 overflow-y-auto p-6">
+          {/* Récapitulatif des soldes à verser */}
+          {typeBalances && (
+            <div className="mb-6 p-4 bg-gradient-to-br from-purple-50 to-purple-100 border border-purple-200 rounded-xl">
+              <p className="text-xs font-semibold text-purple-700 uppercase tracking-wider mb-3">
+                💰 Soldes à verser à l'Admin
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="bg-white/70 rounded-lg p-3 text-center">
+                  <p className="text-xs text-orange-600 font-semibold mb-1">📮 Port Dû</p>
+                  <p className="text-xl font-black text-orange-700">{fmt(parseFloat(typeBalances.port_du || 0))} DH</p>
+                </div>
+                <div className="bg-white/70 rounded-lg p-3 text-center">
+                  <p className="text-xs text-green-600 font-semibold mb-1">💰 COD</p>
+                  <p className="text-xl font-black text-green-700">{fmt(parseFloat(typeBalances.cod || 0))} DH</p>
+                </div>
+              </div>
+              <div className="mt-3 pt-3 border-t border-purple-200">
+                <div className="flex justify-between items-center">
+                  <span className="text-xs font-semibold text-purple-700">TOTAL:</span>
+                  <span className="text-lg font-black text-purple-800">
+                    {fmt((parseFloat(typeBalances.port_du || 0) + parseFloat(typeBalances.cod || 0)))} DH
+                  </span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Type de versement (Port Dû / COD) */}
           <div className="mb-4">
@@ -227,17 +257,19 @@ export default function VersementAdminModal({
 
           {/* Error */}
           {error && (
-            <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
+            <div className="p-3 bg-red-50 border border-red-200 rounded-xl text-sm text-red-700">
               ❌ {error}
             </div>
           )}
+        </div>
 
-          {/* Actions */}
+        {/* Actions fixes en bas */}
+        <div className="p-6 border-t border-gray-100 bg-gray-50 shrink-0">
           <div className="grid grid-cols-2 gap-3">
             <button
               onClick={onClose}
               disabled={loading}
-              className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition disabled:opacity-50"
+              className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-white transition disabled:opacity-50"
             >
               Annuler
             </button>
