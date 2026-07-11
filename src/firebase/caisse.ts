@@ -1207,6 +1207,7 @@ export async function createAdminTransferFromCaissier(data: any) {
 export async function createAdminTransferFromChefAgence(data: any) {
   const amount = parseFloat(data.amount) || 0
   const paymentType = data.paymentType || 'especes' // especes, cheque, virement
+  const type = data.type === 'cod' ? 'cod' : 'port_du' // port_du (défaut) | cod
   if (!data.city || amount <= 0) throw new Error('Données invalides.')
 
   return runTransaction(db, async tx => {
@@ -1244,7 +1245,7 @@ export async function createAdminTransferFromChefAgence(data: any) {
       type: 'sortie',
       category: 'remise_admin',
       amount,
-      description: `Versement à l'Admin (${paymentType})`,
+      description: `Versement à l'Admin (${type === 'cod' ? 'COD' : 'Port Dû'} — ${paymentType})`,
       reference: '',
       city: data.city,
       agentId: data.fromId || null,
@@ -1280,6 +1281,7 @@ export async function createAdminTransferFromChefAgence(data: any) {
       city: data.city,
       amount,
       paymentType,
+      type, // port_du | cod
       note: data.note || '',
       caisseEntryId: entryRef.id,
       status: 'pending',

@@ -152,11 +152,26 @@ export async function printTable(parcels: any[], driverName?: string, profile?: 
     const dateStr   = createdAt ? createdAt.toLocaleDateString('fr-MA') : '—'
     const rowBg     = i % 2 === 0 ? '#ffffff' : '#f0f7ff'
     const sigUrl    = (sigMap as any)[p.id]
+
+    // Générer les checkboxes de service
+    const servicesHTML = Object.keys(SERVICE_LABEL).map(key => {
+      const checked = p.serviceType === key ? '☑' : '☐'
+      return `${checked} ${(SERVICE_LABEL as any)[key]}`
+    }).join(' &nbsp;&nbsp; ')
+
     return `
       <tr style="background:${rowBg}">
-        <td style="font-family:monospace;color:#7c3aed;font-weight:bold">${p.sender?.nic || '—'}</td>
+        <td colspan="14" style="padding:8px 8px 0 8px;border-bottom:none">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+            <div style="font-weight:bold;color:#000;font-size:9pt">N EXP : ${p.sender?.nic || '—'}</div>
+            <div style="text-align:center;color:#000;font-size:8pt">${dateStr}</div>
+            <div></div>
+          </div>
+          <div style="font-size:7.5pt;margin-bottom:4px">${servicesHTML}</div>
+        </td>
+      </tr>
+      <tr style="background:${rowBg}">
         <td style="font-family:monospace;font-weight:bold;color:#1d4ed8">${p.trackingId || '—'}</td>
-        <td style="text-align:center">${dateStr}</td>
         <td><div style="font-weight:bold">${p.sender?.name || '—'}</div><div style="color:#6b7280;font-size:7.5pt">${p.sender?.tel || ''} ${p.sender?.city ? '· ' + p.sender.city : ''}</div></td>
         <td><div style="font-weight:bold">${p.receiver?.name || '—'}</div><div style="color:#6b7280;font-size:7.5pt">${p.receiver?.tel || ''} ${p.receiver?.city ? '· ' + p.receiver.city : ''}</div></td>
         <td style="text-align:center">${p.nbColis || 1}</td>
@@ -165,7 +180,6 @@ export async function printTable(parcels: any[], driverName?: string, profile?: 
         <td style="text-align:right;font-weight:bold;color:#ea580c">${p.codAmount > 0 ? p.codAmount + ' DH' : '—'}</td>
         <td style="text-align:right;font-weight:bold">${p.price ? p.price + ' DH' : '—'}</td>
         <td style="text-align:center">${portLabel}</td>
-        <td style="text-align:center">${svcLabel}</td>
         <td style="text-align:center"><span style="background:${st.bg};color:${st.col};padding:2px 6px;border-radius:10px;font-size:7.5pt;font-weight:bold;white-space:nowrap">${p.status || '—'}</span></td>
         <td style="text-align:center;width:95px;min-height:36px;vertical-align:middle">${sigUrl ? `<img src="${sigUrl}" style="max-width:88px;max-height:32px;object-fit:contain;display:block;margin:auto;" />` : ''}</td>
       </tr>`
@@ -212,9 +226,7 @@ export async function printTable(parcels: any[], driverName?: string, profile?: 
   <table>
     <thead>
       <tr>
-        <th>N° EXP</th>
         <th>Tracking</th>
-        <th>Date</th>
         <th>Expéditeur</th>
         <th>Destinataire</th>
         <th>Nb</th>
@@ -223,7 +235,6 @@ export async function printTable(parcels: any[], driverName?: string, profile?: 
         <th>RETOUR FOND (DH)</th>
         <th>Port (DH)</th>
         <th>Type port</th>
-        <th>Encaiss.</th>
         <th>Statut</th>
         <th>Signature</th>
       </tr>
@@ -231,10 +242,10 @@ export async function printTable(parcels: any[], driverName?: string, profile?: 
     <tbody>
       ${rows}
       <tr class="totals">
-        <td colspan="9" style="text-align:right">TOTAUX</td>
+        <td colspan="6" style="text-align:right">TOTAUX</td>
         <td style="text-align:right">${totalCod.toLocaleString('fr-MA')} DH</td>
         <td style="text-align:right">${totalPort.toLocaleString('fr-MA')} DH</td>
-        <td colspan="4"></td>
+        <td colspan="3"></td>
       </tr>
     </tbody>
   </table>

@@ -1,12 +1,25 @@
-import { CheckCircle, XCircle, Clock, Banknote, AlertTriangle, Eye } from 'lucide-react'
+import { CheckCircle, XCircle, Clock, Banknote, AlertTriangle, Eye, Search, X } from 'lucide-react'
 import { fmt } from '../../../utils/formatNumber'
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
+import DateFilter from '../../agent/DateFilter'
+import { filterByDate } from '../../../utils/dateFilter'
+import type { DateFilterPreset } from '../../../types'
 
 const PAYMENT_TYPES: Record<string, { label: string; emoji: string; color: string }> = {
   especes: { label: 'Espèces', emoji: '💵', color: 'green' },
   cheque: { label: 'Chèque', emoji: '📝', color: 'blue' },
   virement: { label: 'Virement', emoji: '🏦', color: 'purple' },
 }
+
+// Type de versement (Port Dû / COD) — les anciens versements sans champ `type` sont traités comme Port Dû
+const TYPE_META: Record<string, { label: string; emoji: string; cls: string }> = {
+  port_du: { label: 'Port Dû', emoji: '📮', cls: 'bg-orange-100 text-orange-700' },
+  cod: { label: 'COD', emoji: '💰', cls: 'bg-green-100 text-green-700' },
+}
+
+const transferType = (t: any): string => (t.type === 'cod' ? 'cod' : 'port_du')
+
+const transferDate = (t: any): Date => t.createdAt?.toDate?.() || new Date(t.createdAt || 0)
 
 export default function AdminVersementsTab({
   adminTransfers,
@@ -18,18 +31,55 @@ export default function AdminVersementsTab({
   const [rejectModal, setRejectModal] = useState<any>(null)
   const [rejectReason, setRejectReason] = useState('')
   const [statusFilter, setStatusFilter] = useState('all') // all, pending, confirmed, rejected
+  const [cityFilter, setCityFilter] = useState('all')
+  const [paymentFilter, setPaymentFilter] = useState('all') // all, especes, cheque, virement
+  const [typeFilter, setTypeFilter] = useState('all') // all, port_du, cod
+  const [datePreset, setDatePreset] = useState<DateFilterPreset>('all')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [search, setSearch] = useState('')
 
-  const filtered = adminTransfers.filter((t: any) => {
-    if (statusFilter === 'pending') return t.status === 'pending'
-    if (statusFilter === 'confirmed') return t.status === 'confirmed'
-    if (statusFilter === 'rejected') return t.status === 'rejected'
-    return true
+  // Liste des villes présentes dans les versements
+  const cities = useMemo(
+    () =>
+      Array.from(new Set(adminTransfers.map((t: any) => t.city).filter(Boolean))).sort() as string[],
+    [adminTransfers]
+  )
+
+  // Base filtrée (ville + paiement + période + recherche) — les totaux reflètent ces filtres
+  const baseFiltered = useMemo(() => {
+    let list = adminTransfers
+    if (cityFilter !== 'all') list = list.filter((t: any) => t.city === cityFilter)
+    if (paymentFilter !== 'all') list = list.filter((t: any) => (t.paymentType || 'especes') === paymentFilter)
+    if (typeFilter !== 'all') list = list.filter((t: any) => transferType(t) === typeFilter)
+    if (search.trim()) {
+      const q = search.toLowerCase()
+      list = list.filter((t: any) => (t.fromName || '').toLowerCase().includes(q))
+    }
+    list = filterByDate(list, datePreset, dateFrom, dateTo, transferDate)
+    return list
+  }, [adminTransfers, cityFilter, paymentFilter, typeFilter, search, datePreset, dateFrom, dateTo])
+
+  const filtered = baseFiltered.filter((t: any) => {
+    if (statusFilter === 'all') return true
+    return t.status === statusFilter
   })
 
-  const pendingCount = adminTransfers.filter((t: any) => t.status === 'pending').length
-  const pendingAmount = adminTransfers
-    .filter((t: any) => t.status === 'pending')
-    .reduce((sum: number, t: any) => sum + (t.amount || 0), 0)
+  // Totaux (count + montant) par statut + total général
+  const totals = useMemo(() => {
+    const calc = (list: any[]) => ({
+      count: list.length,
+      amount: list.reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0),
+      portDu: list.reduce((sum: number, t: any) => sum + (transferType(t) === 'port_du' ? parseFloat(t.amount) || 0 : 0), 0),
+      cod: list.reduce((sum: number, t: any) => sum + (transferType(t) === 'cod' ? parseFloat(t.amount) || 0 : 0), 0),
+    })
+    return {
+      pending: calc(baseFiltered.filter((t: any) => t.status === 'pending')),
+      confirmed: calc(baseFiltered.filter((t: any) => t.status === 'confirmed')),
+      rejected: calc(baseFiltered.filter((t: any) => t.status === 'rejected')),
+      total: calc(baseFiltered),
+    }
+  }, [baseFiltered])
 
   const handleConfirm = async () => {
     if (!confirmModal) return
@@ -69,65 +119,189 @@ export default function AdminVersementsTab({
   return (
     <div className="space-y-6">
       {/* Header Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <div className="bg-orange-50 border border-orange-200 rounded-2xl p-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="bg-gradient-to-br from-orange-50 to-orange-100 border border-orange-200 rounded-2xl p-4">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-orange-500 rounded-xl flex items-center justify-center">
+            <div className="w-12 h-12 bg-orange-500 rounded-xl flex items-center justify-center shrink-0">
               <Clock className="w-6 h-6 text-white" />
             </div>
             <div>
               <p className="text-xs font-semibold text-orange-600">En attente</p>
-              <p className="text-2xl font-black text-orange-700">{pendingCount}</p>
-              <p className="text-xs text-orange-500">{fmt(pendingAmount)} DH</p>
+              <p className="text-2xl font-black text-orange-700">{totals.pending.count}</p>
+              <p className="text-xs font-bold text-orange-500">{fmt(totals.pending.amount)} DH</p>
             </div>
           </div>
+          <div className="mt-3 pt-2 border-t border-orange-200 flex flex-wrap justify-between gap-1 text-[11px] font-semibold text-orange-600">
+            <span>📮 Port Dû: {fmt(totals.pending.portDu)} DH</span>
+            <span>💰 COD: {fmt(totals.pending.cod)} DH</span>
+          </div>
         </div>
-        <div className="bg-green-50 border border-green-200 rounded-2xl p-4">
+        <div className="bg-gradient-to-br from-green-50 to-green-100 border border-green-200 rounded-2xl p-4">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-green-500 rounded-xl flex items-center justify-center">
+            <div className="w-12 h-12 bg-green-500 rounded-xl flex items-center justify-center shrink-0">
               <CheckCircle className="w-6 h-6 text-white" />
             </div>
             <div>
               <p className="text-xs font-semibold text-green-600">Validés</p>
-              <p className="text-2xl font-black text-green-700">
-                {adminTransfers.filter((t: any) => t.status === 'confirmed').length}
-              </p>
+              <p className="text-2xl font-black text-green-700">{totals.confirmed.count}</p>
+              <p className="text-xs font-bold text-green-500">{fmt(totals.confirmed.amount)} DH</p>
             </div>
           </div>
+          <div className="mt-3 pt-2 border-t border-green-200 flex flex-wrap justify-between gap-1 text-[11px] font-semibold text-green-600">
+            <span>📮 Port Dû: {fmt(totals.confirmed.portDu)} DH</span>
+            <span>💰 COD: {fmt(totals.confirmed.cod)} DH</span>
+          </div>
         </div>
-        <div className="bg-red-50 border border-red-200 rounded-2xl p-4">
+        <div className="bg-gradient-to-br from-red-50 to-red-100 border border-red-200 rounded-2xl p-4">
           <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-red-500 rounded-xl flex items-center justify-center">
+            <div className="w-12 h-12 bg-red-500 rounded-xl flex items-center justify-center shrink-0">
               <XCircle className="w-6 h-6 text-white" />
             </div>
             <div>
               <p className="text-xs font-semibold text-red-600">Rejetés</p>
-              <p className="text-2xl font-black text-red-700">
-                {adminTransfers.filter((t: any) => t.status === 'rejected').length}
-              </p>
+              <p className="text-2xl font-black text-red-700">{totals.rejected.count}</p>
+              <p className="text-xs font-bold text-red-500">{fmt(totals.rejected.amount)} DH</p>
             </div>
+          </div>
+          <div className="mt-3 pt-2 border-t border-red-200 flex flex-wrap justify-between gap-1 text-[11px] font-semibold text-red-600">
+            <span>📮 Port Dû: {fmt(totals.rejected.portDu)} DH</span>
+            <span>💰 COD: {fmt(totals.rejected.cod)} DH</span>
+          </div>
+        </div>
+        <div className="bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 rounded-2xl p-4">
+          <div className="flex items-center gap-3">
+            <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center shrink-0">
+              <Banknote className="w-6 h-6 text-white" />
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-blue-600">Total général</p>
+              <p className="text-2xl font-black text-blue-700">{totals.total.count}</p>
+              <p className="text-xs font-bold text-blue-500">{fmt(totals.total.amount)} DH</p>
+            </div>
+          </div>
+          <div className="mt-3 pt-2 border-t border-blue-200 flex flex-wrap justify-between gap-1 text-[11px] font-semibold text-blue-600">
+            <span>📮 Port Dû: {fmt(totals.total.portDu)} DH</span>
+            <span>💰 COD: {fmt(totals.total.cod)} DH</span>
           </div>
         </div>
       </div>
 
       {/* Filters */}
-      <div className="flex gap-2">
-        {['all', 'pending', 'confirmed', 'rejected'].map((status) => (
+      <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Recherche par nom du chef */}
+          <div className="flex items-center gap-2 flex-1 min-w-[200px] bg-gray-50 border border-gray-200 rounded-xl px-3 py-2">
+            <Search className="w-4 h-4 text-gray-400 shrink-0" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Rechercher un chef..."
+              className="flex-1 outline-none text-sm text-gray-700 placeholder-gray-400 bg-transparent"
+            />
+            {search && (
+              <button onClick={() => setSearch('')}>
+                <X className="w-4 h-4 text-gray-400" />
+              </button>
+            )}
+          </div>
+          {/* Ville */}
+          <select
+            value={cityFilter}
+            onChange={(e) => setCityFilter(e.target.value)}
+            className="border border-gray-200 rounded-xl px-3 py-2 text-sm font-semibold text-gray-600 bg-white focus:border-blue-500 focus:outline-none"
+          >
+            <option value="all">📍 Toutes les villes</option>
+            {cities.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Statut */}
+        <div className="flex gap-2 flex-wrap">
+          {['all', 'pending', 'confirmed', 'rejected'].map((status) => (
+            <button
+              key={status}
+              onClick={() => setStatusFilter(status)}
+              className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${
+                statusFilter === status
+                  ? 'bg-blue-600 text-white'
+                  : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              {status === 'all' && 'Tous'}
+              {status === 'pending' && '⏳ En attente'}
+              {status === 'confirmed' && '✅ Validés'}
+              {status === 'rejected' && '❌ Rejetés'}
+            </button>
+          ))}
+        </div>
+
+        {/* Type de versement (Port Dû / COD) */}
+        <div className="flex gap-2 flex-wrap">
           <button
-            key={status}
-            onClick={() => setStatusFilter(status)}
-            className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${
-              statusFilter === status
-                ? 'bg-blue-600 text-white'
-                : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
+            onClick={() => setTypeFilter('all')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
+              typeFilter === 'all'
+                ? 'bg-gray-800 text-white border-gray-800'
+                : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
             }`}
           >
-            {status === 'all' && 'Tous'}
-            {status === 'pending' && '⏳ En attente'}
-            {status === 'confirmed' && '✅ Validés'}
-            {status === 'rejected' && '❌ Rejetés'}
+            📦 Tous types
           </button>
-        ))}
+          {Object.entries(TYPE_META).map(([key, meta]) => (
+            <button
+              key={key}
+              onClick={() => setTypeFilter(key)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
+                typeFilter === key
+                  ? 'bg-gray-800 text-white border-gray-800'
+                  : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              {meta.emoji} {meta.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Type de paiement */}
+        <div className="flex gap-2 flex-wrap">
+          <button
+            onClick={() => setPaymentFilter('all')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
+              paymentFilter === 'all'
+                ? 'bg-gray-800 text-white border-gray-800'
+                : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+            }`}
+          >
+            💳 Tous paiements
+          </button>
+          {Object.entries(PAYMENT_TYPES).map(([key, meta]) => (
+            <button
+              key={key}
+              onClick={() => setPaymentFilter(key)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
+                paymentFilter === key
+                  ? 'bg-gray-800 text-white border-gray-800'
+                  : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+              }`}
+            >
+              {meta.emoji} {meta.label}
+            </button>
+          ))}
+        </div>
+
+        {/* Période */}
+        <DateFilter
+          value={datePreset}
+          onChange={setDatePreset}
+          from={dateFrom}
+          onFromChange={setDateFrom}
+          to={dateTo}
+          onToChange={setDateTo}
+        />
       </div>
 
       {/* Table */}
@@ -137,9 +311,10 @@ export default function AdminVersementsTab({
             <thead className="bg-gray-50 border-b border-gray-100">
               <tr>
                 <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Date</th>
+                <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Type</th>
                 <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">De</th>
                 <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Agence</th>
-                <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Type</th>
+                <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Mode paiement</th>
                 <th className="px-4 py-3 text-right text-xs font-bold text-gray-600 uppercase">Montant</th>
                 <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Statut</th>
                 <th className="px-4 py-3 text-center text-xs font-bold text-gray-600 uppercase">Actions</th>
@@ -148,13 +323,14 @@ export default function AdminVersementsTab({
             <tbody className="divide-y divide-gray-100">
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="px-4 py-8 text-center text-gray-400 text-sm">
+                  <td colSpan={8} className="px-4 py-8 text-center text-gray-400 text-sm">
                     Aucun versement trouvé
                   </td>
                 </tr>
               ) : (
                 filtered.map((transfer: any) => {
                   const paymentType = PAYMENT_TYPES[transfer.paymentType || 'especes']
+                  const typeMeta = TYPE_META[transferType(transfer)]
                   const date = transfer.createdAt?.toDate?.() || new Date(transfer.createdAt || 0)
                   return (
                     <tr key={transfer.id} className="hover:bg-gray-50">
@@ -163,6 +339,11 @@ export default function AdminVersementsTab({
                         <br />
                         <span className="text-xs text-gray-400">
                           {date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                        </span>
+                      </td>
+                      <td className="px-4 py-3">
+                        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold ${typeMeta.cls}`}>
+                          {typeMeta.emoji} {typeMeta.label}
                         </span>
                       </td>
                       <td className="px-4 py-3">
@@ -268,6 +449,12 @@ export default function AdminVersementsTab({
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">Agence:</span>
                 <span className="font-semibold text-gray-800">{confirmModal.city}</span>
+              </div>
+              <div className="flex justify-between text-sm items-center">
+                <span className="text-gray-600">Type:</span>
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-semibold ${TYPE_META[transferType(confirmModal)].cls}`}>
+                  {TYPE_META[transferType(confirmModal)].emoji} {TYPE_META[transferType(confirmModal)].label}
+                </span>
               </div>
               <div className="flex justify-between text-sm">
                 <span className="text-gray-600">Montant:</span>

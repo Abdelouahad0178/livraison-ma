@@ -365,57 +365,44 @@ export default function DriverPage() {
     return { activeTransport, activeDelivery, activeMissions: activeTransport + activeDelivery, pendingPortDu, activeCod }
   }, [parcels, deliveryParcels, myPortDuTxs])
 
-  // Soldes disponibles pour versement au chef d'agence :
-  // Mémorisé pour cohérence avec les autres calculs optimisés (codData, filteredParcels)
-  // Recalcule uniquement quand deliveryParcels ou myVersements changent
-  const versementBalances = useMemo(() => {
-    // Helper : montant déjà versé (pending ou confirmed)
-    const versed = (type: string) => myVersements
-      .filter((v: any) => v.type === type && ['pending', 'confirmed'].includes(v.status))
-      .reduce((s: number, v: any) => s + (parseFloat(v.amount) || 0), 0)
+  // Soldes disponibles pour versement au chef d'agence
+  // Calculé à chaque render comme l'onglet Port Dû (pas de useMemo car deliveryParcels peut ne pas changer de référence)
+  const versed = (type: string) => myVersements
+    .filter((v: any) => v.type === type && ['pending', 'confirmed'].includes(v.status))
+    .reduce((s: number, v: any) => s + (parseFloat(v.amount) || 0), 0)
 
-    // Port Dû collecté : même logique que dans l'onglet "Port Dû" qui fonctionne
-    const myPortDuParcels = deliveryParcels.filter((p: any) => p.portType === 'port_du' && p.portStatus === 'collected')
-    const portDuTotalCollected = myPortDuParcels.reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
-    const portDuReceivedByChef = myPortDuParcels
-      .filter((p: any) => p.portChefReceivedAt)
-      .reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
-    const portDuHeld = portDuTotalCollected - portDuReceivedByChef
+  // Port Dû collecté : EXACTEMENT la même logique que l'onglet "Port Dû" qui fonctionne (ligne 1991)
+  const myPortDuParcels = deliveryParcels.filter((p: any) => p.portType === 'port_du' && p.portStatus === 'collected')
+  const portDuTotalCollected = myPortDuParcels.reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
+  const portDuReceivedByChef = myPortDuParcels
+    .filter((p: any) => p.portChefReceivedAt)
+    .reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
+  const portDuHeld = portDuTotalCollected - portDuReceivedByChef
 
-    // COD collecté : colis avec COD collecté par le livreur mais pas encore reçu par le chef
-    const codHeld = deliveryParcels
-      .filter((p: any) => {
-        const hasCod = parseFloat(p.codAmount || 0) > 0
-        const isCollected = ['collected_by_driver', 'collected_at_destination', 'collected', 'remis'].includes(p.codStatus || '')
-        const notReceivedByChef = !p.codReceivedByChef
-        return hasCod && isCollected && notReceivedByChef
-      })
-      .reduce((s: number, p: any) => s + (parseFloat(p.codAmount) || 0), 0)
+  // COD collecté : colis avec COD collecté par le livreur mais pas encore reçu par le chef
+  const codHeld = deliveryParcels
+    .filter((p: any) => {
+      const hasCod = parseFloat(p.codAmount || 0) > 0
+      const isCollected = ['collected_by_driver', 'collected_at_destination', 'collected', 'remis'].includes(p.codStatus || '')
+      const notReceivedByChef = !p.codReceivedByChef
+      return hasCod && isCollected && notReceivedByChef
+    })
+    .reduce((s: number, p: any) => s + (parseFloat(p.codAmount) || 0), 0)
 
-    const balances = {
-      port_du: Math.max(0, portDuHeld - versed('port_du')),
-      cod:     Math.max(0, codHeld - versed('cod')),
-      pendingCount: myVersements.filter((v: any) => v.status === 'pending').length,
-    }
-
-    // DEBUG: Log uniquement si les données ont changé (grâce au useMemo)
-    console.log('🔍 VERSEMENT BALANCES RECALCUL:', {
-      deliveryParcelsTotal: deliveryParcels.length,
+  const versementBalances = {
+    port_du: Math.max(0, portDuHeld - versed('port_du')),
+    cod:     Math.max(0, codHeld - versed('cod')),
+    pendingCount: myVersements.filter((v: any) => v.status === 'pending').length,
+    // DEBUG: Ajouter les détails pour affichage
+    _debug: {
+      deliveryParcelsCount: deliveryParcels.length,
       myPortDuParcelsCount: myPortDuParcels.length,
-      portDuCollected: portDuTotalCollected,
+      portDuTotalCollected,
       portDuReceivedByChef,
       portDuHeld,
       versedPortDu: versed('port_du'),
-      finalPortDuBalance: balances.port_du,
-      codHeld,
-      versedCod: versed('cod'),
-      finalCodBalance: balances.cod,
-      myVersementsCount: myVersements.length,
-      timestamp: new Date().toLocaleTimeString()
-    })
-
-    return balances
-  }, [deliveryParcels, myVersements])
+    }
+  }
 
   // Section "Mes COD" : chaîne de filtres + tri + 3 reduce, mémorisée pour éviter
   // le recalcul complet à chaque render (la section vivait dans une IIFE du JSX)
@@ -3168,7 +3155,14 @@ export default function DriverPage() {
       )}
 
       {/* ── MODAL VERSEMENT AU CHEF D'AGENCE ── */}
+      {versementModalOpen && console.log('📤 DRIVER PAGE ENVOIE AU MODAL:', {
+        versementBalances,
+        deliveryParcelsLength: deliveryParcels.length,
+        myVersementsLength: myVersements.length,
+        timestamp: new Date().toLocaleTimeString()
+      })}
       <VersementChefModal
+        key={versementModalOpen ? 'open' : 'closed'}
         isOpen={versementModalOpen}
         onClose={() => setVersementModalOpen(false)}
         uid={uid}

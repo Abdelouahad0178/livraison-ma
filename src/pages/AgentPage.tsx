@@ -27,7 +27,7 @@ import {
   createCaisseEntry, deleteCaisseEntry, deleteCaisseEntries, deleteAgentCashierHistory,
   subscribeCaisseByCity, subscribeAgencyCash, adjustAgencyCash,
   directTransferAgentToCashierAtomic, createAgentCashRecoveryRequest, subscribeAgentCashRecoveryRequests,
-  subscribeDriverPortDuTransactionsByCity, confirmDriverVersement
+  subscribeDriverVersements, confirmDriverVersement
 } from '../firebase/caisse'
 import {
   remitCod, collectCod, collectCodAtSource, collectCodAtDestination,
@@ -75,9 +75,9 @@ import AgentReturnModal from './agent/modals/AgentReturnModal'
 import { printCharge, printTable, printBonRamassage } from '../utils/agentPrintUtils'
 import DateFilter from './agent/DateFilter'
 import ParcelsTab from './agent/tabs/ParcelsTab'  // ⭐ Import direct pour mise à jour temps réel
+import DirectorCaisseSimple from './director/DirectorCaisseSimple'  // ⭐ Nouveau système de caisse simple
 const HomeTab = lazy(() => import('./agent/tabs/HomeTab'))
 const NewTab = lazy(() => import('./agent/tabs/NewTab'))
-const CaisseTab = lazy(() => import('./agent/tabs/CaisseTab'))
 const CodTab = lazy(() => import('./agent/tabs/CodTab'))
 const AgentClientsTab = lazy(() => import('./agent/tabs/AgentClientsTab'))
 const ModificationsTab = lazy(() => import('./agent/tabs/ModificationsTab'))
@@ -667,7 +667,7 @@ export default function AgentPage() {
         subscribeBankDepositsByCity(profile.city, setBankDeposits, onErr('subscribeBankDepositsByCity')),
         subscribeAgencyCash(profile.city, setAgencyCash, onErr('subscribeAgencyCash')),
         subscribeAgentCashRecoveryRequests(profile.city, setCashRecoveryRequests, onErr('subscribeAgentCashRecoveryRequests')),
-        profile.role === 'chef_agence' ? subscribeDriverPortDuTransactionsByCity(profile.city, setDriverVersements, onErr('subscribeDriverVersements')) : null,
+        profile.role === 'chef_agence' ? subscribeDriverVersements(profile.city, setDriverVersements, onErr('subscribeDriverVersements')) : null,
       ].filter(Boolean)
     }
     if ((tab === 'charge' || tab === 'cod') && !started.charge && profile?.role === 'chef_agence') {
@@ -1853,9 +1853,12 @@ export default function AgentPage() {
         {tab === 'parcels' && <ParcelsTab />}
 
         {tab === 'caisse' && (
-          <Suspense fallback={null}>
-            <CaisseTab />
-          </Suspense>
+          <DirectorCaisseSimple
+            profile={profile}
+            agencyCash={agencyCash}
+            driverVersements={driverVersements}
+            adminTransfers={myAdminTransfers}
+          />
         )}
 
         {tab === 'cod' && (

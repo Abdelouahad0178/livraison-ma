@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Banknote, X, AlertTriangle } from 'lucide-react'
+import { Banknote, X, AlertTriangle, Search } from 'lucide-react'
 import { createDriverVersement } from '../../../firebase/firestore'
 import { fmt } from '../../../utils/formatNumber'
 
@@ -47,12 +47,44 @@ export default function VersementChefModal({
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  // Filtres de l'historique
+  const [histStatus, setHistStatus] = useState('all') // all | pending | confirmed | rejected
+  const [histType, setHistType] = useState('all')     // all | port_du | cod
+  const [histSearch, setHistSearch] = useState('')
 
   if (!isOpen) return null
 
   const availableSolde = parseFloat(balances?.[type] || 0) || 0
   const selectedType = VERSEMENT_TYPES.find(t => t.value === type)
-  const recentVersements = (myVersements || []).slice(0, 5)
+
+  // Totaux de l'historique (count + montant par statut)
+  const allVersements = myVersements || []
+  const histTotals = (() => {
+    const calc = (status: string) => {
+      const list = allVersements.filter((v: any) => v.status === status)
+      return { count: list.length, amount: list.reduce((s: number, v: any) => s + (parseFloat(v.amount) || 0), 0) }
+    }
+    return { pending: calc('pending'), confirmed: calc('confirmed'), rejected: calc('rejected') }
+  })()
+
+  // Historique filtré
+  const filteredHistory = allVersements
+    .filter((v: any) => {
+      if (histStatus !== 'all' && v.status !== histStatus) return false
+      if (histType !== 'all' && v.type !== histType) return false
+      if (histSearch.trim() && !(v.note || '').toLowerCase().includes(histSearch.toLowerCase())) return false
+      return true
+    })
+    .slice(0, 20)
+
+  // Vérifier s'il y a des versements en attente qui bloquent le solde
+  const pendingVersements = (myVersements || []).filter((v: any) => v.type === type && v.status === 'pending')
+  const totalPending = pendingVersements.reduce((s: number, v: any) => s + (parseFloat(v.amount) || 0), 0)
+  const hasBlockingPending = availableSolde === 0 && totalPending > 0 && balances?._debug
+
+  // Montants collectés (brut avant déduction des versements)
+  const portDuCollected = balances?._debug?.portDuHeld || 0
+  const codCollected = balances?._debug?.codHeld || 0
 
   const handleSubmit = async () => {
     const amt = parseFloat(amount)
@@ -115,25 +147,34 @@ export default function VersementChefModal({
               Type de versement
             </label>
             <div className="grid grid-cols-2 gap-2">
-              {VERSEMENT_TYPES.map(t => (
-                <button
-                  key={t.value}
-                  onClick={() => { setType(t.value); setError(''); setSuccess('') }}
-                  className={`p-3 rounded-xl border-2 transition text-center ${
-                    type === t.value
-                      ? 'border-orange-500 bg-orange-600/15'
-                      : 'border-gray-700 hover:border-gray-600'
-                  }`}
-                >
-                  <div className="text-2xl mb-1">{t.emoji}</div>
-                  <div className={`text-xs font-semibold ${type === t.value ? 'text-orange-300' : 'text-gray-300'}`}>
-                    {t.label}
-                  </div>
-                  <div className={`text-[11px] font-bold mt-1 ${type === t.value ? 'text-orange-400' : 'text-gray-500'}`}>
-                    {fmt(parseFloat(balances?.[t.value] || 0) || 0)} DH
-                  </div>
-                </button>
-              ))}
+              {VERSEMENT_TYPES.map(t => {
+                const collected = t.value === 'port_du' ? portDuCollected : codCollected
+                const available = parseFloat(balances?.[t.value] || 0) || 0
+                return (
+                  <button
+                    key={t.value}
+                    onClick={() => { setType(t.value); setError(''); setSuccess('') }}
+                    className={`p-3 rounded-xl border-2 transition text-center ${
+                      type === t.value
+                        ? 'border-orange-500 bg-orange-600/15'
+                        : 'border-gray-700 hover:border-gray-600'
+                    }`}
+                  >
+                    <div className="text-2xl mb-1">{t.emoji}</div>
+                    <div className={`text-xs font-semibold ${type === t.value ? 'text-orange-300' : 'text-gray-300'}`}>
+                      {t.label}
+                    </div>
+                    <div className={`text-[11px] font-bold mt-1 ${type === t.value ? 'text-orange-400' : 'text-gray-500'}`}>
+                      {fmt(collected)} DH
+                    </div>
+                    {collected !== available && (
+                      <div className={`text-[9px] mt-0.5 ${type === t.value ? 'text-orange-500' : 'text-gray-600'}`}>
+                        Dispo: {fmt(available)} DH
+                      </div>
+                    )}
+                  </button>
+                )
+              })}
             </div>
           </div>
 
@@ -170,6 +211,17 @@ export default function VersementChefModal({
               </span>
               <span className="text-lg font-black text-blue-200">{fmt(availableSolde)} DH</span>
             </div>
+
+            {/* Message explicatif si bloqué par versements en attente */}
+            {hasBlockingPending && (
+              <div className="mt-2 text-[11px] text-orange-300 bg-orange-900/20 p-2 rounded border border-orange-800/40">
+                <strong>ℹ️ Solde bloqué :</strong> Vous avez {fmt(totalPending)} DH en attente de validation.
+                <br />
+                Collecté : {fmt(balances._debug.portDuHeld)} DH - Versé en attente : {fmt(totalPending)} DH = 0 DH disponible.
+                <br />
+                <span className="text-orange-400">Le chef d'agence doit valider ou rejeter vos versements en attente.</span>
+              </div>
+            )}
           </div>
 
           {/* Montant */}
@@ -264,14 +316,96 @@ export default function VersementChefModal({
             </button>
           </div>
 
-          {/* Historique récent */}
-          {recentVersements.length > 0 && (
+          {/* Historique */}
+          {allVersements.length > 0 && (
             <div className="mt-5 border-t border-gray-800 pt-4">
               <p className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider mb-2">
-                Mes derniers versements
+                Mes versements
               </p>
+
+              {/* Totaux */}
+              <div className="grid grid-cols-3 gap-2 mb-3">
+                <div className="bg-gradient-to-br from-amber-600/25 to-amber-900/25 border border-amber-600/40 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-semibold text-amber-300 uppercase">⏳ Attente</p>
+                  <p className="text-sm font-black text-amber-200">{fmt(histTotals.pending.amount)} DH</p>
+                  <p className="text-[9px] text-amber-400">{histTotals.pending.count} vers.</p>
+                </div>
+                <div className="bg-gradient-to-br from-green-600/25 to-green-900/25 border border-green-600/40 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-semibold text-green-300 uppercase">✅ Validés</p>
+                  <p className="text-sm font-black text-green-200">{fmt(histTotals.confirmed.amount)} DH</p>
+                  <p className="text-[9px] text-green-400">{histTotals.confirmed.count} vers.</p>
+                </div>
+                <div className="bg-gradient-to-br from-red-600/25 to-red-900/25 border border-red-600/40 rounded-xl p-2 text-center">
+                  <p className="text-[9px] font-semibold text-red-300 uppercase">✗ Rejetés</p>
+                  <p className="text-sm font-black text-red-200">{fmt(histTotals.rejected.amount)} DH</p>
+                  <p className="text-[9px] text-red-400">{histTotals.rejected.count} vers.</p>
+                </div>
+              </div>
+
+              {/* Filtres statut */}
+              <div className="flex gap-1.5 flex-wrap mb-2">
+                {[
+                  { key: 'all',       label: 'Tous' },
+                  { key: 'pending',   label: '⏳ Attente' },
+                  { key: 'confirmed', label: '✅ Validés' },
+                  { key: 'rejected',  label: '✗ Rejetés' },
+                ].map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => setHistStatus(key)}
+                    className={`px-2.5 py-1 rounded-xl text-[10px] font-semibold border transition ${
+                      histStatus === key
+                        ? 'bg-orange-600 text-white border-orange-600'
+                        : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-gray-600'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Filtres type */}
+              <div className="flex gap-1.5 flex-wrap mb-2">
+                {[
+                  { key: 'all',     label: '📦 Tous types' },
+                  { key: 'port_du', label: '📮 Port Dû' },
+                  { key: 'cod',     label: '💰 COD' },
+                ].map(({ key, label }) => (
+                  <button
+                    key={key}
+                    onClick={() => setHistType(key)}
+                    className={`px-2.5 py-1 rounded-xl text-[10px] font-semibold border transition ${
+                      histType === key
+                        ? 'bg-blue-600 text-white border-blue-600'
+                        : 'bg-gray-800 text-gray-400 border-gray-700 hover:border-gray-600'
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {/* Recherche par note */}
+              <div className="flex items-center gap-2 bg-gray-800 border border-gray-700 rounded-xl px-3 py-2 mb-3">
+                <Search className="w-3.5 h-3.5 text-gray-500 shrink-0" />
+                <input
+                  value={histSearch}
+                  onChange={e => setHistSearch(e.target.value)}
+                  placeholder="Rechercher par note..."
+                  className="flex-1 outline-none text-xs text-white placeholder-gray-500 bg-transparent"
+                />
+                {histSearch && (
+                  <button onClick={() => setHistSearch('')}>
+                    <X className="w-3.5 h-3.5 text-gray-500" />
+                  </button>
+                )}
+              </div>
+
+              {filteredHistory.length === 0 ? (
+                <p className="text-xs text-gray-500 text-center py-4">Aucun versement trouvé</p>
+              ) : (
               <div className="space-y-2">
-                {recentVersements.map((v: any) => {
+                {filteredHistory.map((v: any) => {
                   const badge = STATUS_BADGES[v.status] || STATUS_BADGES.pending
                   const vType = VERSEMENT_TYPES.find(t => t.value === v.type)
                   const vPay  = PAYMENT_TYPES.find(t => t.value === v.paymentType)
@@ -298,6 +432,7 @@ export default function VersementChefModal({
                   )
                 })}
               </div>
+              )}
             </div>
           )}
         </div>

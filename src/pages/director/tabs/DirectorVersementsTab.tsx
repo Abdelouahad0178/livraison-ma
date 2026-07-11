@@ -7,6 +7,9 @@ import {
 } from '../../../firebase/firestore'
 import { fmt } from '../../../utils/formatNumber'
 import { Banknote, CheckCircle2, X, Clock, Search, AlertTriangle } from 'lucide-react'
+import DateFilter from '../../agent/DateFilter'
+import { filterByDate } from '../../../utils/dateFilter'
+import type { DateFilterPreset } from '../../../types'
 
 const TYPE_META: Record<string, { label: string, emoji: string, cls: string }> = {
   port_du: { label: 'Port Dû', emoji: '📮', cls: 'bg-orange-100 text-orange-700' },
@@ -40,12 +43,17 @@ const fmtDate = (ts: any) => {
  * - Valider (crédite la caisse agence) ou Rejeter (avec motif, recrédite le livreur)
  *
  * Peut être utilisé en mode autonome (souscription interne) ou intégré :
- * si la prop `versements` est fournie (ex: depuis DirectorCaisseTab), la
+ * si la prop `versements` est fournie (ex: depuis DirectorCaisseSimple), la
  * souscription interne est désactivée et les données du parent sont utilisées.
  */
 export default function DirectorVersementsTab({ profile, versements: versementsProp }: any) {
   const [ownVersements, setOwnVersements] = useState<any[]>([])
   const [statusFilter, setStatusFilter] = useState('pending')
+  const [typeFilter, setTypeFilter] = useState('all')       // all | port_du | cod
+  const [paymentFilter, setPaymentFilter] = useState('all') // all | especes | cheque | virement
+  const [datePreset, setDatePreset] = useState<DateFilterPreset>('all')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
   const [search, setSearch] = useState('')
   const [busyId, setBusyId] = useState<any>(null)
   const [actionError, setActionError] = useState('')
@@ -63,30 +71,43 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
     return () => unsub()
   }, [city, isExternal])
 
-  const stats = useMemo(() => {
-    const sum = (list: any[]) => list.reduce((s, v) => s + (parseFloat(v.amount) || 0), 0)
-    const pending   = versements.filter(v => v.status === 'pending')
-    const confirmed = versements.filter(v => v.status === 'confirmed')
-    const rejected  = versements.filter(v => v.status === 'rejected')
-    return {
-      pendingDH: sum(pending),     pendingCount: pending.length,
-      confirmedDH: sum(confirmed), confirmedCount: confirmed.length,
-      rejectedDH: sum(rejected),   rejectedCount: rejected.length,
-    }
-  }, [versements])
-
-  const filtered = useMemo(() => {
+  // Base filtrée (type + paiement + période + recherche) — les stats reflètent ces filtres
+  const baseFiltered = useMemo(() => {
     let list = versements
-    if (statusFilter !== 'all') list = list.filter(v => v.status === statusFilter)
+    if (typeFilter !== 'all') list = list.filter((v: any) => v.type === typeFilter)
+    if (paymentFilter !== 'all') list = list.filter((v: any) => v.paymentType === paymentFilter)
     if (search.trim()) {
       const q = search.toLowerCase()
-      list = list.filter(v =>
+      list = list.filter((v: any) =>
         (v.driverName || '').toLowerCase().includes(q) ||
         (v.note || '').toLowerCase().includes(q)
       )
     }
+    return filterByDate(list, datePreset, dateFrom, dateTo, versementDate)
+  }, [versements, typeFilter, paymentFilter, search, datePreset, dateFrom, dateTo])
+
+  const stats = useMemo(() => {
+    const sum = (list: any[]) => list.reduce((s, v) => s + (parseFloat(v.amount) || 0), 0)
+    const pending   = baseFiltered.filter((v: any) => v.status === 'pending')
+    const confirmed = baseFiltered.filter((v: any) => v.status === 'confirmed')
+    const rejected  = baseFiltered.filter((v: any) => v.status === 'rejected')
+    const byType = (list: any[]) => ({
+      portDu: sum(list.filter((v: any) => v.type === 'port_du')),
+      cod:    sum(list.filter((v: any) => v.type === 'cod')),
+    })
+    return {
+      pendingDH: sum(pending),     pendingCount: pending.length,     pendingByType: byType(pending),
+      confirmedDH: sum(confirmed), confirmedCount: confirmed.length, confirmedByType: byType(confirmed),
+      rejectedDH: sum(rejected),   rejectedCount: rejected.length,   rejectedByType: byType(rejected),
+      totalDH: sum(baseFiltered),  totalCount: baseFiltered.length,  totalByType: byType(baseFiltered),
+    }
+  }, [baseFiltered])
+
+  const filtered = useMemo(() => {
+    let list = baseFiltered
+    if (statusFilter !== 'all') list = list.filter((v: any) => v.status === statusFilter)
     return [...list].sort((a, b) => versementDate(b).getTime() - versementDate(a).getTime())
-  }, [versements, statusFilter, search])
+  }, [baseFiltered, statusFilter])
 
   const handleConfirm = async (v: any) => {
     const typeLabel = TYPE_META[v.type]?.label || v.type
@@ -145,76 +166,163 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
   return (
     <div className="mt-4 space-y-4">
       {/* Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="bg-white rounded-2xl border border-amber-100 shadow-sm p-4 flex items-center gap-3">
-          <div className="w-11 h-11 bg-amber-100 rounded-xl flex items-center justify-center">
-            <Clock className="w-5 h-5 text-amber-600" />
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="bg-gradient-to-br from-amber-50 to-amber-100 rounded-2xl border border-amber-200 shadow-sm p-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 bg-amber-500 rounded-xl flex items-center justify-center shrink-0">
+              <Clock className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <p className="text-xs text-amber-600 font-semibold">En attente</p>
+              <p className="text-xl font-black text-amber-700">{fmt(stats.pendingDH)} DH</p>
+              <p className="text-[11px] text-amber-500">{stats.pendingCount} versement(s)</p>
+            </div>
           </div>
-          <div>
-            <p className="text-xs text-gray-400 font-medium">En attente</p>
-            <p className="text-xl font-black text-amber-600">{fmt(stats.pendingDH)} DH</p>
-            <p className="text-[11px] text-gray-400">{stats.pendingCount} versement(s)</p>
-          </div>
+          <p className="text-[10px] text-amber-600 mt-2 pt-2 border-t border-amber-200/70 font-medium">
+            📮 Port Dû: {fmt(stats.pendingByType.portDu)} DH · 💰 COD: {fmt(stats.pendingByType.cod)} DH
+          </p>
         </div>
-        <div className="bg-white rounded-2xl border border-green-100 shadow-sm p-4 flex items-center gap-3">
-          <div className="w-11 h-11 bg-green-100 rounded-xl flex items-center justify-center">
-            <CheckCircle2 className="w-5 h-5 text-green-600" />
+        <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-2xl border border-green-200 shadow-sm p-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 bg-green-500 rounded-xl flex items-center justify-center shrink-0">
+              <CheckCircle2 className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <p className="text-xs text-green-600 font-semibold">Validés</p>
+              <p className="text-xl font-black text-green-700">{fmt(stats.confirmedDH)} DH</p>
+              <p className="text-[11px] text-green-500">{stats.confirmedCount} versement(s)</p>
+            </div>
           </div>
-          <div>
-            <p className="text-xs text-gray-400 font-medium">Validés</p>
-            <p className="text-xl font-black text-green-600">{fmt(stats.confirmedDH)} DH</p>
-            <p className="text-[11px] text-gray-400">{stats.confirmedCount} versement(s)</p>
-          </div>
+          <p className="text-[10px] text-green-600 mt-2 pt-2 border-t border-green-200/70 font-medium">
+            📮 Port Dû: {fmt(stats.confirmedByType.portDu)} DH · 💰 COD: {fmt(stats.confirmedByType.cod)} DH
+          </p>
         </div>
-        <div className="bg-white rounded-2xl border border-red-100 shadow-sm p-4 flex items-center gap-3">
-          <div className="w-11 h-11 bg-red-100 rounded-xl flex items-center justify-center">
-            <X className="w-5 h-5 text-red-600" />
+        <div className="bg-gradient-to-br from-red-50 to-red-100 rounded-2xl border border-red-200 shadow-sm p-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 bg-red-500 rounded-xl flex items-center justify-center shrink-0">
+              <X className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <p className="text-xs text-red-600 font-semibold">Rejetés</p>
+              <p className="text-xl font-black text-red-700">{fmt(stats.rejectedDH)} DH</p>
+              <p className="text-[11px] text-red-500">{stats.rejectedCount} versement(s)</p>
+            </div>
           </div>
-          <div>
-            <p className="text-xs text-gray-400 font-medium">Rejetés</p>
-            <p className="text-xl font-black text-red-600">{fmt(stats.rejectedDH)} DH</p>
-            <p className="text-[11px] text-gray-400">{stats.rejectedCount} versement(s)</p>
+          <p className="text-[10px] text-red-600 mt-2 pt-2 border-t border-red-200/70 font-medium">
+            📮 Port Dû: {fmt(stats.rejectedByType.portDu)} DH · 💰 COD: {fmt(stats.rejectedByType.cod)} DH
+          </p>
+        </div>
+        <div className="bg-gradient-to-br from-purple-50 to-purple-100 rounded-2xl border border-purple-200 shadow-sm p-4">
+          <div className="flex items-center gap-3">
+            <div className="w-11 h-11 bg-purple-500 rounded-xl flex items-center justify-center shrink-0">
+              <Banknote className="w-5 h-5 text-white" />
+            </div>
+            <div>
+              <p className="text-xs text-purple-600 font-semibold">Total général</p>
+              <p className="text-xl font-black text-purple-700">{fmt(stats.totalDH)} DH</p>
+              <p className="text-[11px] text-purple-500">{stats.totalCount} versement(s)</p>
+            </div>
           </div>
+          <p className="text-[10px] text-purple-600 mt-2 pt-2 border-t border-purple-200/70 font-medium">
+            📮 Port Dû: {fmt(stats.totalByType.portDu)} DH · 💰 COD: {fmt(stats.totalByType.cod)} DH
+          </p>
         </div>
       </div>
 
       {/* Filtres */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2 flex-1 min-w-[200px] bg-gray-50 border border-gray-200 rounded-xl px-3 py-2">
-          <Search className="w-4 h-4 text-gray-400 shrink-0" />
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Rechercher un livreur..."
-            className="flex-1 outline-none text-sm text-gray-700 placeholder-gray-400 bg-transparent"
-          />
-          {search && <button onClick={() => setSearch('')}><X className="w-4 h-4 text-gray-400" /></button>}
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex items-center gap-2 flex-1 min-w-[200px] bg-gray-50 border border-gray-200 rounded-xl px-3 py-2">
+            <Search className="w-4 h-4 text-gray-400 shrink-0" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Rechercher un livreur..."
+              className="flex-1 outline-none text-sm text-gray-700 placeholder-gray-400 bg-transparent"
+            />
+            {search && <button onClick={() => setSearch('')}><X className="w-4 h-4 text-gray-400" /></button>}
+          </div>
+          <div className="flex gap-1.5 flex-wrap">
+            {[
+              { key: 'pending',   label: '⏳ En attente' },
+              { key: 'confirmed', label: '✅ Validés' },
+              { key: 'rejected',  label: '✗ Rejetés' },
+              { key: 'all',       label: 'Tous' },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setStatusFilter(key)}
+                className={`px-3 py-2 rounded-xl text-xs font-semibold border transition ${
+                  statusFilter === key
+                    ? 'bg-purple-600 text-white border-purple-600'
+                    : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                {label}
+                {key === 'pending' && stats.pendingCount > 0 && (
+                  <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${statusFilter === key ? 'bg-white/25' : 'bg-amber-500 text-white'}`}>
+                    {stats.pendingCount}
+                  </span>
+                )}
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="flex gap-1.5 flex-wrap">
-          {[
-            { key: 'pending',   label: '⏳ En attente' },
-            { key: 'confirmed', label: '✅ Validés' },
-            { key: 'rejected',  label: '✗ Rejetés' },
-            { key: 'all',       label: 'Tous' },
-          ].map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => setStatusFilter(key)}
-              className={`px-3 py-2 rounded-xl text-xs font-semibold border transition ${
-                statusFilter === key
-                  ? 'bg-purple-600 text-white border-purple-600'
-                  : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
-              }`}
-            >
-              {label}
-              {key === 'pending' && stats.pendingCount > 0 && (
-                <span className={`ml-1.5 text-[10px] px-1.5 py-0.5 rounded-full ${statusFilter === key ? 'bg-white/25' : 'bg-amber-500 text-white'}`}>
-                  {stats.pendingCount}
-                </span>
-              )}
-            </button>
-          ))}
+
+        {/* Type de versement + mode de paiement */}
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+          <div className="flex gap-1.5 flex-wrap">
+            {[
+              { key: 'all',     label: '📦 Tous types' },
+              { key: 'port_du', label: '📮 Port Dû' },
+              { key: 'cod',     label: '💰 COD' },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setTypeFilter(key)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
+                  typeFilter === key
+                    ? 'bg-orange-500 text-white border-orange-500'
+                    : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <div className="w-px h-5 bg-gray-200 hidden sm:block" />
+          <div className="flex gap-1.5 flex-wrap">
+            {[
+              { key: 'all',      label: '💳 Tous paiements' },
+              { key: 'especes',  label: '💵 Espèces' },
+              { key: 'cheque',   label: '📋 Chèque' },
+              { key: 'virement', label: '🏦 Virement' },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setPaymentFilter(key)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
+                  paymentFilter === key
+                    ? 'bg-gray-800 text-white border-gray-800'
+                    : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
         </div>
+
+        {/* Période */}
+        <DateFilter
+          value={datePreset}
+          onChange={setDatePreset}
+          from={dateFrom}
+          onFromChange={setDateFrom}
+          to={dateTo}
+          onToChange={setDateTo}
+          tone="amber"
+        />
       </div>
 
       {actionError && (

@@ -3,6 +3,11 @@ import { Banknote, X, AlertTriangle } from 'lucide-react'
 import { createAdminTransferFromChefAgence } from '../../../firebase/firestore'
 import { fmt } from '../../../utils/formatNumber'
 
+const VERSEMENT_TYPES = [
+  { value: 'port_du', label: 'Port Dû', emoji: '📮' },
+  { value: 'cod',     label: 'COD',     emoji: '💰' },
+]
+
 const PAYMENT_TYPES = [
   { value: 'especes', label: 'Espèces', emoji: '💵', color: 'green' },
   { value: 'cheque', label: 'Chèque', emoji: '📝', color: 'blue' },
@@ -13,8 +18,10 @@ export default function VersementAdminModal({
   isOpen,
   onClose,
   user,
-  agencyCash
+  agencyCash,
+  typeBalances, // optionnel : { port_du: number, cod: number } — soldes disponibles par type
 }: any) {
+  const [type, setType] = useState('port_du')
   const [amount, setAmount] = useState('')
   const [paymentType, setPaymentType] = useState('especes')
   const [note, setNote] = useState('')
@@ -26,6 +33,16 @@ export default function VersementAdminModal({
     if (!amt || amt <= 0) {
       setError('Montant invalide')
       return
+    }
+
+    // Vérifier le solde disponible par type de versement (Port Dû / COD)
+    if (typeBalances) {
+      const availableForType = parseFloat(typeBalances[type]) || 0
+      if (amt > availableForType) {
+        const meta = VERSEMENT_TYPES.find(t => t.value === type)
+        setError(`Solde ${meta?.label} insuffisant (disponible : ${fmt(availableForType)} DH)`)
+        return
+      }
     }
 
     // Vérifier le solde disponible selon le type
@@ -43,6 +60,7 @@ export default function VersementAdminModal({
         city: user.city,
         amount: amt,
         paymentType,
+        type,
         note: note.trim(),
         fromId: user.uid,
         fromName: user.displayName || user.name || 'Chef Agence',
@@ -52,6 +70,7 @@ export default function VersementAdminModal({
       setAmount('')
       setNote('')
       setPaymentType('especes')
+      setType('port_du')
       onClose()
     } catch (err: any) {
       console.error('Versement error:', err)
@@ -87,6 +106,43 @@ export default function VersementAdminModal({
             >
               <X className="w-5 h-5 text-gray-500" />
             </button>
+          </div>
+
+          {/* Type de versement (Port Dû / COD) */}
+          <div className="mb-4">
+            <label className="block text-xs font-semibold text-gray-700 mb-2 uppercase tracking-wider">
+              Type de versement
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              {VERSEMENT_TYPES.map((t) => {
+                const available = typeBalances ? (parseFloat(typeBalances[t.value]) || 0) : null
+                return (
+                  <button
+                    key={t.value}
+                    onClick={() => { setType(t.value); setError('') }}
+                    className={`p-3 rounded-xl border-2 transition text-center ${
+                      type === t.value
+                        ? 'border-orange-500 bg-orange-50'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <div className="text-2xl mb-1">{t.emoji}</div>
+                    <div className={`text-xs font-semibold ${
+                      type === t.value ? 'text-orange-700' : 'text-gray-600'
+                    }`}>
+                      {t.label}
+                    </div>
+                    {available !== null && (
+                      <div className={`text-[11px] font-bold mt-1 ${
+                        type === t.value ? 'text-orange-600' : 'text-gray-400'
+                      }`}>
+                        Dispo: {fmt(available)} DH
+                      </div>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
           </div>
 
           {/* Type de paiement */}

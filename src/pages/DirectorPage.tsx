@@ -9,8 +9,8 @@ import {
   subscribeAllCaisse, createCaisseCloture, subscribeAllCaisseClotures,
   subscribeAllCaissierRemarks, REMARK_TYPES, resolveRemark, deleteRemark,
   subscribeAgencyCash,
-  subscribeDriverVersements, confirmDriverVersementChef, rejectDriverVersementChef,
-  subscribeAdminTransfers,
+  subscribeDriverVersements,
+  subscribeAdminTransfersByCity,
 } from '../firebase/firestore'
 import {
   subscribeAllClientMessages, resolveClientMessage, addClientMessageReply,
@@ -33,7 +33,7 @@ import CompanyContact from '../components/CompanyContact'
 import LiveClock from '../components/LiveClock'
 import VersementAdminModal from './director/components/VersementAdminModal'
 import DirectorVersementsTab from './director/tabs/DirectorVersementsTab'
-import DirectorCaisseTab from './director/tabs/DirectorCaisseTab'
+import DirectorCaisseSimple from './director/DirectorCaisseSimple'
 import { fmt } from '../utils/formatNumber'
 
 const parcelDate = (p: any) => {
@@ -204,19 +204,6 @@ export default function DirectorPage() {
     const unsubClotures = subscribeAllCaisseClotures(setCaisseClotures)
     const unsubRemarks  = subscribeAllCaissierRemarks(setAllRemarks)
     const unsubClientMessages = subscribeAllClientMessages(setClientMessages)
-    const unsubDriverVersements = user?.city ? subscribeDriverVersements(user.city, setDriverVersements) : () => {}
-    const unsubAdminTransfers = user?.city ? subscribeAdminTransfers(setAdminTransfers) : () => {}
-
-    // Subscribe to agency cash for versement
-    let unsubAgencyCash: any = null
-    if (auth.currentUser) {
-      const userDoc = onSnapshot(doc(db, 'users', auth.currentUser.uid), (snap) => {
-        const userData = snap.data()
-        if (userData?.city) {
-          unsubAgencyCash = subscribeAgencyCash(userData.city, setAgencyCash)
-        }
-      })
-    }
 
     return () => {
       unsubUsers()
@@ -224,11 +211,22 @@ export default function DirectorPage() {
       unsubClotures()
       unsubRemarks()
       unsubClientMessages()
-      unsubDriverVersements()
-      unsubAdminTransfers()
-      if (unsubAgencyCash) unsubAgencyCash()
     }
   }, [])
+
+  // Caisse chef d'agence : versements livreurs + transferts admin + caisse agence
+  useEffect(() => {
+    const city = profile?.city
+    if (!city) return
+    const unsubDriverVersements = subscribeDriverVersements(city, setDriverVersements)
+    const unsubAdminTransfers   = subscribeAdminTransfersByCity(city, setAdminTransfers)
+    const unsubAgencyCash       = subscribeAgencyCash(city, setAgencyCash)
+    return () => {
+      unsubDriverVersements()
+      unsubAdminTransfers()
+      unsubAgencyCash()
+    }
+  }, [profile?.city])
 
   useEffect(() => {
     clientMessages.slice(0, 20).forEach(m => {
@@ -1457,22 +1455,11 @@ export default function DirectorPage() {
 
         {/* ══════════════ TAB: CAISSE ══════════════ */}
         {mainTab === 'caisse' && hasPermission('caisse') && (
-          <DirectorCaisseTab
-            user={user}
-            auth={auth}
+          <DirectorCaisseSimple
             profile={profile}
-            caisseEntries={caisseEntries}
-            caisseClotures={caisseClotures}
             agencyCash={agencyCash}
             driverVersements={driverVersements}
             adminTransfers={adminTransfers}
-            confirmDriverVersementChef={confirmDriverVersementChef}
-            rejectDriverVersementChef={rejectDriverVersementChef}
-            datePreset={datePreset}
-            dateFrom={dateFrom}
-            dateTo={dateTo}
-            parcels={parcels}
-            drivers={users.filter((u: any) => u.role === 'livreur')}
           />
         )}
         {/* ══════════════ TAB: DOSSIERS RH ══════════════ */}
@@ -1605,7 +1592,7 @@ export default function DirectorPage() {
         <VersementAdminModal
           isOpen={versementModal}
           onClose={() => setVersementModal(false)}
-          user={profile || auth.currentUser}
+          user={{ ...(profile || {}), uid: auth.currentUser?.uid }}
           agencyCash={agencyCash}
         />
     </div>
