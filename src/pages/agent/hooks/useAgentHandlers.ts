@@ -1198,25 +1198,19 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 </head>
 <body>
   <div style="border:1px solid #d1d5db;max-width:148mm;margin:0 auto">
-    <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #d1d5db;padding:6px 10px">
+    <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #d1d5db;padding:8px 10px">
       <img src="${logoUrl}" style="height:36px;object-fit:contain" onerror="this.style.display='none'">
-      <div style="text-align:right">
-        <div style="font-size:8pt;color:#6b7280">Bon de Ramassage</div>
-        ${parcel.sender?.nic ? `<div style="font-weight:bold;color:#2563eb;font-size:9pt;font-family:monospace;letter-spacing:1px">N EXP : ${parcel.sender.nic}</div>` : ''}
-        <div style="font-weight:bold;color:#1d4ed8;font-size:11pt;letter-spacing:1px;font-family:monospace">${parcel.trackingId}</div>
-        <div style="font-size:8pt;color:#9ca3af">${printDate}</div>
+      <div style="text-align:center;flex:1">
+        ${parcel.sender?.nic ? `<div style="font-weight:bold;color:#000;font-size:16pt;font-family:monospace;letter-spacing:1px">N EXP : ${parcel.sender.nic}</div>` : ''}
+        <div style="font-weight:normal;color:#6b7280;font-size:7pt;letter-spacing:0.5px;font-family:monospace;margin-top:2px">${parcel.trackingId}</div>
       </div>
+      <div style="text-align:right;font-size:8pt;color:#374151;font-weight:500">${printDate}</div>
     </div>
-    <div style="display:flex;gap:16px;padding:5px 10px;border-bottom:1px solid #e5e7eb;background:#f9fafb">${checks}</div>
     <table style="border-bottom:1px solid #d1d5db">
       <tr>
         <td style="width:50%;border-right:1px solid #d1d5db">
           <div style="font-weight:bold;font-size:8pt;text-transform:uppercase;color:#1d4ed8;margin-bottom:4px">Expéditeur</div>
           <div><span style="color:#6b7280">Nom : </span><strong>${parcel.sender?.name || '—'}</strong></div>
-          <div style="display:inline-flex;align-items:center;gap:4px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:4px;padding:2px 6px;margin:2px 0">
-            <span style="font-size:8pt;font-weight:bold;color:#2563eb;text-transform:uppercase;letter-spacing:0.5px">N EXP :</span>
-            <span style="font-weight:bold;color:#1e3a8a;font-family:monospace;font-size:10pt">${parcel.sender?.nic || '—'}</span>
-          </div>
           ${parcel.sender?.address ? `<div><span style="color:#6b7280">Adresse : </span>${parcel.sender.address}</div>` : ''}
           <div><span style="color:#6b7280">Ville : </span><strong>${parcel.sender?.city || '—'}</strong></div>
           <div><span style="color:#6b7280">Tél : </span>${parcel.sender?.tel || '—'}</div>
@@ -1242,6 +1236,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         </td>
       </tr>
     </table>
+    <div style="display:flex;gap:16px;padding:5px 10px;border-bottom:1px solid #e5e7eb;background:#f9fafb">${checks}</div>
     <table style="border-bottom:1px solid #d1d5db;text-align:center">
       <tr>
         <td style="width:33%;border-right:1px solid #e5e7eb">
