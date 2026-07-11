@@ -1161,7 +1161,7 @@ export async function searchParcels(
     if (!term || term.trim().length === 0) return []
 
     const searchTerm = term.trim()
-    const searchLimit = options.limit || 100
+    const searchLimit = options.limit || 10000
     const startTime = performance.now()
 
     // 1️⃣ Détection du type de recherche

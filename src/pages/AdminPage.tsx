@@ -516,7 +516,7 @@ export default function AdminPage() {
     let cancelled = false
     setIsSearching(true)
 
-    searchParcels(debouncedSearch.trim(), { limit: 500 })
+    searchParcels(debouncedSearch.trim(), { limit: 10000 })
       .then(results => {
         if (!cancelled) {
           console.log(`✅ Recherche serveur: ${results.length} résultats pour "${debouncedSearch}"`)
