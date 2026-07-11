@@ -525,9 +525,9 @@ export default function AdminPage() {
     setLoading(true)
 
     // 📊 Chargement avec limites optimisées
-    // - Recherche active : 10000 colis max (pour trouver même les colis anciens)
+    // - Recherche active : 2000 colis max (équilibre rapidité/exhaustivité)
     // - Par défaut : 500 colis (chargement rapide de la page)
-    const loadLimit = isSearchActive ? 10000 : 500
+    const loadLimit = isSearchActive ? 2000 : 500
 
     console.log(`📦 Chargement ${loadLimit} colis (recherche active: ${isSearchActive ? 'OUI' : 'NON'})`)
 
