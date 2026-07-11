@@ -1129,9 +1129,9 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 
   const handlePrintCharge = (groups: any, profileData: any) => printCharge(groups, profileData)
 
-  const handlePrintTable = async (parcelsArg: any, driverName?: string) => {
+  const handlePrintTable = async (parcelsArg: any, driverName?: string, visibleColumns?: any, orientation?: 'portrait' | 'landscape') => {
     try {
-      await printTable(parcelsArg, driverName, s.current.profile)
+      await printTable(parcelsArg, driverName, s.current.profile, visibleColumns, orientation)
     } catch (err) {
       console.error('Erreur impression tableau:', err)
       alert('Erreur lors de l\'impression du tableau')

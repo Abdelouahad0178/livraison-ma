@@ -102,8 +102,21 @@ export function printCharge(groups: any[], profileData: any): void {
   }
 }
 
-export async function printTable(parcels: any[], driverName?: string, profile?: any): Promise<void> {
+export async function printTable(
+  parcels: any[],
+  driverName?: string,
+  profile?: any,
+  visibleColumns?: any,
+  orientation: 'portrait' | 'landscape' = 'portrait'
+): Promise<void> {
   if (!parcels.length) return
+
+  // Colonnes visibles par défaut si non spécifiées
+  const cols = visibleColumns || {
+    nexp: true, date: true, statut: true, expediteur: true, telExp: true, villeExp: true,
+    destinataire: true, telDest: true, villeDest: true, adresse: true, service: true,
+    nbColis: true, poids: true, port: true, typePort: true, cod: true, livreur: true
+  }
 
   // Charger les signatures depuis Firestore
   const sigMap = {}
@@ -153,37 +166,52 @@ export async function printTable(parcels: any[], driverName?: string, profile?: 
     const rowBg     = i % 2 === 0 ? '#ffffff' : '#f0f7ff'
     const sigUrl    = (sigMap as any)[p.id]
 
-    // Générer les checkboxes de service
-    const servicesHTML = Object.keys(SERVICE_LABEL).map(key => {
-      const checked = p.serviceType === key ? '☑' : '☐'
-      return `${checked} ${(SERVICE_LABEL as any)[key]}`
-    }).join(' &nbsp;&nbsp; ')
+    // Construire les cellules selon les colonnes visibles
+    const cells = []
+    if (cols.nexp) cells.push(`<td style="font-family:monospace;font-weight:bold;color:#1d4ed8;font-size:7.5pt">${p.sender?.nic || '—'}</td>`)
+    if (cols.date) cells.push(`<td style="font-size:7pt">${dateStr}</td>`)
+    if (cols.statut) cells.push(`<td><span style="background:${st.bg};color:${st.col};padding:2px 4px;border-radius:4px;font-size:6.5pt;font-weight:bold;white-space:nowrap">${p.status || '—'}</span></td>`)
+    if (cols.expediteur) cells.push(`<td style="font-weight:bold;font-size:7.5pt">${p.sender?.name || '—'}</td>`)
+    if (cols.telExp) cells.push(`<td style="font-size:6.5pt">${p.sender?.tel || '—'}</td>`)
+    if (cols.villeExp) cells.push(`<td style="font-size:7pt">${p.sender?.city || '—'}</td>`)
+    if (cols.destinataire) cells.push(`<td style="font-weight:bold;font-size:7.5pt">${p.receiver?.name || '—'}</td>`)
+    if (cols.telDest) cells.push(`<td style="font-size:6.5pt">${p.receiver?.tel || '—'}</td>`)
+    if (cols.villeDest) cells.push(`<td style="font-size:7pt">${p.receiver?.city || p.destinationCity || '—'}</td>`)
+    if (cols.adresse) cells.push(`<td style="font-size:6.5pt;max-width:80px;overflow:hidden;text-overflow:ellipsis">${p.enGare ? '🚉 En gare' : (p.receiver?.address || '—')}</td>`)
+    if (cols.service) cells.push(`<td style="font-size:6.5pt">${svcLabel}</td>`)
+    if (cols.nbColis) cells.push(`<td style="text-align:center;font-size:7pt">${p.nbColis || 1}</td>`)
+    if (cols.poids) cells.push(`<td style="text-align:center;font-size:7pt">${p.weight ? p.weight + ' kg' : '—'}</td>`)
+    if (cols.port) cells.push(`<td style="text-align:right;font-weight:bold;font-size:7pt">${p.price ? p.price + ' DH' : '—'}</td>`)
+    if (cols.typePort) cells.push(`<td style="text-align:center;font-size:6.5pt">${portLabel}</td>`)
+    if (cols.cod) cells.push(`<td style="text-align:right;font-weight:bold;color:#ea580c;font-size:7pt">${p.codAmount > 0 ? p.codAmount + ' DH' : '—'}</td>`)
+    if (cols.livreur) cells.push(`<td style="font-size:6.5pt">${p.deliveryDriverName || '—'}</td>`)
 
-    return `
-      <tr style="background:${rowBg}">
-        <td colspan="14" style="padding:8px 8px 0 8px;border-bottom:none">
-          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-            <div style="font-weight:bold;color:#000;font-size:9pt">N EXP : ${p.sender?.nic || '—'}</div>
-            <div style="text-align:center;color:#000;font-size:8pt">${dateStr}</div>
-            <div></div>
-          </div>
-          <div style="font-size:7.5pt;margin-bottom:4px">${servicesHTML}</div>
-        </td>
-      </tr>
-      <tr style="background:${rowBg}">
-        <td style="font-family:monospace;font-weight:bold;color:#1d4ed8">${p.trackingId || '—'}</td>
-        <td><div style="font-weight:bold">${p.sender?.name || '—'}</div><div style="color:#6b7280;font-size:7.5pt">${p.sender?.tel || ''} ${p.sender?.city ? '· ' + p.sender.city : ''}</div></td>
-        <td><div style="font-weight:bold">${p.receiver?.name || '—'}</div><div style="color:#6b7280;font-size:7.5pt">${p.receiver?.tel || ''} ${p.receiver?.city ? '· ' + p.receiver.city : ''}</div></td>
-        <td style="text-align:center">${p.nbColis || 1}</td>
-        <td style="text-align:center">${p.weight ? p.weight + ' kg' : '—'}</td>
-        <td style="max-width:90px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${p.natureOfGoods || '—'}</td>
-        <td style="text-align:right;font-weight:bold;color:#ea580c">${p.codAmount > 0 ? p.codAmount + ' DH' : '—'}</td>
-        <td style="text-align:right;font-weight:bold">${p.price ? p.price + ' DH' : '—'}</td>
-        <td style="text-align:center">${portLabel}</td>
-        <td style="text-align:center"><span style="background:${st.bg};color:${st.col};padding:2px 6px;border-radius:10px;font-size:7.5pt;font-weight:bold;white-space:nowrap">${p.status || '—'}</span></td>
-        <td style="text-align:center;width:95px;min-height:36px;vertical-align:middle">${sigUrl ? `<img src="${sigUrl}" style="max-width:88px;max-height:32px;object-fit:contain;display:block;margin:auto;" />` : ''}</td>
-      </tr>`
+    return `<tr style="background:${rowBg}">${cells.join('')}</tr>`
   }).join('')
+
+  // Générer les en-têtes selon les colonnes visibles
+  const headers = []
+  if (cols.nexp) headers.push('<th>N° EXP</th>')
+  if (cols.date) headers.push('<th>Date</th>')
+  if (cols.statut) headers.push('<th>Statut</th>')
+  if (cols.expediteur) headers.push('<th>Expéditeur</th>')
+  if (cols.telExp) headers.push('<th>Tél Exp.</th>')
+  if (cols.villeExp) headers.push('<th>Ville Exp.</th>')
+  if (cols.destinataire) headers.push('<th>Destinataire</th>')
+  if (cols.telDest) headers.push('<th>Tél Dest.</th>')
+  if (cols.villeDest) headers.push('<th>Ville Dest.</th>')
+  if (cols.adresse) headers.push('<th>Adresse</th>')
+  if (cols.service) headers.push('<th>Service</th>')
+  if (cols.nbColis) headers.push('<th>Nb</th>')
+  if (cols.poids) headers.push('<th>Poids</th>')
+  if (cols.port) headers.push('<th>Port (DH)</th>')
+  if (cols.typePort) headers.push('<th>Type Port</th>')
+  if (cols.cod) headers.push('<th>COD (DH)</th>')
+  if (cols.livreur) headers.push('<th>Livreur</th>')
+
+  const colCount = headers.length
+  const pageSize = orientation === 'portrait' ? 'A4 portrait' : 'A4 landscape'
+  const fontSize = orientation === 'portrait' ? '6.5pt' : '7.5pt'
 
   const html = `<!DOCTYPE html>
 <html lang="fr">
@@ -191,18 +219,18 @@ export async function printTable(parcels: any[], driverName?: string, profile?: 
   <meta charset="UTF-8" />
   <title>Tableau des expéditions</title>
   <style>
-    @page { size: A4 landscape; margin: 10mm 8mm; }
+    @page { size: ${pageSize}; margin: 8mm; }
     * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
-    body { font-family: Arial, sans-serif; font-size: 8pt; color: #111; margin: 0; padding: 0; }
-    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 6px; border-bottom: 2px solid #1e40af; padding-bottom: 6px; }
-    .logo-text { font-size: 18pt; font-weight: 900; color: #1e40af; letter-spacing: 2px; }
-    .logo-sub  { font-size: 8pt; color: #6b7280; }
-    .meta      { text-align: right; font-size: 8pt; color: #374151; min-width: 280px; padding-right: 8px; }
-    .meta div  { margin-bottom: 2px; white-space: nowrap; }
+    body { font-family: Arial, sans-serif; font-size: ${fontSize}; color: #111; margin: 0; padding: 0; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 4px; border-bottom: 2px solid #1e40af; padding-bottom: 4px; }
+    .logo-text { font-size: 14pt; font-weight: 900; color: #1e40af; letter-spacing: 1px; }
+    .logo-sub  { font-size: 7pt; color: #6b7280; }
+    .meta      { text-align: right; font-size: 6.5pt; color: #374151; }
+    .meta div  { margin-bottom: 1px; white-space: nowrap; }
     .meta strong { color: #1e40af; font-weight: 700; }
-    table { border-collapse: collapse; width: 100%; margin-top: 4px; }
-    th { border: 1px solid #1e40af; padding: 4px 5px; background: #1e40af; color: #fff; font-size: 7.5pt; white-space: nowrap; text-align: center; }
-    td { border: 1px solid #d1d5db; padding: 3px 5px; font-size: 7.5pt; vertical-align: middle; }
+    table { border-collapse: collapse; width: 100%; margin-top: 3px; }
+    th { border: 1px solid #1e40af; padding: 2px 3px; background: #1e40af; color: #fff; font-size: 6pt; white-space: nowrap; text-align: center; }
+    td { border: 1px solid #d1d5db; padding: 2px 3px; font-size: ${fontSize}; vertical-align: middle; }
     .totals td { border-top: 2px solid #1e40af; font-weight: bold; background: #eff6ff; }
     @media print { button { display: none; } }
   </style>
@@ -211,41 +239,27 @@ export async function printTable(parcels: any[], driverName?: string, profile?: 
   <div class="header">
     <div>
       <div class="logo-text">BG EXPRESS</div>
-      <div class="logo-sub">Tableau des expéditions</div>
-      ${profile?.agencyAddress ? `<div style="font-size:8pt;color:#666;margin-top:4px">${profile.agencyAddress}</div>` : ''}
+      <div class="logo-sub">Tableau des expéditions (${orientation === 'portrait' ? 'Vertical' : 'Horizontal'})</div>
     </div>
     <div class="meta">
       <div>Date : <strong>${printDate}</strong></div>
       ${driverName ? `<div>Livreur : <strong>${driverName}</strong></div>` : ''}
       ${profile?.city ? `<div>Agence : <strong>${profile.city}</strong></div>` : ''}
-      <div>Nombre de colis : <strong>${parcels.length}</strong></div>
-      <div>Total RETOUR FOND : <strong>${totalCod.toLocaleString('fr-MA')} DH</strong></div>
-      <div>Total Port : <strong>${totalPort.toLocaleString('fr-MA')} DH</strong></div>
+      <div>Colis : <strong>${parcels.length}</strong></div>
+      <div>COD : <strong>${totalCod.toLocaleString('fr-MA')} DH</strong></div>
+      <div>Port : <strong>${totalPort.toLocaleString('fr-MA')} DH</strong></div>
     </div>
   </div>
   <table>
     <thead>
-      <tr>
-        <th>Tracking</th>
-        <th>Expéditeur</th>
-        <th>Destinataire</th>
-        <th>Nb</th>
-        <th>Poids</th>
-        <th>Nature</th>
-        <th>RETOUR FOND (DH)</th>
-        <th>Port (DH)</th>
-        <th>Type port</th>
-        <th>Statut</th>
-        <th>Signature</th>
-      </tr>
+      <tr>${headers.join('')}</tr>
     </thead>
     <tbody>
       ${rows}
       <tr class="totals">
-        <td colspan="6" style="text-align:right">TOTAUX</td>
-        <td style="text-align:right">${totalCod.toLocaleString('fr-MA')} DH</td>
-        <td style="text-align:right">${totalPort.toLocaleString('fr-MA')} DH</td>
-        <td colspan="3"></td>
+        <td colspan="${Math.max(1, colCount - 2)}" style="text-align:right;font-size:6pt">TOTAUX</td>
+        ${cols.cod ? `<td style="text-align:right">${totalCod.toLocaleString('fr-MA')} DH</td>` : ''}
+        ${cols.port ? `<td style="text-align:right">${totalPort.toLocaleString('fr-MA')} DH</td>` : ''}
       </tr>
     </tbody>
   </table>

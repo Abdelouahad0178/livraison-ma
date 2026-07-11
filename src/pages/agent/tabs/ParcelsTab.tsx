@@ -181,6 +181,7 @@ export default function ParcelsTab() {
     nbColis: true, poids: true, port: true, typePort: true, cod: true, livreur: true
   })
   const [showColumnSelector, setShowColumnSelector] = useState(false)
+  const [printOrientation, setPrintOrientation] = useState<'portrait' | 'landscape'>('portrait')
 
   // Sécurité : s'assurer que les tableaux ne sont jamais undefined
   const safeParcels = (() => {
@@ -549,13 +550,33 @@ export default function ParcelsTab() {
                       const selectedDriver = driverFilter !== 'all'
                         ? availableDrivers.find((d: any) => d.id === driverFilter)
                         : null
-                      handlePrintTable(filteredParcels, selectedDriver?.name)
+
+                      // Filtrer les parcels: si des lignes sont sélectionnées, n'imprimer que celles-ci
+                      const parcelsToPrint = bulkAssignSelectedIds.length > 0
+                        ? filteredParcels.filter((p: any) => bulkAssignSelectedIds.includes(p.id))
+                        : filteredParcels
+
+                      // Appeler la fonction d'impression avec les colonnes visibles et l'orientation
+                      handlePrintTable(parcelsToPrint, selectedDriver?.name, visibleColumns, printOrientation)
                     }}
                     disabled={filteredParcels.length === 0}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
                   >
                     <Printer className="w-3.5 h-3.5" />
-                    Imprimer
+                    Imprimer {bulkAssignSelectedIds.length > 0 && `(${bulkAssignSelectedIds.length})`}
+                  </button>
+
+                  {/* Toggle orientation impression */}
+                  <button
+                    onClick={() => setPrintOrientation(prev => prev === 'portrait' ? 'landscape' : 'portrait')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                      printOrientation === 'portrait'
+                        ? 'bg-green-600 text-white hover:bg-green-700'
+                        : 'bg-orange-600 text-white hover:bg-orange-700'
+                    }`}
+                    title={`Format: ${printOrientation === 'portrait' ? 'Vertical ↕' : 'Horizontal ↔'}`}
+                  >
+                    {printOrientation === 'portrait' ? '↕' : '↔'} {printOrientation === 'portrait' ? 'Vertical' : 'Horizontal'}
                   </button>
 
                   {/* Bouton sélection colonnes */}
