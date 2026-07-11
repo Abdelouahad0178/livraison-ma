@@ -121,21 +121,39 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
     return [...list].sort((a, b) => versementDate(b).getTime() - versementDate(a).getTime())
   }, [baseFiltered, statusFilter])
 
+  // Convertit une date (Firestore Timestamp, ISO string ou Date) en millisecondes pour le tri
+  const dateToMs = (d: any) => {
+    if (!d) return 0
+    if (d.toDate) return d.toDate().getTime() // Firestore Timestamp (ex: portCollectedAt)
+    const t = new Date(d).getTime()
+    return isNaN(t) ? 0 : t
+  }
+
+  // Montant d'une expédition selon le type de versement
+  // COD = codAmount · Port Dû = price (les frais de port, il n'y a pas de champ portDuAmount)
+  const parcelAmount = (p: any, type: 'cod' | 'port_du') =>
+    parseFloat((type === 'cod' ? p.codAmount : p.price) || 0)
+
   // Récupérer les expéditions d'un livreur avec COD ou Port Dû collecté
   const getDriverCollectedParcels = (driverId: string, type: 'cod' | 'port_du') => {
     return allParcels.filter((p: any) => {
-      if (p.assignedDriverId !== driverId && p.deliveryDriverId !== driverId) return false
-      if (p.status !== 'Livré') return false
       if (type === 'cod') {
-        return p.codStatus === 'collected' && parseFloat(p.codAmount || 0) > 0
-      } else {
-        // Pour Port Dû, le champ est portStatus (pas portDuStatus)
-        return p.portStatus === 'collected' && parseFloat(p.portDuAmount || 0) > 0
+        if (p.assignedDriverId !== driverId && p.deliveryDriverId !== driverId) return false
+        if (p.status !== 'Livré') return false
+        return p.codStatus === 'collected' && parcelAmount(p, 'cod') > 0
       }
+      // Port Dû : collecté par le livreur (portCollectedById = uid du livreur, cf. collectPortDu)
+      // Pas de filtre sur status === 'Livré' : le port dû est aussi encaissé sur les colis
+      // 'Retourné' / 'Retour finalisé' (cf. DriverPage handleStatusSave)
+      if (p.portType !== 'port_du' || p.portStatus !== 'collected') return false
+      const collectedByDriver = p.portCollectedById
+        ? p.portCollectedById === driverId
+        : (p.deliveryDriverId === driverId || p.assignedDriverId === driverId)
+      return collectedByDriver && parcelAmount(p, 'port_du') > 0
     }).sort((a: any, b: any) => {
-      const dateA = a.codCollectedAt || a.portCollectedAt || a.deliveredAt || ''
-      const dateB = b.codCollectedAt || b.portCollectedAt || b.deliveredAt || ''
-      return dateB.localeCompare(dateA)
+      const dateA = dateToMs(type === 'cod' ? (a.codCollectedAt || a.deliveredAt) : (a.portCollectedAt || a.deliveredAt))
+      const dateB = dateToMs(type === 'cod' ? (b.codCollectedAt || b.deliveredAt) : (b.portCollectedAt || b.deliveredAt))
+      return dateB - dateA
     })
   }
 
@@ -539,7 +557,7 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
         const t = TYPE_META[v.type] || { label: v.type, emoji: '📦', cls: 'bg-gray-100 text-gray-600' }
         const parcels = getDriverCollectedParcels(v.driverId, v.type)
         const totalCollected = parcels.reduce((sum: number, p: any) =>
-          sum + parseFloat(v.type === 'cod' ? (p.codAmount || 0) : (p.portDuAmount || 0)), 0
+          sum + parcelAmount(p, v.type), 0
         )
         return (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
@@ -612,8 +630,10 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
                       </thead>
                       <tbody className="divide-y divide-gray-50">
                         {parcels.map((p: any) => {
-                          const amount = v.type === 'cod' ? parseFloat(p.codAmount || 0) : parseFloat(p.portDuAmount || 0)
-                          const collectedDate = p.codCollectedAt || p.portCollectedAt || p.deliveredAt || ''
+                          const amount = parcelAmount(p, v.type)
+                          const collectedDate = (v.type === 'cod'
+                            ? (p.codCollectedAt || p.deliveredAt)
+                            : (p.portCollectedAt || p.deliveredAt)) || ''
                           return (
                             <tr key={p.id} className="hover:bg-gray-50 transition">
                               <td className="px-3 py-2 font-mono text-xs font-semibold text-gray-800">{p.senderNic || p.sender?.nic || '—'}</td>
