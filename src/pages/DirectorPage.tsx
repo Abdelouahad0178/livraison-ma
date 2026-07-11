@@ -1596,11 +1596,15 @@ export default function DirectorPage() {
           agencyCash={agencyCash}
           typeBalances={useMemo(() => {
             // Calculer les soldes disponibles par type (Port Dû / COD) à verser à l'admin
-            // = Versements livreurs validés − Transferts admin (en attente + validés)
+            // = Versements livreurs (en attente + validés) − Transferts admin (en attente + validés)
             const sumAmounts = (list: any[]) => list.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0)
 
-            const confirmedPortDu = sumAmounts(driverVersements.filter((v: any) => v.status === 'confirmed' && v.type === 'port_du'))
-            const confirmedCod = sumAmounts(driverVersements.filter((v: any) => v.status === 'confirmed' && v.type === 'cod'))
+            const confirmedPortDu = sumAmounts(driverVersements.filter((v: any) =>
+              (v.status === 'confirmed' || v.status === 'pending') && v.type === 'port_du'
+            ))
+            const confirmedCod = sumAmounts(driverVersements.filter((v: any) =>
+              (v.status === 'confirmed' || v.status === 'pending') && v.type === 'cod'
+            ))
 
             const versedPortDu = sumAmounts(adminTransfers.filter((t: any) =>
               (t.status === 'pending' || t.status === 'confirmed') && t.type === 'port_du'

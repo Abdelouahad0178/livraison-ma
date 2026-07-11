@@ -53,13 +53,14 @@ export default function DirectorCaisseSimple({
   const livStats = useMemo(() => {
     const pending   = driverVersements.filter((v: any) => v.status === 'pending')
     const confirmed = driverVersements.filter((v: any) => v.status === 'confirmed')
+    const allAccepted = driverVersements.filter((v: any) => v.status === 'pending' || v.status === 'confirmed')
     return {
       pendingCount:  pending.length,
       pendingDH:     sumAmounts(pending),
       confirmedDH:   sumAmounts(confirmed),
-      // Séparation Port Dû / COD sur les versements validés
-      portDuConfirmedDH: sumAmounts(confirmed.filter((v: any) => v.type === 'port_du')),
-      codConfirmedDH:    sumAmounts(confirmed.filter((v: any) => v.type === 'cod')),
+      // Séparation Port Dû / COD sur les versements acceptés (en attente + validés)
+      portDuConfirmedDH: sumAmounts(allAccepted.filter((v: any) => v.type === 'port_du')),
+      codConfirmedDH:    sumAmounts(allAccepted.filter((v: any) => v.type === 'cod')),
     }
   }, [driverVersements])
 
