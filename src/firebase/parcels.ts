@@ -1176,8 +1176,7 @@ export async function searchParcels(
       const trackingUpper = searchTerm.toUpperCase().replace(/-/g, '')
       const q = query(
         collection(db, 'parcels'),
-        where('trackingId', '>=', trackingUpper),
-        where('trackingId', '<=', trackingUpper + ''),
+        where('trackingId', '==', trackingUpper),
         limit(searchLimit)
       )
       const snapshot = await getDocs(q)
@@ -1190,13 +1189,13 @@ export async function searchParcels(
       // Chercher dans senderTel ET receiverTel
       const senderQuery = query(
         collection(db, 'parcels'),
-        where('senderTel', '>=', phoneNormalized),
+        where('senderTel', '==', phoneNormalized),
         where('senderTel', '<=', phoneNormalized + ''),
         limit(searchLimit)
       )
       const receiverQuery = query(
         collection(db, 'parcels'),
-        where('receiverTel', '>=', phoneNormalized),
+        where('receiverTel', '==', phoneNormalized),
         where('receiverTel', '<=', phoneNormalized + ''),
         limit(searchLimit)
       )
@@ -1223,7 +1222,7 @@ export async function searchParcels(
       const nicUpper = searchTerm.toUpperCase()
       const q = query(
         collection(db, 'parcels'),
-        where('senderNic', '>=', nicUpper),
+        where('senderNic', '==', nicUpper),
         where('senderNic', '<=', nicUpper + ''),
         limit(searchLimit)
       )
@@ -1236,13 +1235,13 @@ export async function searchParcels(
 
       const senderQuery = query(
         collection(db, 'parcels'),
-        where('senderNameLower', '>=', nameLower),
+        where('senderNameLower', '==', nameLower),
         where('senderNameLower', '<=', nameLower + ''),
         limit(searchLimit)
       )
       const receiverQuery = query(
         collection(db, 'parcels'),
-        where('receiverNameLower', '>=', nameLower),
+        where('receiverNameLower', '==', nameLower),
         where('receiverNameLower', '<=', nameLower + ''),
         limit(searchLimit)
       )
