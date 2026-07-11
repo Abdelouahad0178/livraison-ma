@@ -1204,7 +1204,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         ${parcel.sender?.nic ? `<div style="font-weight:bold;color:#000;font-size:16pt;font-family:monospace;letter-spacing:1px">N EXP : ${parcel.sender.nic}</div>` : ''}
         <div style="font-weight:normal;color:#6b7280;font-size:7pt;letter-spacing:0.5px;font-family:monospace;margin-top:2px">${parcel.trackingId}</div>
       </div>
-      <div style="text-align:right;font-size:8pt;color:#374151;font-weight:500">${printDate}</div>
+      <div style="text-align:right;font-size:10pt;color:#000;font-weight:600">${printDate}</div>
     </div>
     <table style="border-bottom:1px solid #d1d5db">
       <tr>
