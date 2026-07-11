@@ -1594,6 +1594,26 @@ export default function DirectorPage() {
           onClose={() => setVersementModal(false)}
           user={{ ...(profile || {}), uid: auth.currentUser?.uid }}
           agencyCash={agencyCash}
+          typeBalances={useMemo(() => {
+            // Calculer les soldes disponibles par type (Port Dû / COD) à verser à l'admin
+            // = Versements livreurs validés − Transferts admin (en attente + validés)
+            const sumAmounts = (list: any[]) => list.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0)
+
+            const confirmedPortDu = sumAmounts(driverVersements.filter((v: any) => v.status === 'confirmed' && v.type === 'port_du'))
+            const confirmedCod = sumAmounts(driverVersements.filter((v: any) => v.status === 'confirmed' && v.type === 'cod'))
+
+            const versedPortDu = sumAmounts(adminTransfers.filter((t: any) =>
+              (t.status === 'pending' || t.status === 'confirmed') && t.type === 'port_du'
+            ))
+            const versedCod = sumAmounts(adminTransfers.filter((t: any) =>
+              (t.status === 'pending' || t.status === 'confirmed') && t.type === 'cod'
+            ))
+
+            return {
+              port_du: confirmedPortDu - versedPortDu,
+              cod: confirmedCod - versedCod
+            }
+          }, [driverVersements, adminTransfers])}
         />
     </div>
   )
