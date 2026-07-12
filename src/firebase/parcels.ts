@@ -1165,89 +1165,73 @@ export async function searchParcels(
     }
 
     const searchTerm = term.trim()
-    const searchLimit = options.limit || 50000  // Chercher dans TOUTE la base
+    const searchLimit = options.limit || 50000
     const startTime = performance.now()
     const parcelsCol = collection(db, 'parcels')
     console.log('📝 Terme normalisé:', searchTerm, 'limite:', searchLimit)
 
-    // 1) Normalisation du terme selon plusieurs formats possibles.
-    //    On NE se base PAS sur une classification exclusive (if/else if) :
-    //    on lance en parallèle TOUTES les requêtes plausibles puis on fusionne.
-    //    Chaque requête est un match EXACT sur un champ indexé (rapide, <100ms).
-    const trackingId = searchTerm.toUpperCase().replace(/[\s-]/g, '') // "LMA-123" / "lma 123" -> "LMA123"
-    const phone      = searchTerm.replace(/[\s\-\(\)\.]/g, '')         // "06 12 34 56 78" -> "0612345678"
-    const nicUpper   = searchTerm.toUpperCase().trim()                 // CIN alphanumérique (ex: "AB123456")
-    const nameLower  = searchTerm.toLowerCase().trim()
-
-    // 2) Construire dynamiquement la liste des requêtes candidates
-    const candidateQueries: Promise<any>[] = []
-
-    console.log('🔬 Détection:', { trackingId, phone, nicUpper, nameLower })
-
-    // Tracking ID : commence par "LMA"
-    if (/^LMA\d*$/.test(trackingId)) {
-      console.log('✅ Requête tracking ID:', trackingId)
-      candidateQueries.push(getDocs(query(parcelsCol, where('trackingId', '==', trackingId), limit(searchLimit))))
-    }
-    // Téléphone : au moins 9 chiffres (couvre fixe + mobile)
-    if (/^\d{9,}$/.test(phone)) {
-      console.log('✅ Requête téléphone:', phone)
-      candidateQueries.push(getDocs(query(parcelsCol, where('senderTel', '==', phone), limit(searchLimit))))
-      candidateQueries.push(getDocs(query(parcelsCol, where('receiverTel', '==', phone), limit(searchLimit))))
-    }
-    // NIC / CIN : alphanumérique court (<= 12), et pas un tracking ID
-    if (/^[A-Z0-9]{1,12}$/.test(nicUpper) && !/^LMA/.test(nicUpper)) {
-      console.log('✅ Requête NIC:', nicUpper)
-      candidateQueries.push(getDocs(query(parcelsCol, where('senderNic', '==', nicUpper), limit(searchLimit))))
-    }
-    // Nom : dès qu'il y a au moins une lettre (évite les recherches inutiles sur du pur numérique)
-    if (/[a-zA-Zà-ÿ]/.test(searchTerm)) {
-      console.log('✅ Requête nom:', nameLower)
-      candidateQueries.push(getDocs(query(parcelsCol, where('senderNameLower', '==', nameLower), limit(searchLimit))))
-      candidateQueries.push(getDocs(query(parcelsCol, where('receiverNameLower', '==', nameLower), limit(searchLimit))))
-    }
-    // Sécurité : si aucun format ne correspond, on tente quand même tracking + nom
-    if (candidateQueries.length === 0) {
-      console.log('⚠️ Aucun format détecté, requêtes fallback')
-      candidateQueries.push(getDocs(query(parcelsCol, where('trackingId', '==', trackingId), limit(searchLimit))))
-      candidateQueries.push(getDocs(query(parcelsCol, where('senderNameLower', '==', nameLower), limit(searchLimit))))
-    }
-
-    console.log(`🚀 Lancement ${candidateQueries.length} requête(s) en parallèle...`)
-
-    // 3) Exécuter en parallèle + fusionner + dédupliquer
-    const snapshots = await Promise.all(candidateQueries)
-    console.log(`📊 Résultats par requête:`)
-    snapshots.forEach((snap, idx) => {
-      console.log(`   Requête ${idx + 1}: ${snap.docs.length} résultats`)
-    })
-
+    // 🔥 SIMPLIFICATION: Tester TOUTES les possibilités sans détection intelligente
+    const results: any[] = []
     const uniqueIds = new Set<string>()
-    let results: any[] = []
-    for (const snap of snapshots) {
-      for (const d of snap.docs) {
-        if (uniqueIds.has(d.id)) continue
-        uniqueIds.add(d.id)
-        const data = d.data()
-        console.log(`   ✅ Trouvé: ${data.trackingId}, senderNic="${data.senderNic}"`)
-        results.push({ id: d.id, ...data })
+
+    // Test 1: Recherche exacte par senderNic (comme le diagnostic)
+    try {
+      console.log('🔍 Test senderNic:', searchTerm)
+      const qNic = query(parcelsCol, where('senderNic', '==', searchTerm))
+      const snapNic = await getDocs(qNic)
+      console.log(`   → ${snapNic.docs.length} résultat(s)`)
+      for (const d of snapNic.docs) {
+        if (!uniqueIds.has(d.id)) {
+          uniqueIds.add(d.id)
+          results.push({ id: d.id, ...d.data() })
+        }
+      }
+    } catch (e) {
+      console.error('Erreur requête senderNic:', e)
+    }
+
+    // Test 2: trackingId
+    const trackingId = searchTerm.toUpperCase().replace(/[\s-]/g, '')
+    if (/^LMA/.test(trackingId)) {
+      try {
+        console.log('🔍 Test trackingId:', trackingId)
+        const qTrack = query(parcelsCol, where('trackingId', '==', trackingId))
+        const snapTrack = await getDocs(qTrack)
+        console.log(`   → ${snapTrack.docs.length} résultat(s)`)
+        for (const d of snapTrack.docs) {
+          if (!uniqueIds.has(d.id)) {
+            uniqueIds.add(d.id)
+            results.push({ id: d.id, ...d.data() })
+          }
+        }
+      } catch (e) {
+        console.error('Erreur requête trackingId:', e)
       }
     }
 
-    // 6️⃣ Filtrer par date si spécifié
-    if (options.dateFrom || options.dateTo) {
-      results = results.filter(p => {
-        const pDate = p.createdAt?.toDate?.() || new Date(p.createdAt)
-        if (options.dateFrom && pDate < options.dateFrom) return false
-        if (options.dateTo && pDate > options.dateTo) return false
-        return true
-      })
+    // Test 3: Téléphone
+    const phone = searchTerm.replace(/[\s\-\(\)\.]/g, '')
+    if (/^\d{9,}$/.test(phone)) {
+      try {
+        console.log('🔍 Test téléphone:', phone)
+        const qPhone1 = query(parcelsCol, where('senderTel', '==', phone))
+        const qPhone2 = query(parcelsCol, where('receiverTel', '==', phone))
+        const [snap1, snap2] = await Promise.all([getDocs(qPhone1), getDocs(qPhone2)])
+        console.log(`   → ${snap1.docs.length + snap2.docs.length} résultat(s)`)
+        for (const d of [...snap1.docs, ...snap2.docs]) {
+          if (!uniqueIds.has(d.id)) {
+            uniqueIds.add(d.id)
+            results.push({ id: d.id, ...d.data() })
+          }
+        }
+      } catch (e) {
+        console.error('Erreur requête téléphone:', e)
+      }
     }
 
     const duration = (performance.now() - startTime).toFixed(0)
     console.log(`⚡ searchParcels: ${results.length} résultats en ${duration}ms`)
-
-    return results.slice(0, searchLimit)
+    return results
 
   } catch (error) {
     console.error('❌ Erreur searchParcels:', error)
