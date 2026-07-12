@@ -1216,6 +1216,24 @@ export async function searchParcels(
       }
     }
 
+    // Test 4: Nom (expéditeur ou destinataire) - seulement si contient des lettres
+    const nameLower = searchTerm.toLowerCase().trim()
+    if (/[a-zA-Zà-ÿ]/.test(searchTerm)) {
+      try {
+        const qName1 = query(parcelsCol, where('senderNameLower', '==', nameLower))
+        const qName2 = query(parcelsCol, where('receiverNameLower', '==', nameLower))
+        const [snap1, snap2] = await Promise.all([getDocs(qName1), getDocs(qName2)])
+        for (const d of [...snap1.docs, ...snap2.docs]) {
+          if (!uniqueIds.has(d.id)) {
+            uniqueIds.add(d.id)
+            results.push({ id: d.id, ...d.data() })
+          }
+        }
+      } catch (e) {
+        console.error('Erreur requête nom:', e)
+      }
+    }
+
     // Filtrer par ville si spécifié (pour chefs d'agence)
     if (agencyCity) {
       return results.filter(p =>
