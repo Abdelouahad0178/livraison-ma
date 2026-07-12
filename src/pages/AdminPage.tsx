@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState, useMemo } from 'react'
 import { signOut, createUserWithEmailAndPassword, signOut as fbSignOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth'
-import { collection, doc, setDoc, getDoc, getDocs, writeBatch } from 'firebase/firestore'
+import { collection, doc, setDoc, getDoc, getDocs, writeBatch, query, where } from 'firebase/firestore'
 import { auth, authSecondary, db } from '../firebase/config'
 import { useNavigate } from 'react-router-dom'
 import Fuse from 'fuse.js'
