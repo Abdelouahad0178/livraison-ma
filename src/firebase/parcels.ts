@@ -1157,29 +1157,18 @@ export async function searchParcels(
     limit?: number
   } = {}
 ): Promise<any[]> {
-  console.log('🔍 searchParcels APPELÉ avec terme:', term, 'options:', options)
   try {
-    if (!term || term.trim().length === 0) {
-      console.log('❌ searchParcels: terme vide')
-      return []
-    }
+    if (!term || term.trim().length === 0) return []
 
     const searchTerm = term.trim()
-    const searchLimit = options.limit || 50000
-    const startTime = performance.now()
     const parcelsCol = collection(db, 'parcels')
-    console.log('📝 Terme normalisé:', searchTerm, 'limite:', searchLimit)
-
-    // 🔥 SIMPLIFICATION: Tester TOUTES les possibilités sans détection intelligente
     const results: any[] = []
     const uniqueIds = new Set<string>()
 
-    // Test 1: Recherche exacte par senderNic (comme le diagnostic)
+    // Test 1: Recherche exacte par senderNic
     try {
-      console.log('🔍 Test senderNic:', searchTerm)
       const qNic = query(parcelsCol, where('senderNic', '==', searchTerm))
       const snapNic = await getDocs(qNic)
-      console.log(`   → ${snapNic.docs.length} résultat(s)`)
       for (const d of snapNic.docs) {
         if (!uniqueIds.has(d.id)) {
           uniqueIds.add(d.id)
@@ -1194,10 +1183,8 @@ export async function searchParcels(
     const trackingId = searchTerm.toUpperCase().replace(/[\s-]/g, '')
     if (/^LMA/.test(trackingId)) {
       try {
-        console.log('🔍 Test trackingId:', trackingId)
         const qTrack = query(parcelsCol, where('trackingId', '==', trackingId))
         const snapTrack = await getDocs(qTrack)
-        console.log(`   → ${snapTrack.docs.length} résultat(s)`)
         for (const d of snapTrack.docs) {
           if (!uniqueIds.has(d.id)) {
             uniqueIds.add(d.id)
@@ -1209,15 +1196,13 @@ export async function searchParcels(
       }
     }
 
-    // Test 3: Téléphone
+    // Test 3: Téléphone (≥9 chiffres)
     const phone = searchTerm.replace(/[\s\-\(\)\.]/g, '')
     if (/^\d{9,}$/.test(phone)) {
       try {
-        console.log('🔍 Test téléphone:', phone)
         const qPhone1 = query(parcelsCol, where('senderTel', '==', phone))
         const qPhone2 = query(parcelsCol, where('receiverTel', '==', phone))
         const [snap1, snap2] = await Promise.all([getDocs(qPhone1), getDocs(qPhone2)])
-        console.log(`   → ${snap1.docs.length + snap2.docs.length} résultat(s)`)
         for (const d of [...snap1.docs, ...snap2.docs]) {
           if (!uniqueIds.has(d.id)) {
             uniqueIds.add(d.id)
@@ -1229,10 +1214,7 @@ export async function searchParcels(
       }
     }
 
-    const duration = (performance.now() - startTime).toFixed(0)
-    console.log(`⚡ searchParcels: ${results.length} résultats en ${duration}ms`)
     return results
-
   } catch (error) {
     console.error('❌ Erreur searchParcels:', error)
     return []

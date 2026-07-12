@@ -336,16 +336,6 @@ export default function AdminPage() {
   const [isSearchActive, setIsSearchActive] = useState(false) // Pour recharger plus de colis quand recherche active
   const [serverSearchResults, setServerSearchResults] = useState<any[] | null>(null) // Résultats recherche serveur
   const [isSearching, setIsSearching] = useState(false) // Loading state pour recherche
-  const [debugLogs, setDebugLogs] = useState<string[]>([]) // 🔍 Logs de debug visibles dans l'interface
-  const [showDebug, setShowDebug] = useState(true) // Toggle panneau debug
-
-  // 🔍 Helper pour ajouter des logs visibles
-  const addDebugLog = (message: string) => {
-    const timestamp = new Date().toLocaleTimeString('fr-FR')
-    const logEntry = `[${timestamp}] ${message}`
-    console.log(logEntry) // Aussi dans la console
-    setDebugLogs(prev => [...prev.slice(-20), logEntry]) // Garder seulement les 20 derniers
-  }
 
   const [statusModal,       setStatusModal]       = useState<any>(null)
   const [returnModal,       setReturnModal]       = useState<any>(null)
@@ -480,10 +470,6 @@ export default function AdminPage() {
   const [tariffSaving,     setTariffSaving]     = useState(false)
   const [tariffMessage,    setTariffMessage]    = useState<any>(null)
 
-  // 🔄 Migration des champs de recherche
-  const [migrationRunning, setMigrationRunning] = useState(false)
-  const [migrationProgress, setMigrationProgress] = useState({ done: 0, total: 0, errors: 0 })
-
   const datePreset = adminDatePreset
   const dateFrom = adminDateFrom
   const dateTo = adminDateTo
@@ -523,37 +509,26 @@ export default function AdminPage() {
 
   // 🔍 RECHERCHE SERVEUR: searchParcels dans toute la base
   useEffect(() => {
-    addDebugLog(`🔍 Recherche déclenchée: "${debouncedSearch}"`)
-
     if (!debouncedSearch || debouncedSearch.trim().length === 0) {
-      addDebugLog('❌ Pas de terme, reset')
       setServerSearchResults(null)
       setIsSearching(false)
-      setDebugLogs([]) // Clear logs quand pas de recherche
       return
     }
 
     let cancelled = false
     setIsSearching(true)
-    addDebugLog(`🚀 Lancement searchParcels(limite: 50000)`)
 
     // Lancer recherche serveur immédiatement pour chercher dans TOUTE la base
     searchParcels(debouncedSearch.trim(), { limit: 50000 })
       .then(results => {
         if (!cancelled) {
-          addDebugLog(`✅ TERMINÉ: ${results.length} résultats`)
-          if (results.length > 0) {
-            addDebugLog(`📊 Premiers: ${results.slice(0, 3).map(p => p.trackingId).join(', ')}`)
-          } else {
-            addDebugLog(`⚠️ AUCUN résultat trouvé dans toute la base`)
-          }
           setServerSearchResults(results)
           setIsSearching(false)
         }
       })
       .catch(error => {
         if (!cancelled) {
-          addDebugLog(`❌ ERREUR: ${error.message || error}`)
+          console.error('❌ Erreur searchParcels:', error)
           setServerSearchResults(null)
           setIsSearching(false)
         }
@@ -1197,117 +1172,6 @@ export default function AdminPage() {
     }).length
   }
 
-  // 🔍 Diagnostic: vérifier si un NIC existe vraiment dans Firebase
-  const diagnosticNic = async (nic: string) => {
-    addDebugLog(`🔬 DIAGNOSTIC: Recherche directe de senderNic="${nic}"`)
-    try {
-      const q = query(collection(db, 'parcels'), where('senderNic', '==', nic))
-      const snap = await getDocs(q)
-      addDebugLog(`📊 Requête directe: ${snap.docs.length} résultat(s)`)
-
-      if (snap.docs.length === 0) {
-        addDebugLog(`⚠️ AUCUN colis avec senderNic="${nic}"`)
-        // Chercher dans sender.nic (champ original)
-        const qOrig = query(collection(db, 'parcels'))
-        const allSnap = await getDocs(qOrig)
-        const found = allSnap.docs.filter(d => d.data().sender?.nic === nic)
-        addDebugLog(`📋 Colis avec sender.nic="${nic}": ${found.length}`)
-        if (found.length > 0) {
-          const first = found[0].data()
-          addDebugLog(`🔍 Trouvé mais senderNic="${first.senderNic}" (devrait être "${nic}")`)
-        }
-      } else {
-        snap.docs.forEach(d => {
-          const data = d.data()
-          addDebugLog(`✅ Trouvé: ${data.trackingId}, senderNic="${data.senderNic}"`)
-        })
-      }
-    } catch (error: any) {
-      addDebugLog(`❌ Erreur diagnostic: ${error.message}`)
-    }
-  }
-
-  // 🔄 Migration des champs de recherche dénormalisés
-  const migrateSearchFields = async () => {
-    if (migrationRunning) return
-    if (!confirm('🔄 Migrer TOUS les colis pour activer la recherche?\n\nCela va ajouter les champs de recherche (senderNic, senderTel, etc.) sur tous vos colis existants.\n\nDurée estimée: 1-5 minutes selon le nombre de colis.')) return
-
-    setMigrationRunning(true)
-    setMigrationProgress({ done: 0, total: 0, errors: 0 })
-    addDebugLog('🔄 Début migration des champs de recherche...')
-
-    try {
-      // Charger TOUS les colis
-      const allParcelsSnapshot = await getDocs(collection(db, 'parcels'))
-      const total = allParcelsSnapshot.size
-      addDebugLog(`📦 ${total} colis à traiter`)
-      setMigrationProgress({ done: 0, total, errors: 0 })
-
-      let done = 0
-      let errors = 0
-
-      // Traiter par batch de 500 (limite Firestore)
-      const batchSize = 500
-      let currentBatch = writeBatch(db)
-      let batchCount = 0
-
-      for (const docSnap of allParcelsSnapshot.docs) {
-        try {
-          const data = docSnap.data()
-          const sender = data.sender || {}
-          const receiver = data.receiver || {}
-
-          // Si le colis a déjà tous les champs, on skip
-          if (data.senderTel !== undefined && data.receiverTel !== undefined &&
-              data.senderNic !== undefined && data.senderNameLower !== undefined &&
-              data.receiverNameLower !== undefined) {
-            done++
-            continue
-          }
-
-          // Préparer les champs dénormalisés
-          const updates: any = {}
-          if (data.senderNic === undefined) updates.senderNic = sender.nic ? String(sender.nic).trim().toUpperCase() : ''
-          if (data.senderTel === undefined) updates.senderTel = sender.tel ? String(sender.tel).replace(/[\s\-\(\)\.]/g, '') : ''
-          if (data.receiverTel === undefined) updates.receiverTel = receiver.tel ? String(receiver.tel).replace(/[\s\-\(\)\.]/g, '') : ''
-          if (data.senderNameLower === undefined) updates.senderNameLower = sender.name ? String(sender.name).toLowerCase().trim() : ''
-          if (data.receiverNameLower === undefined) updates.receiverNameLower = receiver.name ? String(receiver.name).toLowerCase().trim() : ''
-
-          currentBatch.update(doc(db, 'parcels', docSnap.id), updates)
-          batchCount++
-          done++
-
-          // Commit par batch de 500
-          if (batchCount >= batchSize) {
-            await currentBatch.commit()
-            addDebugLog(`✅ Batch de ${batchCount} colis migrés (${done}/${total})`)
-            setMigrationProgress({ done, total, errors })
-            currentBatch = writeBatch(db)
-            batchCount = 0
-          }
-        } catch (error) {
-          console.error('Erreur migration colis:', docSnap.id, error)
-          errors++
-        }
-      }
-
-      // Commit le dernier batch
-      if (batchCount > 0) {
-        await currentBatch.commit()
-        addDebugLog(`✅ Dernier batch de ${batchCount} colis migrés`)
-      }
-
-      setMigrationProgress({ done, total, errors })
-      addDebugLog(`✅ Migration terminée! ${done}/${total} colis, ${errors} erreurs`)
-      alert(`✅ Migration terminée!\n\n${done}/${total} colis migrés\n${errors} erreurs\n\nLa recherche fonctionne maintenant!`)
-    } catch (error: any) {
-      console.error('Erreur migration:', error)
-      addDebugLog(`❌ Erreur: ${error.message}`)
-      alert(`❌ Erreur migration: ${error.message}`)
-    } finally {
-      setMigrationRunning(false)
-    }
-  }
 
   return (
     <div className="min-h-screen bg-gray-50 overflow-x-hidden">
@@ -1420,84 +1284,6 @@ export default function AdminPage() {
       </header>
 
       <main className="max-w-7xl mx-auto p-4 pb-16">
-        {/* 🔍 PANNEAU DEBUG RECHERCHE */}
-        {showDebug && debugLogs.length > 0 && (
-          <div className="bg-yellow-50 border-2 border-yellow-300 rounded-2xl p-4 mb-4">
-            <div className="flex items-center justify-between mb-3">
-              <h3 className="text-sm font-bold text-yellow-900 flex items-center gap-2">
-                🔍 Logs de recherche en temps réel
-              </h3>
-              <button
-                onClick={() => setShowDebug(false)}
-                className="text-yellow-600 hover:text-yellow-800 text-xs font-semibold"
-              >
-                Masquer
-              </button>
-            </div>
-            <div className="bg-black text-green-400 rounded-xl p-3 font-mono text-xs space-y-1 max-h-64 overflow-y-auto">
-              {debugLogs.map((log, idx) => (
-                <div key={idx}>{log}</div>
-              ))}
-            </div>
-            {debugLogs.some(log => log.includes('⚠️ AUCUN résultat')) && !migrationRunning && (
-              <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-xl">
-                <p className="text-sm font-bold text-red-900 mb-2">
-                  ⚠️ Aucun résultat trouvé
-                </p>
-                <p className="text-xs text-red-700 mb-3">
-                  Les champs de recherche n'existent pas sur vos colis. Cliquez ci-dessous pour les ajouter automatiquement sur TOUS vos colis.
-                </p>
-                <button
-                  onClick={migrateSearchFields}
-                  className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-xl transition"
-                >
-                  🔄 Migrer TOUS les colis (1 clic)
-                </button>
-              </div>
-            )}
-            {migrationRunning && (
-              <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-xl">
-                <p className="text-sm font-bold text-blue-900 mb-2">
-                  🔄 Migration en cours...
-                </p>
-                <div className="w-full bg-blue-200 rounded-full h-2 mb-2">
-                  <div
-                    className="bg-blue-600 h-2 rounded-full transition-all"
-                    style={{ width: `${migrationProgress.total > 0 ? (migrationProgress.done / migrationProgress.total) * 100 : 0}%` }}
-                  />
-                </div>
-                <p className="text-xs text-blue-700">
-                  {migrationProgress.done} / {migrationProgress.total} colis
-                  {migrationProgress.errors > 0 && ` (${migrationProgress.errors} erreurs)`}
-                </p>
-              </div>
-            )}
-            <p className="mt-2 text-xs text-yellow-700">
-              💡 Ces logs montrent exactement ce qui se passe quand vous cherchez un colis.
-            </p>
-            {debouncedSearch && (
-              <div className="mt-3">
-                <button
-                  onClick={() => diagnosticNic(debouncedSearch.trim())}
-                  className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2 px-4 rounded-xl transition"
-                >
-                  🔬 Diagnostic approfondi pour "{debouncedSearch}"
-                </button>
-              </div>
-            )}
-          </div>
-        )}
-        {!showDebug && debugLogs.length > 0 && (
-          <div className="mb-4">
-            <button
-              onClick={() => setShowDebug(true)}
-              className="text-xs text-yellow-600 hover:text-yellow-800 font-semibold"
-            >
-              🔍 Afficher les logs de recherche ({debugLogs.length})
-            </button>
-          </div>
-        )}
-
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 mb-4">
           <div className="flex flex-col lg:flex-row lg:items-center gap-3">
             <div className="flex items-center gap-2 min-w-0">
