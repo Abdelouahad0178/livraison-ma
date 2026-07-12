@@ -1155,84 +1155,97 @@ export async function searchParcels(
     dateFrom?: Date
     dateTo?: Date
     limit?: number
-    agencyCity?: string  // Pour filtrer par ville (chefs d'agence)
+    agencyCity?: string      // Pour filtrer par ville (chefs d'agence)
+    includeArchived?: boolean // Pour chercher aussi dans archives
   } = {}
 ): Promise<any[]> {
   try {
     if (!term || term.trim().length === 0) return []
 
     const searchTerm = term.trim()
-    const parcelsCol = collection(db, 'parcels')
+    const includeArchived = options.includeArchived ?? true // Par défaut: inclure archives
     const results: any[] = []
     const uniqueIds = new Set<string>()
     const agencyCity = options.agencyCity
 
-    // Test 1: Recherche exacte par senderNic
-    try {
-      const qNic = query(parcelsCol, where('senderNic', '==', searchTerm))
-      const snapNic = await getDocs(qNic)
-      for (const d of snapNic.docs) {
-        if (!uniqueIds.has(d.id)) {
-          uniqueIds.add(d.id)
-          results.push({ id: d.id, ...d.data() })
-        }
-      }
-    } catch (e) {
-      console.error('Erreur requête senderNic:', e)
+    // Collections à chercher
+    const collections = ['parcels']
+    if (includeArchived) {
+      collections.push('parcels_archived')
     }
 
-    // Test 2: trackingId
-    const trackingId = searchTerm.toUpperCase().replace(/[\s-]/g, '')
-    if (/^LMA/.test(trackingId)) {
+    // Chercher dans chaque collection
+    for (const collectionName of collections) {
+      const parcelsCol = collection(db, collectionName)
+      const isArchived = collectionName === 'parcels_archived'
+
+      // Test 1: Recherche exacte par senderNic
       try {
-        const qTrack = query(parcelsCol, where('trackingId', '==', trackingId))
-        const snapTrack = await getDocs(qTrack)
-        for (const d of snapTrack.docs) {
+        const qNic = query(parcelsCol, where('senderNic', '==', searchTerm))
+        const snapNic = await getDocs(qNic)
+        for (const d of snapNic.docs) {
           if (!uniqueIds.has(d.id)) {
             uniqueIds.add(d.id)
-            results.push({ id: d.id, ...d.data() })
+            results.push({ id: d.id, ...d.data(), isArchived })
           }
         }
       } catch (e) {
-        console.error('Erreur requête trackingId:', e)
+        console.error('Erreur requête senderNic:', e)
       }
-    }
 
-    // Test 3: Téléphone (≥9 chiffres)
-    const phone = searchTerm.replace(/[\s\-\(\)\.]/g, '')
-    if (/^\d{9,}$/.test(phone)) {
-      try {
-        const qPhone1 = query(parcelsCol, where('senderTel', '==', phone))
-        const qPhone2 = query(parcelsCol, where('receiverTel', '==', phone))
-        const [snap1, snap2] = await Promise.all([getDocs(qPhone1), getDocs(qPhone2)])
-        for (const d of [...snap1.docs, ...snap2.docs]) {
-          if (!uniqueIds.has(d.id)) {
-            uniqueIds.add(d.id)
-            results.push({ id: d.id, ...d.data() })
+      // Test 2: trackingId
+      const trackingId = searchTerm.toUpperCase().replace(/[\s-]/g, '')
+      if (/^LMA/.test(trackingId)) {
+        try {
+          const qTrack = query(parcelsCol, where('trackingId', '==', trackingId))
+          const snapTrack = await getDocs(qTrack)
+          for (const d of snapTrack.docs) {
+            if (!uniqueIds.has(d.id)) {
+              uniqueIds.add(d.id)
+              results.push({ id: d.id, ...d.data(), isArchived })
+            }
           }
+        } catch (e) {
+          console.error('Erreur requête trackingId:', e)
         }
-      } catch (e) {
-        console.error('Erreur requête téléphone:', e)
       }
-    }
 
-    // Test 4: Nom (expéditeur ou destinataire) - seulement si contient des lettres
-    const nameLower = searchTerm.toLowerCase().trim()
-    if (/[a-zA-Zà-ÿ]/.test(searchTerm)) {
-      try {
-        const qName1 = query(parcelsCol, where('senderNameLower', '==', nameLower))
-        const qName2 = query(parcelsCol, where('receiverNameLower', '==', nameLower))
-        const [snap1, snap2] = await Promise.all([getDocs(qName1), getDocs(qName2)])
-        for (const d of [...snap1.docs, ...snap2.docs]) {
-          if (!uniqueIds.has(d.id)) {
-            uniqueIds.add(d.id)
-            results.push({ id: d.id, ...d.data() })
+      // Test 3: Téléphone (≥9 chiffres)
+      const phone = searchTerm.replace(/[\s\-\(\)\.]/g, '')
+      if (/^\d{9,}$/.test(phone)) {
+        try {
+          const qPhone1 = query(parcelsCol, where('senderTel', '==', phone))
+          const qPhone2 = query(parcelsCol, where('receiverTel', '==', phone))
+          const [snap1, snap2] = await Promise.all([getDocs(qPhone1), getDocs(qPhone2)])
+          for (const d of [...snap1.docs, ...snap2.docs]) {
+            if (!uniqueIds.has(d.id)) {
+              uniqueIds.add(d.id)
+              results.push({ id: d.id, ...d.data(), isArchived })
+            }
           }
+        } catch (e) {
+          console.error('Erreur requête téléphone:', e)
         }
-      } catch (e) {
-        console.error('Erreur requête nom:', e)
       }
-    }
+
+      // Test 4: Nom (expéditeur ou destinataire) - seulement si contient des lettres
+      const nameLower = searchTerm.toLowerCase().trim()
+      if (/[a-zA-Zà-ÿ]/.test(searchTerm)) {
+        try {
+          const qName1 = query(parcelsCol, where('senderNameLower', '==', nameLower))
+          const qName2 = query(parcelsCol, where('receiverNameLower', '==', nameLower))
+          const [snap1, snap2] = await Promise.all([getDocs(qName1), getDocs(qName2)])
+          for (const d of [...snap1.docs, ...snap2.docs]) {
+            if (!uniqueIds.has(d.id)) {
+              uniqueIds.add(d.id)
+              results.push({ id: d.id, ...d.data(), isArchived })
+            }
+          }
+        } catch (e) {
+          console.error('Erreur requête nom:', e)
+        }
+      }
+    } // Fin de la boucle for collections
 
     // Filtrer par ville si spécifié (pour chefs d'agence)
     if (agencyCity) {
@@ -1246,6 +1259,146 @@ export async function searchParcels(
     console.error('❌ Erreur searchParcels:', error)
     return []
   }
+}
+
+// -- Archivage dynamique -------------------------------------
+
+/**
+ * 📦 Archiver manuellement une expédition
+ */
+export async function archiveParcelManual(parcelId: string): Promise<void> {
+  const parcelRef = doc(db, 'parcels', parcelId)
+  const parcelSnap = await getDoc(parcelRef)
+
+  if (!parcelSnap.exists()) {
+    throw new Error('Colis introuvable')
+  }
+
+  const parcelData = { id: parcelSnap.id, ...parcelSnap.data() }
+
+  // Ajouter à la collection archives avec metadata
+  const archiveRef = doc(db, 'parcels_archived', parcelId)
+  await setDoc(archiveRef, {
+    ...parcelData,
+    archivedAt: serverTimestamp(),
+    archivedManually: true
+  })
+
+  // Supprimer de la collection active
+  await deleteDoc(parcelRef)
+}
+
+/**
+ * 📦 Restaurer une expédition archivée
+ */
+export async function unarchiveParcel(parcelId: string): Promise<void> {
+  const archiveRef = doc(db, 'parcels_archived', parcelId)
+  const archiveSnap = await getDoc(archiveRef)
+
+  if (!archiveSnap.exists()) {
+    throw new Error('Archive introuvable')
+  }
+
+  const parcelData = archiveSnap.data()
+
+  // Retirer les champs d'archivage
+  const { archivedAt, archivedManually, ...originalData } = parcelData
+
+  // Restaurer dans la collection active
+  const parcelRef = doc(db, 'parcels', parcelId)
+  await setDoc(parcelRef, originalData)
+
+  // Supprimer de la collection archives
+  await deleteDoc(archiveRef)
+}
+
+/**
+ * 📦 Archiver plusieurs expéditions en masse
+ */
+export async function bulkArchiveParcels(
+  parcelIds: string[],
+  onProgress?: (done: number, total: number) => void
+): Promise<{ success: number; errors: number }> {
+  let success = 0
+  let errors = 0
+
+  for (let i = 0; i < parcelIds.length; i++) {
+    try {
+      await archiveParcelManual(parcelIds[i])
+      success++
+    } catch (error) {
+      console.error('Erreur archivage:', parcelIds[i], error)
+      errors++
+    }
+
+    if (onProgress) {
+      onProgress(i + 1, parcelIds.length)
+    }
+  }
+
+  return { success, errors }
+}
+
+/**
+ * 📦 Archivage automatique selon règles métier
+ */
+export async function autoArchiveParcels(options: {
+  deliveredDays?: number  // Livrés > X jours (défaut: 90)
+  returnedDays?: number   // Retournés > X jours (défaut: 60)
+  canceledDays?: number   // Annulés > X jours (défaut: 30)
+  dryRun?: boolean        // Test sans archiver
+} = {}): Promise<{ candidates: number; archived: number; errors: number }> {
+  const deliveredDays = options.deliveredDays ?? 90
+  const returnedDays = options.returnedDays ?? 60
+  const canceledDays = options.canceledDays ?? 30
+  const dryRun = options.dryRun ?? false
+
+  const now = new Date()
+  const candidates: string[] = []
+
+  // Règle 1: Colis livrés anciens
+  const deliveredCutoff = new Date(now)
+  deliveredCutoff.setDate(deliveredCutoff.getDate() - deliveredDays)
+
+  const qDelivered = query(
+    collection(db, 'parcels'),
+    where('status', '==', 'Livré'),
+    where('createdAt', '<', Timestamp.fromDate(deliveredCutoff))
+  )
+  const snapDelivered = await getDocs(qDelivered)
+  snapDelivered.docs.forEach(d => candidates.push(d.id))
+
+  // Règle 2: Retours finalisés anciens
+  const returnedCutoff = new Date(now)
+  returnedCutoff.setDate(returnedCutoff.getDate() - returnedDays)
+
+  const qReturned = query(
+    collection(db, 'parcels'),
+    where('status', '==', 'Retour finalisé'),
+    where('createdAt', '<', Timestamp.fromDate(returnedCutoff))
+  )
+  const snapReturned = await getDocs(qReturned)
+  snapReturned.docs.forEach(d => candidates.push(d.id))
+
+  if (dryRun) {
+    return { candidates: candidates.length, archived: 0, errors: 0 }
+  }
+
+  // Archiver par batch
+  let archived = 0
+  let errors = 0
+
+  for (const id of candidates) {
+    try {
+      await archiveParcelManual(id)
+      archived++
+    } catch (error) {
+      console.error('Erreur auto-archivage:', id, error)
+      errors++
+    }
+  }
+
+  return { candidates: candidates.length, archived, errors }
 }
 
 // -- Règlements (Pointeur-Encaisseur) -------------------------------------

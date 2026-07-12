@@ -35,6 +35,7 @@ export {
   getAccurateAgencyStats, subscribeAgencyInbox, subscribeAgencyParcels,
   subscribePendingAideAgentParcels, claimParcel, searchParcelByTrackingId, createReturnParcel,
   searchParcelByTrackingGlobal, searchParcelByNicOptimized, searchParcels,
+  archiveParcelManual, unarchiveParcel, bulkArchiveParcels, autoArchiveParcels,
 } from './parcels'
 
 export {
