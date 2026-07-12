@@ -10,7 +10,7 @@ import {
   updateParcel, deleteParcel, markParcelAsReturned, loadReturnedParcelOnTruck, validateReturnArrival, validateParcelEntry,
   updateParcelStatus, isParcelVisibleInDestinationAgency,
   subscribeAgencyParcels, subscribeAgencyReturnParcels, subscribePendingAideAgentParcels,
-  createReturnParcel, searchParcelByTrackingId,
+  createReturnParcel, searchParcelByTrackingId, searchParcels,
 } from '../firebase/parcels'
 import { markPortDuReceivedByChef, markParcelChefPointed } from '../firebase/finance'
 import { collectPortDu } from '../firebase/cod'
@@ -258,6 +258,8 @@ export default function AgentPage() {
   const [loadingParcels, setLoadingParcels] = useState(false)
   const [pendingAideParcels, setPendingAideParcels] = useState<any[]>([])
   const [search, setSearch]             = useState('')
+  const [serverSearchResults, setServerSearchResults] = useState<any[] | null>(null) // Résultats recherche serveur
+  const [isSearching, setIsSearching]   = useState(false) // Loading state pour recherche
   // Utiliser 'all' par défaut pour voir tous les colis, pas seulement ceux du jour de travail
   const [datePreset, setDatePreset]     = useState('all')
   const [dateFrom, setDateFrom]         = useState('')
@@ -296,6 +298,43 @@ export default function AgentPage() {
   const debouncedSearch      = useDebounce(search)
   const debouncedCaisseSearch = useDebounce(caisseSearch)
   const debouncedCodSearch    = useDebounce(codSearch)
+
+  // 🔍 RECHERCHE SERVEUR: searchParcels dans toute la base (filtrée par ville)
+  useEffect(() => {
+    if (!debouncedSearch || debouncedSearch.trim().length === 0) {
+      setServerSearchResults(null)
+      setIsSearching(false)
+      return
+    }
+
+    if (!profile?.city) return // Attendre que le profile soit chargé
+
+    let cancelled = false
+    setIsSearching(true)
+
+    // Lancer recherche serveur avec filtre ville (seulement colis de cette agence)
+    searchParcels(debouncedSearch.trim(), {
+      limit: 50000,
+      agencyCity: profile.city  // 🔑 Filtre par ville de l'agence
+    })
+      .then(results => {
+        if (!cancelled) {
+          setServerSearchResults(results)
+          setIsSearching(false)
+        }
+      })
+      .catch(error => {
+        if (!cancelled) {
+          console.error('❌ Erreur searchParcels:', error)
+          setServerSearchResults(null)
+          setIsSearching(false)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [debouncedSearch, profile?.city])
 
   const [editingParcel, setEditingParcel] = useState<any>(null)
   const [editForm, setEditForm]         = useState<any>(null)
@@ -990,7 +1029,12 @@ export default function AgentPage() {
   const profileRole = profile?.role
 
   const filteredParcels = useMemo(() => {
-    return filterByDate(allDisplayParcels, datePreset, dateFrom, dateTo).filter((p: any) => {
+    // 🔍 Si recherche serveur active, utiliser ses résultats en priorité
+    const sourceData = (debouncedSearch && serverSearchResults !== null)
+      ? serverSearchResults
+      : allDisplayParcels
+
+    return filterByDate(sourceData, datePreset, dateFrom, dateTo).filter((p: any) => {
     if (profileCity) {
       // Pour les retours, vérifier destinationCity directement (après swap, c'est la ville de retour)
       const isReturnToThisCity = (p.status?.includes('Retour') || p.wasReturned) && p.destinationCity === profileCity
@@ -1037,6 +1081,12 @@ export default function AgentPage() {
       return false
     }
     if (debouncedSearch) {
+      // Si on utilise serverSearchResults, pas besoin de refiltrer par recherche
+      // (déjà fait par searchParcels côté serveur)
+      if (serverSearchResults !== null) {
+        return true
+      }
+      // Sinon, recherche locale dans les colis chargés
       const matches = matchesSearch([
         p.id, p.trackingId, p.senderNic, p.sender?.nic, p.sender?.name, p.sender?.tel,
         p.sender?.city, p.receiver?.name, p.receiver?.tel, p.receiver?.city,
@@ -1044,10 +1094,10 @@ export default function AgentPage() {
       ], debouncedSearch.toLowerCase())
       return matches
     }
-      return true
+    return true
     })
   }, [allDisplayParcels, datePreset, dateFrom, dateTo, profileCity, profileRole, subTab, uid, serviceFilter,
-       parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, debouncedSearch])
+       parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, debouncedSearch, serverSearchResults])
 
   // ── Phase 3: memoized stats — only recompute when Firestore sends new data ──
 

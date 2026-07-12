@@ -1155,6 +1155,7 @@ export async function searchParcels(
     dateFrom?: Date
     dateTo?: Date
     limit?: number
+    agencyCity?: string  // Pour filtrer par ville (chefs d'agence)
   } = {}
 ): Promise<any[]> {
   try {
@@ -1164,6 +1165,7 @@ export async function searchParcels(
     const parcelsCol = collection(db, 'parcels')
     const results: any[] = []
     const uniqueIds = new Set<string>()
+    const agencyCity = options.agencyCity
 
     // Test 1: Recherche exacte par senderNic
     try {
@@ -1212,6 +1214,13 @@ export async function searchParcels(
       } catch (e) {
         console.error('Erreur requête téléphone:', e)
       }
+    }
+
+    // Filtrer par ville si spécifié (pour chefs d'agence)
+    if (agencyCity) {
+      return results.filter(p =>
+        p.originCity === agencyCity || p.destinationCity === agencyCity
+      )
     }
 
     return results
