@@ -1,6 +1,6 @@
 import { lazy, Suspense, useEffect, useRef, useState, useMemo } from 'react'
 import { signOut, createUserWithEmailAndPassword, signOut as fbSignOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth'
-import { collection, doc, setDoc, getDoc } from 'firebase/firestore'
+import { collection, doc, setDoc, getDoc, getDocs, writeBatch } from 'firebase/firestore'
 import { auth, authSecondary, db } from '../firebase/config'
 import { useNavigate } from 'react-router-dom'
 import Fuse from 'fuse.js'
@@ -479,6 +479,10 @@ export default function AdminPage() {
   const [tariffDraft,      setTariffDraft]      = useState(DEFAULT_TARIFF_CONFIG)
   const [tariffSaving,     setTariffSaving]     = useState(false)
   const [tariffMessage,    setTariffMessage]    = useState<any>(null)
+
+  // 🔄 Migration des champs de recherche
+  const [migrationRunning, setMigrationRunning] = useState(false)
+  const [migrationProgress, setMigrationProgress] = useState({ done: 0, total: 0, errors: 0 })
 
   const datePreset = adminDatePreset
   const dateFrom = adminDateFrom
@@ -1193,6 +1197,88 @@ export default function AdminPage() {
     }).length
   }
 
+  // 🔄 Migration des champs de recherche dénormalisés
+  const migrateSearchFields = async () => {
+    if (migrationRunning) return
+    if (!confirm('🔄 Migrer TOUS les colis pour activer la recherche?\n\nCela va ajouter les champs de recherche (senderNic, senderTel, etc.) sur tous vos colis existants.\n\nDurée estimée: 1-5 minutes selon le nombre de colis.')) return
+
+    setMigrationRunning(true)
+    setMigrationProgress({ done: 0, total: 0, errors: 0 })
+    addDebugLog('🔄 Début migration des champs de recherche...')
+
+    try {
+      // Charger TOUS les colis
+      const allParcelsSnapshot = await getDocs(collection(db, 'parcels'))
+      const total = allParcelsSnapshot.size
+      addDebugLog(`📦 ${total} colis à traiter`)
+      setMigrationProgress({ done: 0, total, errors: 0 })
+
+      let done = 0
+      let errors = 0
+
+      // Traiter par batch de 500 (limite Firestore)
+      const batchSize = 500
+      let currentBatch = writeBatch(db)
+      let batchCount = 0
+
+      for (const docSnap of allParcelsSnapshot.docs) {
+        try {
+          const data = docSnap.data()
+          const sender = data.sender || {}
+          const receiver = data.receiver || {}
+
+          // Si le colis a déjà tous les champs, on skip
+          if (data.senderTel !== undefined && data.receiverTel !== undefined &&
+              data.senderNic !== undefined && data.senderNameLower !== undefined &&
+              data.receiverNameLower !== undefined) {
+            done++
+            continue
+          }
+
+          // Préparer les champs dénormalisés
+          const updates: any = {}
+          if (data.senderNic === undefined) updates.senderNic = sender.nic ? String(sender.nic).trim().toUpperCase() : ''
+          if (data.senderTel === undefined) updates.senderTel = sender.tel ? String(sender.tel).replace(/[\s\-\(\)\.]/g, '') : ''
+          if (data.receiverTel === undefined) updates.receiverTel = receiver.tel ? String(receiver.tel).replace(/[\s\-\(\)\.]/g, '') : ''
+          if (data.senderNameLower === undefined) updates.senderNameLower = sender.name ? String(sender.name).toLowerCase().trim() : ''
+          if (data.receiverNameLower === undefined) updates.receiverNameLower = receiver.name ? String(receiver.name).toLowerCase().trim() : ''
+
+          currentBatch.update(doc(db, 'parcels', docSnap.id), updates)
+          batchCount++
+          done++
+
+          // Commit par batch de 500
+          if (batchCount >= batchSize) {
+            await currentBatch.commit()
+            addDebugLog(`✅ Batch de ${batchCount} colis migrés (${done}/${total})`)
+            setMigrationProgress({ done, total, errors })
+            currentBatch = writeBatch(db)
+            batchCount = 0
+          }
+        } catch (error) {
+          console.error('Erreur migration colis:', docSnap.id, error)
+          errors++
+        }
+      }
+
+      // Commit le dernier batch
+      if (batchCount > 0) {
+        await currentBatch.commit()
+        addDebugLog(`✅ Dernier batch de ${batchCount} colis migrés`)
+      }
+
+      setMigrationProgress({ done, total, errors })
+      addDebugLog(`✅ Migration terminée! ${done}/${total} colis, ${errors} erreurs`)
+      alert(`✅ Migration terminée!\n\n${done}/${total} colis migrés\n${errors} erreurs\n\nLa recherche fonctionne maintenant!`)
+    } catch (error: any) {
+      console.error('Erreur migration:', error)
+      addDebugLog(`❌ Erreur: ${error.message}`)
+      alert(`❌ Erreur migration: ${error.message}`)
+    } finally {
+      setMigrationRunning(false)
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-50 overflow-x-hidden">
       <CompanyContact />
@@ -1323,6 +1409,39 @@ export default function AdminPage() {
                 <div key={idx}>{log}</div>
               ))}
             </div>
+            {debugLogs.some(log => log.includes('⚠️ AUCUN résultat')) && !migrationRunning && (
+              <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-xl">
+                <p className="text-sm font-bold text-red-900 mb-2">
+                  ⚠️ Aucun résultat trouvé
+                </p>
+                <p className="text-xs text-red-700 mb-3">
+                  Les champs de recherche n'existent pas sur vos colis. Cliquez ci-dessous pour les ajouter automatiquement sur TOUS vos colis.
+                </p>
+                <button
+                  onClick={migrateSearchFields}
+                  className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded-xl transition"
+                >
+                  🔄 Migrer TOUS les colis (1 clic)
+                </button>
+              </div>
+            )}
+            {migrationRunning && (
+              <div className="mt-3 p-3 bg-blue-50 border border-blue-200 rounded-xl">
+                <p className="text-sm font-bold text-blue-900 mb-2">
+                  🔄 Migration en cours...
+                </p>
+                <div className="w-full bg-blue-200 rounded-full h-2 mb-2">
+                  <div
+                    className="bg-blue-600 h-2 rounded-full transition-all"
+                    style={{ width: `${migrationProgress.total > 0 ? (migrationProgress.done / migrationProgress.total) * 100 : 0}%` }}
+                  />
+                </div>
+                <p className="text-xs text-blue-700">
+                  {migrationProgress.done} / {migrationProgress.total} colis
+                  {migrationProgress.errors > 0 && ` (${migrationProgress.errors} erreurs)`}
+                </p>
+              </div>
+            )}
             <p className="mt-2 text-xs text-yellow-700">
               💡 Ces logs montrent exactement ce qui se passe quand vous cherchez un colis.
             </p>
