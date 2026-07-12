@@ -1217,13 +1217,20 @@ export async function searchParcels(
 
     // 3) Exécuter en parallèle + fusionner + dédupliquer
     const snapshots = await Promise.all(candidateQueries)
+    console.log(`📊 Résultats par requête:`)
+    snapshots.forEach((snap, idx) => {
+      console.log(`   Requête ${idx + 1}: ${snap.docs.length} résultats`)
+    })
+
     const uniqueIds = new Set<string>()
     let results: any[] = []
     for (const snap of snapshots) {
       for (const d of snap.docs) {
         if (uniqueIds.has(d.id)) continue
         uniqueIds.add(d.id)
-        results.push({ id: d.id, ...d.data() })
+        const data = d.data()
+        console.log(`   ✅ Trouvé: ${data.trackingId}, senderNic="${data.senderNic}"`)
+        results.push({ id: d.id, ...data })
       }
     }
 

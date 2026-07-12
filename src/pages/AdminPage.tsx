@@ -1197,6 +1197,36 @@ export default function AdminPage() {
     }).length
   }
 
+  // 🔍 Diagnostic: vérifier si un NIC existe vraiment dans Firebase
+  const diagnosticNic = async (nic: string) => {
+    addDebugLog(`🔬 DIAGNOSTIC: Recherche directe de senderNic="${nic}"`)
+    try {
+      const q = query(collection(db, 'parcels'), where('senderNic', '==', nic))
+      const snap = await getDocs(q)
+      addDebugLog(`📊 Requête directe: ${snap.docs.length} résultat(s)`)
+
+      if (snap.docs.length === 0) {
+        addDebugLog(`⚠️ AUCUN colis avec senderNic="${nic}"`)
+        // Chercher dans sender.nic (champ original)
+        const qOrig = query(collection(db, 'parcels'))
+        const allSnap = await getDocs(qOrig)
+        const found = allSnap.docs.filter(d => d.data().sender?.nic === nic)
+        addDebugLog(`📋 Colis avec sender.nic="${nic}": ${found.length}`)
+        if (found.length > 0) {
+          const first = found[0].data()
+          addDebugLog(`🔍 Trouvé mais senderNic="${first.senderNic}" (devrait être "${nic}")`)
+        }
+      } else {
+        snap.docs.forEach(d => {
+          const data = d.data()
+          addDebugLog(`✅ Trouvé: ${data.trackingId}, senderNic="${data.senderNic}"`)
+        })
+      }
+    } catch (error: any) {
+      addDebugLog(`❌ Erreur diagnostic: ${error.message}`)
+    }
+  }
+
   // 🔄 Migration des champs de recherche dénormalisés
   const migrateSearchFields = async () => {
     if (migrationRunning) return
@@ -1445,6 +1475,16 @@ export default function AdminPage() {
             <p className="mt-2 text-xs text-yellow-700">
               💡 Ces logs montrent exactement ce qui se passe quand vous cherchez un colis.
             </p>
+            {debouncedSearch && (
+              <div className="mt-3">
+                <button
+                  onClick={() => diagnosticNic(debouncedSearch.trim())}
+                  className="w-full bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2 px-4 rounded-xl transition"
+                >
+                  🔬 Diagnostic approfondi pour "{debouncedSearch}"
+                </button>
+              </div>
+            )}
           </div>
         )}
         {!showDebug && debugLogs.length > 0 && (
