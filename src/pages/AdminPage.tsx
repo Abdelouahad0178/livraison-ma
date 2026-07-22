@@ -575,10 +575,8 @@ export default function AdminPage() {
   // ⚡ Abonnement temps réel : 800 premiers colis (rapide)
   useEffect(() => {
     if (isSearchActive) {
-      // Mode recherche : on utilise searchParcels
+      // Mode recherche : on utilise searchParcels - GARDER liveParcels/moreParcels pour éviter l'affichage à 0
       console.log(`🔍 Mode recherche: searchParcels cherche dans TOUTE la base`)
-      setLiveParcels([])
-      setMoreParcels([]) // ✅ Vider aussi les pages chargées pour ne pas polluer les résultats
       setLoading(false)
       return () => {}
     }
