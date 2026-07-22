@@ -4,6 +4,7 @@ import { collection, query, where, orderBy, limit, getDocs, doc, deleteDoc, setD
 import { db } from '../../../firebase/config'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { STATUS_COLORS } from '../../../firebase/constants'
+import { searchParcels } from '../../../firebase/parcels'
 
 export default function AdminArchivageTab() {
   const [stats, setStats] = useState<any>(null)
@@ -34,7 +35,7 @@ export default function AdminArchivageTab() {
     loadAllArchives()
   }, [])
 
-  // Recherche automatique avec debounce
+  // Recherche automatique avec debounce - utilise searchParcels pour chercher dans TOUTE la base
   useEffect(() => {
     const timer = setTimeout(async () => {
       if (!searchQuery.trim()) {
@@ -44,27 +45,23 @@ export default function AdminArchivageTab() {
 
       setLoadingArchives(true)
       try {
-        const q = query(collection(db, 'parcels_archive'), limit(500))
-        const snapshot = await getDocs(q)
-        const parcels = snapshot.docs
-          .map(doc => ({ id: doc.id, ...doc.data() }))
-          .filter((p: any) => {
-            const search = searchQuery.toLowerCase()
-            const nexp = String(p.nic || p.senderNic || '').toLowerCase()
-            return (
-              p.trackingId?.toLowerCase().includes(search) ||
-              p.sender?.name?.toLowerCase().includes(search) ||
-              p.receiver?.name?.toLowerCase().includes(search) ||
-              nexp.includes(search)
-            )
-          })
-          .sort((a: any, b: any) => {
-            const dateA = a.archivedAt?.toDate?.() || new Date(0)
-            const dateB = b.archivedAt?.toDate?.() || new Date(0)
-            return dateB.getTime() - dateA.getTime()
-          })
+        // Utiliser searchParcels pour chercher dans TOUTE la base d'archives
+        const parcels = await searchParcels(searchQuery.trim(), {
+          includeArchived: true,
+          limit: 50000
+        })
 
-        setArchivedParcels(parcels)
+        // Filtrer pour garder seulement les archives
+        const archivedOnly = parcels.filter((p: any) => p.isArchived)
+
+        // Trier par date d'archivage
+        archivedOnly.sort((a: any, b: any) => {
+          const dateA = a.archivedAt?.toDate?.() || new Date(0)
+          const dateB = b.archivedAt?.toDate?.() || new Date(0)
+          return dateB.getTime() - dateA.getTime()
+        })
+
+        setArchivedParcels(archivedOnly)
       } catch (error: any) {
         console.error('Erreur recherche:', error)
       } finally {
