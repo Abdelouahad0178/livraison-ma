@@ -533,8 +533,8 @@ export default function AdminPage() {
     let cancelled = false
     setIsSearching(true)
 
-    // Lancer recherche serveur immédiatement pour chercher dans TOUTE la base
-    searchParcels(debouncedSearch.trim(), { limit: 50000 })
+    // Lancer recherche serveur immédiatement pour chercher dans TOUTE la base (actifs + archives)
+    searchParcels(debouncedSearch.trim(), { limit: 50000, includeArchived: true })
       .then(results => {
         if (!cancelled) {
           setServerSearchResults(results)
