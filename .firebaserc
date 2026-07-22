@@ -1,5 +1,15 @@
 {
   "projects": {
     "default": "arelanc"
-  }
+  },
+  "targets": {
+    "arelanc": {
+      "hosting": {
+        "arelanc": [
+          "arelanc"
+        ]
+      }
+    }
+  },
+  "etags": {}
 }

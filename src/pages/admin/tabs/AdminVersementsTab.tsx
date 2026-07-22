@@ -1,9 +1,9 @@
-import { CheckCircle, XCircle, Clock, Banknote, AlertTriangle, Eye, Search, X } from 'lucide-react'
+import { CheckCircle, XCircle, Clock, Banknote, AlertTriangle, Eye, Search, X, Plus, Edit, Trash2 } from 'lucide-react'
 import { fmt } from '../../../utils/formatNumber'
 import { useState, useMemo } from 'react'
-import DateFilter from '../../agent/DateFilter'
 import { filterByDate } from '../../../utils/dateFilter'
 import type { DateFilterPreset } from '../../../types'
+import { deleteAllDriverVersements } from '../../../firebase/firestore'
 
 const PAYMENT_TYPES: Record<string, { label: string; emoji: string; color: string }> = {
   especes: { label: 'Espèces', emoji: '💵', color: 'green' },
@@ -25,6 +25,9 @@ export default function AdminVersementsTab({
   adminTransfers,
   confirmAdminTransfer,
   rejectAdminTransfer,
+  createAdminTransferDirect,
+  updateAdminTransfer,
+  deleteAdminTransfer,
   auth,
 }: any) {
   const [confirmModal, setConfirmModal] = useState<any>(null)
@@ -38,6 +41,24 @@ export default function AdminVersementsTab({
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [search, setSearch] = useState('')
+
+  // États pour les modaux CRUD
+  const [createModal, setCreateModal] = useState(false)
+  const [editModal, setEditModal] = useState<any>(null)
+  const [deleteConfirmModal, setDeleteConfirmModal] = useState<any>(null)
+  const [deleteAllModal, setDeleteAllModal] = useState(false)
+  const [deleteAllLoading, setDeleteAllLoading] = useState(false)
+  const [formData, setFormData] = useState({
+    city: '',
+    fromName: '',
+    fromRole: 'agent',
+    amount: '',
+    paymentType: 'especes',
+    type: 'port_du',
+    status: 'pending',
+    reference: '',
+    note: '',
+  })
 
   // Liste des villes présentes dans les versements
   const cities = useMemo(
@@ -116,6 +137,98 @@ export default function AdminVersementsTab({
     }
   }
 
+  // ══════════════════════════════════════════════════════════════════════════
+  // Fonctions CRUD
+  // ══════════════════════════════════════════════════════════════════════════
+
+  const openCreateModal = () => {
+    setFormData({
+      city: '',
+      fromName: '',
+      fromRole: 'agent',
+      amount: '',
+      paymentType: 'especes',
+      type: 'port_du',
+      status: 'pending',
+      reference: '',
+      note: '',
+    })
+    setCreateModal(true)
+  }
+
+  const openEditModal = (transfer: any) => {
+    setFormData({
+      city: transfer.city || '',
+      fromName: transfer.fromName || '',
+      fromRole: transfer.fromRole || 'agent',
+      amount: String(transfer.amount || ''),
+      paymentType: transfer.paymentType || 'especes',
+      type: transferType(transfer),
+      status: transfer.status || 'pending',
+      reference: transfer.reference || '',
+      note: transfer.note || '',
+    })
+    setEditModal(transfer)
+  }
+
+  const handleCreateSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!formData.city || !formData.fromName || !formData.amount) {
+      alert('❌ Veuillez remplir tous les champs obligatoires (Ville, De, Montant)')
+      return
+    }
+    try {
+      await createAdminTransferDirect(
+        formData,
+        auth.currentUser?.uid || '',
+        auth.currentUser?.displayName || 'Admin'
+      )
+      setCreateModal(false)
+      alert('✅ Versement créé avec succès!')
+    } catch (err: any) {
+      alert(`❌ Erreur: ${err.message}`)
+    }
+  }
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!editModal || !formData.city || !formData.fromName || !formData.amount) {
+      alert('❌ Veuillez remplir tous les champs obligatoires')
+      return
+    }
+    try {
+      await updateAdminTransfer(editModal.id, formData)
+      setEditModal(null)
+      alert('✅ Versement modifié avec succès!')
+    } catch (err: any) {
+      alert(`❌ Erreur: ${err.message}`)
+    }
+  }
+
+  const handleDelete = async () => {
+    if (!deleteConfirmModal) return
+    try {
+      await deleteAdminTransfer(deleteConfirmModal.id)
+      setDeleteConfirmModal(null)
+      alert('✅ Versement supprimé avec succès!')
+    } catch (err: any) {
+      alert(`❌ Erreur: ${err.message}`)
+    }
+  }
+
+  const handleDeleteAllVersements = async () => {
+    setDeleteAllLoading(true)
+    try {
+      await deleteAllDriverVersements()
+      setDeleteAllModal(false)
+      alert('✅ Tous les versements ont été supprimés!')
+    } catch (err: any) {
+      alert(`❌ Erreur: ${err.message}`)
+    } finally {
+      setDeleteAllLoading(false)
+    }
+  }
+
   return (
     <div className="space-y-6">
       {/* Header Stats */}
@@ -184,6 +297,24 @@ export default function AdminVersementsTab({
             <span>💰 COD: {fmt(totals.total.cod)} DH</span>
           </div>
         </div>
+      </div>
+
+      {/* Boutons actions */}
+      <div className="flex justify-end gap-3">
+        <button
+          onClick={() => setDeleteAllModal(true)}
+          className="flex items-center gap-2 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all transform hover:scale-105"
+        >
+          <Trash2 className="w-5 h-5" />
+          Supprimer tous les versements
+        </button>
+        <button
+          onClick={openCreateModal}
+          className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all transform hover:scale-105"
+        >
+          <Plus className="w-5 h-5" />
+          Nouveau versement
+        </button>
       </div>
 
       {/* Filters */}
@@ -293,15 +424,43 @@ export default function AdminVersementsTab({
           ))}
         </div>
 
-        {/* Période */}
-        <DateFilter
-          value={datePreset}
-          onChange={setDatePreset}
-          from={dateFrom}
-          onFromChange={setDateFrom}
-          to={dateTo}
-          onToChange={setDateTo}
-        />
+        {/* Période - Champs de date uniquement (sans boutons de préréglage) */}
+        <div className="flex gap-3 items-center">
+          <label className="text-sm font-semibold text-gray-600">Période:</label>
+          <input
+            type="date"
+            value={dateFrom}
+            onChange={(e) => {
+              setDateFrom(e.target.value)
+              setDatePreset('custom')
+            }}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+            placeholder="Du"
+          />
+          <span className="text-gray-400">→</span>
+          <input
+            type="date"
+            value={dateTo}
+            onChange={(e) => {
+              setDateTo(e.target.value)
+              setDatePreset('custom')
+            }}
+            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
+            placeholder="Au"
+          />
+          {(dateFrom || dateTo) && (
+            <button
+              onClick={() => {
+                setDateFrom('')
+                setDateTo('')
+                setDatePreset('all')
+              }}
+              className="text-xs text-gray-500 hover:text-gray-700 underline"
+            >
+              Réinitialiser
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Table */}
@@ -389,7 +548,7 @@ export default function AdminVersementsTab({
                         )}
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex items-center justify-center gap-2">
+                        <div className="flex items-center justify-center gap-2 flex-wrap">
                           {transfer.status === 'pending' && (
                             <>
                               <button
@@ -408,13 +567,28 @@ export default function AdminVersementsTab({
                               </button>
                             </>
                           )}
+                          {/* Boutons CRUD - disponibles pour tous les versements */}
+                          <button
+                            onClick={() => openEditModal(transfer)}
+                            className="p-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition"
+                            title="Modifier"
+                          >
+                            <Edit className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => setDeleteConfirmModal(transfer)}
+                            className="p-1.5 bg-red-500 hover:bg-red-600 text-white rounded-lg transition"
+                            title="Supprimer"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                           {transfer.note && (
                             <button
                               onClick={() => alert(transfer.note)}
-                              className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg text-xs font-semibold transition"
+                              className="p-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition"
                               title="Voir note"
                             >
-                              <Eye className="w-3 h-3" />
+                              <Eye className="w-4 h-4" />
                             </button>
                           )}
                         </div>
@@ -530,6 +704,293 @@ export default function AdminVersementsTab({
                 className="py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold transition"
               >
                 ✗ Rejeter
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════════ */}
+      {/* Modal Création/Modification */}
+      {/* ══════════════════════════════════════════════════════════════════════════ */}
+      {(createModal || editModal) && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4">
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[95vh] overflow-y-auto shadow-2xl">
+            <div className="sticky top-0 bg-white border-b border-gray-200 p-4 sm:p-6">
+              <div className="flex items-center justify-between">
+                <h3 className="text-xl font-bold text-gray-800">
+                  {createModal ? '➕ Nouveau versement' : '✏️ Modifier le versement'}
+                </h3>
+                <button
+                  onClick={() => {
+                    setCreateModal(false)
+                    setEditModal(null)
+                  }}
+                  className="p-2 hover:bg-gray-100 rounded-lg transition"
+                >
+                  <X className="w-5 h-5 text-gray-500" />
+                </button>
+              </div>
+            </div>
+
+            <form onSubmit={createModal ? handleCreateSubmit : handleEditSubmit} className="p-4 sm:p-6 space-y-4">
+              {/* Ville */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  Ville <span className="text-red-500">*</span>
+                </label>
+                <select
+                  value={formData.city}
+                  onChange={(e) => setFormData({ ...formData, city: e.target.value })}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
+                  required
+                >
+                  <option value="">-- Sélectionnez une ville --</option>
+                  {cities.map((c) => (
+                    <option key={c} value={c}>
+                      {c}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {/* De (Nom) */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">
+                  De (Nom) <span className="text-red-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  value={formData.fromName}
+                  onChange={(e) => setFormData({ ...formData, fromName: e.target.value })}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
+                  placeholder="Nom du chef"
+                  required
+                />
+              </div>
+
+              {/* Rôle */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Rôle</label>
+                <select
+                  value={formData.fromRole}
+                  onChange={(e) => setFormData({ ...formData, fromRole: e.target.value })}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
+                >
+                  <option value="agent">Agent</option>
+                  <option value="chef_agence">Chef Agence</option>
+                  <option value="caissier">Caissier</option>
+                  <option value="admin">Admin</option>
+                </select>
+              </div>
+
+              {/* Ligne: Montant + Type paiement + Type versement */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">
+                    Montant (DH) <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={formData.amount}
+                    onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
+                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
+                    placeholder="0.00"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Mode paiement</label>
+                  <select
+                    value={formData.paymentType}
+                    onChange={(e) => setFormData({ ...formData, paymentType: e.target.value })}
+                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
+                  >
+                    <option value="especes">💵 Espèces</option>
+                    <option value="cheque">📝 Chèque</option>
+                    <option value="virement">🏦 Virement</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-semibold text-gray-700 mb-2">Type</label>
+                  <select
+                    value={formData.type}
+                    onChange={(e) => setFormData({ ...formData, type: e.target.value })}
+                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
+                  >
+                    <option value="port_du">📮 Port Dû</option>
+                    <option value="cod">💰 COD</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Statut */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Statut</label>
+                <select
+                  value={formData.status}
+                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
+                >
+                  <option value="pending">⏳ En attente</option>
+                  <option value="confirmed">✅ Validé</option>
+                  <option value="rejected">❌ Rejeté</option>
+                </select>
+              </div>
+
+              {/* Référence */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Référence</label>
+                <input
+                  type="text"
+                  value={formData.reference}
+                  onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
+                  placeholder="Numéro de référence (optionnel)"
+                />
+              </div>
+
+              {/* Note */}
+              <div>
+                <label className="block text-sm font-semibold text-gray-700 mb-2">Note</label>
+                <textarea
+                  value={formData.note}
+                  onChange={(e) => setFormData({ ...formData, note: e.target.value })}
+                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
+                  placeholder="Note additionnelle (optionnel)"
+                  rows={3}
+                />
+              </div>
+
+              {/* Boutons */}
+              <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-gray-200">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setCreateModal(false)
+                    setEditModal(null)
+                  }}
+                  className="flex-1 py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="flex-1 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition"
+                >
+                  {createModal ? '➕ Créer' : '💾 Enregistrer'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════════ */}
+      {/* Modal Suppression */}
+      {/* ══════════════════════════════════════════════════════════════════════════ */}
+      {deleteConfirmModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center">
+                <AlertTriangle className="w-6 h-6 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-800">Supprimer le versement</h3>
+                <p className="text-sm text-gray-500">Cette action est irréversible</p>
+              </div>
+            </div>
+            <div className="bg-gray-50 rounded-xl p-4 mb-4 space-y-2">
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-600">De:</span>
+                <span className="font-semibold text-gray-800">{deleteConfirmModal.fromName}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-600">Agence:</span>
+                <span className="font-semibold text-gray-800">{deleteConfirmModal.city}</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-600">Montant:</span>
+                <span className="font-bold text-lg text-red-600">{fmt(deleteConfirmModal.amount)} DH</span>
+              </div>
+              <div className="flex justify-between text-sm">
+                <span className="text-gray-600">Statut:</span>
+                <span className="font-semibold text-gray-800 capitalize">{deleteConfirmModal.status}</span>
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setDeleteConfirmModal(null)}
+                className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleDelete}
+                className="py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold transition"
+              >
+                🗑️ Supprimer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════════ */}
+      {/* Modal Suppression de tous les versements */}
+      {/* ══════════════════════════════════════════════════════════════════════════ */}
+      {deleteAllModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center">
+                <AlertTriangle className="w-6 h-6 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-800">Supprimer tous les versements</h3>
+                <p className="text-sm text-gray-500 mt-0.5">Cette action est irréversible</p>
+              </div>
+            </div>
+
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4">
+              <p className="text-sm text-red-700 font-semibold mb-2">
+                ⚠️ Attention : Vous êtes sur le point de supprimer TOUS les versements livreurs
+              </p>
+              <p className="text-xs text-red-600">
+                <strong>{totals.total.count} versement(s)</strong> seront supprimés définitivement.
+                <br />
+                <strong>Montant total : {fmt(totals.total.amount)} DH</strong>
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setDeleteAllModal(false)}
+                disabled={deleteAllLoading}
+                className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition disabled:opacity-50"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleDeleteAllVersements}
+                disabled={deleteAllLoading}
+                className="py-3 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold transition flex items-center justify-center gap-2"
+              >
+                {deleteAllLoading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Suppression...
+                  </>
+                ) : (
+                  <>
+                    <Trash2 className="w-4 h-4" />
+                    Confirmer
+                  </>
+                )}
               </button>
             </div>
           </div>

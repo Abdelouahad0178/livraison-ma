@@ -13,8 +13,9 @@ import {
   subscribeAllDriverPortDuTransactions, addDriverPortDuTransaction, deleteDriverPortDuTransaction, updateDriverPortDuTransaction,
   confirmDriverVersement,
   subscribeAdminTransfers, confirmAdminTransfer, rejectAdminTransfer,
+  createAdminTransferDirect, updateAdminTransfer, deleteAdminTransfer,
   createCaisseEntry,
-  adjustCentralCash, subscribeCentralCash,
+  adjustCentralCash, subscribeCentralCash, resetCentralCashToZero, resetEverythingToZero,
   subscribeAllAgencyCashes, updateAgencyCash,
   subscribeAllSectors,
   createReturnParcel,
@@ -295,6 +296,7 @@ const ROLES = [
   { key: 'chef_agence', label: "Chef d'agence",   emoji: '🏢',   badge: 'bg-indigo-100 text-indigo-700'   },
   { key: 'agent',       label: 'Agent',           emoji: '👤', badge: 'bg-blue-100 text-blue-700'      },
   { key: 'aide_agent',           label: 'Aide Agent',         emoji: '🙋',   badge: 'bg-violet-100 text-violet-700'  },
+  { key: 'agentpro',             label: 'Agent Pro',          emoji: '⭐',   badge: 'bg-purple-100 text-purple-700'  },
   { key: 'pointeur_encaisseur', label: 'Pointeur-Encaisseur', emoji: '💰',   badge: 'bg-indigo-100 text-indigo-700'  },
   { key: 'encaisseur_central',   label: 'Encaisseur central',  emoji: '🏦',   badge: 'bg-emerald-100 text-emerald-700' },
   { key: 'chauffeur',            label: 'Chauffeur',           emoji: '🚗',   badge: 'bg-orange-100 text-orange-700'  },
@@ -318,12 +320,17 @@ export default function AdminPage() {
   const [codDateFrom,   setCodDateFrom]   = useState('')
   const [codDateTo,     setCodDateTo]     = useState('')
 
-  // Parcels
-  const [parcels,      setParcels]      = useState<any[]>([])
-  const [moreParcels,  setMoreParcels]  = useState<any[]>([])
+  // Parcels - Système de chargement progressif comme CentralCollectorPage
+  const PAGE_SIZE = 800 // Chargement par tranches de 800
+  const [parcels,      setParcels]      = useState<any[]>([]) // Pour compatibilité - alias de liveParcels
+  const [liveParcels,  setLiveParcels]  = useState<any[]>([]) // Temps réel (premiers 800)
+  const [moreParcels,  setMoreParcels]  = useState<any[]>([]) // Chargés progressivement
   const lastPageDocRef = useRef<any>(null)
+  const pagedRef = useRef(false) // true si on a déjà chargé des pages
   const [hasMore,      setHasMore]      = useState(true)
   const [loadingMore,  setLoadingMore]  = useState(false)
+  const [loadingAll,   setLoadingAll]   = useState(false)
+  const [loadAllProgress, setLoadAllProgress] = useState(0)
   const [loading,      setLoading]      = useState(true)
   const [realStats,    setRealStats]    = useState<any>(null)
   const [cityFilter,       setCityFilter]       = useState('Toutes')
@@ -336,6 +343,10 @@ export default function AdminPage() {
   const [isSearchActive, setIsSearchActive] = useState(false) // Pour recharger plus de colis quand recherche active
   const [serverSearchResults, setServerSearchResults] = useState<any[] | null>(null) // Résultats recherche serveur
   const [isSearching, setIsSearching] = useState(false) // Loading state pour recherche
+
+  // Limite d'affichage des expéditions filtrées
+  const DISPLAY_LIMIT = 150
+  const [displayLimit, setDisplayLimit] = useState(DISPLAY_LIMIT)
 
   const [statusModal,       setStatusModal]       = useState<any>(null)
   const [returnModal,       setReturnModal]       = useState<any>(null)
@@ -411,6 +422,10 @@ export default function AdminPage() {
   const [centralCashForm, setCentralCashForm] = useState({ amount: '', type: 'especes', operation: 'add', reason: '' })
   const [centralCashLoading, setCentralCashLoading] = useState(false)
   const [centralCashError, setCentralCashError] = useState('')
+  const [resetCentralCashModal, setResetCentralCashModal] = useState(false)
+  const [resetCentralCashLoading, setResetCentralCashLoading] = useState(false)
+  const [superResetModal, setSuperResetModal] = useState(false)
+  const [superResetLoading, setSuperResetLoading] = useState(false)
 
   // Director logs
   const [directorLogs,      setDirectorLogs]      = useState<any[]>([])
@@ -557,40 +572,114 @@ export default function AdminPage() {
     return () => { unsubParcels(); unsubUsers(); unsubLocks(); unsubTariffs(); unsubClientMessages(); unsubSectors(); unsubCentralCash(); unsubAgencyCashes(); unsubReglements(); unsubRapports() }
   }, [])
 
-  // Charger les colis - recharge quand recherche active pour trouver colis anciens
+  // ⚡ Abonnement temps réel : 800 premiers colis (rapide)
   useEffect(() => {
-    setLoading(true)
-
-    // 📊 Chargement intelligent
-    // - SANS recherche: 500 colis (rapide, pour affichage normal)
-    // - AVEC recherche: Ne charge PAS de colis (on utilise SEULEMENT searchParcels qui cherche dans TOUTE la base)
     if (isSearchActive) {
-      console.log(`🔍 Mode recherche: searchParcels cherche dans TOUTE la base (limite 50000)`)
-      setParcels([])
+      // Mode recherche : on utilise searchParcels
+      console.log(`🔍 Mode recherche: searchParcels cherche dans TOUTE la base`)
+      setLiveParcels([])
+      setMoreParcels([]) // ✅ Vider aussi les pages chargées pour ne pas polluer les résultats
       setLoading(false)
       return () => {}
     }
 
-    const loadLimit = 500
-    console.log(`📦 Chargement ${loadLimit} colis récents`)
+    setLoading(true)
+    console.log(`📦 Chargement ${PAGE_SIZE} colis récents en temps réel`)
 
     const unsubParcels = subscribeAllParcels(
       (data: any, lastSnap: any) => {
-        console.log(`✅ ${data.length} colis chargés`)
-        setParcels(data)
+        console.log(`✅ ${data.length} colis chargés en temps réel`)
+        setLiveParcels(data)
         setLoading(false)
-        if (!lastPageDocRef.current) lastPageDocRef.current = lastSnap
+        if (!pagedRef.current) lastPageDocRef.current = lastSnap
+        if (data.length < PAGE_SIZE) setHasMore(false)
       },
       (err: any) => {
         console.error('❌ Erreur chargement:', err)
         setLoading(false)
       },
       0,
-      loadLimit
+      PAGE_SIZE
     )
 
     return () => unsubParcels()
-  }, [isSearchActive]) // Recharge seulement quand on passe de "pas de recherche" à "recherche active"
+  }, [isSearchActive])
+
+  // 🚀 Chargement automatique de toute la base en arrière-plan (après premiers 800)
+  useEffect(() => {
+    if (!hasMore || loadingAll || loadingMore || !lastPageDocRef.current || isSearchActive) return
+    if (liveParcels.length === 0) return // attendre le chargement initial
+
+    // Lancer le chargement complet automatiquement après 2 secondes
+    const timer = setTimeout(() => {
+      if (hasMore && !loadingAll && !loadingMore && lastPageDocRef.current) {
+        console.log(`🚀 Démarrage du chargement automatique de toute la base...`)
+        loadAllParcels()
+      }
+    }, 2000)
+
+    return () => clearTimeout(timer)
+  }, [liveParcels.length, hasMore, isSearchActive])
+
+  // Charger 800 colis de plus
+  const loadMoreParcels = async () => {
+    if (!hasMore || loadingMore || loadingAll || !lastPageDocRef.current) return
+    setLoadingMore(true)
+    try {
+      const { docs, lastDocSnap, hasMore: moreAvailable } = await getParcelsPage(lastPageDocRef.current, PAGE_SIZE)
+      pagedRef.current = true
+      setMoreParcels(prev => {
+        const map = new Map()
+        prev.forEach((p: any) => map.set(p.id, p))
+        docs.forEach((p: any) => map.set(p.id, p))
+        return [...map.values()]
+      })
+      if (lastDocSnap) lastPageDocRef.current = lastDocSnap
+      if (!moreAvailable) setHasMore(false)
+      console.log(`✅ ${docs.length} colis supplémentaires chargés (total moreParcels: ${docs.length})`)
+    } catch (err) {
+      console.error('AdminPage loadMore:', err)
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
+  // Tout charger : boucle par tranches de 800 jusqu'à la fin
+  const loadAllParcels = async () => {
+    if (loadingAll || loadingMore || !hasMore || !lastPageDocRef.current) return
+    setLoadingAll(true)
+    setLoadAllProgress(0)
+    try {
+      let cursor = lastPageDocRef.current
+      let more = true
+      let loaded = 0
+      let safety = 0
+      while (more && cursor && safety < 500) {
+        const page = await getParcelsPage(cursor, PAGE_SIZE)
+        pagedRef.current = true
+        const pageDocs = page.docs
+        loaded += pageDocs.length
+        setLoadAllProgress(loaded)
+        console.log(`📦 Chargement automatique: +${pageDocs.length} colis (total: ${loaded})`)
+        setMoreParcels(prev => {
+          const map = new Map()
+          prev.forEach((p: any) => map.set(p.id, p))
+          pageDocs.forEach((p: any) => map.set(p.id, p))
+          return [...map.values()]
+        })
+        cursor = page.lastDocSnap
+        more = page.hasMore && !!page.lastDocSnap
+        safety += 1
+      }
+      if (cursor) lastPageDocRef.current = cursor
+      setHasMore(false)
+      console.log(`✅ Chargement automatique terminé: ${loaded} colis chargés`)
+    } catch (err) {
+      console.error('AdminPage loadAll:', err)
+    } finally {
+      setLoadingAll(false)
+    }
+  }
 
   // Charger les vrais compteurs au montage uniquement (économie forfait gratuit)
   const loadRealStats = async () => {
@@ -720,13 +809,33 @@ export default function AdminPage() {
   const inputCls  = "border border-gray-200 rounded-xl px-3 py-2 text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:outline-none w-full transition"
 
   // -- Computed values (useMemo) ---------------------------------------------
+  // Fusion : temps réel + pages chargées + résultats serveur (comme CentralCollectorPage)
   const allParcels = useMemo(() => {
-    if (!Array.isArray(parcels) || !Array.isArray(moreParcels)) return []
     const map = new Map()
-    parcels.forEach((p: any) => map.set(p.id, p))
+    // 1. Ajouter les pages chargées progressivement
     moreParcels.forEach((p: any) => map.set(p.id, p))
-    return [...map.values()]
-  }, [parcels, moreParcels])
+    // 2. Ajouter les résultats de recherche serveur (si recherche active)
+    if (serverSearchResults) {
+      serverSearchResults.forEach((p: any) => map.set(p.id, p))
+    }
+    // 3. Le temps réel gagne (données les plus fraîches)
+    liveParcels.forEach((p: any) => map.set(p.id, p))
+
+    const arr = [...map.values()]
+    console.log(`📊 allParcels: ${arr.length} colis (liveParcels: ${liveParcels.length}, moreParcels: ${moreParcels.length}, serverSearch: ${serverSearchResults?.length || 0})`)
+
+    // Trier par date de création (plus récent en premier)
+    return arr.sort((a: any, b: any) => {
+      const ta = a.createdAt?.toDate?.()?.getTime() || (a.createdAt ? new Date(a.createdAt).getTime() : 0)
+      const tb = b.createdAt?.toDate?.()?.getTime() || (b.createdAt ? new Date(b.createdAt).getTime() : 0)
+      return tb - ta
+    })
+  }, [liveParcels, moreParcels, serverSearchResults])
+
+  // Alias pour compatibilité (setParcels met à jour liveParcels)
+  useEffect(() => {
+    setParcels(liveParcels)
+  }, [liveParcels])
 
   // Mise à jour de allParcels dans _as.current après sa définition
   _as.current.allParcels = allParcels
@@ -1061,20 +1170,29 @@ export default function AdminPage() {
       })
     }
 
-    // 🔢 Limiter à 100 expéditions maximum pour performance
-    return results.slice(0, 100)
+    // Retourner TOUS les résultats filtrés (pas de limitation)
+    return results
   }, [periodParcels, cityFilter, driverFilter, statusFilter, serviceTypeFilter, portTypeFilter, debouncedSearch, fuseIndex, serverSearchResults])
 
-  const loadMoreParcels = async () => {
-    if (!hasMore || loadingMore) return
-    setLoadingMore(true)
-    try {
-      const { docs: data, lastDocSnap: lastSnap, hasMore: moreAvailable } = await getParcelsPage(lastPageDocRef.current, 200) // Charger seulement 200 colis
-      setMoreParcels((prev: any[]) => { const map = new Map(); prev.forEach((p: any) => map.set(p.id, p)); data.forEach((p: any) => map.set(p.id, p)); return [...map.values()] })
-      lastPageDocRef.current = lastSnap
-      if (!moreAvailable) setHasMore(false)
-    } finally { setLoadingMore(false) }
+  // Expéditions affichées avec limite (200 premiers)
+  const displayedFiltered = useMemo(() => {
+    return filtered.slice(0, displayLimit)
+  }, [filtered, displayLimit])
+
+  // Fonction pour charger plus d'expéditions
+  const loadMoreDisplayed = () => {
+    setDisplayLimit(prev => prev + DISPLAY_LIMIT)
   }
+
+  // Fonction pour tout afficher
+  const showAllDisplayed = () => {
+    setDisplayLimit(filtered.length)
+  }
+
+  // Réinitialiser la limite quand les filtres changent
+  useEffect(() => {
+    setDisplayLimit(DISPLAY_LIMIT)
+  }, [cityFilter, driverFilter, statusFilter, serviceTypeFilter, portTypeFilter, debouncedSearch])
 
   const handleAdjustCentralCash = async () => {
     const amount = parseFloat(centralCashForm.amount)
@@ -1113,6 +1231,32 @@ export default function AdminPage() {
       setCentralCashError(err.message || 'Erreur lors de l\'ajustement')
     } finally {
       setCentralCashLoading(false)
+    }
+  }
+
+  const handleResetCentralCash = async () => {
+    setResetCentralCashLoading(true)
+    try {
+      await resetCentralCashToZero(auth.currentUser?.displayName || auth.currentUser?.email || 'Admin')
+      setResetCentralCashModal(false)
+      alert('✅ Caisse Centrale réinitialisée à 0 DH!')
+    } catch (err: any) {
+      alert(`❌ Erreur: ${err.message}`)
+    } finally {
+      setResetCentralCashLoading(false)
+    }
+  }
+
+  const handleSuperReset = async () => {
+    setSuperResetLoading(true)
+    try {
+      await resetEverythingToZero(auth.currentUser?.displayName || auth.currentUser?.email || 'Admin')
+      setSuperResetModal(false)
+      alert('🔥 SUPER RESET EFFECTUÉ!\n\n✅ Caisse Centrale: 0 DH\n✅ Toutes les caisses d\'agences: 0 DH\n✅ Tous les versements livreurs supprimés!')
+    } catch (err: any) {
+      alert(`❌ Erreur: ${err.message}`)
+    } finally {
+      setSuperResetLoading(false)
     }
   }
 
@@ -1387,7 +1531,11 @@ export default function AdminPage() {
               setDateFrom={setDateFrom}
               dateTo={dateTo}
               setDateTo={setDateTo}
-              filtered={filtered}
+              filtered={displayedFiltered}
+              totalFiltered={filtered.length}
+              displayLimit={displayLimit}
+              loadMoreDisplayed={loadMoreDisplayed}
+              showAllDisplayed={showAllDisplayed}
               loading={loading}
               setCodEditModal={setCodEditModal}
               setNicEditModal={setNicEditModal}
@@ -1569,6 +1717,9 @@ export default function AdminPage() {
               setRemarkCityFilter={setRemarkCityFilter}
               remarkFilter={remarkFilter}
               setRemarkFilter={setRemarkFilter}
+              centralCash={centralCash}
+              setResetCentralCashModal={setResetCentralCashModal}
+              setSuperResetModal={setSuperResetModal}
             />
           </Suspense>
         )}
@@ -1580,6 +1731,9 @@ export default function AdminPage() {
               adminTransfers={adminTransfers}
               confirmAdminTransfer={confirmAdminTransfer}
               rejectAdminTransfer={rejectAdminTransfer}
+              createAdminTransferDirect={createAdminTransferDirect}
+              updateAdminTransfer={updateAdminTransfer}
+              deleteAdminTransfer={deleteAdminTransfer}
               auth={auth}
             />
           </Suspense>
@@ -1753,7 +1907,6 @@ export default function AdminPage() {
         {mainTab === 'port_agencies' && (
           <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
             <AdminPortAgenciesTab
-              allParcels={allParcels}
               datePreset={datePreset}
               setDatePreset={setDatePreset}
               dateFrom={dateFrom}
@@ -2822,6 +2975,157 @@ export default function AdminPage() {
                   <>
                     <Save className="w-4 h-4" />
                     Enregistrer
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════════ */}
+      {/* Modal Réinitialisation Caisse Centrale */}
+      {/* ══════════════════════════════════════════════════════════════════════════ */}
+      {resetCentralCashModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center">
+                <AlertTriangle className="w-6 h-6 text-red-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-800">Réinitialiser Caisse Centrale</h3>
+                <p className="text-sm text-gray-500 mt-0.5">Cette action est irréversible</p>
+              </div>
+            </div>
+
+            <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4">
+              <p className="text-sm text-red-700 font-semibold mb-2">
+                ⚠️ Attention : Vous êtes sur le point de réinitialiser la Caisse Centrale Admin à 0 DH
+              </p>
+              <p className="text-xs text-red-600">
+                <strong>Solde actuel : {fmt(centralCash?.solde || 0)} DH</strong>
+                <br />
+                • Espèces : {fmt(centralCash?.soldeEspeces || 0)} DH
+                <br />
+                • Chèques : {fmt(centralCash?.soldeCheques || 0)} DH
+                <br />
+                • Virement : {fmt(centralCash?.soldeVirement || 0)} DH
+              </p>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setResetCentralCashModal(false)}
+                disabled={resetCentralCashLoading}
+                className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition disabled:opacity-50"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleResetCentralCash}
+                disabled={resetCentralCashLoading}
+                className="py-3 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold transition flex items-center justify-center gap-2"
+              >
+                {resetCentralCashLoading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Réinitialisation...
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle className="w-4 h-4" />
+                    Confirmer
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ══════════════════════════════════════════════════════════════════════════ */}
+      {/* 🔥 Modal SUPER RESET - Réinitialise TOUT */}
+      {/* ══════════════════════════════════════════════════════════════════════════ */}
+      {superResetModal && (
+        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+          <div className="bg-gradient-to-br from-red-50 to-orange-50 rounded-2xl w-full max-w-2xl p-8 shadow-2xl border-4 border-red-600">
+            <div className="flex items-center gap-4 mb-6">
+              <div className="w-16 h-16 bg-red-600 rounded-2xl flex items-center justify-center animate-pulse">
+                <AlertTriangle className="w-10 h-10 text-white" />
+              </div>
+              <div>
+                <h3 className="font-black text-2xl text-red-900">🔥 SUPER RESET 🔥</h3>
+                <p className="text-sm text-red-700 mt-1 font-bold">ATTENTION : Cette action est IRRÉVERSIBLE</p>
+              </div>
+            </div>
+
+            <div className="bg-red-100 border-4 border-red-600 rounded-2xl p-6 mb-6">
+              <p className="text-base text-red-900 font-black mb-4 text-center">
+                ⚠️ VOUS ÊTES SUR LE POINT DE RÉINITIALISER TOUT LE SYSTÈME À ZÉRO ⚠️
+              </p>
+
+              <div className="space-y-4">
+                <div className="bg-white rounded-xl p-4 border-2 border-red-400">
+                  <p className="text-sm font-bold text-red-800 mb-2">1️⃣ Caisse Centrale Admin → 0 DH</p>
+                  <p className="text-xs text-red-700 pl-6">
+                    • Solde actuel: {fmt(centralCash?.solde || 0)} DH
+                    <br />
+                    • Espèces: {fmt(centralCash?.soldeEspeces || 0)} DH
+                    <br />
+                    • Chèques: {fmt(centralCash?.soldeCheques || 0)} DH
+                    <br />
+                    • Virement: {fmt(centralCash?.soldeVirement || 0)} DH
+                  </p>
+                </div>
+
+                <div className="bg-white rounded-xl p-4 border-2 border-red-400">
+                  <p className="text-sm font-bold text-red-800 mb-2">2️⃣ Toutes les Caisses d'Agences → 0 DH</p>
+                  <p className="text-xs text-red-700 pl-6">
+                    • {agencyCashes.length} caisses d'agences seront réinitialisées
+                    <br />
+                    • Total actuel: {fmt(agencyCashes.reduce((sum: number, ac: any) => sum + (ac.solde || 0), 0))} DH
+                  </p>
+                </div>
+
+                <div className="bg-white rounded-xl p-4 border-2 border-red-400">
+                  <p className="text-sm font-bold text-red-800 mb-2">3️⃣ Tous les Versements Livreurs SUPPRIMÉS</p>
+                  <p className="text-xs text-red-700 pl-6">
+                    • Tous les versements en attente seront SUPPRIMÉS définitivement
+                  </p>
+                </div>
+              </div>
+
+              <div className="mt-6 bg-red-900 text-white rounded-xl p-4 text-center">
+                <p className="text-sm font-black">
+                  ⚡ CETTE OPÉRATION NE PEUT PAS ÊTRE ANNULÉE ⚡
+                </p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-4">
+              <button
+                onClick={() => setSuperResetModal(false)}
+                disabled={superResetLoading}
+                className="py-4 rounded-xl border-2 border-gray-400 text-gray-700 font-bold hover:bg-gray-100 transition disabled:opacity-50"
+              >
+                ❌ Annuler
+              </button>
+              <button
+                onClick={handleSuperReset}
+                disabled={superResetLoading}
+                className="py-4 rounded-xl bg-gradient-to-r from-red-700 via-red-800 to-red-900 hover:from-red-800 hover:via-red-900 hover:to-black disabled:opacity-50 text-white font-black transition-all transform hover:scale-105 flex items-center justify-center gap-3 shadow-xl border-2 border-red-500"
+              >
+                {superResetLoading ? (
+                  <>
+                    <div className="w-5 h-5 border-3 border-white border-t-transparent rounded-full animate-spin" />
+                    RÉINITIALISATION EN COURS...
+                  </>
+                ) : (
+                  <>
+                    <AlertTriangle className="w-5 h-5 animate-pulse" />
+                    🔥 CONFIRMER SUPER RESET 🔥
+                    <AlertTriangle className="w-5 h-5 animate-pulse" />
                   </>
                 )}
               </button>

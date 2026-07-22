@@ -28,6 +28,7 @@ export default function AdminCaisseTab({
   caisseCityFilter, setCaisseCityFilter, caisseTypeFilter, setCaisseTypeFilter,
   clotureModal, setClotureModal, clotureLoading, setClotureLoading, clotureError, setClotureError,
   remarkCityFilter, setRemarkCityFilter, remarkFilter, setRemarkFilter,
+  centralCash, setResetCentralCashModal, setSuperResetModal,
 }: any) {
   // 🔧 Modal Admin pour modifier solde caisse agence
   const [editCashModal, setEditCashModal] = useState<any>(null)
@@ -254,7 +255,84 @@ export default function AdminCaisseTab({
           return (
             <div className="mt-4 space-y-5">
 
-              {/* â"€â"€â"€ Caisse Centrale â"€â"€â"€ */}
+              {/* 🔥 SUPER RESET BUTTON - TOUJOURS VISIBLE */}
+              <div className="relative overflow-hidden bg-gradient-to-br from-red-700 via-red-800 to-red-900 rounded-3xl p-6 text-white shadow-2xl mb-6 border-4 border-red-500">
+                <div className="absolute inset-0 opacity-10"
+                  style={{ backgroundImage: 'radial-gradient(circle at 20% 80%, white 0%, transparent 50%)' }} />
+                <div className="relative">
+                  <div className="text-center mb-4">
+                    <h2 className="font-black text-2xl mb-2">🔥 RÉINITIALISATION TOTALE 🔥</h2>
+                    <p className="text-red-200 text-sm font-semibold">Remettre tout le système à zéro</p>
+                  </div>
+                  <button
+                    onClick={() => setSuperResetModal && setSuperResetModal(true)}
+                    className="w-full px-6 py-5 bg-gradient-to-r from-red-900 via-black to-red-900 hover:from-black hover:via-red-950 hover:to-black text-white rounded-2xl font-black text-lg transition-all transform hover:scale-105 flex items-center justify-center gap-4 shadow-2xl border-4 border-yellow-400"
+                  >
+                    <AlertTriangle className="w-8 h-8 animate-pulse" />
+                    <div className="text-center">
+                      <div className="text-xl">SUPER RESET</div>
+                      <div className="text-xs font-normal opacity-90">Réinitialiser TOUT à 0 DH</div>
+                    </div>
+                    <AlertTriangle className="w-8 h-8 animate-pulse" />
+                  </button>
+                  <div className="mt-4 bg-red-950/50 rounded-xl p-3 border border-red-400">
+                    <p className="text-center text-white text-xs font-bold">
+                      ⚠️ Cette action va :<br/>
+                      1️⃣ Caisse Centrale Admin → 0 DH<br/>
+                      2️⃣ Toutes les caisses d'agences → 0 DH<br/>
+                      3️⃣ Supprimer tous les versements livreurs
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* â"€â"€â"€ Caisse Centrale Admin â"€â"€â"€ */}
+              {centralCash && (
+                <div className="relative overflow-hidden bg-gradient-to-br from-emerald-600 via-green-700 to-teal-800 rounded-3xl p-5 text-white shadow-xl mb-6">
+                  <div className="absolute inset-0 opacity-10"
+                    style={{ backgroundImage: 'radial-gradient(circle at 85% 15%, white 0%, transparent 50%)' }} />
+                  <div className="relative">
+                    <div className="flex items-start justify-between mb-4">
+                      <div>
+                        <p className="text-emerald-200 text-xs font-medium uppercase tracking-wider">Trésorerie Admin</p>
+                        <h2 className="font-black text-xl mt-0.5">💰 Caisse Centrale Admin</h2>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-emerald-200 text-xs">Solde Central</p>
+                        <p className={`text-2xl font-black ${(centralCash.solde || 0) >= 0 ? 'text-white' : 'text-red-300'}`}>
+                          {fmt(centralCash.solde || 0)} DH
+                        </p>
+                      </div>
+                    </div>
+                    <div className="grid grid-cols-3 gap-2 mb-4">
+                      <div className="bg-white/15 backdrop-blur-sm rounded-xl p-2.5">
+                        <p className="text-emerald-200 text-[10px] mb-1">💵 Espèces</p>
+                        <p className="text-sm font-black text-white">{fmt(centralCash.soldeEspeces || 0)} DH</p>
+                      </div>
+                      <div className="bg-white/15 backdrop-blur-sm rounded-xl p-2.5">
+                        <p className="text-emerald-200 text-[10px] mb-1">📝 Chèques</p>
+                        <p className="text-sm font-black text-white">{fmt(centralCash.soldeCheques || 0)} DH</p>
+                      </div>
+                      <div className="bg-white/15 backdrop-blur-sm rounded-xl p-2.5">
+                        <p className="text-emerald-200 text-[10px] mb-1">🏦 Virement</p>
+                        <p className="text-sm font-black text-white">{fmt(centralCash.soldeVirement || 0)} DH</p>
+                      </div>
+                    </div>
+
+                    {centralCash && (centralCash.solde > 0 || centralCash.soldeEspeces > 0 || centralCash.soldeCheques > 0 || centralCash.soldeVirement > 0) && (
+                      <button
+                        onClick={() => setResetCentralCashModal && setResetCentralCashModal(true)}
+                        className="w-full px-4 py-2.5 bg-red-500/90 hover:bg-red-600 text-white rounded-xl font-bold text-sm transition flex items-center justify-center gap-2"
+                      >
+                        <AlertTriangle className="w-4 h-4" />
+                        Réinitialiser Caisse Centrale à 0
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* â"€â"€â"€ Caisse Centrale (Vue globale) â"€â"€â"€ */}
               <div className="relative overflow-hidden bg-gradient-to-br from-teal-600 via-teal-700 to-cyan-800 rounded-3xl p-5 text-white shadow-xl">
                 <div className="absolute inset-0 opacity-10"
                   style={{ backgroundImage: 'radial-gradient(circle at 85% 15%, white 0%, transparent 50%)' }} />
@@ -262,7 +340,7 @@ export default function AdminCaisseTab({
                   <div className="flex items-start justify-between mb-5">
                     <div>
                       <p className="text-teal-200 text-xs font-medium uppercase tracking-wider">Vue globale</p>
-                      <h2 className="font-black text-xl mt-0.5">🏛️ Caisse Centrale</h2>
+                      <h2 className="font-black text-xl mt-0.5">🏛️ Mouvements Agences</h2>
                       <p className="text-teal-300 text-xs mt-1">{cities.length} agence(s) · {caisseEntries.length} mouvement(s)</p>
                     </div>
                     <div className="text-right">

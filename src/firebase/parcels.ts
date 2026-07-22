@@ -50,27 +50,16 @@ export const isInReturnCircuit = (parcel: any) => {
 const DESTINATION_VISIBLE_STATUSES = ['En transit', 'Arrivé en agence', 'En cours de livraison', 'Livré', 'Retourné']
 
 /**
- * 📅 Calcule la date de travail (workDate) basée sur l'heure de création
- * Session de travail: 8h00 → 6h00 du lendemain
- * Exemple: 01/07 8h→minuit + 02/07 minuit→6h = workDate 02/07
+ * 📅 Calcule la date de travail (workDate) basée sur la date de création
+ * Système classique: 00h00 à 23h59 (jour calendaire)
+ * Exemples:
+ *   - 21/07 à 00h → workDate = 21/07
+ *   - 21/07 à 10h → workDate = 21/07
+ *   - 21/07 à 23h → workDate = 21/07
  */
 function calculateWorkDate(timestamp?: Date | string): string {
   const date = timestamp ? new Date(timestamp) : new Date()
-  const hours = date.getHours()
-
-  // Entre 8h00 et minuit → workDate = DEMAIN (fin de session)
-  if (hours >= 8) {
-    const workDate = new Date(date)
-    workDate.setDate(workDate.getDate() + 1)
-    return workDate.toISOString().split('T')[0]
-  }
-
-  // Entre minuit et 6h00 → workDate = AUJOURD'HUI (déjà dans le lendemain)
-  if (hours < 6) {
-    return date.toISOString().split('T')[0]
-  }
-
-  // Entre 6h00 et 8h00 → période de transition, utiliser aujourd'hui
+  // Retourne simplement le jour calendaire (00h à 23h59)
   return date.toISOString().split('T')[0]
 }
 
@@ -169,7 +158,8 @@ async function ensureReceiverClientForAgency(parcel: any, parcelId: any) {
 }
 export async function createParcel(data: Record<string, unknown>): Promise<Record<string, unknown> & { id: string; trackingId: string }> {
   const trackingId    = generateTrackingId()
-  const requiresChefValidation = data.agentRole === 'aide_agent' || data.agentRole === 'client_portal'
+  // ⚠️ VALIDATION DÉSACTIVÉE : Les saisies des aides agents et portail client ne nécessitent plus de validation par le chef
+  const requiresChefValidation = false  // Était: data.agentRole === 'aide_agent' || data.agentRole === 'client_portal'
   const sender = data.sender as Record<string, unknown>
   const receiver = data.receiver as Record<string, unknown>
   const isLocalDelivery = sameText(sender?.city, receiver?.city)
@@ -303,6 +293,13 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
 export async function updateParcelStatus(parcelId: string, status: string, extra: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const parcelRef = doc(db, 'parcels', parcelId)
 
+  // Créer historyEntry avant la transaction pour qu'il soit accessible après
+  const historyEntry = {
+    status,
+    timestamp: new Date().toISOString(),
+    ...extra
+  }
+
   // 🔒 Transaction pour éviter race conditions sur circuit retour
   await runTransaction(db, async tx => {
     const parcelSnap = await tx.get(parcelRef)
@@ -320,11 +317,6 @@ export async function updateParcelStatus(parcelId: string, status: string, extra
       }
     }
 
-    const historyEntry = {
-      status,
-      timestamp: new Date().toISOString(),
-      ...extra
-    }
     const patch: Record<string, any> = {
       status,
       history: arrayUnion(historyEntry)
@@ -544,7 +536,7 @@ export async function validateParcelEntry(parcelId: any, chefId: any, chefName: 
 
   await updateDoc(ref, patch)
 
-  if (parcel.agentRole === 'client_portal' && parcel.portType === 'port_en_compte' && parcel.clientId && (parseFloat(parcel.price) || 0) > 0 && parcel.portalDebitCreated !== true) {
+  if (parcel.agentRole === 'client_portal' && parcel.portType === 'port_en_compte_expediteur' && parcel.clientId && (parseFloat(parcel.price) || 0) > 0 && parcel.portalDebitCreated !== true) {
     try {
       await addPayment({
         clientId: parcel.clientId,
@@ -625,6 +617,14 @@ export async function getArchivedParcels(city: any, { lastOrigDoc = null, lastDe
     lastDestDoc: s2.docs[s2.docs.length - 1] ?? null,
   }
 }
+
+// Récupérer TOUTES les archives (pour Encaisseur Central)
+export async function getAllArchivedParcels(maxResults = 1000) {
+  const q = query(collection(db, 'parcels_archive'), orderBy('createdAt', 'desc'), limit(maxResults))
+  const snapshot = await getDocs(q)
+  return snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
+}
+
 export async function archiveParcels(city: any, olderThanDays = 180, onProgress: (done?: number, total?: number) => void = () => {}) {
   const cutoff = daysAgoTimestamp(olderThanDays)
   const [r1, r2, r3, r4] = await Promise.all([
@@ -794,7 +794,7 @@ export function subscribeAgentParcels(agentId: any, callback: any, onError: (err
 
   return () => { unsub1(); unsub2(); clearTimeout(timer) }
 }
-export async function getMoreAgentParcels(agentId: any, beforeTimestamp: any, pageSize = 50) {
+export async function getMoreAgentParcels(agentId: any, beforeTimestamp: any, pageSize = 800) {
   const [s1, s2] = await Promise.all([
     getDocs(query(collection(db, 'parcels'), where('agentId', '==', agentId), where('createdAt', '<', beforeTimestamp), orderBy('createdAt', 'desc'), limit(pageSize))),
     getDocs(query(collection(db, 'parcels'), where('destinationAgentId', '==', agentId), where('createdAt', '<', beforeTimestamp), orderBy('createdAt', 'desc'), limit(pageSize)))
@@ -837,9 +837,17 @@ export function subscribeAgencyInbox(city: any, callback: any, onError: (err?: a
 }
 
 // Colis d'un chauffeur de transport
-export function subscribeAgencyParcels(city: any, callback: any, onError: (err?: any) => void = () => {}) {
+export function subscribeAgencyParcels(
+  city: any,
+  callback: any,
+  onError: (err?: any) => void = () => {},
+  pageLimit = 600, // Limite configurable (600 par défaut)
+  callbackWithLastDoc?: (lastDoc: any) => void // Callback pour retourner le dernier document (pagination)
+) {
   let created: any[] = [], arrived: any[] = []
   let timer: ReturnType<typeof setTimeout> | undefined = undefined
+  let lastCreatedDoc: any = null
+  let lastArrivedDoc: any = null
 
   const merge = () => {
     clearTimeout(timer)
@@ -847,15 +855,24 @@ export function subscribeAgencyParcels(city: any, callback: any, onError: (err?:
       const map = new Map()
       created.forEach(p => map.set(p.id, p))
       arrived.forEach(p => map.set(p.id, p))
-      callback(sortByCreatedDesc([...map.values()]))
+      const sorted = sortByCreatedDesc([...map.values()])
+      callback(sorted)
+      // Retourner les derniers documents pour la pagination
+      if (callbackWithLastDoc) {
+        callbackWithLastDoc({ lastCreatedDoc, lastArrivedDoc })
+      }
     }, 50)
   }
 
   const since = daysAgoTimestamp(60)
-  const q1 = query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(2000))
-  const q2 = query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(2000))
+  const q1 = query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
+  const q2 = query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
 
-  const unsub1 = onSnapshot(q1, snap => { created = snap.docs.map(d => ({ id: d.id, ...d.data() })); merge() }, onError)
+  const unsub1 = onSnapshot(q1, snap => {
+    created = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    lastCreatedDoc = snap.docs[snap.docs.length - 1] || null
+    merge()
+  }, onError)
   const unsub2 = onSnapshot(q2, snap => {
     // Chef d'agence voit TOUS les colis de destination (incluant les retours)
     // Filtrer seulement les colis visibles OU les retours qui reviennent ici
@@ -865,10 +882,77 @@ export function subscribeAgencyParcels(city: any, callback: any, onError: (err?:
       // Sinon, utiliser le filtre normal pour les colis non-retournés
       return isParcelVisibleInDestinationAgency(p)
     })
+    lastArrivedDoc = snap.docs[snap.docs.length - 1] || null
     merge()
   }, onError)
 
   return () => { unsub1(); unsub2(); clearTimeout(timer) }
+}
+
+// Charger plus de colis pour une agence (pagination)
+export async function getMoreAgencyParcels(
+  city: string,
+  lastDocs: { lastCreatedDoc: any; lastArrivedDoc: any },
+  pageSize = 600
+): Promise<{ docs: any[]; lastDocs: any; hasMore: boolean }> {
+  const since = daysAgoTimestamp(60)
+  const results: any[] = []
+  let newLastCreatedDoc: any = null
+  let newLastArrivedDoc: any = null
+
+  try {
+    // Query 1: colis créés dans cette ville
+    if (lastDocs.lastCreatedDoc) {
+      const q1 = query(
+        collection(db, 'parcels'),
+        where('originCity', '==', city),
+        where('createdAt', '>=', since),
+        orderBy('createdAt', 'desc'),
+        startAfter(lastDocs.lastCreatedDoc),
+        limit(pageSize)
+      )
+      const snap1 = await getDocs(q1)
+      const created = snap1.docs.map(d => ({ id: d.id, ...d.data() }))
+      results.push(...created)
+      newLastCreatedDoc = snap1.docs[snap1.docs.length - 1] || lastDocs.lastCreatedDoc
+    }
+
+    // Query 2: colis arrivés dans cette ville
+    if (lastDocs.lastArrivedDoc) {
+      const q2 = query(
+        collection(db, 'parcels'),
+        where('destinationCity', '==', city),
+        where('createdAt', '>=', since),
+        orderBy('createdAt', 'desc'),
+        startAfter(lastDocs.lastArrivedDoc),
+        limit(pageSize)
+      )
+      const snap2 = await getDocs(q2)
+      const arrived = (snap2.docs.map(d => ({ id: d.id, ...d.data() })) as any[]).filter((p: any) => {
+        if (p.wasReturned && (p.returnToCity === city || p.destinationCity === city)) return true
+        return isParcelVisibleInDestinationAgency(p)
+      })
+      results.push(...arrived)
+      newLastArrivedDoc = snap2.docs[snap2.docs.length - 1] || lastDocs.lastArrivedDoc
+    }
+
+    // Fusionner et dédupliquer
+    const map = new Map()
+    results.forEach(p => map.set(p.id, p))
+    const docs = sortByCreatedDesc([...map.values()])
+
+    return {
+      docs,
+      lastDocs: {
+        lastCreatedDoc: newLastCreatedDoc,
+        lastArrivedDoc: newLastArrivedDoc
+      },
+      hasMore: docs.length >= pageSize
+    }
+  } catch (error) {
+    console.error('getMoreAgencyParcels error:', error)
+    return { docs: [], lastDocs, hasMore: false }
+  }
 }
 
 // Colis retournés pour une agence (à charger, reçus, historique)
@@ -1171,26 +1255,27 @@ export async function searchParcels(
     // Collections à chercher
     const collections = ['parcels']
     if (includeArchived) {
-      collections.push('parcels_archived')
+      collections.push('parcels_archive')
     }
 
     // Chercher dans chaque collection
     for (const collectionName of collections) {
       const parcelsCol = collection(db, collectionName)
-      const isArchived = collectionName === 'parcels_archived'
+      const isArchived = collectionName === 'parcels_archive'
 
-      // Test 1: Recherche exacte par senderNic
+      // Test 1: Recherche EXACTE par senderNic ou nic
       try {
-        const qNic = query(parcelsCol, where('senderNic', '==', searchTerm))
-        const snapNic = await getDocs(qNic)
-        for (const d of snapNic.docs) {
+        const qSenderNic = query(parcelsCol, where('senderNic', '==', searchTerm))
+        const qNic = query(parcelsCol, where('nic', '==', searchTerm))
+        const [snapSenderNic, snapNic] = await Promise.all([getDocs(qSenderNic), getDocs(qNic)])
+        for (const d of [...snapSenderNic.docs, ...snapNic.docs]) {
           if (!uniqueIds.has(d.id)) {
             uniqueIds.add(d.id)
             results.push({ id: d.id, ...d.data(), isArchived })
           }
         }
       } catch (e) {
-        console.error('Erreur requête senderNic:', e)
+        console.error('Erreur requête senderNic/nic:', e)
       }
 
       // Test 2: trackingId
@@ -1232,10 +1317,22 @@ export async function searchParcels(
       const nameLower = searchTerm.toLowerCase().trim()
       if (/[a-zA-Zà-ÿ]/.test(searchTerm)) {
         try {
-          const qName1 = query(parcelsCol, where('senderNameLower', '==', nameLower))
-          const qName2 = query(parcelsCol, where('receiverNameLower', '==', nameLower))
-          const [snap1, snap2] = await Promise.all([getDocs(qName1), getDocs(qName2)])
-          for (const d of [...snap1.docs, ...snap2.docs]) {
+          // Recherche exacte
+          const qName1Exact = query(parcelsCol, where('senderNameLower', '==', nameLower))
+          const qName2Exact = query(parcelsCol, where('receiverNameLower', '==', nameLower))
+
+          // Recherche par préfixe (commence par)
+          const qName1Prefix = query(parcelsCol, where('senderNameLower', '>=', nameLower), where('senderNameLower', '<=', nameLower + ''))
+          const qName2Prefix = query(parcelsCol, where('receiverNameLower', '>=', nameLower), where('receiverNameLower', '<=', nameLower + ''))
+
+          const [snap1Exact, snap2Exact, snap1Prefix, snap2Prefix] = await Promise.all([
+            getDocs(qName1Exact),
+            getDocs(qName2Exact),
+            getDocs(qName1Prefix),
+            getDocs(qName2Prefix)
+          ])
+
+          for (const d of [...snap1Exact.docs, ...snap2Exact.docs, ...snap1Prefix.docs, ...snap2Prefix.docs]) {
             if (!uniqueIds.has(d.id)) {
               uniqueIds.add(d.id)
               results.push({ id: d.id, ...d.data(), isArchived })
@@ -1401,4 +1498,8 @@ export async function autoArchiveParcels(options: {
   return { candidates: candidates.length, archived, errors }
 }
 
+/**
+ * Convertir un colis "Port Dû" en "En compte destinataire"
+ * Utilisé par le chef d'agence ou le livreur lors de la livraison
+ */
 // -- Règlements (Pointeur-Encaisseur) -------------------------------------

@@ -16,7 +16,7 @@ service cloud.firestore {
 
     function isStaff() {
       return role() == 'admin' || role() == 'directeur' || role() == 'agent'
-          || role() == 'chef_agence' || role() == 'caissier'
+          || role() == 'chef_agence' || role() == 'agentpro' || role() == 'caissier'
           || role() == 'aide_agent' || role() == 'pointeur_encaisseur'
           || role() == 'encaisseur_central';
     }
@@ -38,11 +38,11 @@ service cloud.firestore {
     }
 
     function isAgentOrChef() {
-      return role() == 'agent' || role() == 'chef_agence';
+      return role() == 'agent' || role() == 'chef_agence' || role() == 'agentpro';
     }
 
     function isChefAgence() {
-      return role() == 'chef_agence';
+      return role() == 'chef_agence' || role() == 'agentpro';
     }
 
     function isAideAgent() {
@@ -71,7 +71,7 @@ service cloud.firestore {
     }
 
     function isChefOfAideAgentParcelAgency() {
-      return role() == 'chef_agence'
+      return (role() == 'chef_agence' || role() == 'agentpro')
         && (resource.data.agentRole == 'aide_agent' || resource.data.agentRole == 'client_portal')
         && (
           resource.data.originCity == userDoc().city
@@ -159,7 +159,7 @@ service cloud.firestore {
     }
 
     function isDestinationAgencyChief() {
-      return role() == 'chef_agence'
+      return (role() == 'chef_agence' || role() == 'agentpro')
         && userDoc().city == resource.data.destinationCity;
     }
 
@@ -224,6 +224,10 @@ service cloud.firestore {
 
       // 🔒 RÈGLE GLOBALE : Admin peut TOUJOURS modifier (même après chargement camion)
       allow update: if isAdmin();
+
+      // 💼 RÈGLE PRIORITAIRE : Encaisseur Central peut modifier les champs de gestion centrale
+      // Sans vérifier le statut de livraison ni le verrouillage
+      allow update: if isCentralCollector();
 
       // ✅ RÈGLE : Aide-agent peut modifier ses propres colis non validés et non verrouillés
       allow update: if isAideAgent()
@@ -423,16 +427,6 @@ service cloud.firestore {
              'modificationHistory', 'lastModificationRequestId',
              'lastModificationAt', 'lastModificationBy', 'lastModificationByRole'
            ]);
-      // Encaisseur central : marquage des cheques societe vers fournisseurs.
-      allow update: if isCentralCollector()
-        && keepsDeliveredStatus()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'codSenderPaid', 'codSenderPaidAt', 'codSenderPaidBy', 'codSenderPaidById',
-          'centralSupplierPaid', 'centralSupplierPaymentId', 'centralSupplierPaymentStatus',
-          'centralSupplierPreparedAt', 'centralSupplierPreparedBy', 'centralSupplierPreparedById',
-          'centralSupplierPaidAt', 'centralSupplierPaidBy', 'centralSupplierPaidById',
-          'centralChequeNum', 'centralChequeBank', 'centralChequeDate'
-        ]);
       // Retour camion : l'agence qui a physiquement le colis retournÃ© peut l'expÃ©dier
       // vers l'agence d'origine, sans toucher aux donnÃ©es sensibles du bon.
       allow update: if signedIn()
@@ -559,7 +553,7 @@ service cloud.firestore {
       allow read: if signedIn();
       // Seul l'Admin ou Chef d'agence de la ville peut modifier
       allow write: if isAdmin()
-        || (role() == 'chef_agence' && userCity() == cityId);
+        || ((role() == 'chef_agence' || role() == 'agentpro') && userCity() == cityId);
       // Permettre la création si le document n'existe pas encore
       allow create: if signedIn();
     }
@@ -579,7 +573,7 @@ service cloud.firestore {
       // Admin crÃ©e les autres comptes (sauf un autre admin)
       allow create: if isAdmin() && request.resource.data.role != 'admin';
       // Chef d'agence crÃ©e des livreurs locaux, aides agents et pointeurs-encaisseurs dans sa propre ville
-      allow create: if role() == 'chef_agence'
+      allow create: if (role() == 'chef_agence' || role() == 'agentpro')
         && request.resource.data.role in ['livreur', 'aide_agent', 'pointeur_encaisseur']
         && request.resource.data.city == userDoc().city;
       // Création de comptes portail clients (expéditeurs/destinataires)
@@ -593,15 +587,19 @@ service cloud.firestore {
       allow update: if isStaff();
       // Suppression : admin ou chef pour aide_agent/livreur/pointeur de sa ville
       allow delete: if isAdmin()
-        || (role() == 'chef_agence'
+        || ((role() == 'chef_agence' || role() == 'agentpro')
           && resource.data.role in ['aide_agent', 'livreur', 'pointeur_encaisseur']
           && resource.data.city == userDoc().city);
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Clients
     match /clients/{clientId} {
-      allow read:  if isStaff() || (signedIn() && resource.data.portalUid == request.auth.uid);
+      // Lecture : Staff, portail client, ou livreurs (pour chercher clients destinataires)
+      allow read:  if isStaff() || isDeliveryWorker() || (signedIn() && resource.data.portalUid == request.auth.uid);
+      // Staff peut tout faire
       allow write: if isStaff();
+      // Livreurs peuvent créer des clients destinataires uniquement
+      allow create: if isDeliveryWorker() && request.resource.data.isDestinataire == true;
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Portails clients
@@ -725,7 +723,7 @@ service cloud.firestore {
           && request.resource.data.driverId == request.auth.uid
           && request.resource.data.type == 'versement'
           && request.resource.data.status == 'pending');
-      allow update, delete: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence';
+      allow update, delete: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || role() == 'agentpro';
     }
 
     // -- Versements Livreur -> Chef d'agence (Port Du / COD, workflow de validation)
@@ -747,7 +745,7 @@ service cloud.firestore {
           && request.resource.data.status == 'pending')
         // OU validation / rejet par chef d'agence, agent (de la meme ville), directeur ou admin
         || role() == 'admin' || role() == 'directeur'
-        || ((role() == 'chef_agence' || role() == 'agent') && resource.data.city == userCity());
+        || ((role() == 'chef_agence' || role() == 'agentpro' || role() == 'agent') && resource.data.city == userCity());
       // Suppression par le créateur (livreur) si status == 'pending' OU par admin
       allow delete: if isAdmin()
         || (signedIn()
@@ -770,13 +768,13 @@ service cloud.firestore {
     // Ã¢â€â‚¬Ã¢â€â‚¬ Secteurs
     match /sectors/{sectorId} {
       allow read:  if isStaff();
-      allow write: if role() == 'admin' || role() == 'chef_agence';
+      allow write: if role() == 'admin' || role() == 'chef_agence' || role() == 'agentpro';
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Bons de ramassage (lots prÃ©-imprimÃ©s)
     match /bonRamasageBatches/{batchId} {
       allow read:  if isStaff();
-      allow write: if role() == 'admin' || role() == 'chef_agence';
+      allow write: if role() == 'admin' || role() == 'chef_agence' || role() == 'agentpro';
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Arrivages
@@ -793,7 +791,7 @@ service cloud.firestore {
     // Ã¢â€â‚¬Ã¢â€â‚¬ Transferts vers l'Admin
     match /adminTransfers/{id} {
       allow read:   if isStaff();
-      allow create: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || role() == 'caissier';
+      allow create: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || role() == 'agentpro' || role() == 'caissier';
       // Modification par le créateur si status == 'pending'
       allow update: if (signedIn()
           && resource.data.fromId == request.auth.uid
@@ -855,8 +853,8 @@ service cloud.firestore {
           && resource.data.pointeurId == request.auth.uid
           && resource.data.agencyCity == userDoc().city
           && (resource.data.status == 'en_attente' || resource.data.status == 'encaisse'))
-        || (role() == 'chef_agence' && resource.data.agencyCity == userDoc().city)
-        || (role() == 'chef_agence'
+        || ((role() == 'chef_agence' || role() == 'agentpro') && resource.data.agencyCity == userDoc().city)
+        || ((role() == 'chef_agence' || role() == 'agentpro')
           && resource.data.villeExpedition == userDoc().city
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'sourceReceived', 'sourceReceivedAt', 'sourceReceivedBy', 'sourceReceivedById',
@@ -868,7 +866,7 @@ service cloud.firestore {
         || (isPointeurEncaisseur()
           && resource.data.pointeurId == request.auth.uid
           && (resource.data.status == 'en_attente' || resource.data.status == 'encaisse'))
-        || (role() == 'chef_agence' && resource.data.agencyCity == userDoc().city);
+        || ((role() == 'chef_agence' || role() == 'agentpro') && resource.data.agencyCity == userDoc().city);
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Rapports RÃ¨glements
@@ -886,7 +884,7 @@ service cloud.firestore {
         || (isPointeurEncaisseur()
           && resource.data.pointeurId == request.auth.uid
           && resource.data.status == 'brouillon')
-        || (role() == 'chef_agence' && resource.data.agencyCity == userDoc().city);
+        || ((role() == 'chef_agence' || role() == 'agentpro') && resource.data.agencyCity == userDoc().city);
       allow delete: if isAdmin()
         || (isPointeurEncaisseur()
           && resource.data.pointeurId == request.auth.uid
@@ -902,7 +900,7 @@ service cloud.firestore {
           && request.resource.data.agencyCity == userDoc().city);
       allow update: if isAdmin()
         || (isPointeurEncaisseur() && resource.data.agencyCity == userDoc().city)
-        || (role() == 'chef_agence'   && resource.data.agencyCity == userDoc().city);
+        || ((role() == 'chef_agence' || role() == 'agentpro') && resource.data.agencyCity == userDoc().city);
       allow delete: if isAdmin()
         || (isPointeurEncaisseur()
           && resource.data.pointeurId == request.auth.uid
@@ -936,8 +934,8 @@ service cloud.firestore {
     // (protÃ¨ge les collections non listÃ©es explicitement)
     // Encaisseur central : versements societe et paiements fournisseurs
     match /centralCodDeposits/{depositId} {
-      allow read: if isAdmin() || isCentralCollector() || role() == 'chef_agence';
-      allow create: if isAdmin() || role() == 'chef_agence';
+      allow read: if isAdmin() || isCentralCollector() || role() == 'chef_agence' || role() == 'agentpro';
+      allow create: if isAdmin() || role() == 'chef_agence' || role() == 'agentpro';
       allow update: if isAdmin() || isCentralCollector();
       allow delete: if isAdmin();
     }
@@ -966,8 +964,21 @@ service cloud.firestore {
       allow update: if isStaff();
       // Suppression : admin, chef d'agence, ou déclarateur original
       allow delete: if isAdmin()
-        || role() == 'chef_agence'
+        || role() == 'chef_agence' || role() == 'agentpro'
         || (signedIn() && resource.data.declaredBy.uid == request.auth.uid);
+    }
+
+    // Transactions de ports dûs en compte clients
+    match /clientPortDuTransactions/{transactionId} {
+      // Lecture : Staff et livreurs
+      allow read: if isStaff() || isDeliveryWorker();
+      // Création : Staff et livreurs
+      allow create: if signedIn() && (isStaff() || isDeliveryWorker());
+      // Mise à jour : Admin, chef d'agence et agentpro de la même ville
+      allow update: if isAdmin()
+        || (isChefAgence() && resource.data.agencyCity == userCity());
+      // Suppression : Admin uniquement
+      allow delete: if isAdmin();
     }
 
     match /{document=**} {

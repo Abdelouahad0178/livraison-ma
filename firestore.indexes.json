@@ -350,6 +350,14 @@
         { "fieldPath": "validatedByChef", "order": "ASCENDING"  },
         { "fieldPath": "createdAt",       "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "clientPortDuTransactions",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agencyCity", "order": "ASCENDING"  },
+        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

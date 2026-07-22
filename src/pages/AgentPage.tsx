@@ -10,7 +10,7 @@ import {
   updateParcel, deleteParcel, markParcelAsReturned, loadReturnedParcelOnTruck, validateReturnArrival, validateParcelEntry,
   updateParcelStatus, isParcelVisibleInDestinationAgency,
   subscribeAgencyParcels, subscribeAgencyReturnParcels, subscribePendingAideAgentParcels,
-  createReturnParcel, searchParcelByTrackingId, searchParcels,
+  createReturnParcel, searchParcelByTrackingId, searchParcels, getMoreAgencyParcels,
 } from '../firebase/parcels'
 import { markPortDuReceivedByChef, markParcelChefPointed } from '../firebase/finance'
 import { collectPortDu } from '../firebase/cod'
@@ -40,6 +40,7 @@ import {
 } from '../firebase/finance'
 import { subscribeAgentNotesByCity } from '../firebase/agentNotes'
 import {
+  subscribeDeliveryDriverParcels,
 } from '../firebase/firestore'
 import {
   subscribeAgentCodRequests, markAgentCodRequestRead, addAgentCodRequestReply, resolveAgentCodRequest,
@@ -90,6 +91,7 @@ const ArrivageTab = lazy(() => import('./agent/tabs/ArrivageTab'))
 const RetoursTab = lazy(() => import('./agent/tabs/RetoursTab'))
 const NotesAgentsTab = lazy(() => import('./agent/tabs/NotesAgentsTab'))
 const LostParcelsTab = lazy(() => import('./agent/tabs/LostParcelsTab'))
+const AgentClientPortDuTab = lazy(() => import('./agent/tabs/AgentClientPortDuTab'))
 
 const MOD_STATUS = {
   pending:  { label: 'En attente', bg: 'bg-amber-100', text: 'text-amber-700' },
@@ -257,6 +259,18 @@ export default function AgentPage() {
   const [returnParcels, setReturnParcels] = useState<any[]>([])
   const [loadingParcels, setLoadingParcels] = useState(false)
   const [pendingAideParcels, setPendingAideParcels] = useState<any[]>([])
+
+  // Système de chargement automatique pour chef d'agence
+  const AGENCY_PAGE_SIZE = 600
+  const [liveParcels, setLiveParcels] = useState<any[]>([]) // Premiers 600 en temps réel
+  const [moreParcels, setMoreParcels] = useState<any[]>([]) // Chargés progressivement
+  const [hasMoreAgency, setHasMoreAgency] = useState(true)
+  const [loadingMoreAgency, setLoadingMoreAgency] = useState(false)
+  const [loadingAllAgency, setLoadingAllAgency] = useState(false)
+  const [loadAllAgencyProgress, setLoadAllAgencyProgress] = useState(0)
+  const agencyLastDocsRef = useRef<any>(null)
+  const agencyPagedRef = useRef(false)
+
   const [search, setSearch]             = useState('')
   const [serverSearchResults, setServerSearchResults] = useState<any[] | null>(null) // Résultats recherche serveur
   const [isSearching, setIsSearching]   = useState(false) // Loading state pour recherche
@@ -271,6 +285,8 @@ export default function AgentPage() {
   const [destinationCityFilter, setDestinationCityFilter] = useState('all')  // ⭐ Filtre ville de destination
   const [driverFilter, setDriverFilter] = useState('all')  // ⭐ Filtre par livreur/chauffeur
   const [portTypeFilter, setPortTypeFilter] = useState('all')  // ⭐ Filtre par type de port
+  const [driverFilteredParcels, setDriverFilteredParcels] = useState<any[]>([]) // Colis du livreur filtré
+  const [loadingDriverParcels, setLoadingDriverParcels] = useState(false)
   const [extraParcels, setExtraParcels]             = useState<any[]>([])
   const [hasMoreParcels, setHasMoreParcels]         = useState(false)
   const [loadingMore, setLoadingMore]               = useState(false)
@@ -366,8 +382,8 @@ export default function AgentPage() {
   const [bulkAssignError, setBulkAssignError] = useState('')
 
   // ⭐ Permissions de modification par rôle
-  const [editPermissions, setEditPermissions] = useState<any>({ chef_agence: [], aide_agent: [] })
-  const [actionPermissions, setActionPermissions] = useState<any>({ chef_agence: [] })
+  const [editPermissions, setEditPermissions] = useState<any>({ chef_agence: [], aide_agent: [], agentpro: [] })
+  const [actionPermissions, setActionPermissions] = useState<any>({ chef_agence: [], agentpro: [] })
 
   const [deliveryModal, setDeliveryModal] = useState({ open: false, parcel: null as any, sectorId: '', driverId: '', vehicleId: '', loading: false, error: '' })
   const [codCollectModal, setCodCollectModal] = useState({ open: false, parcel: null as any, paymentType: '', loading: false, withDelivery: false })
@@ -527,16 +543,17 @@ export default function AgentPage() {
     const uid = auth.currentUser?.uid
     if (!uid) return
     const isAide = profile.role === 'aide_agent'
+    const isAgentPro = profile.role === 'agentpro'
     const onListenerError = (label: any) => (err: any) => {
       console.error(`AgentPage ${label}:`, err)
       if (err.code === 'permission-denied') {
         auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
       }
     }
-    // aide_agent has access to clients (for the parcel form) but not other staff-only data
+    // aide_agent a accès limité, agentpro a les mêmes accès que chef_agence
     const unsubClients     = subscribeClients(setClients, onListenerError('subscribeClients'))
-    const unsubDrivers     = isAide ? null : subscribeDrivers(setDrivers, onListenerError('subscribeDrivers'))
-    const unsubUsers       = isAide ? null : subscribeAllUsers(data => {
+    const unsubDrivers     = (isAide) ? null : subscribeDrivers(setDrivers, onListenerError('subscribeDrivers'))
+    const unsubUsers       = (isAide) ? null : subscribeAllUsers(data => {
       setAgencyCashiers(data.filter(u => u.role === 'caissier'))
       setAllUsers(data)
     }, onListenerError('subscribeAllUsers'))
@@ -562,24 +579,134 @@ export default function AgentPage() {
         auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
       }
     }
-    if (profile.role === 'chef_agence' && profile.city) {
-      // NOUVELLE POLITIQUE : Le chef voit TOUS les colis de l'agence directement
-      // Plus besoin de pending validation
-      const unsubAgency = subscribeAgencyParcels(profile.city, (data: any) => {
-        setParcels(data)
-        setLoadingParcels(false)
-      }, onError)
+    if ((profile.role === 'chef_agence' || profile.role === 'agentpro') && profile.city) {
+      // NOUVELLE POLITIQUE : Le chef et agentpro voient TOUS les colis de l'agence directement
+      // Chargement automatique par blocs de 600
+      console.log(`📦 [Chef d'agence/AgentPro] Chargement automatique des colis de ${profile.city} (blocs de ${AGENCY_PAGE_SIZE})`)
+
+      const unsubAgency = subscribeAgencyParcels(
+        profile.city,
+        (data: any) => {
+          console.log(`✅ [Chef d'agence] ${data.length} colis chargés en temps réel pour ${profile.city}`)
+          setLiveParcels(data)
+          setLoadingParcels(false)
+          if (data.length < AGENCY_PAGE_SIZE) setHasMoreAgency(false)
+        },
+        onError,
+        AGENCY_PAGE_SIZE, // Limite de 600
+        (lastDocs: any) => {
+          // Callback pour capturer les derniers documents (pagination)
+          if (!agencyPagedRef.current) {
+            agencyLastDocsRef.current = lastDocs
+          }
+        }
+      )
+
       // Souscrire aussi aux retours pour cette agence
       const unsubReturns = subscribeAgencyReturnParcels(profile.city, (data: any) => {
+        console.log(`✅ [Chef d'agence] ${data.length} colis retour chargés pour ${profile.city}`)
         setReturnParcels(data)
       }, onError)
+
       setPendingAideParcels([]) // Plus de pending
       return () => { unsubAgency(); unsubReturns() }
     }
     setPendingAideParcels([])
-    const unsub = subscribeAgentParcels(uid, (data: any) => { setParcels(data); setLoadingParcels(false) }, onError)
+    console.log(`📦 [Agent] Chargement automatique des colis (limite: 2000 des 60 derniers jours)`)
+    const unsub = subscribeAgentParcels(uid, (data: any) => {
+      console.log(`✅ [Agent] ${data.length} colis chargés automatiquement`)
+      setParcels(data)
+      setLoadingParcels(false)
+    }, onError)
     return () => unsub()
   }, [profile?.role, profile?.city, authTick])
+
+  // 🚀 Chargement automatique de tous les colis du chef d'agence en arrière-plan
+  useEffect(() => {
+    if (profile?.role !== 'chef_agence' || !hasMoreAgency || loadingAllAgency || loadingMoreAgency || !agencyLastDocsRef.current) return
+    if (liveParcels.length === 0) return // Attendre le chargement initial
+
+    // Lancer le chargement complet automatiquement après 2 secondes
+    const timer = setTimeout(() => {
+      if (hasMoreAgency && !loadingAllAgency && !loadingMoreAgency && agencyLastDocsRef.current) {
+        console.log(`🚀 [Chef d'agence] Démarrage du chargement automatique de tous les colis...`)
+        loadAllAgencyParcels()
+      }
+    }, 2000)
+
+    return () => clearTimeout(timer)
+  }, [liveParcels.length, hasMoreAgency, profile?.role])
+
+  // Fusionner liveParcels et moreParcels pour le chef d'agence et agentpro
+  useEffect(() => {
+    if (profile?.role === 'chef_agence' || profile?.role === 'agentpro') {
+      const map = new Map()
+      moreParcels.forEach((p: any) => map.set(p.id, p))
+      liveParcels.forEach((p: any) => map.set(p.id, p)) // Temps réel gagne
+      const merged = [...map.values()]
+      console.log(`📊 [Chef d'agence] Total colis: ${merged.length} (live: ${liveParcels.length}, more: ${moreParcels.length})`)
+      setParcels(merged)
+    }
+  }, [liveParcels, moreParcels, profile?.role])
+
+  // Charger 600 colis de plus pour le chef d'agence
+  const loadMoreAgencyParcels = async () => {
+    if (!hasMoreAgency || loadingMoreAgency || loadingAllAgency || !agencyLastDocsRef.current || !profile?.city) return
+    setLoadingMoreAgency(true)
+    try {
+      const result = await getMoreAgencyParcels(profile.city, agencyLastDocsRef.current, AGENCY_PAGE_SIZE)
+      agencyPagedRef.current = true
+      setMoreParcels(prev => {
+        const map = new Map()
+        prev.forEach((p: any) => map.set(p.id, p))
+        result.docs.forEach((p: any) => map.set(p.id, p))
+        return [...map.values()]
+      })
+      if (result.lastDocs) agencyLastDocsRef.current = result.lastDocs
+      if (!result.hasMore) setHasMoreAgency(false)
+      console.log(`✅ [Chef d'agence] ${result.docs.length} colis supplémentaires chargés`)
+    } catch (err) {
+      console.error('[Chef d\'agence] loadMore error:', err)
+    } finally {
+      setLoadingMoreAgency(false)
+    }
+  }
+
+  // Charger TOUS les colis du chef d'agence en boucle
+  const loadAllAgencyParcels = async () => {
+    if (!profile?.city || loadingAllAgency || loadingMoreAgency || !hasMoreAgency || !agencyLastDocsRef.current) return
+    setLoadingAllAgency(true)
+    setLoadAllAgencyProgress(0)
+    try {
+      let cursor = agencyLastDocsRef.current
+      let more = true
+      let loaded = 0
+      let safety = 0
+      while (more && cursor && safety < 500) {
+        const result = await getMoreAgencyParcels(profile.city, cursor, AGENCY_PAGE_SIZE)
+        agencyPagedRef.current = true
+        loaded += result.docs.length
+        setLoadAllAgencyProgress(loaded)
+        console.log(`📦 [Chef d'agence] Chargement automatique: +${result.docs.length} colis (total: ${loaded})`)
+        setMoreParcels(prev => {
+          const map = new Map()
+          prev.forEach((p: any) => map.set(p.id, p))
+          result.docs.forEach((p: any) => map.set(p.id, p))
+          return [...map.values()]
+        })
+        cursor = result.lastDocs
+        more = result.hasMore && !!result.lastDocs
+        safety += 1
+      }
+      if (cursor) agencyLastDocsRef.current = cursor
+      setHasMoreAgency(false)
+      console.log(`✅ [Chef d'agence] Chargement automatique terminé: ${loaded} colis chargés`)
+    } catch (err) {
+      console.error('[Chef d\'agence] loadAll error:', err)
+    } finally {
+      setLoadingAllAgency(false)
+    }
+  }
 
   useEffect(() => {
     if (profile?.role !== 'chef_agence' || !profile?.city) {
@@ -591,7 +718,7 @@ export default function AgentPage() {
   }, [profile?.role, profile?.city])
 
   useEffect(() => {
-    if (profile?.role === 'chef_agence') {
+    if (profile?.role === 'chef_agence' || profile?.role === 'agentpro') {
       setSubTab('all')
       if (!chefDefaultTodayRef.current) {
         setDatePreset('today')
@@ -601,6 +728,34 @@ export default function AgentPage() {
       }
     }
   }, [profile?.role])
+
+  // Charger tous les colis d'un livreur quand le filtre livreur change
+  useEffect(() => {
+    if (driverFilter === 'all') {
+      setDriverFilteredParcels([])
+      setLoadingDriverParcels(false)
+      return
+    }
+
+    console.log(`🚚 [Filtre livreur] Chargement de tous les colis du livreur ${driverFilter}...`)
+    setLoadingDriverParcels(true)
+
+    const unsub = subscribeDeliveryDriverParcels(
+      driverFilter,
+      (data: any) => {
+        console.log(`✅ [Filtre livreur] ${data.length} colis chargés pour le livreur`)
+        setDriverFilteredParcels(data)
+        setLoadingDriverParcels(false)
+      },
+      (err: any) => {
+        console.error('Erreur chargement colis livreur:', err)
+        setLoadingDriverParcels(false)
+      },
+      1000 // Charger jusqu'à 1000 colis du livreur
+    )
+
+    return () => unsub()
+  }, [driverFilter])
 
   useEffect(() => {
     if (profile?.city) setForm(p => ({ ...p, senderCity: profile.city }))
@@ -661,8 +816,8 @@ export default function AgentPage() {
     }
     const unsubArrivages = subscribeArrivages(profile.city, setArrivages, onErr('subscribeArrivages'))
     const unsubBonBatch = subscribeBonRamasageBatches(profile.city, setBonBatches, onErr('subscribeBonRamasageBatches'))
-    const unsubNotes = profile.role === 'chef_agence' ? subscribeAgentNotesByCity(profile.city, setAgentNotes, onErr('subscribeAgentNotes')) : null
-    const unsubUsers = profile.role === 'chef_agence' ? subscribeAllUsers(setUsers, onErr('subscribeAllUsers')) : null
+    const unsubNotes = (profile.role === 'chef_agence' || profile.role === 'agentpro') ? subscribeAgentNotesByCity(profile.city, setAgentNotes, onErr('subscribeAgentNotes')) : null
+    const unsubUsers = (profile.role === 'chef_agence' || profile.role === 'agentpro') ? subscribeAllUsers(setUsers, onErr('subscribeAllUsers')) : null
     let unsubT1: any = null, unsubT2: any = null
     const mergeTransit = (() => {
       let normal: any[] = [], retour: any[] = []
@@ -706,10 +861,10 @@ export default function AgentPage() {
         subscribeBankDepositsByCity(profile.city, setBankDeposits, onErr('subscribeBankDepositsByCity')),
         subscribeAgencyCash(profile.city, setAgencyCash, onErr('subscribeAgencyCash')),
         subscribeAgentCashRecoveryRequests(profile.city, setCashRecoveryRequests, onErr('subscribeAgentCashRecoveryRequests')),
-        profile.role === 'chef_agence' ? subscribeDriverVersements(profile.city, setDriverVersements, onErr('subscribeDriverVersements')) : null,
+        (profile.role === 'chef_agence' || profile.role === 'agentpro') ? subscribeDriverVersements(profile.city, setDriverVersements, onErr('subscribeDriverVersements')) : null,
       ].filter(Boolean)
     }
-    if ((tab === 'charge' || tab === 'cod') && !started.charge && profile?.role === 'chef_agence') {
+    if ((tab === 'charge' || tab === 'cod') && !started.charge && (profile?.role === 'chef_agence' || profile?.role === 'agentpro')) {
       const retry = (err: any) => { if (err.code === 'permission-denied') auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {}) }
       started.charge = [
         subscribeRapports(profile.city, setPointeurRapports, err => { console.error('subscribeRapports:', err); retry(err) }),
@@ -1018,12 +1173,16 @@ export default function AgentPage() {
     ;(parcels || []).forEach(p => map.set(p.id, p))
     ;(returnParcels || []).forEach(p => map.set(p.id, p))
     ;(extraParcels || []).forEach(p => map.set(p.id, p))
+    // Si un livreur est filtré, inclure tous ses colis
+    if (driverFilter !== 'all') {
+      ;(driverFilteredParcels || []).forEach(p => map.set(p.id, p))
+    }
     return [...map.values()].sort((a, b) => {
       const ta = a.createdAt?.toDate?.() || new Date(0)
       const tb = b.createdAt?.toDate?.() || new Date(0)
       return tb - ta
     })
-  }, [parcels, returnParcels, extraParcels])
+  }, [parcels, returnParcels, extraParcels, driverFilter, driverFilteredParcels])
 
   const profileCity = profile?.city
   const profileRole = profile?.role
@@ -1034,8 +1193,14 @@ export default function AgentPage() {
       ? serverSearchResults
       : allDisplayParcels
 
-    return filterByDate(sourceData, datePreset, dateFrom, dateTo).filter((p: any) => {
-    if (profileCity) {
+    // ⭐ Si un livreur est filtré, ne pas appliquer le filtre par date (montrer tous ses colis)
+    const dateFilteredData = driverFilter !== 'all'
+      ? sourceData
+      : filterByDate(sourceData, datePreset, dateFrom, dateTo)
+
+    return dateFilteredData.filter((p: any) => {
+    // 🔒 FILTRE VILLE OBLIGATOIRE : Le chef d'agence ne voit QUE les colis de sa ville
+    if (profileCity && (profileRole === 'chef_agence' || profileRole === 'agentpro')) {
       // Pour les retours, vérifier destinationCity directement (après swap, c'est la ville de retour)
       const isReturnToThisCity = (p.status?.includes('Retour') || p.wasReturned) && p.destinationCity === profileCity
       const destinationVisible = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
@@ -1046,9 +1211,9 @@ export default function AgentPage() {
     if (subTab === 'mine' && p.agentId !== uid && p.destinationAgentId !== uid) {
       return false
     }
-    if (profileRole === 'chef_agence' && parcelEditorFilter !== 'all') {
+    if ((profileRole === 'chef_agence' || profileRole === 'agentpro') && parcelEditorFilter !== 'all') {
       const isAideEntry = p.agentRole === 'aide_agent'
-      const isChefEntry = p.agentRole === 'chef_agence' || p.agentId === uid
+      const isChefEntry = p.agentRole === 'chef_agence' || p.agentRole === 'agentpro' || p.agentId === uid
       if (parcelEditorFilter === 'chef' && !isChefEntry) return false
       if (parcelEditorFilter === 'aide' && !isAideEntry) return false
     }
@@ -1207,7 +1372,7 @@ export default function AgentPage() {
   const sameCity = (a: any, b: any) => String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase()
   const isParcelCreator = (parcel: any) => !!uid && parcel?.agentId === uid
   const isChefAgencyAideParcel = (parcel: any) =>
-    profile?.role === 'chef_agence' &&
+    (profile?.role === 'chef_agence' || profile?.role === 'agentpro') &&
     (parcel?.agentRole === 'aide_agent' || parcel?.agentRole === 'client_portal') &&
     (parcel?.originCity === profile?.city || parcel?.sender?.city === profile?.city ||
       allUsers.find((u: any) => u.id === parcel?.agentId)?.city === profile?.city)
@@ -1241,6 +1406,11 @@ export default function AgentPage() {
       return editPermissions?.chef_agence?.includes(fieldPath) ?? false
     }
 
+    // Agent Pro: mêmes permissions que chef d'agence
+    if (profile?.role === 'agentpro') {
+      return editPermissions?.agentpro?.includes(fieldPath) ?? false
+    }
+
     // Aide agent: vérifier les permissions configurées
     if (profile?.role === 'aide_agent') {
       return editPermissions?.aide_agent?.includes(fieldPath) ?? false
@@ -1260,23 +1430,28 @@ export default function AgentPage() {
       return actionPermissions?.chef_agence?.includes(action) ?? false
     }
 
+    // Agent Pro: mêmes permissions que chef d'agence
+    if (profile?.role === 'agentpro') {
+      return actionPermissions?.agentpro?.includes(action) ?? false
+    }
+
     // Par défaut: pas autorisé
     return false
   }
 
   const canManageStatus = (parcel: any) =>
-    profile?.role === 'admin' || profile?.role === 'chef_agence' || isParcelCreator(parcel)
+    profile?.role === 'admin' || profile?.role === 'chef_agence' || profile?.role === 'agentpro' || isParcelCreator(parcel)
   const canManageReturnDelivery = (_parcel: any) =>
-    profile?.role === 'chef_agence' || profile?.role === 'admin'
+    profile?.role === 'chef_agence' || profile?.role === 'agentpro' || profile?.role === 'admin'
   const isReturnOriginCity = (parcel: any) =>
     parcel?.returnToCity === profile?.city || parcel?.sender?.city === profile?.city
   const canManageDeliveryAssignment = (_parcel: any) =>
-    profile?.role === 'chef_agence' || profile?.role === 'admin' || profile?.role === 'directeur'
+    profile?.role === 'chef_agence' || profile?.role === 'agentpro' || profile?.role === 'admin' || profile?.role === 'directeur'
   const isPointedForDelivery = (parcel: any) =>
     parcel?.status === 'Arrivé en agence' &&
     (parcel?.chefPointedAt || parcel?.destinationArrivedAt)
   const canLoadTransportParcel = (parcel: any) =>
-    (profile?.role === 'agent' || profile?.role === 'chef_agence' || profile?.role === 'admin') &&
+    (profile?.role === 'agent' || profile?.role === 'chef_agence' || profile?.role === 'agentpro' || profile?.role === 'admin') &&
     parcel?.status === 'Initialisé'
   // NOUVELLE POLITIQUE : Plus de validation requise
   // Un colis d'aide-agent est "verrouillé" seulement si chargé (transportAssignedAt existe)
@@ -1923,7 +2098,7 @@ export default function AgentPage() {
           </Suspense>
         )}
 
-        {tab === 'modifications' && profile?.role === 'chef_agence' && (
+        {tab === 'modifications' && (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
           <Suspense fallback={null}>
             <ModificationsTab />
           </Suspense>
@@ -1958,7 +2133,7 @@ export default function AgentPage() {
           recipientName={viewSignature.receiver?.name}
           nexpCode={viewSignature.sender?.nic}
           onClose={() => setViewSignature(null)}
-          canEdit={profile?.role === 'chef_agence'}
+          canEdit={profile?.role === 'chef_agence' || profile?.role === 'agentpro'}
           userName={profile?.name || profile?.email || 'Chef d\'agence'}
           isReturn={!!(viewSignature.returnedAt || viewSignature.returnToCity)}
         />
@@ -2025,8 +2200,18 @@ export default function AgentPage() {
         </Suspense>
       )}
 
+      {/* ── PORTS DÛS EN COMPTE CLIENTS TAB ── */}
+      {tab === 'clientportdu' && (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+        <Suspense fallback={null}>
+          <AgentClientPortDuTab
+            agencyCity={profile?.city || ''}
+            profile={profile}
+          />
+        </Suspense>
+      )}
+
       {/* ── DASHBOARD TAB ── */}
-      {tab === 'dashboard' && profile?.role === 'chef_agence' && (
+      {tab === 'dashboard' && (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
         <Suspense fallback={null}>
           <DashboardTab />
         </Suspense>
@@ -2039,7 +2224,7 @@ export default function AgentPage() {
       )}
 
       {/* ── NOTES AGENTS TAB ── */}
-      {tab === 'notes' && profile?.role === 'chef_agence' && (
+      {tab === 'notes' && (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
         <Suspense fallback={null}>
           <NotesAgentsTab profile={profile} users={users} agentNotes={agentNotes} />
         </Suspense>

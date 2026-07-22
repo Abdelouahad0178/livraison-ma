@@ -541,6 +541,63 @@ export async function adjustCentralCash(data: any) {
   })
 }
 
+// Réinitialiser la caisse centrale à 0 (Admin uniquement)
+export async function resetCentralCashToZero(updatedBy: string) {
+  const ref = doc(db, 'centralCash', 'main')
+  await setDoc(ref, {
+    solde: 0,
+    soldeEspeces: 0,
+    soldeCheques: 0,
+    soldeVirement: 0,
+    lastUpdatedAt: serverTimestamp(),
+    lastUpdatedBy: updatedBy,
+    reason: 'Réinitialisation à 0 par Admin',
+  }, { merge: true })
+}
+
+// SUPER RESET : Réinitialise TOUT (Caisse Centrale + Caisses Agences + Versements)
+export async function resetEverythingToZero(updatedBy: string) {
+  // 1. Réinitialiser la Caisse Centrale
+  const centralRef = doc(db, 'centralCash', 'main')
+  await setDoc(centralRef, {
+    solde: 0,
+    soldeEspeces: 0,
+    soldeCheques: 0,
+    soldeVirement: 0,
+    lastUpdatedAt: serverTimestamp(),
+    lastUpdatedBy: updatedBy,
+    reason: 'Réinitialisation TOTALE par Admin',
+  }, { merge: true })
+
+  // 2. Réinitialiser toutes les caisses d'agences
+  const agencyCashesSnapshot = await getDocs(collection(db, 'agencyCashes'))
+  const batch1 = writeBatch(db)
+  agencyCashesSnapshot.docs.forEach(doc => {
+    batch1.update(doc.ref, {
+      solde: 0,
+      soldeEspeces: 0,
+      soldeCheques: 0,
+      soldeVirement: 0,
+      lastUpdatedAt: serverTimestamp(),
+      lastUpdatedBy: updatedBy,
+    })
+  })
+  await batch1.commit()
+
+  // 3. Supprimer tous les versements livreurs
+  const versementsSnapshot = await getDocs(collection(db, 'driverVersements'))
+  const batch2 = writeBatch(db)
+  versementsSnapshot.docs.forEach(doc => {
+    batch2.delete(doc.ref)
+  })
+  await batch2.commit()
+
+  console.log(`✅ SUPER RESET effectué par ${updatedBy}`)
+  console.log(`  - Caisse Centrale: 0 DH`)
+  console.log(`  - ${agencyCashesSnapshot.size} caisses d'agences réinitialisées`)
+  console.log(`  - ${versementsSnapshot.size} versements supprimés`)
+}
+
 // Subscribe au solde de la caisse centrale
 export function subscribeCentralCash(callback: any, onError: (err?: any) => void = () => {}) {
   const ref = doc(db, 'centralCash', 'main')
@@ -1184,6 +1241,19 @@ export function subscribeAllDriverVersements(callback: any, onError: (err?: any)
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 
+// Supprimer tous les versements livreurs (Admin uniquement)
+export async function deleteAllDriverVersements() {
+  const verseSnapshot = await getDocs(collection(db, 'driverVersements'))
+  const batch = writeBatch(db)
+
+  verseSnapshot.docs.forEach(doc => {
+    batch.delete(doc.ref)
+  })
+
+  await batch.commit()
+  console.log(`✅ ${verseSnapshot.size} versements supprimés`)
+}
+
 // -- Transferts vers l'Admin --------------------------------------------------
 export async function createAdminTransferFromAgent(data: any) {
   const amount = parseFloat(data.amount) || 0
@@ -1392,16 +1462,7 @@ export async function updateAdminTransfer(id: string, data: any, updaterId: stri
 
     const transfer = transferSnap.data()
 
-    // Vérifier que le statut est 'pending'
-    if (transfer.status !== 'pending') {
-      throw new Error('Seuls les transferts en attente peuvent être modifiés.')
-    }
-
-    // Vérifier que c'est le créateur
-    if (transfer.fromId !== updaterId) {
-      throw new Error('Seul le créateur peut modifier ce transfert.')
-    }
-
+    // L'admin peut modifier n'importe quel transfert (plus de restriction de statut ou de créateur)
     const oldAmount = parseFloat(transfer.amount) || 0
     const oldPaymentType = transfer.paymentType || 'especes'
     const city = transfer.city
@@ -1480,16 +1541,7 @@ export async function deleteAdminTransfer(id: string, deleterId: string) {
 
     const transfer = transferSnap.data()
 
-    // Vérifier que le statut est 'pending'
-    if (transfer.status !== 'pending') {
-      throw new Error('Seuls les transferts en attente peuvent être supprimés.')
-    }
-
-    // Vérifier que c'est le créateur
-    if (transfer.fromId !== deleterId) {
-      throw new Error('Seul le créateur peut supprimer ce transfert.')
-    }
-
+    // L'admin peut supprimer n'importe quel transfert (plus de restriction de statut ou de créateur)
     const amount = parseFloat(transfer.amount) || 0
     const paymentType = transfer.paymentType || 'especes'
     const city = transfer.city
@@ -1526,6 +1578,43 @@ export async function deleteAdminTransfer(id: string, deleterId: string) {
     // Supprimer le transfert
     tx.delete(transferRef)
   })
+}
+
+// Création directe d'un versement par l'admin (sans passer par une caisse d'agence)
+export async function createAdminTransferDirect(data: any, creatorId: string, creatorName: string) {
+  const amount = parseFloat(data.amount) || 0
+  const paymentType = data.paymentType || 'especes' // especes, cheque, virement
+  const type = data.type === 'cod' ? 'cod' : 'port_du' // port_du (défaut) | cod
+  const city = data.city || ''
+  const fromName = data.fromName || ''
+
+  if (!city || !fromName || amount <= 0) {
+    throw new Error('Données invalides. Ville, nom et montant sont requis.')
+  }
+
+  const transferRef = doc(collection(db, 'adminTransfers'))
+  await setDoc(transferRef, {
+    city,
+    fromName,
+    fromRole: data.fromRole || 'admin',
+    fromId: creatorId,
+    amount,
+    paymentType,
+    type,
+    status: data.status || 'pending', // pending, confirmed, rejected
+    reference: data.reference || '',
+    note: data.note || '',
+    createdBy: creatorName,
+    createdAt: serverTimestamp(),
+    // Si le statut est déjà confirmé lors de la création
+    ...(data.status === 'confirmed' && {
+      confirmedBy: creatorName,
+      confirmedById: creatorId,
+      confirmedAt: serverTimestamp(),
+    }),
+  })
+
+  return transferRef.id
 }
 
 export function subscribeAdminTransfers(callback: any, onError: (err?: any) => void = () => {}) {

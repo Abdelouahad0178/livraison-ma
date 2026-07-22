@@ -17,7 +17,7 @@ export {
   addClientMessageReply, addClientPortalReply,
   createModificationRequest, subscribeClientModificationRequests,
   subscribeAgencyModificationRequests, resolveModificationRequest, deleteModificationRequest,
-  findPortalClient, ensurePortalClient,
+  findPortalClient, ensurePortalClient, findOrCreateClientForReceiver,
 } from './clients'
 
 export {
@@ -30,9 +30,9 @@ export {
   generateTrackingId, isParcelVisibleInDestinationAgency,
   createParcel, updateParcelStatus, getAllParcels, updateParcel,
   markParcelAsReturned, loadReturnedParcelOnTruck, validateParcelEntry, validateReturnArrival,
-  deleteParcel, getArchivedParcels, archiveParcels, archiveParcelsByCriteria, archiveAllParcels,
+  deleteParcel, getArchivedParcels, getAllArchivedParcels, archiveParcels, archiveParcelsByCriteria, archiveAllParcels,
   subscribeAllParcels, getParcelsPage, subscribeAgentParcels, getMoreAgentParcels,
-  getAccurateAgencyStats, subscribeAgencyInbox, subscribeAgencyParcels,
+  getAccurateAgencyStats, subscribeAgencyInbox, subscribeAgencyParcels, getMoreAgencyParcels,
   subscribePendingAideAgentParcels, claimParcel, searchParcelByTrackingId, createReturnParcel,
   searchParcelByTrackingGlobal, searchParcelByNicOptimized, searchParcels,
   archiveParcelManual, unarchiveParcel, bulkArchiveParcels, autoArchiveParcels,
@@ -41,7 +41,7 @@ export {
 export {
   getDrivers, subscribeDrivers, subscribePendingCods, getDriverParcels,
   assignDriver, assignDriversBulk, getAgencyInbox,
-  subscribeDriverParcels, subscribeDeliveryDriverParcels,
+  subscribeDriverParcels, subscribeDeliveryDriverParcels, getMoreDeliveryDriverParcels,
   assignDeliveryDriver, rejectDeliveryAssignment, getDeliveryDriverParcels,
   createSector, updateSector, deleteSector, subscribeSectors, subscribeAllSectors,
   createBonRamasageBatch, subscribeBonRamasageBatches, deleteBonRamasageBatch,
@@ -55,7 +55,8 @@ export {
   remitCod, settleCodToSender, markCodSentToSource, confirmCodReceivedBySource,
   markCodSentToChef, validateCodByChef,  // ⭐ Nouvelles fonctions
   batchSettleCods, fetchAllAgentCodParcels,
-  collectPortDu, markPortDuReceivedByAgent, subscribeCodParcels,
+  collectPortDu, addPortDuToClientAccount, markPortDuReceivedByAgent, subscribeCodParcels,
+  subscribeClientPortDuTransactions, collectClientPortDu, cancelClientPortDu,
 } from './cod'
 
 export {
@@ -74,7 +75,7 @@ export {
   completeCaisseRequest, completeRhSalaryCaisseRequest,
   subscribeCaisseRequests, subscribeAllCaisseRequests,
   updateAgencyCash, adjustAgencyCash,
-  adjustCentralCash, subscribeCentralCash,
+  adjustCentralCash, subscribeCentralCash, resetCentralCashToZero, resetEverythingToZero,
   createCaisseEntryAtomic, deleteCaisseEntryAtomic, updateCaisseEntryAtomic,
   depositAgentCashAtomic, directTransferAgentToCashierAtomic, approveRecoveryAtomic,
   subscribeAgencyCash, subscribeAllAgencyCashes,
@@ -86,9 +87,10 @@ export {
   createDriverVersement, confirmDriverVersementChef, rejectDriverVersementChef,
   updateDriverVersement, deleteDriverVersement,
   subscribeDriverVersements, subscribeMyDriverVersements, subscribeAllDriverVersements,
+  deleteAllDriverVersements,
   createAdminTransferFromAgent, createAdminTransferFromCaissier, createAdminTransferFromChefAgence,
   confirmAdminTransfer, rejectAdminTransfer,
-  updateAdminTransfer, deleteAdminTransfer,
+  createAdminTransferDirect, updateAdminTransfer, deleteAdminTransfer,
   subscribeAdminTransfers, subscribeMyAdminTransfers, subscribeAdminTransfersByCity,
 } from './caisse'
 
@@ -110,10 +112,13 @@ export {
 } from './users'
 
 export {
-  createCentralCodDeposit, subscribeAllCentralCodDeposits,
+  createCentralCodDeposit, updateCentralCodDeposit, deleteCentralCodDeposit,
+  subscribeAllCentralCodDeposits, resetAllAgencyCashBalances,
+  deleteAllCentralCodDeposits, deleteAllCentralSupplierPayments,
   createCentralSupplierPayment, markCentralSupplierPaymentPaid,
   updateCentralSupplierPayment, deleteCentralSupplierPayment,
   subscribeAllCentralSupplierPayments,
+  markParcelsControlled, unmarkParcelsControlled,
 } from './central'
 
 export {

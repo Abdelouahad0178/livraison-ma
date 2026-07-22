@@ -4,7 +4,7 @@ import {
   LayoutGrid, Lock, Package, Printer, Search, Table2, Trash2, Truck,
   Unlock, User, X,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { deleteField } from 'firebase/firestore'
 import {
   loadReturnedParcelOnTruck, validateReturnArrival, getMoreAgentParcels,
@@ -167,6 +167,7 @@ export default function ParcelsTab() {
     RETURN_REASONS,
     returnReasonModal, setReturnReasonModal,
     submitReturnWithReason,
+    handleChangeParcelStatus,
   } = useAgentCtx()
 
   const PAGE_SIZE = 25
@@ -222,7 +223,8 @@ export default function ParcelsTab() {
     return (drivers || [])
       .filter((d: any) =>
         driverIds.has(d.id) &&
-        (!agentCity || d.city === agentCity)  // Filtrer par ville de l'agent
+        (!agentCity || d.city === agentCity) &&  // Filtrer par ville de l'agent
+        d.sectorId  // ⭐ Ne montrer que les livreurs associés à un secteur
       )
       .sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''))
   })()
@@ -232,6 +234,90 @@ export default function ParcelsTab() {
 
   // ⭐ État pour recherche spécifique dans le tableau
   const [tableSearch, setTableSearch] = useState('')
+  const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // ⭐ Fonction pour vider et focus la recherche après sélection d'un colis
+  const handleParcelRowClick = (e: React.MouseEvent) => {
+    // Ne pas déclencher si on clique sur un bouton, input, select, ou lien
+    const target = e.target as HTMLElement
+    if (
+      target.tagName === 'BUTTON' ||
+      target.tagName === 'INPUT' ||
+      target.tagName === 'SELECT' ||
+      target.tagName === 'A' ||
+      target.closest('button') ||
+      target.closest('input') ||
+      target.closest('select') ||
+      target.closest('a')
+    ) {
+      return
+    }
+
+    // Si une recherche est active, la vider et remettre le focus
+    if (tableSearch) {
+      setTableSearch('')
+      setTimeout(() => {
+        searchInputRef.current?.focus()
+      }, 100)
+    }
+  }
+
+  // ⭐ Fonction helper pour calculer les résultats filtrés par la recherche tableau
+  const getTableFilteredParcels = (allParcels: any[]) => {
+    if (!tableSearch) return allParcels
+    const searchLower = tableSearch.toLowerCase()
+    return allParcels.filter((p: any) => (
+      p.sender?.nic?.toLowerCase().includes(searchLower) ||
+      p.trackingId?.toLowerCase().includes(searchLower) ||
+      p.sender?.name?.toLowerCase().includes(searchLower) ||
+      p.receiver?.name?.toLowerCase().includes(searchLower) ||
+      p.sender?.tel?.toLowerCase().includes(searchLower) ||
+      p.receiver?.tel?.toLowerCase().includes(searchLower) ||
+      p.sender?.city?.toLowerCase().includes(searchLower) ||
+      p.receiver?.city?.toLowerCase().includes(searchLower)
+    ))
+  }
+
+  // ⭐ Fonction pour gérer la touche Espace sur le champ de recherche
+  const handleSearchKeyDown = (e: React.KeyboardEvent) => {
+    // Si la touche Espace est pressée
+    if (e.key === ' ' && tableSearch) {
+      // Calculer les résultats filtrés
+      const tableFilteredParcels = getTableFilteredParcels(filteredParcels)
+
+      // Si exactement 1 résultat
+      if (tableFilteredParcels.length === 1) {
+        e.preventDefault() // Empêcher l'ajout d'espace dans le champ
+
+        const singleParcel = tableFilteredParcels[0]
+
+        // Vérifier si le colis peut être assigné (pour chef_agence et agentpro)
+        if (profile?.role === 'chef_agence' || profile?.role === 'agentpro') {
+          const isInMyCity = (singleParcel.destinationCity === profile?.city || singleParcel.receiver?.city === profile?.city)
+          const canAssign = !singleParcel.deliveredAt && !singleParcel.returnedAt && singleParcel.status !== 'Livré'
+
+          if (isInMyCity && canAssign) {
+            // Ajouter/retirer de la sélection
+            setBulkAssignError('')
+            setBulkAssignSelectedIds((prev: any) => {
+              const isAlreadySelected = prev.includes(singleParcel.id)
+              if (isAlreadySelected) {
+                return prev.filter((id: any) => id !== singleParcel.id)
+              } else {
+                return [...new Set([...prev, singleParcel.id])]
+              }
+            })
+
+            // Vider la recherche et remettre le focus
+            setTableSearch('')
+            setTimeout(() => {
+              searchInputRef.current?.focus()
+            }, 100)
+          }
+        }
+      }
+    }
+  }
 
   // État pour modal détails ports
   const [portDetailsModal, setPortDetailsModal] = useState<{ open: boolean; portType: string; title: string; parcels: any[] }>({
@@ -250,12 +336,12 @@ export default function ParcelsTab() {
             <button onClick={() => setSubTab('mine')}
               className={`flex-1 py-2 rounded-lg text-sm font-semibold transition ${subTab === 'mine' ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-700'}`}
             >
-              {profile?.role === 'chef_agence' ? 'Mes créations' : 'Mes colis'}
+              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') ? 'Mes créations' : 'Mes colis'}
             </button>
             <button onClick={() => setSubTab('all')}
               className={`flex-1 py-2 rounded-lg text-sm font-semibold transition ${subTab === 'all' ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-700'}`}
             >
-              {profile?.role === 'chef_agence' ? "Toute l'agence" : 'Tous les colis'}
+              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') ? "Toute l'agence" : 'Tous les colis'}
             </button>
           </div>
           <span className="flex items-center gap-1.5 text-xs text-green-600 font-medium px-2.5 py-2 bg-white border border-gray-200 rounded-xl">
@@ -425,6 +511,24 @@ export default function ParcelsTab() {
                     ))}
                   </div>
 
+                  {/* Créateur */}
+                  {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                    <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
+                      <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Créateur</span>
+                      {[
+                        { key: 'all', label: 'Tous', emoji: '👥' },
+                        { key: 'chef', label: 'Chef d\'agence', emoji: '👔' },
+                        { key: 'aide', label: 'Aide agent', emoji: '🤝' },
+                      ].map(({ key, label, emoji }) => (
+                        <button key={key} onClick={() => setParcelEditorFilter(key)}
+                          className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
+                            parcelEditorFilter === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                          }`}
+                        >{emoji} {label}</button>
+                      ))}
+                    </div>
+                  )}
+
                   {/* Statut */}
                   <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
                     <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Statut</span>
@@ -507,7 +611,7 @@ export default function ParcelsTab() {
           const loadableParcels = filteredParcels.filter(canLoadTransportParcel)
           const selectedCount = bulkLoadSelectedIds.filter((id: any) => loadableParcels.some((p: any) => p.id === id)).length
           const allSelected = loadableParcels.length > 0 && selectedCount === loadableParcels.length
-          const aideValidationParcels = profile?.role === 'chef_agence'
+          const aideValidationParcels = (profile?.role === 'chef_agence' || profile?.role === 'agentpro')
             ? filteredParcels.filter(isPendingAideParcelForAgency)
             : []
 
@@ -760,8 +864,8 @@ export default function ParcelsTab() {
                 </div>
               )}
 
-              {/* ⭐ NOUVEAU: Panneau d'assignation en masse à un livreur (chef d'agence uniquement) */}
-              {profile?.role === 'chef_agence' && (() => {
+              {/* ⭐ NOUVEAU: Panneau d'assignation en masse à un livreur (chef d'agence et agentpro) */}
+              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (() => {
                 // Colis assignables: arrivés dans la ville du chef, pas encore livrés
                 const assignableParcels = filteredParcels.filter((p: any) => {
                   const isInMyCity = (p.destinationCity === profile?.city || p.receiver?.city === profile?.city)
@@ -826,7 +930,7 @@ export default function ParcelsTab() {
                         >
                           <option value="">-- Choisir un livreur --</option>
                           {(drivers || [])
-                            .filter((d: any) => d.city === profile?.city && ['livreur', 'chauffeur'].includes(d.role))
+                            .filter((d: any) => d.city === profile?.city && ['livreur', 'chauffeur'].includes(d.role) && d.sectorId)
                             .map((d: any) => (
                               <option key={d.id} value={d.id}>{d.name}</option>
                             ))}
@@ -884,19 +988,7 @@ export default function ParcelsTab() {
           </div>
         ) : (() => {
           // ⭐ Appliquer le filtre de recherche du tableau sur TOUS les parcels
-          const tableFilteredParcels = tableSearch ? filteredParcels.filter((p: any) => {
-            const searchLower = tableSearch.toLowerCase()
-            return (
-              p.sender?.nic?.toLowerCase().includes(searchLower) ||
-              p.trackingId?.toLowerCase().includes(searchLower) ||
-              p.sender?.name?.toLowerCase().includes(searchLower) ||
-              p.receiver?.name?.toLowerCase().includes(searchLower) ||
-              p.sender?.tel?.toLowerCase().includes(searchLower) ||
-              p.receiver?.tel?.toLowerCase().includes(searchLower) ||
-              p.sender?.city?.toLowerCase().includes(searchLower) ||
-              p.receiver?.city?.toLowerCase().includes(searchLower)
-            )
-          }) : filteredParcels
+          const tableFilteredParcels = getTableFilteredParcels(filteredParcels)
 
           const totalPages = Math.max(1, Math.ceil(tableFilteredParcels.length / PAGE_SIZE))
           const safePage = Math.min(parcelPage, totalPages - 1)
@@ -1008,9 +1100,11 @@ export default function ParcelsTab() {
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-purple-500" />
                 <input
+                  ref={searchInputRef}
                   placeholder="🔍 Recherche dans le tableau: N° EXP, Nom Expéditeur, Nom Destinataire..."
                   value={tableSearch}
                   onChange={e => setTableSearch(e.target.value)}
+                  onKeyDown={handleSearchKeyDown}
                   className="w-full bg-gradient-to-r from-purple-50 to-pink-50 border-2 border-purple-300 pl-12 pr-12 py-3.5 rounded-xl text-sm font-medium text-gray-800 placeholder-gray-500 focus:border-purple-500 focus:bg-white focus:shadow-lg focus:outline-none transition-all"
                 />
                 {tableSearch && (
@@ -1027,7 +1121,7 @@ export default function ParcelsTab() {
                 <table className="w-full text-xs">
                   <thead className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white sticky top-0 shadow-lg">
                     <tr>
-                      {profile?.role === 'chef_agence' && (
+                      {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
                         <th className="px-3 py-4 text-center font-bold whitespace-nowrap border-r border-green-400/30 bg-green-600/40">
                           <div className="flex items-center justify-center gap-1">
                             <CheckSquare className="w-4 h-4" />
@@ -1128,17 +1222,18 @@ export default function ParcelsTab() {
                       // Vérifier si ce colis peut être assigné
                       const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
                       const canAssign = !parcel.deliveredAt && !parcel.returnedAt && parcel.status !== 'Livré'
-                      const isAssignable = profile?.role === 'chef_agence' && isInMyCity && canAssign
+                      const isAssignable = (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && isInMyCity && canAssign
                       const assignSelected = bulkAssignSelectedIds.includes(parcel.id)
 
                       return (
                         <tr
                           key={parcel.id}
-                          className={`border-b border-gray-100 transition-all hover:shadow-lg hover:scale-[1.01] hover:z-10 relative ${
+                          onClick={handleParcelRowClick}
+                          className={`border-b border-gray-100 transition-all hover:shadow-lg hover:scale-[1.01] hover:z-10 relative cursor-pointer ${
                             idx % 2 === 0 ? 'bg-white' : 'bg-gradient-to-r from-blue-50/30 via-purple-50/20 to-pink-50/30'
                           } ${isOwn ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-orange-400'}`}
                         >
-                          {profile?.role === 'chef_agence' && (
+                          {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
                             <td className="px-3 py-3 text-center border-r border-gray-100 bg-green-50/30">
                               {isAssignable ? (
                                 <input
@@ -1309,6 +1404,26 @@ export default function ParcelsTab() {
                                   <Edit2 className="w-4 h-4" />
                                 </button>
                               )}
+                              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                                <select
+                                  onChange={(e) => {
+                                    if (e.target.value && e.target.value !== parcel.status) {
+                                      handleChangeParcelStatus(parcel.id, e.target.value)
+                                      e.target.value = parcel.status // Reset to current status
+                                    }
+                                  }}
+                                  value={parcel.status}
+                                  className="px-2 py-1 text-xs font-semibold rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-md cursor-pointer"
+                                  title="Changer le statut"
+                                >
+                                  <option value={parcel.status} disabled>📋 Statut: {parcel.status}</option>
+                                  {STATUSES.map((status) => (
+                                    <option key={status} value={status} className="bg-white text-gray-900">
+                                      {status}
+                                    </option>
+                                  ))}
+                                </select>
+                              )}
                               {isOwn && (
                                 <button
                                   onClick={() => handleDeleteClick(parcel)}
@@ -1444,13 +1559,14 @@ export default function ParcelsTab() {
               const sc    = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
               const canLoadTransport = canLoadTransportParcel(parcel)
               const bulkSelected = bulkLoadSelectedIds.includes(parcel.id)
-              const canSelectAideValidation = profile?.role === 'chef_agence' && isPendingAideParcelForAgency(parcel)
+              const canSelectAideValidation = (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && isPendingAideParcelForAgency(parcel)
               const aideValidationSelected = selectedAideEntryIds.includes(parcel.id)
 
 
               return (
                 <div key={parcel.id}
-                  className={`bg-white rounded-xl p-4 shadow-sm border-l-4 ${isOwn ? 'border-l-blue-500 border border-blue-100' : 'border-l-orange-400 border border-orange-100'}`}
+                  onClick={handleParcelRowClick}
+                  className={`bg-white rounded-xl p-4 shadow-sm border-l-4 cursor-pointer ${isOwn ? 'border-l-blue-500 border border-blue-100' : 'border-l-orange-400 border border-orange-100'}`}
                 >
                   {/* NOUVELLE POLITIQUE : Plus de sélection validation nécessaire */}
                   {canLoadTransport && (
@@ -1473,9 +1589,9 @@ export default function ParcelsTab() {
                     </label>
                   )}
 
-                  {/* ⭐ NOUVEAU: Checkbox pour assignation livreur (chef d'agence) */}
+                  {/* ⭐ NOUVEAU: Checkbox pour assignation livreur (chef d'agence et agentpro) */}
                   {(() => {
-                    if (profile?.role !== 'chef_agence') return null
+                    if (profile?.role !== 'chef_agence' && profile?.role !== 'agentpro') return null
                     const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
                     // Tous les colis dans ma ville qui ne sont pas livrés
                     const canAssign = !parcel.deliveredAt && !parcel.returnedAt && parcel.status !== 'Livré'
@@ -1716,8 +1832,8 @@ export default function ParcelsTab() {
                           ✍️
                         </button>
                       )}
-                      {/* Bouton Modifier - Toujours affiché pour chef d'agence et aide agent */}
-                      {(canEditParcelDetails(parcel) || profile?.role === 'chef_agence' || profile?.role === 'aide_agent') && (
+                      {/* Bouton Modifier - Toujours affiché pour chef d'agence, agentpro et aide agent */}
+                      {(canEditParcelDetails(parcel) || profile?.role === 'chef_agence' || profile?.role === 'agentpro' || profile?.role === 'aide_agent') && (
                         <button
                           onClick={() => handleEditClick(parcel)}
                           className="flex items-center gap-1 text-xs px-2.5 py-2 rounded-lg transition bg-blue-50 hover:bg-blue-100 text-blue-600"
@@ -1725,6 +1841,27 @@ export default function ParcelsTab() {
                           <Edit2 className="w-3.5 h-3.5" />
                           Modifier
                         </button>
+                      )}
+                      {/* Select Changer statut - Chef d'agence uniquement */}
+                      {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                        <select
+                          onChange={(e) => {
+                            if (e.target.value && e.target.value !== parcel.status) {
+                              handleChangeParcelStatus(parcel.id, e.target.value)
+                              e.target.value = parcel.status // Reset to current status
+                            }
+                          }}
+                          value={parcel.status}
+                          className="flex items-center gap-1 text-xs px-2 py-2 rounded-lg transition bg-amber-50 hover:bg-amber-100 text-amber-700 font-semibold cursor-pointer border border-amber-200"
+                          title="Changer le statut"
+                        >
+                          <option value={parcel.status} disabled>📋 Statut: {parcel.status}</option>
+                          {STATUSES.map((status) => (
+                            <option key={status} value={status} className="bg-white text-gray-900">
+                              {status}
+                            </option>
+                          ))}
+                        </select>
                       )}
                       {/* Bouton Supprimer - Seulement si peut vraiment éditer */}
                       {canEditParcelDetails(parcel) && (
@@ -1736,7 +1873,7 @@ export default function ParcelsTab() {
                         </button>
                       )}
                       {/* Badge Lecture seule - Seulement si ne peut vraiment pas modifier */}
-                      {!canEditParcelDetails(parcel) && profile?.role !== 'chef_agence' && profile?.role !== 'aide_agent' && (
+                      {!canEditParcelDetails(parcel) && profile?.role !== 'chef_agence' && profile?.role !== 'agentpro' && profile?.role !== 'aide_agent' && (
                         <span className="inline-flex items-center gap-1 text-xs bg-gray-50 text-gray-500 px-2.5 py-2 rounded-lg border border-gray-100">
                           <Lock className="w-3.5 h-3.5" />
                           Lecture seule
@@ -1777,7 +1914,7 @@ export default function ParcelsTab() {
                   {/* En compte — badge */}
                   {parcel.portType === 'port_en_compte' && (
                     <div className="mt-2 inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium border bg-purple-50 text-purple-700 border-purple-200">
-                      🗂️ En compte {parcel.price > 0 ? `${parcel.price} DH` : ''}
+                      💼 En compte {parcel.price > 0 ? `${parcel.price} DH` : ''}
                     </div>
                   )}
 
@@ -1815,8 +1952,8 @@ export default function ParcelsTab() {
                     </div>
                   )}
 
-                  {/* Validation saisie aide_agent / portail client — pour le chef */}
-                  {profile?.role === 'chef_agence' && ['aide_agent', 'client_portal'].includes(parcel.agentRole) && parcel.validatedByChef === false && ((parcel.originCity || parcel.sender?.city || '') === profile?.city || aideAgents.some((a: any) => a.id === (parcel.aideAgentId || parcel.agentId) && a.city === profile?.city)) && (
+                  {/* Validation saisie aide_agent / portail client — pour le chef et agentpro */}
+                  {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && ['aide_agent', 'client_portal'].includes(parcel.agentRole) && parcel.validatedByChef === false && ((parcel.originCity || parcel.sender?.city || '') === profile?.city || aideAgents.some((a: any) => a.id === (parcel.aideAgentId || parcel.agentId) && a.city === profile?.city)) && (
                     <div className="mt-3 pt-3 border-t border-amber-100">
                       <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 space-y-2">
                         <div className="flex items-center gap-2">
@@ -2828,6 +2965,7 @@ export default function ParcelsTab() {
               const cityDrivers = drivers.filter((d: any) =>
                 (!destCity || d.city === destCity) &&
                 (d.role === 'livreur' || (d.role === 'chauffeur' && d.chauffeurType !== 'transport')) &&
+                d.sectorId &&  // ⭐ Ne montrer que les livreurs associés à un secteur
                 (!selectedSectorId || d.sectorId === selectedSectorId)
               )
               const cityVehicles = vehicles.filter((v: any) =>

@@ -1,6 +1,8 @@
-import { Banknote } from 'lucide-react'
+import { Banknote, Trash2, CheckSquare, Square } from 'lucide-react'
+import { useState } from 'react'
 import { useAgentCtx } from '../AgentCtx'
 import { fmtFixed as fmtAmt } from '../../../utils/formatNumber'
+import { updateParcel } from '../../../firebase/firestore'
 
 export default function DriversTab() {
   const {
@@ -15,7 +17,67 @@ export default function DriversTab() {
     isRetourFondValue,
   } = useAgentCtx()
 
-  
+  // 🔧 États pour la sélection multiple
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [deleteLoading, setDeleteLoading] = useState(false)
+
+  const toggleSelection = (id: string) => {
+    const newSet = new Set(selectedIds)
+    if (newSet.has(id)) {
+      newSet.delete(id)
+    } else {
+      newSet.add(id)
+    }
+    setSelectedIds(newSet)
+  }
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === portDuPending.length) {
+      setSelectedIds(new Set())
+    } else {
+      setSelectedIds(new Set(portDuPending.map((p: any) => p.id)))
+    }
+  }
+
+  const handleDeleteSelected = async () => {
+    if (selectedIds.size === 0) {
+      alert('⚠️ Veuillez sélectionner au moins un versement à supprimer')
+      return
+    }
+
+    const count = selectedIds.size
+    const total = Array.from(selectedIds).reduce((sum, id) => {
+      const p = portDuPending.find((parcel: any) => parcel.id === id)
+      return sum + (parseFloat(p?.price || 0))
+    }, 0)
+
+    if (!confirm(`🗑️ Confirmer la suppression de ${count} versement(s) ?\n\nMontant total: ${fmtAmt(total)} DH\n\n⚠️ Cette action annulera la collecte du port dû pour ces colis.`)) {
+      return
+    }
+
+    setDeleteLoading(true)
+    try {
+      // Annuler la collecte de port dû pour chaque parcel sélectionné
+      const promises = Array.from(selectedIds).map(id =>
+        updateParcel(id, {
+          portStatus: null,
+          portCollectedAt: null,
+          portCollectedBy: null,
+          portCollectedById: null,
+        })
+      )
+      await Promise.all(promises)
+
+      setSelectedIds(new Set())
+      alert(`✅ ${count} versement(s) supprimé(s) avec succès!`)
+    } catch (err: any) {
+      alert(`❌ Erreur: ${err.message}`)
+    } finally {
+      setDeleteLoading(false)
+    }
+  }
+
+
   const fmtD = (iso: any) => {
     try {
       return new Date(iso).toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: 'numeric' })
@@ -75,14 +137,77 @@ export default function DriversTab() {
         </div>
       ) : (
         <div className="bg-white rounded-2xl border border-orange-200 overflow-hidden">
-          <div className="px-4 py-3 border-b border-orange-100 bg-orange-50 flex items-center gap-2">
-            <span className="text-base">📮</span>
-            <h3 className="font-bold text-orange-700 text-sm">Port dû à réceptionner</h3>
-            <span className="ml-auto bg-orange-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">{portDuPending.length}</span>
+          {/* Header avec actions de sélection */}
+          <div className="px-4 py-3 border-b border-orange-100 bg-orange-50">
+            <div className="flex items-center gap-3 mb-2">
+              <span className="text-base">📮</span>
+              <h3 className="font-bold text-orange-700 text-sm flex-1">Port dû à réceptionner</h3>
+              <span className="bg-orange-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">{portDuPending.length}</span>
+            </div>
+
+            {/* Barre d'actions */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={toggleSelectAll}
+                className="flex items-center gap-1.5 px-3 py-1.5 bg-white hover:bg-gray-50 border border-orange-200 rounded-lg text-xs font-semibold text-orange-700 transition"
+              >
+                {selectedIds.size === portDuPending.length ? (
+                  <>
+                    <CheckSquare className="w-3.5 h-3.5" />
+                    Tout désélectionner
+                  </>
+                ) : (
+                  <>
+                    <Square className="w-3.5 h-3.5" />
+                    Tout sélectionner
+                  </>
+                )}
+              </button>
+
+              {selectedIds.size > 0 && (
+                <>
+                  <div className="text-xs font-semibold text-orange-600 px-2">
+                    {selectedIds.size} sélectionné{selectedIds.size > 1 ? 's' : ''}
+                    <span className="ml-1 text-orange-500">
+                      ({fmtAmt(Array.from(selectedIds).reduce((sum, id) => {
+                        const p = portDuPending.find((parcel: any) => parcel.id === id)
+                        return sum + (parseFloat(p?.price || 0))
+                      }, 0))} DH)
+                    </span>
+                  </div>
+
+                  <button
+                    onClick={handleDeleteSelected}
+                    disabled={deleteLoading}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition ml-auto"
+                  >
+                    {deleteLoading ? (
+                      <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <Trash2 className="w-3.5 h-3.5" />
+                    )}
+                    Supprimer la sélection
+                  </button>
+                </>
+              )}
+            </div>
           </div>
+
           <div className="divide-y divide-gray-100">
             {portDuPending.map((p: any) => (
-              <div key={p.id} className="flex items-center justify-between px-4 py-3 gap-3">
+              <div key={p.id} className={`flex items-center gap-3 px-4 py-3 ${selectedIds.has(p.id) ? 'bg-orange-50' : 'hover:bg-gray-50'} transition`}>
+                {/* Checkbox */}
+                <button
+                  onClick={() => toggleSelection(p.id)}
+                  className="shrink-0"
+                >
+                  {selectedIds.has(p.id) ? (
+                    <CheckSquare className="w-5 h-5 text-orange-600" />
+                  ) : (
+                    <Square className="w-5 h-5 text-gray-300 hover:text-orange-400" />
+                  )}
+                </button>
+
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-sm font-bold text-gray-800 font-mono">{p.trackingId}</p>

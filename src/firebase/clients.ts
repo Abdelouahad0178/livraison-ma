@@ -81,6 +81,100 @@ export async function createClient(data: DynamicData) {
   return ref.id
 }
 
+/**
+ * Trouve un client existant ou en crée un nouveau automatiquement
+ * Recherche par téléphone OU par (nom + ville)
+ */
+export async function findOrCreateClientForReceiver(
+  receiverData: {
+    name: string
+    tel: string
+    city: string
+    address?: string
+  },
+  createdBy: string,
+  createdByName: string
+): Promise<string> {
+  console.log('🔍 Recherche/création client pour:', receiverData)
+
+  // Normaliser les données
+  const normalizedTel = receiverData.tel?.trim() || ''
+  const normalizedName = receiverData.name?.trim() || ''
+  const normalizedCity = receiverData.city?.trim() || ''
+
+  if (!normalizedName || !normalizedCity) {
+    throw new Error('Le nom et la ville du destinataire sont requis')
+  }
+
+  // 1. Chercher par téléphone si disponible
+  if (normalizedTel) {
+    const telQuery = query(
+      collection(db, 'clients'),
+      where('tel', '==', normalizedTel),
+      limit(1)
+    )
+    const telSnapshot = await getDocs(telQuery)
+
+    if (!telSnapshot.empty) {
+      const existingClient = telSnapshot.docs[0]
+      console.log('✅ Client trouvé par téléphone:', existingClient.id)
+
+      // Marquer comme destinataire s'il ne l'est pas déjà
+      if (!existingClient.data().isDestinataire) {
+        await updateDoc(doc(db, 'clients', existingClient.id), {
+          isDestinataire: true
+        })
+      }
+
+      return existingClient.id
+    }
+  }
+
+  // 2. Chercher par nom + ville
+  const nameQuery = query(
+    collection(db, 'clients'),
+    where('name', '==', normalizedName),
+    where('city', '==', normalizedCity),
+    limit(1)
+  )
+  const nameSnapshot = await getDocs(nameQuery)
+
+  if (!nameSnapshot.empty) {
+    const existingClient = nameSnapshot.docs[0]
+    console.log('✅ Client trouvé par nom+ville:', existingClient.id)
+
+    // Mettre à jour le téléphone si on en a un et qu'il n'en avait pas
+    const updateData: any = { isDestinataire: true }
+    if (normalizedTel && !existingClient.data().tel) {
+      updateData.tel = normalizedTel
+    }
+
+    await updateDoc(doc(db, 'clients', existingClient.id), updateData)
+
+    return existingClient.id
+  }
+
+  // 3. Créer un nouveau client
+  console.log('➕ Création d\'un nouveau client destinataire')
+  const newClientId = await createClient({
+    name: normalizedName,
+    tel: normalizedTel,
+    city: normalizedCity,
+    address: receiverData.address || '',
+    accountType: 'compte', // Par défaut en compte pour les ports
+    remise: 0,
+    createdBy,
+    createdByName,
+    createdByRole: 'livreur',
+    isDestinataire: true,
+    isExpediteur: false,
+    notes: 'Client créé automatiquement lors d\'une livraison en compte destinataire'
+  })
+
+  console.log('✅ Nouveau client créé:', newClientId)
+  return newClientId
+}
+
 export async function updateClient(clientId: string, data: DynamicData) {
   await updateDoc(doc(db, 'clients', clientId), data)
 }

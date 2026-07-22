@@ -91,7 +91,8 @@ export function subscribeAllCentralCodDeposits(callback: any, onError: (err?: an
   // 180 jours pour éviter surcharge Firestore
   const since = daysAgoTimestamp(180)
   const q = query(collection(db, 'centralCodDeposits'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
-  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
+  // Filtrer les versements supprimés (status: 'deleted')
+  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((dep: any) => dep.status !== 'deleted')), onError)
 }
 export async function createCentralSupplierPayment({ parcelIds = [], parcels = [] as any[], amount, senderName, senderTel, chequeNum, bankName, chequeDate, preparedBy, preparedById, note }: any) {
   const ids = [...new Set((parcelIds || []).filter(Boolean))]
@@ -244,30 +245,31 @@ export async function deleteCentralSupplierPayment(paymentId: any, deletedBy: an
   if (!snap.exists()) throw new Error('Paiement introuvable.')
 
   const payment: any = snap.data()
-  if (payment.status === 'paid') {
-    throw new Error('Ce paiement a déjà été réglé. Seul l\'admin peut le supprimer.')
-  }
-
   const ids = payment.parcelIds || []
 
-  // Retirer les champs de paiement des colis
+  // Retirer les champs de paiement des colis (utiliser set avec merge pour ignorer les inexistants)
   const chunks: any[][] = []
   for (let i = 0; i < ids.length; i += 500) chunks.push(ids.slice(i, i + 500))
   for (const chunk of chunks) {
     const batch = writeBatch(db)
     chunk.forEach((id: string) => {
-      batch.update(doc(db, 'parcels', id), {
-        centralSupplierPaymentId: deleteField(),
-        centralSupplierPaymentStatus: deleteField(),
-        centralSupplierPreparedAt: deleteField(),
-        centralSupplierPreparedBy: deleteField(),
-        centralSupplierPreparedById: deleteField(),
-        centralChequeNum: deleteField(),
-        centralChequeBank: deleteField(),
-        centralChequeDate: deleteField(),
-      })
+      // Utiliser set avec merge:true pour ignorer les documents inexistants
+      batch.set(doc(db, 'parcels', id), {
+        centralSupplierPaymentId: null,
+        centralSupplierPaymentStatus: null,
+        centralSupplierPreparedAt: null,
+        centralSupplierPreparedBy: null,
+        centralSupplierPreparedById: null,
+        centralChequeNum: null,
+        centralChequeBank: null,
+        centralChequeDate: null,
+      }, { merge: true })
     })
-    await batch.commit()
+    try {
+      await batch.commit()
+    } catch (err: any) {
+      console.warn(`Erreur ignorée lors de la mise à jour des colis:`, err.message)
+    }
   }
 
   // Supprimer le paiement
@@ -281,9 +283,260 @@ export async function deleteCentralSupplierPayment(paymentId: any, deletedBy: an
   return paymentId
 }
 
+export async function updateCentralCodDeposit(depositId: any, { amount, agentName, note, updatedBy, updatedById }: any) {
+  if (!depositId) throw new Error('Versement invalide.')
+
+  const depositRef = doc(db, 'centralCodDeposits', depositId)
+  const snap = await getDoc(depositRef)
+  if (!snap.exists()) throw new Error('Versement introuvable.')
+
+  const updates: any = {
+    updatedAt: new Date().toISOString(),
+    updatedBy: updatedBy || 'Encaisseur central',
+    updatedById: updatedById || null,
+  }
+
+  if (amount !== undefined) updates.amount = parseFloat(amount) || 0
+  if (agentName !== undefined) updates.agentName = agentName
+  if (note !== undefined) updates.note = note
+
+  await updateDoc(depositRef, updates)
+  return depositId
+}
+
+export async function deleteCentralCodDeposit(depositId: any, deletedBy: any, deletedById: any) {
+  if (!depositId) throw new Error('Versement invalide.')
+
+  const depositRef = doc(db, 'centralCodDeposits', depositId)
+  const snap = await getDoc(depositRef)
+  if (!snap.exists()) throw new Error('Versement introuvable.')
+
+  // ÉTAPE 1 : D'abord marquer le versement comme supprimé
+  try {
+    await updateDoc(depositRef, {
+      status: 'deleted',
+      deletedAt: new Date().toISOString(),
+      deletedBy: deletedBy || 'Encaisseur central',
+      deletedById: deletedById || null,
+    })
+  } catch (err: any) {
+    throw new Error(`Erreur lors de la suppression du versement : ${err.message}`)
+  }
+
+  // ÉTAPE 2 : Ensuite retirer le flag des colis (utiliser set avec merge pour éviter les erreurs de documents inexistants)
+  const deposit: any = snap.data()
+  const ids = deposit.parcelIds || []
+
+  try {
+    const chunks: any[][] = []
+    for (let i = 0; i < ids.length; i += 500) chunks.push(ids.slice(i, i + 500))
+    for (const chunk of chunks) {
+      const batch = writeBatch(db)
+      chunk.forEach((id: string) => {
+        // Utiliser set avec merge:true au lieu de update pour ignorer les documents inexistants
+        batch.set(doc(db, 'parcels', id), {
+          centralDeposited: false,
+          centralDepositedAt: null,
+          centralDepositCity: null,
+        }, { merge: true })
+      })
+      await batch.commit()
+    }
+  } catch (err: any) {
+    // Le versement est déjà supprimé, on log juste l'erreur sans bloquer
+    console.warn(`Versement ${depositId} supprimé. Avertissement lors de la mise à jour des colis:`, err.message)
+  }
+
+  return depositId
+}
+
+export async function resetAllAgencyCashBalances(resetBy: string, resetById: string) {
+  if (!window.confirm('⚠️ ATTENTION : Vous êtes sur le point de réinitialiser TOUTES les soldes de caisse de TOUTES les agences à 0 DH.\n\nCette action ne peut pas être annulée.\n\nÊtes-vous absolument certain de vouloir continuer ?')) {
+    throw new Error('Opération annulée.')
+  }
+
+  // Récupérer toutes les caisses
+  const snapshot = await getDocs(collection(db, 'agencyCashes'))
+  const batch = writeBatch(db)
+  const now = new Date().toISOString()
+  let count = 0
+
+  snapshot.docs.forEach(docSnap => {
+    batch.update(docSnap.ref, {
+      solde: 0,
+      soldeEspeces: 0,
+      soldeCheques: 0,
+      soldeVirement: 0,
+      lastResetAt: now,
+      lastResetBy: resetBy || 'Encaisseur central',
+      lastResetById: resetById || null,
+    })
+    count++
+  })
+
+  await batch.commit()
+
+  return {
+    success: true,
+    count,
+    message: `${count} caisse(s) réinitialisée(s) avec succès.`
+  }
+}
+
+export async function deleteAllCentralCodDeposits(deletedBy: string, deletedById: string) {
+  if (!window.confirm('⚠️ ATTENTION : Vous êtes sur le point de SUPPRIMER TOUS LES VERSEMENTS.\n\nTous les versements seront marqués comme supprimés et les colis seront démarqués.\n\nCette action ne peut pas être annulée.\n\nÊtes-vous absolument certain de vouloir continuer ?')) {
+    throw new Error('Opération annulée.')
+  }
+
+  // Récupérer tous les versements non supprimés
+  const snapshot = await getDocs(query(collection(db, 'centralCodDeposits'), where('status', '!=', 'deleted')))
+  let count = 0
+  const now = new Date().toISOString()
+
+  for (const docSnap of snapshot.docs) {
+    const deposit: any = docSnap.data()
+    const ids = deposit.parcelIds || []
+
+    // Retirer le flag centralDeposited des colis (utiliser set avec merge pour ignorer les inexistants)
+    const chunks: any[][] = []
+    for (let i = 0; i < ids.length; i += 500) chunks.push(ids.slice(i, i + 500))
+    for (const chunk of chunks) {
+      const batch = writeBatch(db)
+      chunk.forEach((id: string) => {
+        // Utiliser set avec merge:true pour ignorer les documents inexistants
+        batch.set(doc(db, 'parcels', id), {
+          centralDeposited: false,
+          centralDepositedAt: null,
+          centralDepositCity: null,
+        }, { merge: true })
+      })
+      try {
+        await batch.commit()
+      } catch (err: any) {
+        console.warn(`Erreur ignorée lors de la mise à jour des colis:`, err.message)
+      }
+    }
+
+    // Marquer le versement comme supprimé
+    await updateDoc(doc(db, 'centralCodDeposits', docSnap.id), {
+      status: 'deleted',
+      deletedAt: now,
+      deletedBy: deletedBy || 'Encaisseur central',
+      deletedById: deletedById || null,
+    })
+    count++
+  }
+
+  return {
+    success: true,
+    count,
+    message: `${count} versement(s) supprimé(s) avec succès.`
+  }
+}
+
+export async function deleteAllCentralSupplierPayments(deletedBy: string, deletedById: string) {
+  if (!window.confirm('⚠️ ATTENTION : Vous êtes sur le point de SUPPRIMER TOUS LES CHÈQUES (PAYÉS ET NON PAYÉS).\n\nTous les paiements seront marqués comme supprimés et les champs de paiement seront retirés des colis.\n\nCette action ne peut pas être annulée.\n\nÊtes-vous absolument certain de vouloir continuer ?')) {
+    throw new Error('Opération annulée.')
+  }
+
+  // Récupérer TOUS les paiements (payés et non payés), sauf les déjà supprimés
+  const snapshot = await getDocs(query(collection(db, 'centralSupplierPayments'), where('status', '!=', 'deleted')))
+  let count = 0
+  const now = new Date().toISOString()
+
+  for (const docSnap of snapshot.docs) {
+    const payment: any = docSnap.data()
+    const ids = payment.parcelIds || []
+
+    // Retirer les champs de paiement des colis (utiliser set avec merge pour ignorer les inexistants)
+    const chunks: any[][] = []
+    for (let i = 0; i < ids.length; i += 500) chunks.push(ids.slice(i, i + 500))
+    for (const chunk of chunks) {
+      const batch = writeBatch(db)
+      chunk.forEach((id: string) => {
+        // Utiliser set avec merge:true pour ignorer les documents inexistants
+        batch.set(doc(db, 'parcels', id), {
+          centralSupplierPaymentId: null,
+          centralSupplierPaymentStatus: null,
+          centralSupplierPreparedAt: null,
+          centralSupplierPreparedBy: null,
+          centralSupplierPreparedById: null,
+          centralChequeNum: null,
+          centralChequeBank: null,
+          centralChequeDate: null,
+        }, { merge: true })
+      })
+      try {
+        await batch.commit()
+      } catch (err: any) {
+        console.warn(`Erreur ignorée lors de la mise à jour des colis:`, err.message)
+      }
+    }
+
+    // Marquer le paiement comme supprimé
+    await updateDoc(doc(db, 'centralSupplierPayments', docSnap.id), {
+      status: 'deleted',
+      deletedAt: now,
+      deletedBy: deletedBy || 'Encaisseur central',
+      deletedById: deletedById || null,
+    })
+    count++
+  }
+
+  return {
+    success: true,
+    count,
+    message: `${count} paiement(s) supprimé(s) avec succès.`
+  }
+}
+
 export function subscribeAllCentralSupplierPayments(callback: any, onError: (err?: any) => void = () => {}) {
   // 180 jours pour éviter surcharge Firestore
   const since = daysAgoTimestamp(180)
   const q = query(collection(db, 'centralSupplierPayments'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((p: any) => p.status !== 'deleted')), onError)
+}
+
+// ── Pointage / Contrôle Encaisseur Central ─────────────────────────────────
+// Marque des colis COD comme "contrôlés" par l'encaisseur central.
+// Champs ajoutés sur le colis : controlled, controlledBy, controlledById, controlledAt
+const CONTROL_BATCH_SIZE = 450
+
+export async function markParcelsControlled(parcelIds: string[], controlledBy: string, controlledById: string) {
+  const ids = [...new Set((parcelIds || []).filter(Boolean))]
+  if (ids.length === 0) return { updated: 0 }
+  const now = new Date().toISOString()
+  for (let i = 0; i < ids.length; i += CONTROL_BATCH_SIZE) {
+    const chunk = ids.slice(i, i + CONTROL_BATCH_SIZE)
+    const batch = writeBatch(db)
+    chunk.forEach(id => {
+      batch.update(doc(db, 'parcels', id), {
+        controlled: true,
+        controlledBy: controlledBy || 'Encaisseur central',
+        controlledById: controlledById || '',
+        controlledAt: now,
+      })
+    })
+    await batch.commit()
+  }
+  return { updated: ids.length, controlledAt: now }
+}
+
+export async function unmarkParcelsControlled(parcelIds: string[]) {
+  const ids = [...new Set((parcelIds || []).filter(Boolean))]
+  if (ids.length === 0) return { updated: 0 }
+  for (let i = 0; i < ids.length; i += CONTROL_BATCH_SIZE) {
+    const chunk = ids.slice(i, i + CONTROL_BATCH_SIZE)
+    const batch = writeBatch(db)
+    chunk.forEach(id => {
+      batch.update(doc(db, 'parcels', id), {
+        controlled: false,
+        controlledBy: deleteField(),
+        controlledById: deleteField(),
+        controlledAt: deleteField(),
+      })
+    })
+    await batch.commit()
+  }
+  return { updated: ids.length }
 }

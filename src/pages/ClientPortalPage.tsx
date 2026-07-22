@@ -81,7 +81,7 @@ export default function ClientPortalPage() {
     natureOfGoods: '',
     serviceType: 'simple',
     codAmount: '',
-    portType: 'port_en_compte',
+    portType: 'port_en_compte_expediteur',
   })
   const [parcelSending, setParcelSending] = useState(false)
   const [parcelError, setParcelError] = useState('')
@@ -303,7 +303,7 @@ export default function ClientPortalPage() {
         natureOfGoods: '',
         serviceType: 'simple',
         codAmount: '',
-        portType: 'port_en_compte',
+        portType: 'port_en_compte_expediteur',
       })
       setParcelSuccess(`Demande envoyee a l'agence de ${clientCity}. Reference: ${parcel.trackingId}`)
     } catch (err: any) {

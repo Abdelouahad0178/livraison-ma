@@ -248,7 +248,7 @@ function AppContent() {
             </PrivateRoute>
           } />
           <Route path="/agent" element={
-            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole={['agent', 'chef_agence', 'aide_agent']}>
+            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole={['agent', 'chef_agence', 'aide_agent', 'agentpro']}>
               <AgentPage />
             </PrivateRoute>
           } />

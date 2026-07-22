@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react'
-import { Building2, TrendingUp, Package, Search, Filter, X, Calendar, ChevronDown } from 'lucide-react'
+import { useMemo, useState, useEffect, useRef } from 'react'
+import { Building2, TrendingUp, Package, Search, Filter, X, Calendar, ChevronDown, Loader2, AlertCircle } from 'lucide-react'
 import { CITIES } from '../../../firebase/constants'
+import { collection, query, orderBy, limit, onSnapshot, startAfter, getDocs } from 'firebase/firestore'
+import { db } from '../../../firebase/config'
 
 interface Props {
-  allParcels: any[]
   datePreset: string
   setDatePreset: (preset: string) => void
   dateFrom: string
@@ -12,8 +13,9 @@ interface Props {
   setDateTo: (date: string) => void
 }
 
+const PAGE_SIZE = 800 // Nombre de colis chargés par batch
+
 export default function AdminPortAgenciesTab({
-  allParcels,
   datePreset,
   setDatePreset,
   dateFrom,
@@ -23,8 +25,101 @@ export default function AdminPortAgenciesTab({
 }: Props) {
   // États pour filtres et recherche
   const [searchCity, setSearchCity] = useState('')
-  const [portTypeFilter, setPortTypeFilter] = useState('all') // all, port_paye, port_du, port_en_compte
+  const [portTypeFilter, setPortTypeFilter] = useState('all') // all, port_paye, port_du, port_en_compte_expediteur
   const [showFilters, setShowFilters] = useState(true)
+
+  // États pour chargement progressif
+  const [liveParcels, setLiveParcels] = useState<any[]>([])
+  const [loading, setLoading] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [loadingAll, setLoadingAll] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
+  const lastDocRef = useRef<any>(null)
+
+  // ⚡ Chargement initial : PAGE_SIZE colis récents
+  useEffect(() => {
+    setLoading(true)
+    const q = query(
+      collection(db, 'parcels'),
+      orderBy('createdAt', 'desc'),
+      limit(PAGE_SIZE)
+    )
+
+    const unsub = onSnapshot(
+      q,
+      (snap) => {
+        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+        setLiveParcels(data)
+        lastDocRef.current = snap.docs[snap.docs.length - 1] || null
+        setHasMore(snap.docs.length === PAGE_SIZE)
+        setLoading(false)
+      },
+      (err) => {
+        console.error('Erreur chargement initial:', err)
+        setLoading(false)
+      }
+    )
+
+    return () => unsub()
+  }, [])
+
+  // ⚡ Charger TOUS les colis restants en arrière-plan
+  const loadAllParcels = async () => {
+    if (!hasMore || loadingAll || !lastDocRef.current) return
+
+    setLoadingAll(true)
+    let cursor = lastDocRef.current
+    let allNewParcels: any[] = []
+
+    try {
+      while (cursor) {
+        const q = query(
+          collection(db, 'parcels'),
+          orderBy('createdAt', 'desc'),
+          startAfter(cursor),
+          limit(PAGE_SIZE)
+        )
+
+        const snap = await getDocs(q)
+        if (snap.empty) break
+
+        const batch = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+        allNewParcels = [...allNewParcels, ...batch]
+        cursor = snap.docs[snap.docs.length - 1]
+
+        if (snap.docs.length < PAGE_SIZE) break
+      }
+
+      // Mettre à jour l'état avec tous les colis
+      setLiveParcels((prev) => {
+        const map = new Map()
+        prev.forEach((p: any) => map.set(p.id, p))
+        allNewParcels.forEach((p: any) => map.set(p.id, p))
+        return Array.from(map.values())
+      })
+
+      setHasMore(false)
+      lastDocRef.current = cursor
+    } catch (err) {
+      console.error('Erreur chargement complet:', err)
+    } finally {
+      setLoadingAll(false)
+    }
+  }
+
+  // ⚡ Chargement automatique en arrière-plan après 2 secondes
+  useEffect(() => {
+    if (!hasMore || loadingAll || loadingMore || !lastDocRef.current) return
+    if (liveParcels.length === 0) return
+
+    const timer = setTimeout(() => {
+      if (hasMore && !loadingAll && !loadingMore && lastDocRef.current) {
+        loadAllParcels()
+      }
+    }, 2000)
+
+    return () => clearTimeout(timer)
+  }, [liveParcels.length, hasMore, loadingAll, loadingMore])
 
   // 🔒 Fonction sécurisée pour parser les nombres
   const safeParseFloat = (value: any): number => {
@@ -47,14 +142,14 @@ export default function AdminPortAgenciesTab({
   }
 
   const filteredByDate = useMemo(() => {
-    if (!Array.isArray(allParcels)) return []
+    if (!Array.isArray(liveParcels)) return []
 
     const now = new Date()
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
     const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
 
-    return allParcels.filter((p: any) => {
+    return liveParcels.filter((p: any) => {
       const pDate = parcelDate(p)
 
       if (datePreset === 'today') return pDate >= today
@@ -68,7 +163,7 @@ export default function AdminPortAgenciesTab({
       }
       return true // 'all'
     })
-  }, [allParcels, datePreset, dateFrom, dateTo])
+  }, [liveParcels, datePreset, dateFrom, dateTo])
 
   // Calculer les statistiques par agence
   const portStats = useMemo(() => {
@@ -117,8 +212,8 @@ export default function AdminPortAgenciesTab({
         stats[destCity].portDu += price
       }
 
-      // En Compte : collecté à l'ORIGINE
-      if (p.portType === 'port_en_compte' && originCity && stats[originCity]) {
+      // En Compte Expéditeur : collecté à l'ORIGINE
+      if (p.portType === 'port_en_compte_expediteur' && originCity && stats[originCity]) {
         stats[originCity].enCompte += price
       }
 
@@ -163,7 +258,7 @@ export default function AdminPortAgenciesTab({
       filtered = filtered.filter(stat => {
         if (portTypeFilter === 'port_paye') return stat.portPaye > 0
         if (portTypeFilter === 'port_du') return stat.portDu > 0
-        if (portTypeFilter === 'port_en_compte') return stat.enCompte > 0
+        if (portTypeFilter === 'port_en_compte_expediteur') return stat.enCompte > 0
         return true
       })
     }
@@ -198,16 +293,57 @@ export default function AdminPortAgenciesTab({
 
   return (
     <div className="mt-4 space-y-4">
-      {/* En-tête */}
-      <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 rounded-2xl p-6 shadow-xl">
-        <div className="flex items-center gap-3 text-white">
-          <Building2 className="w-8 h-8" />
-          <div>
-            <h2 className="text-2xl font-black">Port par Agence</h2>
-            <p className="text-blue-100 text-sm mt-1">Port Payé et En Compte (collecté par expéditeur) · Port Dû (collecté à destination)</p>
-          </div>
+      {/* Chargement initial */}
+      {loading && (
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-12 text-center">
+          <Loader2 className="w-12 h-12 text-purple-600 animate-spin mx-auto mb-4" />
+          <p className="text-gray-600 font-medium">Chargement des données...</p>
         </div>
-      </div>
+      )}
+
+      {!loading && (
+        <>
+          {/* En-tête */}
+          <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 rounded-2xl p-6 shadow-xl">
+            <div className="flex items-center gap-3 text-white">
+              <Building2 className="w-8 h-8" />
+              <div>
+                <h2 className="text-2xl font-black">Port par Agence</h2>
+                <p className="text-blue-100 text-sm mt-1">Port Payé et En Compte (collecté par expéditeur) · Port Dû (collecté à destination)</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Avertissement chargement progressif */}
+          {hasMore && datePreset !== 'all' && (
+            <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-l-4 border-orange-500 rounded-lg p-4 shadow-sm">
+              <div className="flex items-start gap-3">
+                <AlertCircle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <p className="text-sm font-semibold text-orange-900">
+                    ⚠️ Chargement en cours : {liveParcels.length} colis chargés
+                  </p>
+                  <p className="text-xs text-orange-700 mt-1">
+                    Le filtre de date est actif mais toutes les données ne sont pas encore chargées.
+                    Les statistiques affichées sont partielles. Attendez quelques secondes pour des résultats complets.
+                  </p>
+                </div>
+                {loadingAll && (
+                  <Loader2 className="w-5 h-5 text-orange-600 animate-spin flex-shrink-0" />
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Indicateur de chargement en arrière-plan */}
+          {loadingAll && (
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center gap-3">
+              <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
+              <p className="text-sm text-blue-900">
+                <span className="font-semibold">Chargement en arrière-plan...</span> {liveParcels.length} colis déjà disponibles
+              </p>
+            </div>
+          )}
 
       {/* Section Filtres */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
@@ -318,7 +454,7 @@ export default function AdminPortAgenciesTab({
                   <option value="all">Tous les types</option>
                   <option value="port_paye">✅ Port Payé uniquement</option>
                   <option value="port_du">📮 Port Dû uniquement</option>
-                  <option value="port_en_compte">💼 En Compte uniquement</option>
+                  <option value="port_en_compte_expediteur">💼 En Compte Expéditeur uniquement</option>
                 </select>
               </div>
             </div>
@@ -358,7 +494,7 @@ export default function AdminPortAgenciesTab({
                     <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-100 text-green-700 rounded-lg text-xs font-bold">
                       {portTypeFilter === 'port_paye' && '✅ Port Payé'}
                       {portTypeFilter === 'port_du' && '📮 Port Dû'}
-                      {portTypeFilter === 'port_en_compte' && '💼 En Compte'}
+                      {portTypeFilter === 'port_en_compte_expediteur' && '💼 En Compte Expéditeur'}
                       <button
                         onClick={() => setPortTypeFilter('all')}
                         className="hover:bg-green-200 rounded p-0.5 transition"
@@ -617,6 +753,8 @@ export default function AdminPortAgenciesTab({
             </button>
           )}
         </div>
+      )}
+        </>
       )}
     </div>
   )

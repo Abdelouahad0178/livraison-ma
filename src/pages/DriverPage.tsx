@@ -5,8 +5,8 @@ import { auth, db } from '../firebase/config'
 import { doc, onSnapshot, getDoc } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
 import {
-  updateParcelStatus, subscribeDriverParcels, subscribeDeliveryDriverParcels,
-  collectCod, collectPortDu, rejectDeliveryAssignment,
+  updateParcelStatus, subscribeDriverParcels, subscribeDeliveryDriverParcels, getMoreDeliveryDriverParcels,
+  collectCod, collectPortDu, addPortDuToClientAccount, rejectDeliveryAssignment,
   subscribeDriverOwnPortDuTransactions,
   subscribeMyDriverVersements,
 } from '../firebase/firestore'
@@ -96,6 +96,16 @@ export default function DriverPage() {
   const [parcels, setParcels]             = useState<any[]>([])
   const [deliveryParcels, setDeliveryParcels] = useState<any[]>([])
   const [loadingParcels, setLoadingParcels] = useState(false)
+
+  // Système de chargement progressif pour deliveryParcels
+  const DELIVERY_PAGE_SIZE = 100 // Affichage initial
+  const DELIVERY_LOAD_SIZE = 50  // Chargement par blocs
+  const [liveDeliveryParcels, setLiveDeliveryParcels] = useState<any[]>([]) // Premiers 100 en temps réel
+  const [moreDeliveryParcels, setMoreDeliveryParcels] = useState<any[]>([]) // Chargés progressivement
+  const [hasMoreDelivery, setHasMoreDelivery] = useState(true)
+  const [loadingMoreDelivery, setLoadingMoreDelivery] = useState(false)
+  const deliveryLastDocsRef = useRef<any>(null)
+  const [displayedDeliveryCount, setDisplayedDeliveryCount] = useState(DELIVERY_PAGE_SIZE)
   const [filter, setFilter]               = useState('active') // 'active' | 'done' | 'all'
   const [datePreset, setDatePreset]       = useState('all')
   const [dateFrom, setDateFrom]           = useState('')
@@ -113,6 +123,7 @@ export default function DriverPage() {
   // Sélection multiple pour validation papier
   const [paperSelectedIds, setPaperSelectedIds] = useState<Set<string>>(new Set())
   const [bulkPaperValidating, setBulkPaperValidating] = useState(false)
+  const [validationProgress, setValidationProgress] = useState({ current: 0, total: 0 })
 
   // Modal mise à jour statut
   const [statusModal, setStatusModal]     = useState<any>(null)
@@ -147,7 +158,7 @@ export default function DriverPage() {
 
   // Bon papier (livraison sans signature électronique)
   const [paperReceiptModal, setPaperReceiptModal] = useState<any>(null)
-  // paperReceiptModal = { parcel, note, confirming, error, isReturn }
+  // paperReceiptModal = { parcel, note, confirming, error, isReturn, codPaymentType }
 
   const signatureUnsubRef = useRef<any>(null)
   const stampInputRef     = useRef<any>(null)
@@ -172,9 +183,25 @@ export default function DriverPage() {
       setParcels(sortByStatus(data))
       setLoadingParcels(false)
     })
-    const unsubDelivery = subscribeDeliveryDriverParcels(uid, (data: any) => {
-      setDeliveryParcels(sortByStatus(data))
-    })
+    const unsubDelivery = subscribeDeliveryDriverParcels(
+      uid,
+      (data: any) => {
+        console.log('🚚 DRIVER PAGE - Colis de livraison reçus:', {
+          driverId: uid,
+          nbColis: data.length,
+          colis: data.map((p: any) => ({ id: p.id, trackingId: p.trackingId, deliveryDriverId: p.deliveryDriverId, status: p.status }))
+        })
+        setLiveDeliveryParcels(sortByStatus(data))
+        setLoadingParcels(false)
+        if (data.length < DELIVERY_PAGE_SIZE) setHasMoreDelivery(false)
+      },
+      () => {}, // onError
+      DELIVERY_PAGE_SIZE, // Limite de 100
+      (lastDocs: any) => {
+        // Callback pour capturer les derniers documents (pagination)
+        deliveryLastDocsRef.current = lastDocs
+      }
+    )
     const unsubPortDu = subscribeDriverOwnPortDuTransactions(uid, setMyPortDuTxs)
     const unsubVersements = subscribeMyDriverVersements(uid, setMyVersements)
     setUsers([])
@@ -190,6 +217,39 @@ export default function DriverPage() {
     const timer = setTimeout(() => setDebouncedMissionSearch(missionSearch), 500)
     return () => clearTimeout(timer)
   }, [missionSearch])
+
+  // Fusionner liveDeliveryParcels et moreDeliveryParcels
+  useEffect(() => {
+    const map = new Map()
+    moreDeliveryParcels.forEach((p: any) => map.set(p.id, p))
+    liveDeliveryParcels.forEach((p: any) => map.set(p.id, p)) // Temps réel gagne
+    const merged = sortByStatus([...map.values()])
+    setDeliveryParcels(merged.slice(0, displayedDeliveryCount))
+    console.log(`📊 [Livreur] Total colis: ${merged.length} (live: ${liveDeliveryParcels.length}, more: ${moreDeliveryParcels.length}, affichés: ${displayedDeliveryCount})`)
+  }, [liveDeliveryParcels, moreDeliveryParcels, displayedDeliveryCount])
+
+  // Charger 50 colis de plus
+  const loadMoreDeliveryParcels = async () => {
+    if (!hasMoreDelivery || loadingMoreDelivery || !deliveryLastDocsRef.current || !uid) return
+    setLoadingMoreDelivery(true)
+    try {
+      const result = await getMoreDeliveryDriverParcels(uid, deliveryLastDocsRef.current, DELIVERY_LOAD_SIZE)
+      setMoreDeliveryParcels(prev => {
+        const map = new Map()
+        prev.forEach((p: any) => map.set(p.id, p))
+        result.docs.forEach((p: any) => map.set(p.id, p))
+        return [...map.values()]
+      })
+      if (result.lastDocs) deliveryLastDocsRef.current = result.lastDocs
+      if (!result.hasMore) setHasMoreDelivery(false)
+      setDisplayedDeliveryCount(prev => prev + DELIVERY_LOAD_SIZE)
+      console.log(`✅ [Livreur] ${result.docs.length} colis supplémentaires chargés`)
+    } catch (err) {
+      console.error('[Livreur] loadMore error:', err)
+    } finally {
+      setLoadingMoreDelivery(false)
+    }
+  }
 
   const resolveDeliveryManagerName = (deliveries: any) => {
     const explicitNames = [...new Set(deliveries
@@ -820,7 +880,7 @@ export default function DriverPage() {
 
   const handleConfirmWithPaperReceipt = async () => {
     if (!paperReceiptModal) return
-    const { parcel, note, isReturn, codPaymentType } = paperReceiptModal
+    const { parcel, note, isReturn, codPaymentType, portDuMode } = paperReceiptModal
     const name = profile?.name || workerLabel
     const isDeliveryDriver = parcel.deliveryDriverId === uid
     const needsCod = isDeliveryDriver
@@ -837,9 +897,31 @@ export default function DriverPage() {
 
     setPaperReceiptModal((m: any) => ({ ...m, confirming: true, error: '' }))
     try {
-      if (needsCod) await collectCod(parcel.id, codPaymentType, name)
-      if (needsPortDu) await collectPortDu(parcel.id, name, uid || '')
+      console.log('🔍 Confirmation bon papier:', { parcelId: parcel.id, needsCod, needsPortDu, codPaymentType, portDuMode, isReturn })
+
+      if (needsCod) {
+        console.log('💰 Collecte COD...')
+        await collectCod(parcel.id, codPaymentType, name)
+        console.log('✅ COD collecté')
+      }
+
+      if (needsPortDu) {
+        // Gérer le port dû selon le mode sélectionné
+        if (portDuMode === 'en_compte_destinataire') {
+          console.log('🏦 Ajout Port Dû au compte destinataire...')
+          await addPortDuToClientAccount(parcel.id, name, uid || '', profile?.city || '')
+          console.log('✅ Port Dû ajouté au compte destinataire')
+        } else {
+          console.log('📦 Collecte Port Dû...')
+          await collectPortDu(parcel.id, name, uid || '')
+          console.log('✅ Port Dû collecté')
+        }
+      }
+
+      console.log('📝 Confirmation livraison avec bon papier...')
       await confirmDeliveryWithPaperReceipt(parcel.id, name, isReturn, note)
+      console.log('✅ Livraison confirmée')
+
       const finalStatus = isReturn ? 'Retour finalisé' : 'Livré'
       const patchList = (ps: any) => ps.map((p: any) =>
         p.id === parcel.id
@@ -852,7 +934,13 @@ export default function DriverPage() {
       setPaperReceiptModal(null)
     } catch (err: any) {
       console.error('❌ Erreur confirmation bon papier:', err)
-      setPaperReceiptModal((m: any) => ({ ...m, confirming: false, error: 'Erreur lors de la confirmation. Réessayez.' }))
+      const errorMessage = err?.message || err?.toString() || 'Erreur inconnue'
+      console.error('💥 Message d\'erreur:', errorMessage)
+      setPaperReceiptModal((m: any) => ({
+        ...m,
+        confirming: false,
+        error: `Erreur: ${errorMessage}`
+      }))
     }
   }
 
@@ -1139,14 +1227,57 @@ export default function DriverPage() {
               </span>
             </div>
 
-            {driverTab === 'delivery' && !isLivreur && (
-              <button
-                onClick={handlePrintMyDeliveries}
-                disabled={filteredParcels.length === 0}
-                className="w-full flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 disabled:opacity-40 disabled:hover:bg-orange-600 text-white text-sm font-bold py-3 rounded-xl transition"
-              >
-                <Printer className="w-4 h-4" /> Imprimer la liste des livraisons
-              </button>
+            {driverTab === 'delivery' && (
+              <div className="space-y-3">
+                {/* Indicateur du nombre total d'expéditions */}
+                <div className="rounded-xl border border-orange-500/30 bg-orange-950/20 p-4">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-xs text-orange-400 font-medium">Expéditions chargées</p>
+                      <p className="text-2xl font-bold text-white mt-1">
+                        {deliveryParcels.length}
+                        {hasMoreDelivery && (
+                          <span className="text-sm text-orange-400 ml-2">+ non chargées</span>
+                        )}
+                      </p>
+                    </div>
+                    <div className="w-12 h-12 rounded-xl bg-orange-600 flex items-center justify-center">
+                      <Home className="w-6 h-6 text-white" />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Bouton charger 50 de plus (seulement pour "À livrer") */}
+                {hasMoreDelivery && filter === 'active' && (
+                  <button
+                    onClick={loadMoreDeliveryParcels}
+                    disabled={loadingMoreDelivery}
+                    className="w-full flex items-center justify-center gap-2 bg-gradient-to-r from-orange-600 to-amber-600 hover:from-orange-700 hover:to-amber-700 disabled:opacity-40 text-white text-sm font-bold py-3 rounded-xl transition shadow-lg"
+                  >
+                    {loadingMoreDelivery ? (
+                      <>
+                        <div className="w-4 h-4 border-2 border-white/30 border-t-white rounded-full animate-spin" />
+                        Chargement...
+                      </>
+                    ) : (
+                      <>
+                        <Package className="w-4 h-4" /> Charger 50 de plus
+                      </>
+                    )}
+                  </button>
+                )}
+
+                {/* Bouton imprimer (seulement pour non-livreur) */}
+                {!isLivreur && (
+                  <button
+                    onClick={handlePrintMyDeliveries}
+                    disabled={filteredParcels.length === 0}
+                    className="w-full flex items-center justify-center gap-2 bg-orange-600 hover:bg-orange-700 disabled:opacity-40 disabled:hover:bg-orange-600 text-white text-sm font-bold py-3 rounded-xl transition"
+                  >
+                    <Printer className="w-4 h-4" /> Imprimer la liste des livraisons
+                  </button>
+                )}
+              </div>
             )}
 
             {bulkManageableParcels.length > 0 && !isLivreur && (
@@ -1355,30 +1486,113 @@ export default function DriverPage() {
                       <button
                         onClick={async () => {
                           if (bulkPaperValidating) return
-                          if (!window.confirm(`Valider ${paperSelectedIds.size} livraison(s) avec bon papier (signature manuelle) ?`)) return
 
+                          // Vérifier s'il y a des colis avec COD
+                          const selectedParcels = Array.from(paperSelectedIds)
+                            .map(id => filteredParcels.find((p: any) => p.id === id))
+                            .filter(p => p && !['Livré','Retourné'].includes(p.status))
+
+                          if (!window.confirm(`Valider ${selectedParcels.length} livraison(s) avec bon papier (signature manuelle) ?`)) return
+
+                          console.log('🔄 Validation groupée de', selectedParcels.length, 'colis')
                           setBulkPaperValidating(true)
+                          setValidationProgress({ current: 0, total: selectedParcels.length })
                           let successCount = 0
-                          try {
-                            for (const parcelId of paperSelectedIds) {
-                              const parcel = filteredParcels.find((p: any) => p.id === parcelId)
-                              if (parcel && !['Livré','Retourné'].includes(parcel.status)) {
-                                try {
-                                  const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
-                                  await confirmDeliveryWithPaperReceipt(parcel.id, '', isReturn)
-                                  successCount++
-                                } catch (err) {
-                                  console.error(`Erreur validation ${parcel.trackingId}:`, err)
-                                }
+                          const driverName = profile?.name || workerLabel
+
+                          // Liste des colis avec COD (pour mise à jour du status plus tard)
+                          const parcelsWithCod = selectedParcels.filter(p =>
+                            parseFloat(p.codAmount || 0) > 0 &&
+                            (p.codStatus === 'pending' || !p.codStatus)
+                          )
+
+                          // Fonction pour extraire le mode de paiement d'un colis
+                          const extractPaymentType = (p: any) => {
+                            if (p.serviceType) {
+                              const st = String(p.serviceType).toLowerCase().trim()
+                              if (st === 'cheque' || st === 'especes' || st === 'traite') return st
+                              if (st.includes(',')) {
+                                const parts = st.split(',').map((s: string) => s.trim())
+                                const paymentType = parts.find((s: string) => s === 'cheque' || s === 'especes' || s === 'traite')
+                                if (paymentType) return paymentType
                               }
                             }
+                            if (p.codPaymentType) {
+                              const cpt = String(p.codPaymentType).toLowerCase().trim()
+                              if (cpt === 'cheque' || cpt === 'especes' || cpt === 'traite') return cpt
+                            }
+                            return 'especes' // Par défaut
+                          }
+
+                          try {
+                            for (let i = 0; i < selectedParcels.length; i++) {
+                              const parcel = selectedParcels[i]
+                              try {
+                                console.log('📦 Validation de', parcel.trackingId)
+                                const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
+                                const isDeliveryDriver = parcel.deliveryDriverId === uid
+
+                                // Collecter COD si nécessaire - utiliser le mode de paiement DU COLIS
+                                const needsCod = isDeliveryDriver
+                                  && parseFloat(parcel.codAmount || 0) > 0
+                                  && (parcel.codStatus === 'pending' || !parcel.codStatus)
+
+                                if (needsCod) {
+                                  const codPaymentType = extractPaymentType(parcel)
+                                  console.log('💰 Collecte COD pour', parcel.trackingId, 'mode:', codPaymentType)
+                                  await collectCod(parcel.id, codPaymentType, driverName)
+                                }
+
+                                // Collecter Port Dû si nécessaire
+                                const needsPortDu = isDeliveryDriver
+                                  && parcel.portType === 'port_du'
+                                  && parcel.portStatus !== 'collected'
+
+                                if (needsPortDu) {
+                                  console.log('📦 Collecte Port Dû pour', parcel.trackingId)
+                                  await collectPortDu(parcel.id, driverName, uid || '')
+                                }
+
+                                // Confirmer la livraison
+                                await confirmDeliveryWithPaperReceipt(parcel.id, driverName, isReturn, '')
+                                console.log('✅ Validé:', parcel.trackingId)
+                                successCount++
+
+                                // Mettre à jour la progression
+                                setValidationProgress({ current: i + 1, total: selectedParcels.length })
+                              } catch (err: any) {
+                                console.error(`❌ Erreur validation ${parcel.trackingId}:`, err)
+                                console.error('Message:', err?.message || err)
+                              }
+                            }
+
                             setPaperSelectedIds(new Set())
-                            setMsg({ type: 'success', text: `✅ ${successCount} livraison(s) validée(s) avec bon papier !` })
+
+                            if (successCount > 0) {
+                              setMsg({ type: 'success', text: `✅ ${successCount} livraison(s) validée(s) avec bon papier !` })
+                              // Rafraîchir les listes
+                              const finalizeParcel = (p: any) => {
+                                if (selectedParcels.find(sp => sp.id === p.id)) {
+                                  const isReturn = p?.status?.includes('Retour') || p?.wasReturned === true
+                                  return {
+                                    ...p,
+                                    status: isReturn ? 'Retour finalisé' : 'Livré',
+                                    codStatus: parcelsWithCod.find(pc => pc.id === p.id) ? 'collected' : p.codStatus
+                                  }
+                                }
+                                return p
+                              }
+                              setParcels(prev => prev.map(finalizeParcel))
+                              setDeliveryParcels(prev => prev.map(finalizeParcel))
+                            } else {
+                              setMsg({ type: 'error', text: '❌ Aucune livraison n\'a pu être validée' })
+                            }
                           } catch (err) {
                             console.error('Erreur validation groupée:', err)
                             setMsg({ type: 'error', text: '❌ Erreur lors de la validation groupée' })
                           } finally {
                             setBulkPaperValidating(false)
+                            setValidationProgress({ current: 0, total: 0 })
                           }
                         }}
                         disabled={bulkPaperValidating}
@@ -1387,7 +1601,7 @@ export default function DriverPage() {
                         {bulkPaperValidating ? (
                           <>
                             <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                            Validation...
+                            {validationProgress.current}/{validationProgress.total} validés
                           </>
                         ) : (
                           <>
@@ -1526,13 +1740,47 @@ export default function DriverPage() {
                                   <button
                                     onClick={() => {
                                       const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
+                                      // Extraire le mode de paiement du colis
+                                      let detectedPaymentType = ''
+
+                                      // 1. PRIORITÉ AU serviceType (c'est lui qui détermine le badge "C/Chèque")
+                                      if (parcel.serviceType) {
+                                        const st = String(parcel.serviceType).toLowerCase().trim()
+                                        // Si serviceType est 'cheque', 'especes', 'traite'
+                                        if (st === 'cheque' || st === 'especes' || st === 'traite') {
+                                          detectedPaymentType = st
+                                        }
+                                        // Si serviceType contient plusieurs valeurs séparées par des virgules
+                                        else if (st.includes(',')) {
+                                          const parts = st.split(',').map((s: string) => s.trim())
+                                          const paymentType = parts.find((s: string) =>
+                                            s === 'cheque' || s === 'especes' || s === 'traite'
+                                          )
+                                          if (paymentType) detectedPaymentType = paymentType
+                                        }
+                                      }
+
+                                      // 2. Sinon, utiliser codPaymentType s'il existe
+                                      if (!detectedPaymentType && parcel.codPaymentType) {
+                                        const cpt = String(parcel.codPaymentType).toLowerCase().trim()
+                                        if (cpt === 'cheque' || cpt === 'especes' || cpt === 'traite') {
+                                          detectedPaymentType = cpt
+                                        }
+                                      }
+
+                                      // 3. Si toujours vide et que le colis a un COD, par défaut c'est "especes"
+                                      if (!detectedPaymentType && parseFloat(parcel.codAmount || 0) > 0) {
+                                        detectedPaymentType = 'especes'
+                                      }
+
                                       setPaperReceiptModal({
                                         parcel,
                                         note: '',
                                         confirming: false,
                                         error: '',
                                         isReturn,
-                                        codPaymentType: ''
+                                        codPaymentType: detectedPaymentType,
+                                        portDuMode: 'collect' // 'collect' ou 'en_compte_destinataire'
                                       })
                                     }}
                                     className="p-2 rounded-lg bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-110"
@@ -1581,30 +1829,113 @@ export default function DriverPage() {
                       <button
                         onClick={async () => {
                           if (bulkPaperValidating) return
-                          if (!window.confirm(`Valider ${paperSelectedIds.size} livraison(s) avec bon papier (signature manuelle) ?`)) return
 
+                          // Vérifier s'il y a des colis avec COD
+                          const selectedParcels = Array.from(paperSelectedIds)
+                            .map(id => filteredParcels.find((p: any) => p.id === id))
+                            .filter(p => p && !['Livré','Retourné'].includes(p.status))
+
+                          if (!window.confirm(`Valider ${selectedParcels.length} livraison(s) avec bon papier (signature manuelle) ?`)) return
+
+                          console.log('🔄 Validation groupée de', selectedParcels.length, 'colis')
                           setBulkPaperValidating(true)
+                          setValidationProgress({ current: 0, total: selectedParcels.length })
                           let successCount = 0
-                          try {
-                            for (const parcelId of paperSelectedIds) {
-                              const parcel = filteredParcels.find((p: any) => p.id === parcelId)
-                              if (parcel && !['Livré','Retourné'].includes(parcel.status)) {
-                                try {
-                                  const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
-                                  await confirmDeliveryWithPaperReceipt(parcel.id, '', isReturn)
-                                  successCount++
-                                } catch (err) {
-                                  console.error(`Erreur validation ${parcel.trackingId}:`, err)
-                                }
+                          const driverName = profile?.name || workerLabel
+
+                          // Liste des colis avec COD (pour mise à jour du status plus tard)
+                          const parcelsWithCod = selectedParcels.filter(p =>
+                            parseFloat(p.codAmount || 0) > 0 &&
+                            (p.codStatus === 'pending' || !p.codStatus)
+                          )
+
+                          // Fonction pour extraire le mode de paiement d'un colis
+                          const extractPaymentType = (p: any) => {
+                            if (p.serviceType) {
+                              const st = String(p.serviceType).toLowerCase().trim()
+                              if (st === 'cheque' || st === 'especes' || st === 'traite') return st
+                              if (st.includes(',')) {
+                                const parts = st.split(',').map((s: string) => s.trim())
+                                const paymentType = parts.find((s: string) => s === 'cheque' || s === 'especes' || s === 'traite')
+                                if (paymentType) return paymentType
                               }
                             }
+                            if (p.codPaymentType) {
+                              const cpt = String(p.codPaymentType).toLowerCase().trim()
+                              if (cpt === 'cheque' || cpt === 'especes' || cpt === 'traite') return cpt
+                            }
+                            return 'especes' // Par défaut
+                          }
+
+                          try {
+                            for (let i = 0; i < selectedParcels.length; i++) {
+                              const parcel = selectedParcels[i]
+                              try {
+                                console.log('📦 Validation de', parcel.trackingId)
+                                const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
+                                const isDeliveryDriver = parcel.deliveryDriverId === uid
+
+                                // Collecter COD si nécessaire - utiliser le mode de paiement DU COLIS
+                                const needsCod = isDeliveryDriver
+                                  && parseFloat(parcel.codAmount || 0) > 0
+                                  && (parcel.codStatus === 'pending' || !parcel.codStatus)
+
+                                if (needsCod) {
+                                  const codPaymentType = extractPaymentType(parcel)
+                                  console.log('💰 Collecte COD pour', parcel.trackingId, 'mode:', codPaymentType)
+                                  await collectCod(parcel.id, codPaymentType, driverName)
+                                }
+
+                                // Collecter Port Dû si nécessaire
+                                const needsPortDu = isDeliveryDriver
+                                  && parcel.portType === 'port_du'
+                                  && parcel.portStatus !== 'collected'
+
+                                if (needsPortDu) {
+                                  console.log('📦 Collecte Port Dû pour', parcel.trackingId)
+                                  await collectPortDu(parcel.id, driverName, uid || '')
+                                }
+
+                                // Confirmer la livraison
+                                await confirmDeliveryWithPaperReceipt(parcel.id, driverName, isReturn, '')
+                                console.log('✅ Validé:', parcel.trackingId)
+                                successCount++
+
+                                // Mettre à jour la progression
+                                setValidationProgress({ current: i + 1, total: selectedParcels.length })
+                              } catch (err: any) {
+                                console.error(`❌ Erreur validation ${parcel.trackingId}:`, err)
+                                console.error('Message:', err?.message || err)
+                              }
+                            }
+
                             setPaperSelectedIds(new Set())
-                            setMsg({ type: 'success', text: `✅ ${successCount} livraison(s) validée(s) avec bon papier !` })
+
+                            if (successCount > 0) {
+                              setMsg({ type: 'success', text: `✅ ${successCount} livraison(s) validée(s) avec bon papier !` })
+                              // Rafraîchir les listes
+                              const finalizeParcel = (p: any) => {
+                                if (selectedParcels.find(sp => sp.id === p.id)) {
+                                  const isReturn = p?.status?.includes('Retour') || p?.wasReturned === true
+                                  return {
+                                    ...p,
+                                    status: isReturn ? 'Retour finalisé' : 'Livré',
+                                    codStatus: parcelsWithCod.find(pc => pc.id === p.id) ? 'collected' : p.codStatus
+                                  }
+                                }
+                                return p
+                              }
+                              setParcels(prev => prev.map(finalizeParcel))
+                              setDeliveryParcels(prev => prev.map(finalizeParcel))
+                            } else {
+                              setMsg({ type: 'error', text: '❌ Aucune livraison n\'a pu être validée' })
+                            }
                           } catch (err) {
                             console.error('Erreur validation groupée:', err)
                             setMsg({ type: 'error', text: '❌ Erreur lors de la validation groupée' })
                           } finally {
                             setBulkPaperValidating(false)
+                            setValidationProgress({ current: 0, total: 0 })
                           }
                         }}
                         disabled={bulkPaperValidating}
@@ -1613,7 +1944,7 @@ export default function DriverPage() {
                         {bulkPaperValidating ? (
                           <>
                             <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                            Validation...
+                            {validationProgress.current}/{validationProgress.total} validés
                           </>
                         ) : (
                           <>
@@ -1841,13 +2172,37 @@ export default function DriverPage() {
                               <button
                                 onClick={() => {
                                   const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
+
+                                  // Extraire le mode de paiement - MÊME LOGIQUE partout
+                                  let detectedPaymentType = ''
+                                  if (parcel.serviceType) {
+                                    const st = String(parcel.serviceType).toLowerCase().trim()
+                                    if (st === 'cheque' || st === 'especes' || st === 'traite') {
+                                      detectedPaymentType = st
+                                    } else if (st.includes(',')) {
+                                      const parts = st.split(',').map((s: string) => s.trim())
+                                      const paymentType = parts.find((s: string) => s === 'cheque' || s === 'especes' || s === 'traite')
+                                      if (paymentType) detectedPaymentType = paymentType
+                                    }
+                                  }
+                                  if (!detectedPaymentType && parcel.codPaymentType) {
+                                    const cpt = String(parcel.codPaymentType).toLowerCase().trim()
+                                    if (cpt === 'cheque' || cpt === 'especes' || cpt === 'traite') {
+                                      detectedPaymentType = cpt
+                                    }
+                                  }
+                                  if (!detectedPaymentType && parseFloat(parcel.codAmount || 0) > 0) {
+                                    detectedPaymentType = 'especes'
+                                  }
+
                                   setPaperReceiptModal({
                                     parcel,
                                     note: '',
                                     confirming: false,
                                     error: '',
                                     isReturn,
-                                    codPaymentType: ''
+                                    codPaymentType: detectedPaymentType,
+                                    portDuMode: 'collect' // 'collect' ou 'en_compte_destinataire'
                                   })
                                 }}
                                 className="flex items-center justify-center gap-1 text-[11px] font-bold px-2 py-1.5 rounded-lg border border-blue-500 text-blue-900 bg-blue-50 hover:bg-blue-100 transition"
@@ -1907,13 +2262,37 @@ export default function DriverPage() {
                                     <button
                                       onClick={() => {
                                         const isReturn = parcel?.status?.includes('Retour') || parcel?.wasReturned === true
+
+                                        // Extraire le mode de paiement - MÊME LOGIQUE que l'autre endroit
+                                        let detectedPaymentType = ''
+                                        if (parcel.serviceType) {
+                                          const st = String(parcel.serviceType).toLowerCase().trim()
+                                          if (st === 'cheque' || st === 'especes' || st === 'traite') {
+                                            detectedPaymentType = st
+                                          } else if (st.includes(',')) {
+                                            const parts = st.split(',').map((s: string) => s.trim())
+                                            const paymentType = parts.find((s: string) => s === 'cheque' || s === 'especes' || s === 'traite')
+                                            if (paymentType) detectedPaymentType = paymentType
+                                          }
+                                        }
+                                        if (!detectedPaymentType && parcel.codPaymentType) {
+                                          const cpt = String(parcel.codPaymentType).toLowerCase().trim()
+                                          if (cpt === 'cheque' || cpt === 'especes' || cpt === 'traite') {
+                                            detectedPaymentType = cpt
+                                          }
+                                        }
+                                        if (!detectedPaymentType && parseFloat(parcel.codAmount || 0) > 0) {
+                                          detectedPaymentType = 'especes'
+                                        }
+
                                         setPaperReceiptModal({
                                           parcel,
                                           note: '',
                                           confirming: false,
                                           error: '',
                                           isReturn,
-                                          codPaymentType: ''
+                                          codPaymentType: detectedPaymentType,
+                                          portDuMode: 'collect' // 'collect' ou 'en_compte_destinataire'
                                         })
                                       }}
                                       className="flex items-center gap-1 text-xs font-semibold px-3 py-2 rounded-lg border border-blue-500/40 text-blue-300 bg-blue-950/30 hover:bg-blue-900/50 transition"
@@ -2892,6 +3271,12 @@ export default function DriverPage() {
                     {hasCod && (
                       <>
                         <p className="text-xs text-amber-800 font-medium">Mode de paiement RETOUR FOND :</p>
+                        {/* DEBUG - À RETIRER APRÈS */}
+                        <div className="text-xs bg-yellow-100 border border-yellow-400 rounded p-2 mb-2">
+                          <strong>DEBUG:</strong> serviceType="{paperReceiptModal.parcel.serviceType}" |
+                          codPaymentType="{paperReceiptModal.parcel.codPaymentType}" |
+                          sélectionné="{paperReceiptModal.codPaymentType}"
+                        </div>
                         <div className="grid grid-cols-2 gap-2">
                           {COD_PAYMENT_TYPES.map(pt => (
                             <button
@@ -2907,6 +3292,38 @@ export default function DriverPage() {
                             </button>
                           ))}
                         </div>
+                      </>
+                    )}
+                    {hasPortDu && (
+                      <>
+                        <p className="text-xs text-orange-800 font-medium mt-3">Mode de gestion du Port dû :</p>
+                        <div className="grid grid-cols-2 gap-2">
+                          <button
+                            onClick={() => setPaperReceiptModal((m: any) => ({ ...m, portDuMode: 'collect', error: '' }))}
+                            className={`px-3 py-2.5 rounded-lg text-sm font-semibold transition border-2 ${
+                              paperReceiptModal.portDuMode === 'collect'
+                                ? 'bg-green-500 text-white border-green-600'
+                                : 'bg-white text-gray-700 border-gray-200 hover:border-gray-300'
+                            }`}
+                          >
+                            💵 Collecter
+                          </button>
+                          <button
+                            onClick={() => setPaperReceiptModal((m: any) => ({ ...m, portDuMode: 'en_compte_destinataire', error: '' }))}
+                            className={`px-3 py-2.5 rounded-lg text-sm font-semibold transition border-2 ${
+                              paperReceiptModal.portDuMode === 'en_compte_destinataire'
+                                ? 'bg-purple-500 text-white border-purple-600'
+                                : 'bg-white text-gray-700 border-gray-200 hover:border-gray-300'
+                            }`}
+                          >
+                            🏦 En compte destinataire
+                          </button>
+                        </div>
+                        {paperReceiptModal.portDuMode === 'en_compte_destinataire' && (
+                          <div className="bg-purple-50 border border-purple-200 text-purple-800 p-2.5 rounded-lg text-xs mt-2">
+                            ℹ️ Le montant sera ajouté au compte du destinataire et ne sera pas collecté par vous
+                          </div>
+                        )}
                       </>
                     )}
                   </div>

@@ -60,7 +60,7 @@ export async function createClientPortalParcel(data: ClientPortalInput) {
     natureOfGoods: data.natureOfGoods,
     serviceType: data.serviceType || 'especes',
     codAmount: data.codAmount || 0,
-    portType: data.portType || 'port_en_compte',
+    portType: data.portType || 'port_en_compte_expediteur',
     price: data.price || 0,
     clientId: data.clientId,
     clientName: data.clientName,

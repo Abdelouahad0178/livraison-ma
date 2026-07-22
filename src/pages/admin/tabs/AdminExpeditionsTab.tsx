@@ -10,9 +10,12 @@ import {
   Package,
   Plus,
   Printer,
+  RotateCcw,
   X,
 } from 'lucide-react'
 import { useState } from 'react'
+import { doc, setDoc, deleteDoc } from 'firebase/firestore'
+import { db } from '../../../firebase/config'
 import {
   CITIES,
   COD_PAYMENT_TYPES,
@@ -55,6 +58,10 @@ export default function AdminExpeditionsTab({
   dateTo,
   setDateTo,
   filtered,
+  totalFiltered,
+  displayLimit,
+  loadMoreDisplayed,
+  showAllDisplayed,
   loading,
   setCodEditModal,
   setNicEditModal,
@@ -73,6 +80,7 @@ export default function AdminExpeditionsTab({
 }: any) {
   const [showPrintModal, setShowPrintModal] = useState(false)
   const [printGroupBy, setPrintGroupBy] = useState<'agency' | 'status' | 'none'>('none')
+  const [restoringParcel, setRestoringParcel] = useState<string | null>(null)
 
   const handlePrint = () => {
     if (filtered.length === 0) {
@@ -81,6 +89,24 @@ export default function AdminExpeditionsTab({
     }
     printAdminExpeditions(filtered, printGroupBy, 'Liste des Expéditions')
     setShowPrintModal(false)
+  }
+
+  const handleRestoreParcel = async (parcel: any) => {
+    if (!confirm(`Restaurer le colis ${parcel.trackingId} depuis les archives?`)) return
+
+    setRestoringParcel(parcel.id)
+    try {
+      const { archivedAt, archivedReason, archivedBy, archivedByName, isArchived, _archivedAt, _archivedFrom, ...parcelData } = parcel
+      await setDoc(doc(db, 'parcels', parcel.id), parcelData)
+      await deleteDoc(doc(db, 'parcels_archive', parcel.id))
+
+      alert('✅ Colis restauré! Rechargez la page pour voir les changements.')
+      window.location.reload()
+    } catch (error: any) {
+      alert('❌ Erreur: ' + error.message)
+    } finally {
+      setRestoringParcel(null)
+    }
   }
 
   return (
@@ -103,6 +129,39 @@ export default function AdminExpeditionsTab({
           </div>
         ))}
       </div>
+
+      {/* Bouton Charger plus en HAUT - charge par tranches de 800 */}
+      {hasMore && (
+        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl border border-blue-200 shadow-sm p-4 mb-4">
+          <div className="flex items-center justify-between">
+            <div className="flex-1">
+              <div className="flex items-center gap-2 mb-1">
+                <Archive className="w-5 h-5 text-blue-600" />
+                <h3 className="font-bold text-gray-800">Historique complet disponible</h3>
+              </div>
+              <p className="text-xs text-gray-600">
+                {allParcels.length} colis chargés · Charger les 800 expéditions suivantes pour accéder à tout l'historique
+              </p>
+            </div>
+            <button
+              onClick={loadMoreParcels}
+              disabled={loadingMore}
+              className="ml-4 px-6 py-3 rounded-xl text-sm font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-lg flex items-center gap-2"
+            >
+              {loadingMore ? (
+                <>
+                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                  Chargement...
+                </>
+              ) : (
+                <>
+                  ↓ Charger 800 de plus
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 mb-4 space-y-3">
         <div className="flex flex-wrap gap-3 items-center">
@@ -333,9 +392,30 @@ export default function AdminExpeditionsTab({
               />
             </div>
           )}
-          <span className="ml-auto text-xs text-gray-400 bg-gray-100 rounded-lg px-2 py-1">
-            {filtered.length} resultat(s)
-          </span>
+          <div className="ml-auto flex items-center gap-2">
+            <span className="text-xs text-gray-400 bg-gray-100 rounded-lg px-2 py-1 font-semibold">
+              {totalFiltered} resultat(s)
+              {filtered.length < totalFiltered && (
+                <span className="text-blue-600"> · {filtered.length} affichée(s)</span>
+              )}
+            </span>
+            {filtered.length < totalFiltered && (
+              <>
+                <button
+                  onClick={loadMoreDisplayed}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 transition border border-blue-200"
+                >
+                  <Plus className="w-3.5 h-3.5" /> 150 de plus
+                </button>
+                <button
+                  onClick={showAllDisplayed}
+                  className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-purple-50 text-purple-700 hover:bg-purple-100 transition border border-purple-200"
+                >
+                  Tout afficher ({totalFiltered})
+                </button>
+              </>
+            )}
+          </div>
           <button
             onClick={() => setShowPrintModal(true)}
             className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold bg-blue-600 text-white hover:bg-blue-700 transition shadow-sm"
@@ -375,7 +455,7 @@ export default function AdminExpeditionsTab({
                       <div className="text-gray-500">
                         <div className="text-2xl mb-2">🔍</div>
                         <div className="font-semibold">Utilisez la recherche ou les filtres ci-dessus</div>
-                        <div className="text-sm text-gray-400 mt-1">Pour optimiser les performances, les colis s'affichent uniquement avec recherche/filtres actifs (max 300 résultats)</div>
+                        <div className="text-sm text-gray-400 mt-1">Tous les colis filtrés s'affichent automatiquement</div>
                       </div>
                     ) : (
                       <div className="text-gray-400">Aucun colis trouvé</div>
@@ -392,7 +472,9 @@ export default function AdminExpeditionsTab({
                           ? { label: 'En transit source', bg: 'bg-blue-100', text: 'text-blue-700', dot: 'bg-blue-500' }
                           : COD_STATUS[p.codStatus || 'pending']
                     : null
-                  const cpt = p.codPaymentType ? COD_PAYMENT_TYPES.find(t => t.key === p.codPaymentType) : null
+                  // Utiliser serviceType en priorité (plus fiable), sinon codPaymentType en fallback
+                  const paymentTypeKey = (p.serviceType?.split(',')[0]?.trim()) || p.codPaymentType
+                  const cpt = paymentTypeKey ? COD_PAYMENT_TYPES.find(t => t.key === paymentTypeKey) : null
                   const date = p.createdAt?.toDate?.()
                     ? p.createdAt.toDate().toLocaleDateString('fr-MA')
                     : p.history?.[0]?.timestamp
@@ -402,9 +484,9 @@ export default function AdminExpeditionsTab({
                     <tr key={p.id} className="hover:bg-gray-50 transition">
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
-                          <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">{p.senderNic || p.sender?.nic || '-'}</span>
+                          <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">{p.senderNic || p.nic || p.sender?.nic || '-'}</span>
                           <button
-                            onClick={() => setNicEditModal({ parcel: p, value: p.senderNic || p.sender?.nic || '', loading: false, error: '' })}
+                            onClick={() => setNicEditModal({ parcel: p, value: p.senderNic || p.nic || p.sender?.nic || '', loading: false, error: '' })}
                             className="p-0.5 rounded hover:bg-blue-50 text-gray-400 hover:text-blue-500 transition"
                             title="Modifier le N° EXP (Admin)"
                           >
@@ -412,6 +494,23 @@ export default function AdminExpeditionsTab({
                           </button>
                           {p.lastAdminEditAt && (
                             <span className="text-[10px] text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded font-semibold" title={`Modifie admin le ${new Date(p.lastAdminEditAt).toLocaleDateString('fr-MA')}`}>Admin</span>
+                          )}
+                          {p.isArchived && (
+                            <div className="flex items-center gap-1">
+                              <span className="text-[10px] text-red-600 bg-red-50 px-1.5 py-0.5 rounded font-bold border border-red-200" title="Cette expédition est archivée">
+                                <Archive className="w-3 h-3 inline-block mr-0.5" />
+                                ARCHIVÉ
+                              </span>
+                              <button
+                                onClick={() => handleRestoreParcel(p)}
+                                disabled={restoringParcel === p.id}
+                                className="text-[10px] text-green-600 bg-green-50 px-1.5 py-0.5 rounded font-semibold border border-green-200 hover:bg-green-100 disabled:opacity-50 flex items-center gap-0.5"
+                                title="Restaurer depuis les archives"
+                              >
+                                <RotateCcw className="w-3 h-3" />
+                                {restoringParcel === p.id ? 'En cours...' : 'Restaurer'}
+                              </button>
+                            </div>
                           )}
                         </div>
                         <div className="text-[10px] text-gray-400 mt-0.5">ID: {p.trackingId}</div>
@@ -436,12 +535,11 @@ export default function AdminExpeditionsTab({
                       <td className="px-4 py-3">
                         {p.portType === 'port_du'
                           ? <span className="text-orange-600 font-bold">{p.price || 0} DH</span>
-                          : <span className="text-gray-300">-</span>
-                        }
+                          : <span className="text-gray-300">-</span>}
                       </td>
                       <td className="px-4 py-3">
                         {p.portType === 'port_en_compte'
-                          ? <span className="text-purple-600 font-bold">{p.price || 0} DH</span>
+                          ? <span className="text-purple-600 font-bold">💼 {p.price || 0} DH</span>
                           : <span className="text-gray-300">-</span>
                         }
                       </td>
@@ -466,7 +564,7 @@ export default function AdminExpeditionsTab({
                             <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${p.codStatus === 'collected' && cpt ? `${cpt.bg} ${cpt.text}` : `${cs.bg} ${cs.text}`}`}>
                               <span className={`w-1.5 h-1.5 rounded-full ${cs.dot}`} />
                               {p.codStatus === 'collected'
-                                ? <>{cpt?.emoji} {codCollectedLabel(p.codPaymentType)}</>
+                                ? <>{cpt?.emoji} {codCollectedLabel(paymentTypeKey)}</>
                                 : cs.label
                               }
                             </span>
@@ -519,21 +617,12 @@ export default function AdminExpeditionsTab({
             </table>
           </div>
           <div className="border-t border-gray-100 px-4 py-3 bg-gray-50">
-            <div className="flex items-center justify-between text-xs text-gray-500 mb-2">
-              <span>{allParcels.length} colis charges · {filtered.length} affiche(s)</span>
-              <span>RETOUR FOND filtre : <b className="text-orange-600">{fmt(filtered.reduce((s: any, p: any) => s + (p.codAmount || 0), 0))} DH</b></span>
+            <div className="flex items-center justify-between text-xs text-gray-500">
+              <span>
+                {allParcels.length} colis chargés · <b className="text-blue-600">{totalFiltered} filtrée(s)</b> · {filtered.length} affichée(s)
+              </span>
+              <span>RETOUR FOND (affiché) : <b className="text-orange-600">{fmt(filtered.reduce((s: any, p: any) => s + (p.codAmount || 0), 0))} DH</b></span>
             </div>
-            {hasMore && (
-              <button
-                onClick={loadMoreParcels}
-                disabled={loadingMore}
-                className="w-full py-2 rounded-xl text-xs font-semibold text-blue-600 border border-blue-200 bg-blue-50 hover:bg-blue-100 disabled:opacity-50 transition flex items-center justify-center gap-2"
-              >
-                {loadingMore
-                  ? <><span className="w-4 h-4 border-2 border-blue-400 border-t-transparent rounded-full animate-spin" />Chargement...</>
-                  : 'Charger plus de colis'}
-              </button>
-            )}
           </div>
         </div>
       )}

@@ -171,14 +171,42 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     }
     setBulkAssignBusy(true)
     try {
+      // Récupérer les infos du livreur et du secteur
+      const { drivers, allSectors, profile } = s.current
+      const driver = drivers?.find((d: any) => d.id === bulkAssignDriverId)
+      const sector = allSectors?.find((s: any) => s.id === bulkAssignSectorId)
+
+      console.log('🔍 DEBUG ASSIGNATION:', {
+        bulkAssignDriverId,
+        driverFound: driver,
+        sectorFound: sector,
+        nbParcels: selectedParcels.length
+      })
+
       // Assigner chaque colis au livreur
       for (const parcel of selectedParcels) {
+        console.log('📦 Assignation colis:', parcel.trackingId, 'au livreur ID:', bulkAssignDriverId)
+
         await assignDeliveryDriver(
           parcel.id,
           bulkAssignDriverId,
-          bulkAssignSectorId || '',
-          '' // vehicleId optionnel
+          driver?.name || 'Livreur', // ✅ CORRECTION : nom du livreur
+          {
+            deliverySectorId: sector?.id || '',
+            deliverySectorCode: sector?.code || '',
+            deliverySectorName: sector?.name || '',
+            deliveryAssignedBy: profile?.name || 'Chef agence',
+          }
         )
+
+        console.log('✅ assignDeliveryDriver terminé pour', parcel.trackingId)
+
+        // ✅ Mettre à jour le statut du colis
+        await updateParcelStatus(parcel.id, 'En cours de livraison', {
+          note: `Assigné au livreur ${driver?.name || 'Livreur'}${sector ? ` (Secteur: ${sector.name})` : ''}`
+        })
+
+        console.log('✅ updateParcelStatus terminé pour', parcel.trackingId)
       }
       // Réinitialiser après succès
       setBulkAssignSelectedIds([])
@@ -1430,12 +1458,12 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       return
     }
 
-    if (form.portType === 'port_en_compte' && !form.clientName && !form.senderName) {
+    if (form.portType === 'port_en_compte_expediteur' && !form.clientName && !form.senderName) {
       setError('⚠️ Veuillez saisir un nom d\'expéditeur pour le mode "En Compte".')
       return
     }
     // Si En Compte mais pas de clientId, utiliser le nom de l'expéditeur comme client
-    if (form.portType === 'port_en_compte' && !form.clientId && form.senderName) {
+    if (form.portType === 'port_en_compte_expediteur' && !form.clientId && form.senderName) {
       form.clientName = form.senderName
     }
     // Validation shipmentMode 'client' : accepter clientName OU clientId
@@ -1681,9 +1709,20 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 
   const handleEditSave = async () => {
     const { editForm, editingParcel, setEditLoading, setEditError, setEditingParcel, setParcels, profile } = s.current
+
+    console.log('🔍 DEBUG DEBUT handleEditSave:', {
+      editFormStatus: editForm?.status,
+      editingParcelStatus: editingParcel?.status,
+      profileRole: profile?.role,
+      profileCity: profile?.city
+    })
+
     const statusChanging = editForm.status !== editingParcel.status
     const isReturning    = statusChanging && editForm.status === 'Retourné'
     const canManageStatus = (parcel: any) => {
+      // Le chef d'agence peut modifier le statut de n'importe quelle expédition
+      if (profile?.role === 'chef_agence') return true
+      // Pour les autres rôles, on garde la restriction par ville de destination
       if (!profile?.city) return true
       const dest = parcel.destinationCity || parcel.receiver?.city
       return !dest || profile.city === dest
@@ -1744,20 +1783,38 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         if (Number(editingParcel.price || 0)     !== nextPrice)     detailsPatch.price = nextPrice
         if (changedText(editingParcel.destinationCity, nextDestinationCity)) detailsPatch.destinationCity = nextDestinationCity
 
+        // Le chef d'agence et l'admin peuvent modifier les colis livrés
         if ((editingParcel.status === 'Livré' || editingParcel.status === 'Livré') && (Object.keys(detailsPatch).length > 0 || (statusChanging && editForm.status !== editingParcel.status))) {
-          throw new Error('Colis deja livre : toute modification doit passer par une demande au chef d agence ou a l admin.')
+          if (profile?.role !== 'chef_agence' && profile?.role !== 'admin') {
+            throw new Error('Colis deja livre : toute modification doit passer par une demande au chef d agence ou a l admin.')
+          }
         }
 
         if (Object.keys(detailsPatch).length > 0) {
           await updateParcel(editingParcel.id, detailsPatch)
           setParcels((prev: any) => prev.map((p: any) => p.id === editingParcel.id ? { ...p, ...detailsPatch } : p))
         }
+
+        // Debug logs pour comprendre le problème de changement de statut
+        console.log('🔍 DEBUG CHANGEMENT STATUT:', {
+          statusChanging,
+          oldStatus: editingParcel.status,
+          newStatus: editForm.status,
+          profileRole: profile?.role,
+          canManage: canManageStatus(editingParcel),
+          parcelId: editingParcel.id
+        })
+
         if (statusChanging && canManageStatus(editingParcel)) {
+          console.log('✅ APPEL updateParcelStatus avec:', editForm.status)
           await updateParcelStatus(
             editingParcel.id,
             editForm.status,
             editForm.note ? { note: editForm.note } : {}
           )
+          console.log('✅ updateParcelStatus terminé avec succès')
+        } else {
+          console.log('❌ Changement de statut bloqué:', { statusChanging, canManage: canManageStatus(editingParcel) })
         }
       }
       setEditingParcel(null)
@@ -1811,6 +1868,28 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   }
 
   // ── Aide agent parcel validation ──────────────────────────────────────────
+
+  // ⚡ Modifier le statut d'un colis (Chef d'agence uniquement)
+  const handleChangeParcelStatus = async (parcelId: string, newStatus: string) => {
+    const { profile } = s.current
+
+    if (profile?.role !== 'chef_agence') {
+      alert('Seul le chef d\'agence peut modifier le statut d\'une expédition.')
+      return
+    }
+
+    if (!window.confirm(`Voulez-vous vraiment changer le statut vers "${newStatus}" ?`)) {
+      return
+    }
+
+    try {
+      await updateParcelStatus(parcelId, newStatus)
+      // Le colis sera automatiquement mis à jour via la subscription
+    } catch (e: any) {
+      console.error('❌ ERREUR CHANGEMENT STATUT:', e)
+      alert(`Erreur lors du changement de statut : ${e?.message || e}`)
+    }
+  }
 
   const handleValidateParcelEntry = async (parcel: any) => {
     const { profile, aideAgents, setValidatingEntryId } = s.current
@@ -2322,6 +2401,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     handleCreateReturnParcel,
     handleReturnDirect,
     submitReturnWithReason,
+    handleChangeParcelStatus,
     // Aide agent validation
     handleValidateParcelEntry,
     handleBulkValidateAideEntries,

@@ -101,15 +101,23 @@ export function subscribeDriverParcels(driverId: any, callback: any) {
 }
 
 // Colis d'un livreur local
-export function subscribeDeliveryDriverParcels(driverId: any, callback: any) {
+export function subscribeDeliveryDriverParcels(
+  driverId: any,
+  callback: any,
+  onError: (err?: any) => void = () => {},
+  pageLimit = 100, // Limite configurable (100 par défaut)
+  callbackWithLastDoc?: (lastDocs: any) => void // Callback pour retourner les derniers documents (pagination)
+) {
   const since = daysAgoTimestamp(30)
 
   // Deux requêtes : colis assignés + colis retournés par ce livreur (historique)
-  const q1 = query(collection(db, 'parcels'), where('deliveryDriverId', '==', driverId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(50))
-  const q2 = query(collection(db, 'parcels'), where('returnedByDriverId', '==', driverId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(50))
+  const q1 = query(collection(db, 'parcels'), where('deliveryDriverId', '==', driverId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
+  const q2 = query(collection(db, 'parcels'), where('returnedByDriverId', '==', driverId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
 
   let assigned: any[] = []
   let returned: any[] = []
+  let lastAssignedDoc: any = null
+  let lastReturnedDoc: any = null
 
   const merge = () => {
     // Fusionner et dédupliquer par ID
@@ -117,23 +125,31 @@ export function subscribeDeliveryDriverParcels(driverId: any, callback: any) {
     assigned.forEach(p => map.set(p.id, p))
     returned.forEach(p => map.set(p.id, p))
     callback([...map.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))
+    // Retourner les derniers documents pour la pagination
+    if (callbackWithLastDoc) {
+      callbackWithLastDoc({ lastAssignedDoc, lastReturnedDoc })
+    }
   }
 
   const unsub1 = onSnapshot(q1, snap => {
     assigned = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    lastAssignedDoc = snap.docs[snap.docs.length - 1] || null
     merge()
   }, err => {
     console.warn('subscribeDeliveryDriverParcels (assigned) permission error:', err.code)
     assigned = []
+    onError(err)
     merge()
   })
 
   const unsub2 = onSnapshot(q2, snap => {
     returned = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    lastReturnedDoc = snap.docs[snap.docs.length - 1] || null
     merge()
   }, err => {
     console.warn('subscribeDeliveryDriverParcels (returned) permission error:', err.code)
     returned = []
+    onError(err)
     merge()
   })
 
@@ -142,6 +158,70 @@ export function subscribeDeliveryDriverParcels(driverId: any, callback: any) {
     unsub2()
   }
 }
+
+// Charger plus de colis pour un livreur (pagination)
+export async function getMoreDeliveryDriverParcels(
+  driverId: string,
+  lastDocs: { lastAssignedDoc: any; lastReturnedDoc: any },
+  pageSize = 50
+): Promise<{ docs: any[]; lastDocs: any; hasMore: boolean }> {
+  const since = daysAgoTimestamp(30)
+  const results: any[] = []
+  let newLastAssignedDoc: any = null
+  let newLastReturnedDoc: any = null
+
+  try {
+    // Query 1: colis assignés
+    if (lastDocs.lastAssignedDoc) {
+      const q1 = query(
+        collection(db, 'parcels'),
+        where('deliveryDriverId', '==', driverId),
+        where('createdAt', '>=', since),
+        orderBy('createdAt', 'desc'),
+        startAfter(lastDocs.lastAssignedDoc),
+        limit(pageSize)
+      )
+      const snap1 = await getDocs(q1)
+      const assigned = snap1.docs.map(d => ({ id: d.id, ...d.data() }))
+      results.push(...assigned)
+      newLastAssignedDoc = snap1.docs[snap1.docs.length - 1] || lastDocs.lastAssignedDoc
+    }
+
+    // Query 2: colis retournés par ce livreur
+    if (lastDocs.lastReturnedDoc) {
+      const q2 = query(
+        collection(db, 'parcels'),
+        where('returnedByDriverId', '==', driverId),
+        where('createdAt', '>=', since),
+        orderBy('createdAt', 'desc'),
+        startAfter(lastDocs.lastReturnedDoc),
+        limit(pageSize)
+      )
+      const snap2 = await getDocs(q2)
+      const returned = snap2.docs.map(d => ({ id: d.id, ...d.data() }))
+      results.push(...returned)
+      newLastReturnedDoc = snap2.docs[snap2.docs.length - 1] || lastDocs.lastReturnedDoc
+    }
+
+    // Fusionner et dédupliquer
+    const map = new Map()
+    results.forEach(p => map.set(p.id, p))
+    const docs = [...map.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+
+    return {
+      docs,
+      lastDocs: {
+        lastAssignedDoc: newLastAssignedDoc,
+        lastReturnedDoc: newLastReturnedDoc
+      },
+      hasMore: docs.length >= pageSize
+    }
+  } catch (error) {
+    console.error('getMoreDeliveryDriverParcels error:', error)
+    return { docs: [], lastDocs, hasMore: false }
+  }
+}
+
 export async function assignDeliveryDriver(parcelId: any, deliveryDriverId: any, deliveryDriverName: any, extra: any = {}) {
   const patch = {
     deliveryDriverId,

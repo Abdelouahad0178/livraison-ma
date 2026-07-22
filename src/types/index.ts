@@ -17,7 +17,7 @@ export type CodStatus = 'pending' | 'collected' | 'remis'
 
 export type CodPaymentType = 'especes' | 'cheque' | 'traite' | 'bon_livraison' | 'retour_bl'
 
-export type PortType = 'port_paye' | 'port_du' | 'port_en_compte'
+export type PortType = 'port_paye' | 'port_du' | 'port_en_compte' | 'port_en_compte_expediteur' | 'port_en_compte_destinataire'
 
 export type ServiceType = 'oc' | 'especes' | 'cheque' | 'traite' | 'retour_bl'
 

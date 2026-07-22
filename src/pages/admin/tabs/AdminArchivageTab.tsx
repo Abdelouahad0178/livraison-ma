@@ -1,8 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { Archive, Calendar, RotateCcw, Search, TrendingDown, AlertCircle, CheckCircle, Trash2 } from 'lucide-react'
 import { collection, query, where, orderBy, limit, getDocs, doc, deleteDoc, setDoc, Timestamp } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
 import { getFunctions, httpsCallable } from 'firebase/functions'
+import { STATUS_COLORS } from '../../../firebase/constants'
 
 export default function AdminArchivageTab() {
   const [stats, setStats] = useState<any>(null)
@@ -18,13 +19,61 @@ export default function AdminArchivageTab() {
   const [deleting, setDeleting] = useState(false)
   const [deleteResult, setDeleteResult] = useState<any>(null)
 
+  // Filtres pour le tableau
+  const [statusFilter, setStatusFilter] = useState('all')
+  const [cityFilter, setCityFilter] = useState('all')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+
   const functions = getFunctions()
   const CITIES = ['Toutes', 'Casablanca', 'Rabat', 'Marrakech', 'Fès', 'Tanger', 'Agadir', 'Meknès', 'Oujda', 'Kénitra', 'Tétouan']
   const ARCHIVABLE_STATUSES = ['Livré', 'Retourné', 'Retour finalisé']
 
   useEffect(() => {
     loadStats()
+    loadAllArchives()
   }, [])
+
+  // Recherche automatique avec debounce
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      if (!searchQuery.trim()) {
+        await loadAllArchives()
+        return
+      }
+
+      setLoadingArchives(true)
+      try {
+        const q = query(collection(db, 'parcels_archive'), limit(500))
+        const snapshot = await getDocs(q)
+        const parcels = snapshot.docs
+          .map(doc => ({ id: doc.id, ...doc.data() }))
+          .filter((p: any) => {
+            const search = searchQuery.toLowerCase()
+            const nexp = String(p.nic || p.senderNic || '').toLowerCase()
+            return (
+              p.trackingId?.toLowerCase().includes(search) ||
+              p.sender?.name?.toLowerCase().includes(search) ||
+              p.receiver?.name?.toLowerCase().includes(search) ||
+              nexp.includes(search)
+            )
+          })
+          .sort((a: any, b: any) => {
+            const dateA = a.archivedAt?.toDate?.() || new Date(0)
+            const dateB = b.archivedAt?.toDate?.() || new Date(0)
+            return dateB.getTime() - dateA.getTime()
+          })
+
+        setArchivedParcels(parcels)
+      } catch (error: any) {
+        console.error('Erreur recherche:', error)
+      } finally {
+        setLoadingArchives(false)
+      }
+    }, 300)
+
+    return () => clearTimeout(timer)
+  }, [searchQuery])
 
   const loadStats = async () => {
     try {
@@ -94,23 +143,49 @@ export default function AdminArchivageTab() {
     )
   }
 
+  const loadAllArchives = async () => {
+    setLoadingArchives(true)
+    try {
+      const q = query(collection(db, 'parcels_archive'), limit(500))
+      const snapshot = await getDocs(q)
+      const parcels = snapshot.docs
+        .map(doc => ({ id: doc.id, ...doc.data() }))
+        .sort((a: any, b: any) => {
+          const dateA = a.archivedAt?.toDate?.() || new Date(0)
+          const dateB = b.archivedAt?.toDate?.() || new Date(0)
+          return dateB.getTime() - dateA.getTime()
+        })
+      setArchivedParcels(parcels)
+    } catch (error: any) {
+      console.error('❌ Erreur chargement:', error)
+      alert('❌ Erreur: ' + error.message)
+    } finally {
+      setLoadingArchives(false)
+    }
+  }
+
   const handleSearchArchive = async () => {
     if (!searchQuery.trim()) {
-      alert('⚠️ Entrez un terme de recherche')
+      await loadAllArchives()
       return
     }
 
     setLoadingArchives(true)
     try {
-      const q = query(collection(db, 'parcels_archive'), limit(100))
+      const q = query(collection(db, 'parcels_archive'), limit(500))
       const snapshot = await getDocs(q)
       const parcels = snapshot.docs
         .map(doc => ({ id: doc.id, ...doc.data() }))
-        .filter((p: any) =>
-          p.trackingId?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          p.sender?.name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-          p.receiver?.name?.toLowerCase().includes(searchQuery.toLowerCase())
-        )
+        .filter((p: any) => {
+          const search = searchQuery.toLowerCase()
+          const nic = String(p.nic || p.senderNic || '').toLowerCase()
+          return (
+            p.trackingId?.toLowerCase().includes(search) ||
+            p.sender?.name?.toLowerCase().includes(search) ||
+            p.receiver?.name?.toLowerCase().includes(search) ||
+            nic.includes(search)
+          )
+        })
         .sort((a: any, b: any) => {
           const dateA = a.archivedAt?.toDate?.() || new Date(0)
           const dateB = b.archivedAt?.toDate?.() || new Date(0)
@@ -128,6 +203,34 @@ export default function AdminArchivageTab() {
       setLoadingArchives(false)
     }
   }
+
+  // Filtrage des archives
+  const filteredArchives = useMemo(() => {
+    let list = archivedParcels
+
+    if (statusFilter !== 'all') {
+      list = list.filter((p: any) => p.status === statusFilter)
+    }
+
+    if (cityFilter !== 'all') {
+      list = list.filter((p: any) =>
+        p.originCity === cityFilter || p.destinationCity === cityFilter
+      )
+    }
+
+    if (dateFrom || dateTo) {
+      list = list.filter((p: any) => {
+        const date = p.archivedAt?.toDate?.() || new Date(0)
+        const from = dateFrom ? new Date(dateFrom) : null
+        const to = dateTo ? new Date(dateTo + 'T23:59:59') : null
+        if (from && date < from) return false
+        if (to && date > to) return false
+        return true
+      })
+    }
+
+    return list
+  }, [archivedParcels, statusFilter, cityFilter, dateFrom, dateTo])
 
   const handleRestoreParcel = async (parcel: any) => {
     if (!confirm(`Restaurer le colis ${parcel.trackingId}?`)) return
@@ -408,49 +511,164 @@ export default function AdminArchivageTab() {
       <div className="bg-white rounded-xl border border-gray-200 p-6">
         <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
           <Search className="w-5 h-5 text-blue-600" />
-          Consulter Archives
+          Consulter Archives ({filteredArchives.length} résultats)
         </h2>
 
-        <div className="flex gap-4 mb-4">
+        {/* Recherche automatique */}
+        <div className="mb-4">
           <input
             type="text"
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            onKeyPress={e => e.key === 'Enter' && handleSearchArchive()}
-            placeholder="Rechercher (tracking, expéditeur, destinataire)..."
-            className="flex-1 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
+            placeholder="🔍 Recherche automatique par N EXP, Tracking ID, expéditeur, destinataire..."
+            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
           />
-          <button
-            onClick={handleSearchArchive}
-            disabled={loadingArchives}
-            className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400"
-          >
-            {loadingArchives ? 'Recherche...' : 'Rechercher'}
-          </button>
+          {searchQuery && (
+            <p className="text-xs text-gray-500 mt-2">
+              {loadingArchives ? 'Recherche en cours...' : `${filteredArchives.length} résultat(s) trouvé(s)`}
+            </p>
+          )}
         </div>
 
-        {archivedParcels.length > 0 && (
-          <div className="space-y-2">
-            {archivedParcels.map(parcel => (
-              <div key={parcel.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg border border-gray-200">
-                <div className="flex-1">
-                  <div className="font-mono font-bold text-gray-900">{parcel.trackingId}</div>
-                  <div className="text-sm text-gray-600">
-                    {parcel.sender?.name} → {parcel.receiver?.name}
-                  </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Archivé: {parcel.archivedAt?.toDate?.()?.toLocaleDateString('fr-MA') || 'N/A'}
-                  </div>
-                </div>
-                <button
-                  onClick={() => handleRestoreParcel(parcel)}
-                  className="px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-2 text-sm"
-                >
-                  <RotateCcw className="w-4 h-4" />
-                  Restaurer
-                </button>
-              </div>
-            ))}
+        {/* Filtres */}
+        <div className="grid grid-cols-4 gap-4 mb-4">
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-2">Statut</label>
+            <select
+              value={statusFilter}
+              onChange={e => setStatusFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="all">Tous</option>
+              <option value="Livré">Livré</option>
+              <option value="Retourné">Retourné</option>
+              <option value="Arrivé en agence">Arrivé en agence</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-2">Ville</label>
+            <select
+              value={cityFilter}
+              onChange={e => setCityFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+            >
+              <option value="all">Toutes</option>
+              <option value="Casablanca">Casablanca</option>
+              <option value="Agadir">Agadir</option>
+              <option value="Marrakech">Marrakech</option>
+              <option value="Rabat">Rabat</option>
+              <option value="Fès">Fès</option>
+              <option value="Tanger">Tanger</option>
+            </select>
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-2">Du</label>
+            <input
+              type="date"
+              value={dateFrom}
+              onChange={e => setDateFrom(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-gray-600 mb-2">Au</label>
+            <input
+              type="date"
+              value={dateTo}
+              onChange={e => setDateTo(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+            />
+          </div>
+        </div>
+
+        {loadingArchives ? (
+          <div className="flex items-center justify-center py-16 gap-3 text-gray-400">
+            <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+            <span className="text-sm">Chargement des archives...</span>
+          </div>
+        ) : filteredArchives.length > 0 ? (
+          <div className="overflow-x-auto rounded-lg border border-gray-200">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-200">
+                <tr>
+                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">N EXP</th>
+                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Tracking ID</th>
+                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Expéditeur</th>
+                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">De</th>
+                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Destinataire</th>
+                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Vers</th>
+                  <th className="px-3 py-3 text-right text-xs font-bold text-gray-600 uppercase">COD</th>
+                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Statut</th>
+                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Archivé le</th>
+                  <th className="px-3 py-3 text-center text-xs font-bold text-gray-600 uppercase">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {filteredArchives.map((parcel: any) => {
+                  const sc = STATUS_COLORS[parcel.status] || STATUS_COLORS['Livré']
+                  const nexp = parcel.nic || parcel.senderNic || ''
+                  return (
+                    <tr key={parcel.id} className="hover:bg-gray-50 transition">
+                      <td className="px-3 py-3">
+                        <span className="font-mono text-sm font-bold text-blue-700">
+                          {nexp || '—'}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="font-mono text-xs text-gray-600">{parcel.trackingId || '—'}</span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="text-xs font-medium text-gray-800">{parcel.sender?.name || '—'}</span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="text-xs font-semibold text-blue-700">{parcel.originCity}</span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="text-xs font-medium text-gray-800">{parcel.receiver?.name || '—'}</span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className="text-xs font-semibold text-orange-700">{parcel.destinationCity}</span>
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        {parcel.codAmount > 0 ? (
+                          <span className="text-xs font-semibold text-green-700">
+                            {parcel.codAmount.toLocaleString('fr-MA')} DH
+                          </span>
+                        ) : (
+                          <span className="text-xs text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full font-medium ${sc.bg} ${sc.text}`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
+                          {parcel.status}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-xs text-gray-600">
+                        {parcel.archivedAt?.toDate?.()?.toLocaleDateString('fr-MA') || 'N/A'}
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        <button
+                          onClick={() => handleRestoreParcel(parcel)}
+                          className="px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-1 text-xs mx-auto"
+                        >
+                          <RotateCcw className="w-3 h-3" />
+                          Restaurer
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <div className="text-center py-12 text-gray-400">
+            <Search className="w-12 h-12 mx-auto mb-3 opacity-50" />
+            <p>Aucune archive trouvée</p>
           </div>
         )}
       </div>

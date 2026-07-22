@@ -5,6 +5,7 @@ import {
 } from 'firebase/firestore'
 import { db } from './db'
 import { COD_STATUS, COD_PAYMENT_TYPES, STATUSES } from './constants'
+import { findOrCreateClientForReceiver } from './clients'
 
 type DynamicData = Record<string, any>
 type FirestoreRow = DynamicData & { id: string }
@@ -204,6 +205,183 @@ export async function collectPortDu(parcelId: string, agentName: string, agentId
     portCollectedAt:     serverTimestamp(),
   })
 }
+
+/**
+ * Ajoute le port dû au compte du client destinataire
+ * Le montant n'est PAS ajouté au solde du livreur
+ */
+export async function addPortDuToClientAccount(
+  parcelId: string,
+  driverName: string,
+  driverId: string,
+  agencyCity: string
+): Promise<void> {
+  console.log('🏦 Début addPortDuToClientAccount:', { parcelId, driverName, agencyCity })
+
+  // Étape 1 : Lire le colis pour vérifications initiales
+  const parcelRef = doc(db, 'parcels', parcelId)
+  const parcelSnap = await getDoc(parcelRef)
+
+  if (!parcelSnap.exists()) {
+    console.error('❌ Colis introuvable:', parcelId)
+    throw new Error('Colis introuvable.')
+  }
+
+  const parcelData = parcelSnap.data()
+  console.log('📦 Données du colis:', {
+    trackingId: parcelData.trackingId,
+    portType: parcelData.portType,
+    portStatus: parcelData.portStatus,
+    receiverClientId: parcelData.receiverClientId,
+    receiverName: parcelData.receiver?.name || parcelData.receiverName,
+    receiverTel: parcelData.receiver?.tel || parcelData.receiverTel,
+    receiverCity: parcelData.receiver?.city || parcelData.receiverCity,
+    price: parcelData.price
+  })
+
+  // Vérifier que c'est bien un port dû
+  if (parcelData.portType !== 'port_du') {
+    console.error('❌ Pas un port dû:', parcelData.portType)
+    throw new Error('Ce colis n\'est pas en port dû.')
+  }
+
+  // Vérifier que le port n'a pas déjà été traité
+  if (parcelData.portStatus === 'collected' || parcelData.portStatus === 'en_compte_destinataire') {
+    console.error('❌ Port déjà traité:', parcelData.portStatus)
+    throw new Error('Le port dû a déjà été traité.')
+  }
+
+  const portAmount = parseFloat(parcelData.price || 0)
+
+  if (portAmount <= 0) {
+    console.error('❌ Montant invalide:', portAmount)
+    throw new Error('Le montant du port est invalide.')
+  }
+
+  // Étape 2 : Trouver ou créer le client pour le destinataire
+  const receiverName = parcelData.receiver?.name || parcelData.receiverName || ''
+  const receiverTel = parcelData.receiver?.tel || parcelData.receiverTel || ''
+  const receiverCity = parcelData.receiver?.city || parcelData.receiverCity || parcelData.destinationCity || agencyCity
+  const receiverAddress = parcelData.receiver?.address || parcelData.receiverAddress || ''
+
+  if (!receiverName || !receiverCity) {
+    throw new Error('Le nom et la ville du destinataire sont requis.')
+  }
+
+  console.log('🔍 Recherche/création du client pour le destinataire...')
+  const receiverClientId = await findOrCreateClientForReceiver(
+    {
+      name: receiverName,
+      tel: receiverTel,
+      city: receiverCity,
+      address: receiverAddress
+    },
+    driverId,
+    driverName
+  )
+
+  console.log('✅ Client ID obtenu:', receiverClientId)
+
+  // Étape 3 : Transaction pour mettre à jour le colis et créer la transaction
+  return runTransaction(db, async tx => {
+    // Re-vérifier le colis dans la transaction
+    const parcelSnapTx = await tx.get(parcelRef)
+    if (!parcelSnapTx.exists()) {
+      throw new Error('Colis introuvable.')
+    }
+
+    const parcelDataTx = parcelSnapTx.data()
+    if (parcelDataTx.portStatus === 'collected' || parcelDataTx.portStatus === 'en_compte_destinataire') {
+      throw new Error('Le port dû a déjà été traité.')
+    }
+
+    console.log('✅ Validation OK, création de la transaction...')
+
+    // Mettre à jour le colis
+    tx.update(parcelRef, {
+      portStatus: 'en_compte_destinataire',
+      portEnCompteBy: driverName,
+      portEnCompteById: driverId,
+      portEnCompteAt: serverTimestamp(),
+      portEnCompteClientId: receiverClientId,
+      receiverClientId: receiverClientId, // Lier le colis au client
+    })
+
+    // Créer une transaction de port en compte destinataire
+    const transactionRef = doc(collection(db, 'clientPortDuTransactions'))
+    const transactionData = {
+      parcelId,
+      trackingId: parcelData.trackingId || '',
+      nic: parcelData.nic || '',
+      clientId: receiverClientId,
+      clientName: receiverName,
+      clientTel: receiverTel,
+      clientCity: receiverCity,
+      amount: portAmount,
+      driverName,
+      driverId,
+      agencyCity,
+      createdAt: serverTimestamp(),
+      status: 'pending',
+      createdBy: driverName,
+    }
+
+    console.log('📝 Transaction à créer:', transactionData)
+    tx.set(transactionRef, transactionData)
+
+    console.log('✅ Transaction créée avec succès!')
+  })
+}
+
+/**
+ * Souscription aux transactions de ports en compte clients pour une agence
+ */
+export function subscribeClientPortDuTransactions(
+  agencyCity: string,
+  callback: (transactions: FirestoreRow[]) => void,
+  onError: (err?: any) => void = () => {}
+) {
+  const q = query(
+    collection(db, 'clientPortDuTransactions'),
+    where('agencyCity', '==', agencyCity),
+    orderBy('createdAt', 'desc')
+  )
+  return onSnapshot(q, snap => {
+    const transactions = snap.docs.map(rowFromDoc)
+    callback(transactions)
+  }, onError)
+}
+
+/**
+ * Collecter un port en compte client (quand le chef récupère le paiement)
+ */
+export async function collectClientPortDu(
+  transactionId: string,
+  collectedBy: string
+): Promise<void> {
+  await updateDoc(doc(db, 'clientPortDuTransactions', transactionId), {
+    status: 'collected',
+    collectedBy,
+    collectedAt: serverTimestamp(),
+  })
+}
+
+/**
+ * Annuler un port en compte client
+ */
+export async function cancelClientPortDu(
+  transactionId: string,
+  cancelledBy: string,
+  reason: string
+): Promise<void> {
+  await updateDoc(doc(db, 'clientPortDuTransactions', transactionId), {
+    status: 'cancelled',
+    cancelledBy,
+    cancelledAt: serverTimestamp(),
+    cancellationReason: reason,
+  })
+}
+
 export async function markPortDuReceivedByAgent(parcelId: string, receivedBy: string) {
   await updateDoc(doc(db, 'parcels', parcelId), {
     portReceivedByAgent:   receivedBy,

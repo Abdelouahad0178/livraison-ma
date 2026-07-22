@@ -140,6 +140,7 @@ export default function AgentHeader({
             { key: 'parcels',       label: profile?.role === 'aide_agent' ? '📋 Mes saisies' : '📦 Expéditions', onClick: () => setTab('parcels'),                                                               hidden: false },
             { key: 'caisse',        label: profile?.role === 'chef_agence' ? '🏛️ Caisse Agence' : '💼 Ma Caisse', onClick: () => setTab('caisse'),                                                              hidden: profile?.role === 'aide_agent' },
             { key: 'cod',           label: '💰 RETOUR FOND Clients',    onClick: () => setTab('cod'),                                                                                                             hidden: profile?.role === 'aide_agent' },
+            { key: 'clientportdu',  label: '🏦 Ports en compte',        onClick: () => setTab('clientportdu'),                                                                                                    hidden: profile?.role !== 'chef_agence' && profile?.role !== 'agentpro' },
             { key: 'clients',       label: '👥 Mes clients',            onClick: () => setTab('clients'),                                                                                                         hidden: profile?.role === 'aide_agent' },
             { key: 'charge',        label: '📋 Feuille de charge',      onClick: () => setTab('charge'),                                                                                                          hidden: profile?.role === 'aide_agent' },
             { key: 'secteurs',      label: '🏢 Secteurs',               onClick: () => setTab('secteurs'),                                                                                                        hidden: profile?.role === 'aide_agent' },
@@ -183,7 +184,7 @@ export default function AgentHeader({
             </button>
             <span className="text-gray-300">/</span>
             <span className="text-sm font-semibold text-blue-600">
-              {tab === 'new' ? '+ Nouveau colis' : tab === 'caisse' ? (profile?.role === 'chef_agence' ? `Caisse Agence ${profile?.city || ''}` : 'Ma Caisse') : tab === 'cod' ? 'RETOUR FOND Clients' : tab === 'clients' ? 'Mes clients' : tab === 'charge' ? 'Feuille de charge' : tab === 'secteurs' ? 'Secteurs' : tab === 'drivers' ? 'Port dû' : tab === 'arrivage' ? 'Arrivages' : tab === 'retours' ? '↩️ Retours' : tab === 'lostparcels' ? '🚨 Colis perdus' : tab === 'modifications' ? 'Modif. clients' : tab === 'aideagents' ? 'Aide Agents' : tab === 'dashboard' ? 'Dashboard' : tab === 'notes' ? 'Notes agents' : 'Expéditions'}
+              {tab === 'new' ? '+ Nouveau colis' : tab === 'caisse' ? (profile?.role === 'chef_agence' ? `Caisse Agence ${profile?.city || ''}` : 'Ma Caisse') : tab === 'cod' ? 'RETOUR FOND Clients' : tab === 'clientportdu' ? '🏦 Ports en compte clients' : tab === 'clients' ? 'Mes clients' : tab === 'charge' ? 'Feuille de charge' : tab === 'secteurs' ? 'Secteurs' : tab === 'drivers' ? 'Port dû' : tab === 'arrivage' ? 'Arrivages' : tab === 'retours' ? '↩️ Retours' : tab === 'lostparcels' ? '🚨 Colis perdus' : tab === 'modifications' ? 'Modif. clients' : tab === 'aideagents' ? 'Aide Agents' : tab === 'dashboard' ? 'Dashboard' : tab === 'notes' ? 'Notes agents' : 'Expéditions'}
             </span>
           </div>
         )}
@@ -228,6 +229,14 @@ export default function AgentHeader({
                     {newCodCount}
                   </span>
                 )}
+              </button>
+            )}
+            {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+              <button
+                onClick={() => { setTab('clientportdu'); setMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'clientportdu' ? 'bg-purple-50 text-purple-700' : 'text-gray-600 hover:bg-gray-50'}`}
+              >
+                🏦 Ports en compte clients
               </button>
             )}
             {profile?.role !== 'aide_agent' && (
