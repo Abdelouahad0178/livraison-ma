@@ -21,12 +21,13 @@ import {
   getAllArchivedParcels,
   markParcelsControlled,
   unmarkParcelsControlled,
+  unarchiveParcel,
   COD_PAYMENT_TYPES,
   COD_STATUS,
   STATUS_COLORS,
   STATUSES,
 } from '../firebase/firestore'
-import { Banknote, Building2, CheckCircle2, ClipboardCheck, Database, LogOut, MapPin, Package, Search, FileText, X, Save, Printer, Calendar, Filter, Edit, Trash2, Sparkles, TrendingUp, Wallet, Archive } from 'lucide-react'
+import { Banknote, Building2, CheckCircle2, ClipboardCheck, Database, LogOut, MapPin, Package, Search, FileText, X, Save, Printer, Calendar, Filter, Edit, Trash2, Sparkles, TrendingUp, Wallet, Archive, Undo2 } from 'lucide-react'
 import ProfilePhotoUpload from '../components/ProfilePhotoUpload'
 
 const PAGE_SIZE = 800 // Chargement progressif par tranches de 800
@@ -96,6 +97,7 @@ export default function CentralCollectorPage() {
   const [archiveDateFrom, setArchiveDateFrom] = useState('')
   const [archiveDateTo, setArchiveDateTo] = useState('')
   const [archivePaymentType, setArchivePaymentType] = useState('all')
+  const [restoringParcelId, setRestoringParcelId] = useState<string | null>(null)
 
   // ── Chargement progressif des colis (tranches de 800) ────────────────────
   const [liveParcels, setLiveParcels] = useState<any[]>([])       // 800 derniers, temps réel
@@ -914,6 +916,28 @@ export default function CentralCollectorPage() {
       }
     } finally {
       setDeletingAllPayments(false)
+    }
+  }
+
+  // ✅ Restaurer une expédition archivée
+  const handleRestoreParcel = async (parcelId: string, trackingId: string) => {
+    if (!confirm(`Restaurer l'expédition ${trackingId} ?\n\nCela la rendra à nouveau active et visible dans la liste des expéditions.`)) {
+      return
+    }
+
+    setRestoringParcelId(parcelId)
+    try {
+      await unarchiveParcel(parcelId)
+
+      // Retirer l'expédition de la liste des archives localement
+      setArchivedParcels(prev => prev.filter(p => p.id !== parcelId))
+
+      alert(`✅ Expédition ${trackingId} restaurée avec succès!`)
+    } catch (err: any) {
+      console.error('Erreur restauration:', err)
+      alert(`❌ Erreur lors de la restauration: ${err.message || 'Erreur inconnue'}`)
+    } finally {
+      setRestoringParcelId(null)
     }
   }
 
@@ -2373,6 +2397,7 @@ export default function CentralCollectorPage() {
                             <th className="px-4 py-3 text-left font-bold text-purple-900">Type paiement</th>
                             <th className="px-4 py-3 text-right font-bold text-purple-900">Prix</th>
                             <th className="px-4 py-3 text-left font-bold text-purple-900">Archivé le</th>
+                            <th className="px-4 py-3 text-center font-bold text-purple-900">Actions</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
@@ -2422,6 +2447,26 @@ export default function CentralCollectorPage() {
                               </td>
                               <td className="px-4 py-3 text-xs text-gray-500">
                                 {fmtDate(p.archivedAt || p.updatedAt)}
+                              </td>
+                              <td className="px-4 py-3 text-center">
+                                <button
+                                  onClick={() => handleRestoreParcel(p.id, p.trackingId)}
+                                  disabled={restoringParcelId === p.id}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-gradient-to-r from-green-500 to-emerald-500 hover:from-green-600 hover:to-emerald-600 text-white text-xs font-bold transition-all shadow-md hover:shadow-lg disabled:opacity-50 disabled:cursor-not-allowed transform hover:scale-105"
+                                  title="Restaurer cette expédition"
+                                >
+                                  {restoringParcelId === p.id ? (
+                                    <>
+                                      <div className="w-3 h-3 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                                      Restauration...
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Undo2 className="w-3.5 h-3.5" />
+                                      Restaurer
+                                    </>
+                                  )}
+                                </button>
                               </td>
                             </tr>
                           ))}
