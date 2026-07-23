@@ -3,7 +3,8 @@ import { signOut, createUserWithEmailAndPassword, signOut as fbSignOut, updatePa
 import { collection, doc, setDoc, getDoc, getDocs, writeBatch, query, where } from 'firebase/firestore'
 import { auth, authSecondary, db } from '../firebase/config'
 import { useNavigate } from 'react-router-dom'
-import Fuse from 'fuse.js'
+import { useFuseSearch } from '../hooks/useFuseSearch'
+import { ADMIN_SEARCH_CONFIG, SEARCH_PLACEHOLDERS } from '../config/searchConfig'
 import {
   subscribeAllParcels, subscribeAllUsers,
   updateParcel, updateParcelStatus, markParcelAsReturned, remitCod, settleCodToSender, batchSettleCods, updateUser, deleteUserDoc,
@@ -338,11 +339,10 @@ export default function AdminPage() {
   const [serviceTypeFilter, setServiceTypeFilter] = useState<string[]>([])
   const [portTypeFilter,   setPortTypeFilter]   = useState<string[]>([])
   const [driverFilter,     setDriverFilter]     = useState('Tous')
-  const [search,        setSearch]        = useState('')
-  const [debouncedSearch, setDebouncedSearch] = useState('')
+
+  // ✅ NOUVEAU: Recherche gérée par hook professionnel useFuseSearch (défini plus bas après periodParcels)
   const [isSearchActive, setIsSearchActive] = useState(false) // Pour recharger plus de colis quand recherche active
   const [serverSearchResults, setServerSearchResults] = useState<any[] | null>(null) // Résultats recherche serveur
-  const [isSearching, setIsSearching] = useState(false) // Loading state pour recherche
 
   // Limite d'affichage des expéditions filtrées
   const DISPLAY_LIMIT = 150
@@ -506,53 +506,7 @@ export default function AdminPage() {
   const setActivityDateTo = setAdminDateTo
   const periodLabel = formatPeriod(adminDatePreset, adminDateFrom, adminDateTo)
 
-  // ⚡ Détecter si recherche active - MAIS sans charger 2000 colis
-  // On garde isSearchActive pour la logique, mais loadLimit reste à 500
-  useEffect(() => {
-    const hasSearch = debouncedSearch.trim() !== ''
-    setIsSearchActive(hasSearch)
-  }, [debouncedSearch])
-
-  // ⚡ Debounce de la recherche - temps réel pour meilleure UX
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedSearch(search)
-    }, 500) // ⚡ 500ms - Optimisation : attendre que l'utilisateur finisse de taper
-
-    return () => clearTimeout(timer)
-  }, [search])
-
-  // 🔍 RECHERCHE SERVEUR: searchParcels dans toute la base
-  useEffect(() => {
-    if (!debouncedSearch || debouncedSearch.trim().length === 0) {
-      setServerSearchResults(null)
-      setIsSearching(false)
-      return
-    }
-
-    let cancelled = false
-    setIsSearching(true)
-
-    // Lancer recherche serveur immédiatement pour chercher dans TOUTE la base (actifs + archives)
-    searchParcels(debouncedSearch.trim(), { limit: 50000, includeArchived: true })
-      .then(results => {
-        if (!cancelled) {
-          setServerSearchResults(results)
-          setIsSearching(false)
-        }
-      })
-      .catch(error => {
-        if (!cancelled) {
-          console.error('❌ Erreur searchParcels:', error)
-          setServerSearchResults(null)
-          setIsSearching(false)
-        }
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [debouncedSearch])
+  // ✅ useEffect de recherche déplacés après useFuseSearch hook (ligne ~1090)
 
   // Subscriptions de base � ddémarrent au montage du composant
   useEffect(() => {
@@ -1059,30 +1013,70 @@ export default function AdminPage() {
     alertes: Array.isArray(visibleAlerts) ? visibleAlerts.map((a: any) => ({ tracking: a.parcel.trackingId, type: a.type, age: a.ageHours + 'h', statut: a.parcel.status })) : [],
   }), [periodParcels, filteredCod, returnParcels, agencyStats, visibleAlerts])
 
-  // 🚀 Index de recherche Fuse.js pour performance optimale
-  // ⚡ OPTIMISATION MAJEURE: Utiliser periodParcels au lieu de allParcels
-  // periodParcels est déjà filtré par période → beaucoup moins de données à indexer
-  const fuseIndex = useMemo(() => {
-    if (!Array.isArray(periodParcels) || periodParcels.length === 0) return null
+  // 🚀 NOUVEAU: Hook de recherche professionnel avec Fuse.js
+  // ⚡ Optimisations:
+  // - Détection automatique recherche numérique (N° EXP)
+  // - Scoring intelligent (préfixe exact prioritaire pour numéros)
+  // - Debounce intégré (300ms) pour performance
+  // - 14 champs indexés avec poids optimaux
+  const {
+    search: fuseSearchValue,
+    setSearch: setFuseSearch,
+    debouncedSearch: fuseDebouncedSearch,
+    results: fuseResults,
+    detailedResults: fuseDetailedResults,
+    isSearching: fuseIsSearching,
+    totalResults: fuseTotalResults,
+  } = useFuseSearch({
+    items: periodParcels || [],
+    keys: ADMIN_SEARCH_CONFIG.keys,
+    threshold: ADMIN_SEARCH_CONFIG.threshold,
+    debounceMs: ADMIN_SEARCH_CONFIG.debounceMs,
+    limit: ADMIN_SEARCH_CONFIG.limit,
+  })
 
-    return new Fuse(periodParcels, {
-      keys: [
-        { name: 'trackingId', weight: 2.0 },
-        { name: 'senderNic', weight: 2.0 },
-        { name: 'sender.nic', weight: 2.0 },
-        { name: 'sender.name', weight: 1.0 },
-        { name: 'sender.tel', weight: 1.5 },
-        { name: 'receiver.name', weight: 1.0 },
-        { name: 'receiver.tel', weight: 1.5 },
-        { name: 'sender.city', weight: 0.5 },
-        { name: 'receiver.city', weight: 0.5 },
-      ],
-      threshold: 0.1, // 0=exact, 1=anything → 0.1 = résultats quasi-exacts uniquement
-      ignoreLocation: true,
-      useExtendedSearch: true,
-      distance: 50, // Limite la distance de recherche pour plus de précision
-    })
-  }, [periodParcels])
+  // ✅ Alias pour compatibilité avec le reste du code
+  const search = fuseSearchValue
+  const setSearch = setFuseSearch
+  const debouncedSearch = fuseDebouncedSearch
+  const isSearching = fuseIsSearching
+
+  // ⚡ Détecter si recherche active - MAIS sans charger 2000 colis
+  // On garde isSearchActive pour la logique, mais loadLimit reste à 500
+  useEffect(() => {
+    const hasSearch = fuseDebouncedSearch.trim() !== ''
+    setIsSearchActive(hasSearch)
+  }, [fuseDebouncedSearch])
+
+  // 🔍 RECHERCHE SERVEUR: searchParcels dans toute la base
+  // Note: Cette recherche est lancée en parallèle de Fuse.js local
+  // Fuse.js donne des résultats instantanés, puis searchParcels cherche dans toute la base
+  useEffect(() => {
+    if (!fuseDebouncedSearch || fuseDebouncedSearch.trim().length === 0) {
+      setServerSearchResults(null)
+      return
+    }
+
+    let cancelled = false
+
+    // Lancer recherche serveur immédiatement pour chercher dans TOUTE la base (actifs + archives)
+    searchParcels(fuseDebouncedSearch.trim(), { limit: 50000, includeArchived: true })
+      .then(results => {
+        if (!cancelled) {
+          setServerSearchResults(results)
+        }
+      })
+      .catch(error => {
+        if (!cancelled) {
+          console.error('❌ Erreur searchParcels:', error)
+          setServerSearchResults(null)
+        }
+      })
+
+    return () => {
+      cancelled = true
+    }
+  }, [fuseDebouncedSearch])
 
   const filtered = useMemo(() => {
     if (!Array.isArray(periodParcels)) return []
@@ -1093,19 +1087,18 @@ export default function AdminPage() {
     // 3️⃣ Sinon afficher tous les periodParcels
     let results = periodParcels
 
-    if (debouncedSearch) {
-      // Priorité 1: Recherche serveur (cherche dans TOUTE la base)
-      // Si serverSearchResults !== null, c'est que searchParcels a répondu
-      // Même si c'est [], on l'affiche (0 résultats = vraiment rien trouvé dans toute la base)
+    if (debouncedSearch.trim()) {
+      // 🔍 STRATÉGIE OPTIMISÉE:
+      // 1️⃣ Recherche serveur si disponible (toute la base)
+      // 2️⃣ Sinon résultats Fuse.js optimisés (scoring intelligent)
       if (serverSearchResults !== null) {
         results = serverSearchResults
-        console.log(`✅ Affichage ${results.length} résultats de searchParcels (toute la base)`)
-      }
-      // Priorité 2: Fuse.js local (cherche dans 2000 chargés) - SEULEMENT si searchParcels pas encore répondu
-      else if (fuseIndex) {
-        const searchResults = fuseIndex.search(debouncedSearch.trim())
-        results = searchResults.map(r => r.item)
-        console.log(`⚠️ Fuse.js temporaire: ${results.length} résultats (${periodParcels.length} colis) - searchParcels en cours...`)
+        console.log(`✅ Serveur: ${results.length} résultats (toute la base)`)
+      } else {
+        // ⚡ NOUVEAU: Utiliser résultats du hook professionnel
+        // Scoring automatique (préfixe exact prioritaire pour numéros)
+        results = fuseResults
+        console.log(`🔍 Fuse.js PRO: ${fuseTotalResults} résultats sur ${periodParcels.length} colis (${fuseIsSearching ? 'recherche...' : 'terminé'})`)
       }
     }
 
@@ -1148,29 +1141,28 @@ export default function AdminPage() {
       return true
     })
 
-    // 2️⃣ Si recherche numérique (N° EXP) → trier par match exact d'abord
-    if (debouncedSearch && /^[0-9]+$/.test(debouncedSearch.trim())) {
+    // ✅ SUPPRIMÉ: Tri numérique manuel (maintenant géré automatiquement par useFuseSearch)
+    // Le hook détecte les recherches numériques et applique scoring intelligent:
+    // - Préfixe exact (^123): score 1000
+    // - Contient: score 100
+    // Résultats déjà triés par pertinence ⚡
+
+    // 2️⃣ Si recherche serveur → appliquer tri manuel (fallback)
+    if (serverSearchResults !== null && debouncedSearch && /^[0-9]+$/.test(debouncedSearch.trim())) {
       const searchNum = debouncedSearch.trim().toUpperCase()
       results.sort((a, b) => {
-        // Score A
-        const aExact = (a.senderNic === searchNum || a.sender?.nic === searchNum || a.trackingId === searchNum) ? 1000 : 0
-        const aStart = (a.senderNic?.startsWith(searchNum) || a.sender?.nic?.startsWith(searchNum) || a.trackingId?.startsWith(searchNum)) ? 100 : 0
-        const aContains = (a.senderNic?.includes(searchNum) || a.sender?.nic?.includes(searchNum) || a.trackingId?.includes(searchNum)) ? 10 : 0
-        const scoreA = aExact + aStart + aContains
-
-        // Score B
-        const bExact = (b.senderNic === searchNum || b.sender?.nic === searchNum || b.trackingId === searchNum) ? 1000 : 0
-        const bStart = (b.senderNic?.startsWith(searchNum) || b.sender?.nic?.startsWith(searchNum) || b.trackingId?.startsWith(searchNum)) ? 100 : 0
-        const bContains = (b.senderNic?.includes(searchNum) || b.sender?.nic?.includes(searchNum) || b.trackingId?.includes(searchNum)) ? 10 : 0
-        const scoreB = bExact + bStart + bContains
-
-        return scoreB - scoreA // Tri décroissant (meilleur score en premier)
+        const scoreA = (a.trackingId === searchNum || a.senderNic === searchNum ? 1000 : 0) +
+                       (a.trackingId?.startsWith(searchNum) || a.senderNic?.startsWith(searchNum) ? 100 : 0) +
+                       (a.trackingId?.includes(searchNum) || a.senderNic?.includes(searchNum) ? 10 : 0)
+        const scoreB = (b.trackingId === searchNum || b.senderNic === searchNum ? 1000 : 0) +
+                       (b.trackingId?.startsWith(searchNum) || b.senderNic?.startsWith(searchNum) ? 100 : 0) +
+                       (b.trackingId?.includes(searchNum) || b.senderNic?.includes(searchNum) ? 10 : 0)
+        return scoreB - scoreA
       })
     }
 
-    // Retourner TOUS les résultats filtrés (pas de limitation)
     return results
-  }, [periodParcels, cityFilter, driverFilter, statusFilter, serviceTypeFilter, portTypeFilter, debouncedSearch, fuseIndex, serverSearchResults])
+  }, [periodParcels, cityFilter, driverFilter, statusFilter, serviceTypeFilter, portTypeFilter, debouncedSearch, fuseResults, fuseTotalResults, fuseIsSearching, serverSearchResults])
 
   // Expéditions affichées avec limite (200 premiers)
   const displayedFiltered = useMemo(() => {
