@@ -341,7 +341,8 @@ export default function ParcelsTab() {
 
       const pagedParcels = safeParcels.slice((parcelPage - 1) * PAGE_SIZE, parcelPage * PAGE_SIZE)
 
-      if (e.key === 'ArrowDown') {
+      // Tab: Descendre (avancer dans la liste)
+      if (e.key === 'Tab' && !e.ctrlKey) {
         e.preventDefault()
         setFocusedIndex(prev => {
           const next = prev < pagedParcels.length - 1 ? prev + 1 : prev
@@ -351,7 +352,9 @@ export default function ParcelsTab() {
           }, 0)
           return next
         })
-      } else if (e.key === 'ArrowUp') {
+      }
+      // Ctrl+Tab: Monter (reculer dans la liste)
+      else if (e.key === 'Tab' && e.ctrlKey) {
         e.preventDefault()
         setFocusedIndex(prev => {
           const next = prev > 0 ? prev - 1 : prev
@@ -361,7 +364,9 @@ export default function ParcelsTab() {
           }, 0)
           return next
         })
-      } else if (e.key === ' ' && focusedIndex >= 0 && focusedIndex < pagedParcels.length) {
+      }
+      // Espace: Sélectionner/désélectionner
+      else if (e.key === ' ' && focusedIndex >= 0 && focusedIndex < pagedParcels.length) {
         e.preventDefault()
         const parcel = pagedParcels[focusedIndex]
 
