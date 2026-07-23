@@ -240,6 +240,32 @@ export default function ParcelsTab() {
   const [focusedIndex, setFocusedIndex] = useState(0)
   const checkboxRefs = useRef<(HTMLInputElement | null)[]>([])
 
+  // ⭐ État pour gérer les couleurs des colis par livreur
+  const [parcelColors, setParcelColors] = useState<{[key: string]: string}>({})
+
+  // ⭐ Palette de couleurs pour les livreurs (12 couleurs vives)
+  const DRIVER_COLORS = [
+    '#FFE5E5', // Rose pâle
+    '#E5F5FF', // Bleu pâle
+    '#FFF5E5', // Orange pâle
+    '#E5FFE5', // Vert pâle
+    '#F5E5FF', // Violet pâle
+    '#FFFFE5', // Jaune pâle
+    '#FFE5F5', // Magenta pâle
+    '#E5FFFF', // Cyan pâle
+    '#FFEEDD', // Pêche
+    '#E5F0E5', // Vert menthe
+    '#FFE5CC', // Saumon pâle
+    '#E5E5FF', // Lavande
+  ]
+
+  // ⭐ Générer une couleur pour un livreur basée sur son ID
+  const getDriverColor = (driverId: string) => {
+    if (!driverId) return ''
+    const hash = driverId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0)
+    return DRIVER_COLORS[hash % DRIVER_COLORS.length]
+  }
+
   // ⭐ Fonction pour vider et focus la recherche après sélection d'un colis
   const handleParcelRowClick = (e: React.MouseEvent) => {
     // Ne pas déclencher si on clique sur un bouton, input, select, ou lien
@@ -278,8 +304,46 @@ export default function ParcelsTab() {
       p.sender?.tel?.toLowerCase().includes(searchLower) ||
       p.receiver?.tel?.toLowerCase().includes(searchLower) ||
       p.sender?.city?.toLowerCase().includes(searchLower) ||
-      p.receiver?.city?.toLowerCase().includes(searchLower)
+      p.receiver?.city?.toLowerCase().includes(searchLower) ||
+      p.receiver?.address?.toLowerCase().includes(searchLower)
     ))
+  }
+
+  // ⭐ Fonctions de gestion des couleurs
+  const colorSelectedParcels = () => {
+    if (!bulkAssignDriverId || bulkAssignSelectedIds.length === 0) return
+
+    const driverColor = getDriverColor(bulkAssignDriverId)
+    const newColors: {[key: string]: string} = {}
+
+    bulkAssignSelectedIds.forEach((id: string) => {
+      newColors[id] = driverColor
+    })
+
+    setParcelColors(prev => ({ ...prev, ...newColors }))
+  }
+
+  const clearParcelColors = (parcelIds?: string[]) => {
+    if (parcelIds && parcelIds.length > 0) {
+      // Effacer uniquement les colis spécifiés
+      setParcelColors(prev => {
+        const updated = { ...prev }
+        parcelIds.forEach(id => delete updated[id])
+        return updated
+      })
+    } else {
+      // Effacer toutes les couleurs
+      setParcelColors({})
+    }
+  }
+
+  // ⭐ Wrapper pour l'assignation qui ajoute les couleurs
+  const handleBulkAssignDriverWithColor = async (assignableParcels: any[]) => {
+    // D'abord colorer les colis
+    colorSelectedParcels()
+
+    // Ensuite faire l'assignation normale
+    await handleBulkAssignDriver(assignableParcels)
   }
 
   // ⭐ Fonction pour gérer la touche Espace sur le champ de recherche
@@ -331,64 +395,59 @@ export default function ParcelsTab() {
     parcels: []
   })
 
-  // ⭐ Navigation au clavier - Focus uniquement sur les checkboxes, blocage navigation horizontale
+  // ⭐ Navigation au clavier - Focus uniquement sur les checkboxes d'assignation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const pagedParcels = safeParcels.slice((parcelPage - 1) * PAGE_SIZE, parcelPage * PAGE_SIZE)
-
-      // Compter combien de checkboxes sont disponibles
-      let availableCheckboxes = 0
-      pagedParcels.forEach((parcel: any) => {
-        if (profile?.role === 'chef_agence' || profile?.role === 'agentpro') {
-          const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
-          const canAssign = !parcel.deliveredAt && !parcel.returnedAt && parcel.status !== 'Livré'
-          if (isInMyCity && canAssign) availableCheckboxes++
-        }
-      })
-
-      // ⚠️ BLOQUER COMPLÈTEMENT Tab pour forcer navigation verticale uniquement
+      // Tab: Navigation entre checkboxes d'assignation dans le tableau
       if (e.key === 'Tab') {
+        // Chercher tous les checkboxes d'assignation
+        const allCheckboxes = Array.from(document.querySelectorAll('.checkbox-assign-table')) as HTMLElement[]
+
+        // Si pas de checkboxes, laisser Tab fonctionner normalement
+        if (allCheckboxes.length === 0) return
+
+        // Vérifier si on est déjà sur un checkbox d'assignation
+        const isOnAssignCheckbox = e.target instanceof HTMLElement && e.target.classList.contains('checkbox-assign-table')
+
+        // Si on est ailleurs (input text, select, etc.), laisser Tab normal
+        if (e.target instanceof HTMLInputElement && !isOnAssignCheckbox) return
+        if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return
+
+        // On a des checkboxes d'assignation, bloquer Tab
         e.preventDefault()
         e.stopPropagation()
 
-        if (availableCheckboxes === 0) return
+        // Trouver lequel a le focus
+        let currentIndex = allCheckboxes.findIndex(cb => cb === document.activeElement)
 
-        // Ctrl+Tab: Monter (reculer dans la liste)
+        // Si aucun n'a le focus, focuser le premier
+        if (currentIndex === -1) {
+          allCheckboxes[0].focus()
+          allCheckboxes[0].scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+          setFocusedIndex(0)
+          return
+        }
+
+        // Calculer le prochain index
+        let nextIndex
         if (e.ctrlKey) {
-          setFocusedIndex(prev => {
-            const next = prev > 0 ? prev - 1 : 0
-            // Focus sur la checkbox
-            setTimeout(() => {
-              checkboxRefs.current[next]?.focus()
-              checkboxRefs.current[next]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-            }, 0)
-            return next
-          })
+          // Ctrl+Tab: Monter
+          nextIndex = currentIndex > 0 ? currentIndex - 1 : 0
+        } else {
+          // Tab: Descendre
+          nextIndex = currentIndex < allCheckboxes.length - 1 ? currentIndex + 1 : currentIndex
         }
-        // Tab seul: Descendre (avancer dans la liste)
-        else {
-          setFocusedIndex(prev => {
-            const next = prev < availableCheckboxes - 1 ? prev + 1 : prev
-            // Focus sur la checkbox
-            setTimeout(() => {
-              checkboxRefs.current[next]?.focus()
-              checkboxRefs.current[next]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-            }, 0)
-            return next
-          })
-        }
-      }
-      // Espace: Déclencher le clic sur la checkbox focusée
-      else if (e.key === ' ') {
-        e.preventDefault()
-        checkboxRefs.current[focusedIndex]?.click()
+
+        // Focuser la prochaine checkbox
+        allCheckboxes[nextIndex].focus()
+        allCheckboxes[nextIndex].scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+        setFocusedIndex(nextIndex)
       }
     }
 
-    // Capturer en phase de capture pour bloquer avant tout autre handler
     window.addEventListener('keydown', handleKeyDown, true)
     return () => window.removeEventListener('keydown', handleKeyDown, true)
-  }, [focusedIndex, safeParcels, parcelPage, profile])
+  }, [])
 
   // Focus automatique sur la première checkbox au chargement et changement de page
   useEffect(() => {
@@ -1029,17 +1088,30 @@ export default function ParcelsTab() {
                         {selectedCount} colis sélectionné(s)
                       </p>
                       {bulkAssignError && <p className="text-xs font-semibold text-red-600">{bulkAssignError}</p>}
-                      <button
-                        type="button"
-                        onClick={() => handleBulkAssignDriver(assignableParcels)}
-                        disabled={bulkAssignBusy || selectedCount === 0}
-                        className="ml-auto flex items-center gap-2 px-4 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 disabled:opacity-40 text-white text-sm font-bold transition"
-                      >
-                        {bulkAssignBusy
-                          ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Assignation...</>
-                          : <><User className="w-4 h-4" /> Assigner au livreur</>
-                        }
-                      </button>
+                      <div className="ml-auto flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => handleBulkAssignDriverWithColor(assignableParcels)}
+                          disabled={bulkAssignBusy || selectedCount === 0}
+                          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 disabled:opacity-40 text-white text-sm font-bold transition"
+                        >
+                          {bulkAssignBusy
+                            ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Assignation...</>
+                            : <><User className="w-4 h-4" /> Assigner au livreur</>
+                          }
+                        </button>
+                        {Object.keys(parcelColors).length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => clearParcelColors(selectedCount > 0 ? bulkAssignSelectedIds : undefined)}
+                            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-red-100 hover:bg-red-200 text-red-700 text-sm font-bold transition border border-red-300"
+                            title={selectedCount > 0 ? "Effacer couleurs sélectionnées" : "Effacer toutes couleurs"}
+                          >
+                            <X className="w-4 h-4" />
+                            {selectedCount > 0 ? 'Effacer couleurs' : 'Tout effacer'}
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )
@@ -1167,12 +1239,31 @@ export default function ParcelsTab() {
                 </div>
               </div>
 
+              {/* ⭐ Bouton effacer couleurs */}
+              {Object.keys(parcelColors).length > 0 && (
+                <div className="flex items-center justify-between bg-gradient-to-r from-red-50 to-pink-50 border-2 border-red-200 rounded-xl p-3 shadow-md">
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold text-red-700">
+                      {Object.keys(parcelColors).length} expédition{Object.keys(parcelColors).length > 1 ? 's' : ''} colorée{Object.keys(parcelColors).length > 1 ? 's' : ''}
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => clearParcelColors()}
+                    className="flex items-center gap-2 px-4 py-2 rounded-xl bg-red-600 hover:bg-red-700 text-white text-sm font-bold transition shadow-md"
+                  >
+                    <X className="w-4 h-4" />
+                    Effacer toutes les couleurs
+                  </button>
+                </div>
+              )}
+
               {/* ⭐ Barre de recherche spécifique au tableau */}
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-purple-500" />
                 <input
                   ref={searchInputRef}
-                  placeholder="🔍 Recherche dans le tableau: N° EXP, Nom Expéditeur, Nom Destinataire..."
+                  placeholder="🔍 Recherche dans le tableau: N° EXP, Nom Expéditeur, Nom Destinataire, Adresse..."
                   value={tableSearch}
                   onChange={e => setTableSearch(e.target.value)}
                   onKeyDown={handleSearchKeyDown}
@@ -1282,7 +1373,8 @@ export default function ParcelsTab() {
                         p.sender?.tel?.toLowerCase().includes(searchLower) ||
                         p.receiver?.tel?.toLowerCase().includes(searchLower) ||
                         p.sender?.city?.toLowerCase().includes(searchLower) ||
-                        p.receiver?.city?.toLowerCase().includes(searchLower)
+                        p.receiver?.city?.toLowerCase().includes(searchLower) ||
+                        p.receiver?.address?.toLowerCase().includes(searchLower)
                       )
                     }).map((parcel: any, idx: number) => {
                       const isOwn = canActAsParcelOwner(parcel)
@@ -1300,8 +1392,10 @@ export default function ParcelsTab() {
                         <tr
                           key={parcel.id}
                           onClick={handleParcelRowClick}
+                          tabIndex={-1}
+                          style={{ backgroundColor: parcelColors[parcel.id] || 'transparent' }}
                           className={`border-b border-gray-100 transition-all hover:shadow-lg hover:scale-[1.01] hover:z-10 relative cursor-pointer ${
-                            idx % 2 === 0 ? 'bg-white' : 'bg-gradient-to-r from-blue-50/30 via-purple-50/20 to-pink-50/30'
+                            !parcelColors[parcel.id] && (idx % 2 === 0 ? 'bg-white' : 'bg-gradient-to-r from-blue-50/30 via-purple-50/20 to-pink-50/30')
                           } ${isOwn ? 'border-l-4 border-l-blue-500' : 'border-l-4 border-l-orange-400'}`}
                         >
                           {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
@@ -1312,12 +1406,24 @@ export default function ParcelsTab() {
                                   checked={assignSelected}
                                   onChange={e => {
                                     setBulkAssignError('')
-                                    setBulkAssignSelectedIds((prev: any) => e.target.checked
-                                      ? [...new Set([...prev, parcel.id])]
-                                      : prev.filter((id: any) => id !== parcel.id)
-                                    )
+                                    const checked = e.target.checked
+
+                                    setBulkAssignSelectedIds((prev: any) => {
+                                      if (checked) {
+                                        return [...new Set([...prev, parcel.id])]
+                                      } else {
+                                        return prev.filter((id: any) => id !== parcel.id)
+                                      }
+                                    })
+
+                                    // Colorer immédiatement si un livreur est sélectionné et on coche
+                                    if (checked && bulkAssignDriverId) {
+                                      const driverColor = getDriverColor(bulkAssignDriverId)
+                                      setParcelColors(prev => ({ ...prev, [parcel.id]: driverColor }))
+                                    }
                                   }}
-                                  className="w-4 h-4 accent-green-600 cursor-pointer"
+                                  tabIndex={0}
+                                  className="w-4 h-4 accent-green-600 cursor-pointer checkbox-assign-table"
                                 />
                               ) : (
                                 <span className="text-gray-300">—</span>
@@ -1461,6 +1567,7 @@ export default function ParcelsTab() {
                             <div className="flex items-center justify-center gap-1.5">
                               <button
                                 onClick={() => handlePrintTicket(parcel)}
+                                tabIndex={-1}
                                 className="p-2 rounded-lg bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-110"
                                 title="Imprimer"
                               >
@@ -1469,6 +1576,7 @@ export default function ParcelsTab() {
                               {canEditParcelDetails(parcel) && (
                                 <button
                                   onClick={() => handleEditClick(parcel)}
+                                  tabIndex={-1}
                                   className="p-2 rounded-lg bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-110"
                                   title="Modifier"
                                 >
@@ -1484,6 +1592,7 @@ export default function ParcelsTab() {
                                     }
                                   }}
                                   value={parcel.status}
+                                  tabIndex={-1}
                                   className="px-2 py-1 text-xs font-semibold rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-md cursor-pointer"
                                   title="Changer le statut"
                                 >
@@ -1498,6 +1607,7 @@ export default function ParcelsTab() {
                               {isOwn && (
                                 <button
                                   onClick={() => handleDeleteClick(parcel)}
+                                  tabIndex={-1}
                                   className="p-2 rounded-lg bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-110"
                                   title="Supprimer"
                                 >
@@ -1648,6 +1758,7 @@ export default function ParcelsTab() {
                 return (
                   <div key={parcel.id}
                     onClick={handleParcelRowClick}
+                    tabIndex={-1}
                     className={`bg-white rounded-xl p-4 shadow-sm border-l-4 cursor-pointer ${isOwn ? 'border-l-blue-500 border border-blue-100' : 'border-l-orange-400 border border-orange-100'}`}
                   >
                   {/* NOUVELLE POLITIQUE : Plus de sélection validation nécessaire */}
@@ -1665,35 +1776,51 @@ export default function ParcelsTab() {
                             : prev.filter((id: any) => id !== parcel.id)
                           )
                         }}
+                        tabIndex={-1}
                         className="w-4 h-4 accent-blue-600"
                       />
                       <span className="text-xs font-bold">Sélection chargement camion</span>
                     </label>
                   )}
 
-                  {/* ⭐ NOUVEAU: Checkbox pour assignation livreur (chef d'agence et agentpro) */}
+                  {/* ⭐ NOUVEAU: Checkbox personnalisé pour assignation livreur */}
                   {hasAssignCheckbox && (() => {
                     const assignSelected = bulkAssignSelectedIds.includes(parcel.id)
                     const isFocused = focusedIndex === currentCheckboxIndex
                     return (
-                      <label className={`mb-3 flex items-center gap-2 rounded-xl border px-3 py-2 cursor-pointer transition ${
-                        isFocused ? 'ring-2 ring-blue-500 shadow-md' : ''
-                      } ${assignSelected ? 'bg-green-50 border-green-300 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-green-200'}`}>
-                        <input
-                          ref={el => checkboxRefs.current[currentCheckboxIndex] = el}
-                          type="checkbox"
-                          checked={assignSelected}
-                          onChange={e => {
+                      <div
+                        ref={el => checkboxRefs.current[currentCheckboxIndex] = el}
+                        role="checkbox"
+                        aria-checked={assignSelected}
+                        tabIndex={0}
+                        className={`mb-3 flex items-center gap-2 rounded-xl border px-3 py-2 cursor-pointer transition ${
+                          isFocused ? 'ring-2 ring-blue-500 shadow-md' : ''
+                        } ${assignSelected ? 'bg-green-50 border-green-300 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-green-200'}`}
+                        onClick={() => {
+                          setBulkAssignError('')
+                          setBulkAssignSelectedIds((prev: any) => assignSelected
+                            ? prev.filter((id: any) => id !== parcel.id)
+                            : [...new Set([...prev, parcel.id])]
+                          )
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === ' ' || e.key === 'Enter') {
+                            e.preventDefault()
                             setBulkAssignError('')
-                            setBulkAssignSelectedIds((prev: any) => e.target.checked
-                              ? [...new Set([...prev, parcel.id])]
-                              : prev.filter((id: any) => id !== parcel.id)
+                            setBulkAssignSelectedIds((prev: any) => assignSelected
+                              ? prev.filter((id: any) => id !== parcel.id)
+                              : [...new Set([...prev, parcel.id])]
                             )
-                          }}
-                          className="w-4 h-4 accent-green-600"
-                        />
+                          }
+                        }}
+                      >
+                        <div className={`w-4 h-4 border-2 rounded flex items-center justify-center ${
+                          assignSelected ? 'bg-green-600 border-green-600' : 'bg-white border-gray-300'
+                        }`}>
+                          {assignSelected && <span className="text-white text-xs">✓</span>}
+                        </div>
                         <span className="text-xs font-bold">Sélection assignation livreur</span>
-                      </label>
+                      </div>
                     )
                   })()}
 
@@ -1897,6 +2024,7 @@ export default function ParcelsTab() {
                     <div className="flex gap-1.5 shrink-0">
                       <button
                         onClick={() => handlePrintTicket(parcel)}
+                        tabIndex={-1}
                         className="flex items-center gap-1 text-xs bg-gray-50 hover:bg-gray-100 text-gray-500 px-2.5 py-2 rounded-lg transition"
                         title="Imprimer le bon de ramassage"
                       >
@@ -1905,6 +2033,7 @@ export default function ParcelsTab() {
                       {parcel.signatureConfirmedAt && (
                         <button
                           onClick={() => setViewSignature(parcel)}
+                          tabIndex={-1}
                           className="flex items-center gap-1 text-xs bg-violet-50 hover:bg-violet-100 text-violet-600 px-2.5 py-2 rounded-lg transition"
                           title="Voir la signature électronique"
                         >
@@ -1915,6 +2044,7 @@ export default function ParcelsTab() {
                       {(canEditParcelDetails(parcel) || profile?.role === 'chef_agence' || profile?.role === 'agentpro' || profile?.role === 'aide_agent') && (
                         <button
                           onClick={() => handleEditClick(parcel)}
+                          tabIndex={-1}
                           className="flex items-center gap-1 text-xs px-2.5 py-2 rounded-lg transition bg-blue-50 hover:bg-blue-100 text-blue-600"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
@@ -1931,6 +2061,7 @@ export default function ParcelsTab() {
                             }
                           }}
                           value={parcel.status}
+                          tabIndex={-1}
                           className="flex items-center gap-1 text-xs px-2 py-2 rounded-lg transition bg-amber-50 hover:bg-amber-100 text-amber-700 font-semibold cursor-pointer border border-amber-200"
                           title="Changer le statut"
                         >
@@ -1946,6 +2077,7 @@ export default function ParcelsTab() {
                       {canEditParcelDetails(parcel) && (
                         <button
                           onClick={() => handleDeleteClick(parcel)}
+                          tabIndex={-1}
                           className="flex items-center gap-1 text-xs bg-red-50 hover:bg-red-100 text-red-500 px-2.5 py-2 rounded-lg transition"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
