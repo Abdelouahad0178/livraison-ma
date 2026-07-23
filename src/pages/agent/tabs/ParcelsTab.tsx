@@ -236,9 +236,9 @@ export default function ParcelsTab() {
   const [tableSearch, setTableSearch] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
 
-  // ⭐ Navigation au clavier
-  const [focusedIndex, setFocusedIndex] = useState(-1)
-  const parcelRowRefs = useRef<(HTMLDivElement | null)[]>([])
+  // ⭐ Navigation au clavier - Focus sur les checkboxes uniquement
+  const [focusedIndex, setFocusedIndex] = useState(0)
+  const checkboxRefs = useRef<(HTMLInputElement | null)[]>([])
 
   // ⭐ Fonction pour vider et focus la recherche après sélection d'un colis
   const handleParcelRowClick = (e: React.MouseEvent) => {
@@ -331,24 +331,32 @@ export default function ParcelsTab() {
     parcels: []
   })
 
-  // ⭐ Navigation au clavier dans la liste des expéditions
+  // ⭐ Navigation au clavier - Focus uniquement sur les checkboxes
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignorer si on est dans un input/textarea
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) {
-        return
-      }
-
       const pagedParcels = safeParcels.slice((parcelPage - 1) * PAGE_SIZE, parcelPage * PAGE_SIZE)
+
+      // Compter combien de checkboxes sont disponibles
+      let availableCheckboxes = 0
+      pagedParcels.forEach((parcel: any) => {
+        if (profile?.role === 'chef_agence' || profile?.role === 'agentpro') {
+          const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
+          const canAssign = !parcel.deliveredAt && !parcel.returnedAt && parcel.status !== 'Livré'
+          if (isInMyCity && canAssign) availableCheckboxes++
+        }
+      })
+
+      if (availableCheckboxes === 0) return
 
       // Tab: Descendre (avancer dans la liste)
       if (e.key === 'Tab' && !e.ctrlKey) {
         e.preventDefault()
         setFocusedIndex(prev => {
-          const next = prev < pagedParcels.length - 1 ? prev + 1 : prev
-          // Scroll vers l'élément
+          const next = prev < availableCheckboxes - 1 ? prev + 1 : prev
+          // Focus sur la checkbox
           setTimeout(() => {
-            parcelRowRefs.current[next]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+            checkboxRefs.current[next]?.focus()
+            checkboxRefs.current[next]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
           }, 0)
           return next
         })
@@ -357,42 +365,32 @@ export default function ParcelsTab() {
       else if (e.key === 'Tab' && e.ctrlKey) {
         e.preventDefault()
         setFocusedIndex(prev => {
-          const next = prev > 0 ? prev - 1 : prev
-          // Scroll vers l'élément
+          const next = prev > 0 ? prev - 1 : 0
+          // Focus sur la checkbox
           setTimeout(() => {
-            parcelRowRefs.current[next]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+            checkboxRefs.current[next]?.focus()
+            checkboxRefs.current[next]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
           }, 0)
           return next
         })
       }
-      // Espace: Sélectionner/désélectionner
-      else if (e.key === ' ' && focusedIndex >= 0 && focusedIndex < pagedParcels.length) {
+      // Espace: Déclencher le clic sur la checkbox focusée
+      else if (e.key === ' ') {
         e.preventDefault()
-        const parcel = pagedParcels[focusedIndex]
-
-        // Toggle sélection pour assignation livreur (chef d'agence et agentpro)
-        if (profile?.role === 'chef_agence' || profile?.role === 'agentpro') {
-          const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
-          const canAssign = !parcel.deliveredAt && !parcel.returnedAt && parcel.status !== 'Livré'
-
-          if (isInMyCity && canAssign) {
-            setBulkAssignSelectedIds((prev: any) =>
-              prev.includes(parcel.id)
-                ? prev.filter((id: any) => id !== parcel.id)
-                : [...new Set([...prev, parcel.id])]
-            )
-          }
-        }
+        checkboxRefs.current[focusedIndex]?.click()
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [focusedIndex, safeParcels, parcelPage, profile, setBulkAssignSelectedIds])
+  }, [focusedIndex, safeParcels, parcelPage, profile])
 
-  // Initialiser focusedIndex à 0 quand la page change
+  // Focus automatique sur la première checkbox au chargement et changement de page
   useEffect(() => {
     setFocusedIndex(0)
+    setTimeout(() => {
+      checkboxRefs.current[0]?.focus()
+    }, 100)
   }, [parcelPage])
 
   return (
@@ -1621,26 +1619,32 @@ export default function ParcelsTab() {
             </div>
 
             <div className="space-y-2">
-            {pagedParcels.map((parcel: any, idx: number) => {
-              const isOwn = canActAsParcelOwner(parcel)
-              const isAideManagedByChef = !isParcelCreator(parcel) && isChefAgencyAideParcel(parcel)
-              const sc    = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
-              const canLoadTransport = canLoadTransportParcel(parcel)
-              const bulkSelected = bulkLoadSelectedIds.includes(parcel.id)
-              const canSelectAideValidation = (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && isPendingAideParcelForAgency(parcel)
-              const aideValidationSelected = selectedAideEntryIds.includes(parcel.id)
-              const isFocused = focusedIndex === idx
+            {(() => {
+              let checkboxIndex = 0 // Compteur pour les checkboxes disponibles
+              return pagedParcels.map((parcel: any, idx: number) => {
+                const isOwn = canActAsParcelOwner(parcel)
+                const isAideManagedByChef = !isParcelCreator(parcel) && isChefAgencyAideParcel(parcel)
+                const sc    = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
+                const canLoadTransport = canLoadTransportParcel(parcel)
+                const bulkSelected = bulkLoadSelectedIds.includes(parcel.id)
+                const canSelectAideValidation = (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && isPendingAideParcelForAgency(parcel)
+                const aideValidationSelected = selectedAideEntryIds.includes(parcel.id)
 
+                // Vérifier si cette ligne a une checkbox assignation
+                const hasAssignCheckbox = (() => {
+                  if (profile?.role !== 'chef_agence' && profile?.role !== 'agentpro') return false
+                  const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
+                  const canAssign = !parcel.deliveredAt && !parcel.returnedAt && parcel.status !== 'Livré'
+                  return isInMyCity && canAssign
+                })()
 
-              return (
-                <div key={parcel.id}
-                  ref={el => parcelRowRefs.current[idx] = el}
-                  tabIndex={0}
-                  onClick={handleParcelRowClick}
-                  className={`bg-white rounded-xl p-4 shadow-sm border-l-4 cursor-pointer transition-all ${
-                    isFocused ? 'ring-2 ring-blue-500 shadow-lg scale-[1.01]' : ''
-                  } ${isOwn ? 'border-l-blue-500 border border-blue-100' : 'border-l-orange-400 border border-orange-100'}`}
-                >
+                const currentCheckboxIndex = hasAssignCheckbox ? checkboxIndex++ : -1
+
+                return (
+                  <div key={parcel.id}
+                    onClick={handleParcelRowClick}
+                    className={`bg-white rounded-xl p-4 shadow-sm border-l-4 cursor-pointer ${isOwn ? 'border-l-blue-500 border border-blue-100' : 'border-l-orange-400 border border-orange-100'}`}
+                  >
                   {/* NOUVELLE POLITIQUE : Plus de sélection validation nécessaire */}
                   {canLoadTransport && (
                     <label className={`mb-3 flex items-center gap-2 rounded-xl border px-3 py-2 cursor-pointer transition ${
@@ -1663,18 +1667,15 @@ export default function ParcelsTab() {
                   )}
 
                   {/* ⭐ NOUVEAU: Checkbox pour assignation livreur (chef d'agence et agentpro) */}
-                  {(() => {
-                    if (profile?.role !== 'chef_agence' && profile?.role !== 'agentpro') return null
-                    const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
-                    // Tous les colis dans ma ville qui ne sont pas livrés
-                    const canAssign = !parcel.deliveredAt && !parcel.returnedAt && parcel.status !== 'Livré'
-                    if (!isInMyCity || !canAssign) return null
+                  {hasAssignCheckbox && (() => {
                     const assignSelected = bulkAssignSelectedIds.includes(parcel.id)
+                    const isFocused = focusedIndex === currentCheckboxIndex
                     return (
                       <label className={`mb-3 flex items-center gap-2 rounded-xl border px-3 py-2 cursor-pointer transition ${
-                        assignSelected ? 'bg-green-50 border-green-300 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-green-200'
-                      }`}>
+                        isFocused ? 'ring-2 ring-blue-500 shadow-md' : ''
+                      } ${assignSelected ? 'bg-green-50 border-green-300 text-green-700' : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-green-200'}`}>
                         <input
+                          ref={el => checkboxRefs.current[currentCheckboxIndex] = el}
                           type="checkbox"
                           checked={assignSelected}
                           onChange={e => {
@@ -2289,7 +2290,8 @@ export default function ParcelsTab() {
                   })()}
                 </div>
               )
-            })}
+              })
+            })()}
             </div>
 
             {/* Barre de pagination */}
