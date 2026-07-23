@@ -168,8 +168,10 @@ function statusKey(s) {
 }
 
 // ── Scheduled auto-archive ─────────────────────────────────────────────────
+// ⛔ DÉSACTIVÉ TEMPORAIREMENT - Archivage manuel uniquement
 // Runs every day at 02:00 AM Casablanca time (UTC+1).
 // Moves Livré/Retourné parcels older than 90 days to parcels_archive.
+/* ARCHIVAGE AUTOMATIQUE DÉSACTIVÉ
 exports.scheduledArchive = onSchedule({
   schedule:  '0 2 * * *',
   timeZone:  'Africa/Casablanca',
@@ -210,6 +212,7 @@ exports.scheduledArchive = onSchedule({
   }
   console.log(`[scheduledArchive] Archived ${docs.length} parcels.`)
 })
+*/ // FIN ARCHIVAGE AUTOMATIQUE DÉSACTIVÉ
 
 // ── Stats maintenance on every parcel write ────────────────────────────────
 // Maintains:
@@ -1174,7 +1177,9 @@ exports.generateTestData = onCall({ maxInstances: 1, timeoutSeconds: 540 }, asyn
 })
 
 // ── Archivage automatique des vieux colis ────────────────────────────────
+// ⛔ DÉSACTIVÉ TEMPORAIREMENT - Archivage manuel uniquement
 // S'exécute chaque jour à 2h du matin
+/* ARCHIVAGE AUTOMATIQUE DÉSACTIVÉ
 exports.autoArchiveOldParcels = onSchedule({
   schedule: '0 2 * * *', // Tous les jours à 2h00 (heure UTC)
   timeZone: 'Africa/Casablanca',
@@ -1275,6 +1280,7 @@ exports.autoArchiveOldParcels = onSchedule({
     throw error
   }
 })
+*/ // FIN ARCHIVAGE AUTOMATIQUE DÉSACTIVÉ
 
 // ── Fonction callable pour archivage manuel ──────────────────────────────
 exports.manualArchive = onCall({ maxInstances: 1, timeoutSeconds: 540 }, async (request) => {
