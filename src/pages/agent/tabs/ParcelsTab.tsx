@@ -331,7 +331,7 @@ export default function ParcelsTab() {
     parcels: []
   })
 
-  // ⭐ Navigation au clavier - Focus uniquement sur les checkboxes
+  // ⭐ Navigation au clavier - Focus uniquement sur les checkboxes, blocage navigation horizontale
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const pagedParcels = safeParcels.slice((parcelPage - 1) * PAGE_SIZE, parcelPage * PAGE_SIZE)
@@ -346,33 +346,37 @@ export default function ParcelsTab() {
         }
       })
 
-      if (availableCheckboxes === 0) return
+      // ⚠️ BLOQUER COMPLÈTEMENT Tab pour forcer navigation verticale uniquement
+      if (e.key === 'Tab') {
+        e.preventDefault()
+        e.stopPropagation()
 
-      // Tab: Descendre (avancer dans la liste)
-      if (e.key === 'Tab' && !e.ctrlKey) {
-        e.preventDefault()
-        setFocusedIndex(prev => {
-          const next = prev < availableCheckboxes - 1 ? prev + 1 : prev
-          // Focus sur la checkbox
-          setTimeout(() => {
-            checkboxRefs.current[next]?.focus()
-            checkboxRefs.current[next]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-          }, 0)
-          return next
-        })
-      }
-      // Ctrl+Tab: Monter (reculer dans la liste)
-      else if (e.key === 'Tab' && e.ctrlKey) {
-        e.preventDefault()
-        setFocusedIndex(prev => {
-          const next = prev > 0 ? prev - 1 : 0
-          // Focus sur la checkbox
-          setTimeout(() => {
-            checkboxRefs.current[next]?.focus()
-            checkboxRefs.current[next]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
-          }, 0)
-          return next
-        })
+        if (availableCheckboxes === 0) return
+
+        // Ctrl+Tab: Monter (reculer dans la liste)
+        if (e.ctrlKey) {
+          setFocusedIndex(prev => {
+            const next = prev > 0 ? prev - 1 : 0
+            // Focus sur la checkbox
+            setTimeout(() => {
+              checkboxRefs.current[next]?.focus()
+              checkboxRefs.current[next]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+            }, 0)
+            return next
+          })
+        }
+        // Tab seul: Descendre (avancer dans la liste)
+        else {
+          setFocusedIndex(prev => {
+            const next = prev < availableCheckboxes - 1 ? prev + 1 : prev
+            // Focus sur la checkbox
+            setTimeout(() => {
+              checkboxRefs.current[next]?.focus()
+              checkboxRefs.current[next]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+            }, 0)
+            return next
+          })
+        }
       }
       // Espace: Déclencher le clic sur la checkbox focusée
       else if (e.key === ' ') {
@@ -381,8 +385,9 @@ export default function ParcelsTab() {
       }
     }
 
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
+    // Capturer en phase de capture pour bloquer avant tout autre handler
+    window.addEventListener('keydown', handleKeyDown, true)
+    return () => window.removeEventListener('keydown', handleKeyDown, true)
   }, [focusedIndex, safeParcels, parcelPage, profile])
 
   // Focus automatique sur la première checkbox au chargement et changement de page
