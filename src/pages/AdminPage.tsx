@@ -1069,34 +1069,13 @@ export default function AdminPage() {
     setIsSearchActive(hasSearch)
   }, [fuseDebouncedSearch])
 
-  // 🔍 RECHERCHE SERVEUR: searchParcels dans toute la base
-  // Note: Cette recherche est lancée en parallèle de Fuse.js local
-  // Fuse.js donne des résultats instantanés, puis searchParcels cherche dans toute la base
+  // 🔍 RECHERCHE SERVEUR: DÉSACTIVÉE
+  // ✅ POLITIQUE: Recherche uniquement dans les données DÉJÀ filtrées (date, ville, etc.)
+  // La recherche Fuse.js sur periodParcels (déjà filtré) est suffisante et plus rapide
+  // Exemple: 1000 colis filtrés au lieu de 50000 dans toute la base
   useEffect(() => {
-    if (!fuseDebouncedSearch || fuseDebouncedSearch.trim().length === 0) {
-      setServerSearchResults(null)
-      return
-    }
-
-    let cancelled = false
-
-    // Lancer recherche serveur immédiatement pour chercher dans TOUTE la base (actifs + archives)
-    searchParcels(fuseDebouncedSearch.trim(), { limit: 50000, includeArchived: true })
-      .then(results => {
-        if (!cancelled) {
-          setServerSearchResults(results)
-        }
-      })
-      .catch(error => {
-        if (!cancelled) {
-          console.error('❌ Erreur searchParcels:', error)
-          setServerSearchResults(null)
-        }
-      })
-
-    return () => {
-      cancelled = true
-    }
+    // Toujours retourner null pour forcer l'utilisation de Fuse.js uniquement
+    setServerSearchResults(null)
   }, [fuseDebouncedSearch])
 
   const filtered = useMemo(() => {

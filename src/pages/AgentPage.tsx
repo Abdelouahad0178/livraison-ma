@@ -323,42 +323,15 @@ export default function AgentPage() {
   const debouncedCaisseSearch = useDebounce(caisseSearch)
   const debouncedCodSearch    = useDebounce(codSearch)
 
-  // 🔍 RECHERCHE SERVEUR: searchParcels dans toute la base (filtrée par ville)
+  // 🔍 RECHERCHE SERVEUR: DÉSACTIVÉE
+  // ✅ POLITIQUE: Recherche uniquement dans les données DÉJÀ filtrées
+  // (date, ville, livreur, statut, service, etc.)
+  // La recherche locale sur allDisplayParcels filtré est plus rapide et plus cohérente
   useEffect(() => {
-    if (!debouncedSearch || debouncedSearch.trim().length === 0) {
-      setServerSearchResults(null)
-      setIsSearching(false)
-      return
-    }
-
-    if (!profile?.city) return // Attendre que le profile soit chargé
-
-    let cancelled = false
-    setIsSearching(true)
-
-    // Lancer recherche serveur avec filtre ville (seulement colis de cette agence)
-    searchParcels(debouncedSearch.trim(), {
-      limit: 50000,
-      agencyCity: profile.city  // 🔑 Filtre par ville de l'agence
-    })
-      .then(results => {
-        if (!cancelled) {
-          setServerSearchResults(results)
-          setIsSearching(false)
-        }
-      })
-      .catch(error => {
-        if (!cancelled) {
-          console.error('❌ Erreur searchParcels:', error)
-          setServerSearchResults(null)
-          setIsSearching(false)
-        }
-      })
-
-    return () => {
-      cancelled = true
-    }
-  }, [debouncedSearch, profile?.city])
+    // Toujours retourner null pour forcer la recherche locale uniquement
+    setServerSearchResults(null)
+    setIsSearching(false)
+  }, [debouncedSearch])
 
   const [editingParcel, setEditingParcel] = useState<any>(null)
   const [editForm, setEditForm]         = useState<any>(null)

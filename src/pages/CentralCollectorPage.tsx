@@ -296,24 +296,19 @@ export default function CentralCollectorPage() {
     }
   }
 
-  // 🔍 Recherche approfondie côté serveur (toute la base, index Firestore)
+  // 🔍 RECHERCHE PROFONDE: DÉSACTIVÉE
+  // ✅ POLITIQUE: Recherche uniquement dans les données DÉJÀ filtrées
+  // La recherche locale dans ctlFiltered (ligne 437-454) filtre déjà par:
+  // - Date (journée opérationnelle, today, week, month, custom)
+  // - Ville
+  // - Type paiement
+  // - Statut COD
+  // - Statut contrôle
+  // - Statut colis
+  // Puis applique la recherche textuelle intelligente avec scoring N° EXP
   const runDeepSearch = async () => {
-    const term = ctlQuery.trim()
-    if (term.length < 3 || deepSearching) return
-    setDeepSearching(true)
-    try {
-      const res = await searchParcels(term, { includeArchived: false })
-      setServerResults(prev => {
-        const map = new Map()
-        prev.forEach((p: any) => map.set(p.id, p))
-        res.forEach((p: any) => map.set(p.id, p))
-        return [...map.values()]
-      })
-    } catch (err) {
-      console.error('CentralCollectorPage deepSearch:', err)
-    } finally {
-      setDeepSearching(false)
-    }
+    // Désactivé - la recherche locale est suffisante et respecte les filtres
+    console.log('ℹ️ Recherche profonde désactivée - utilisez la recherche locale qui respecte les filtres')
   }
 
   // Fusion : temps réel + pages chargées + résultats serveur + pointage optimiste
@@ -1409,23 +1404,13 @@ export default function CentralCollectorPage() {
                   <input
                     value={ctlQuery}
                     onChange={e => setCtlQuery(e.target.value)}
-                    onKeyDown={e => { if (e.key === 'Enter') runDeepSearch() }}
-                    placeholder="N° EXP, tracking, nom expéditeur/client, téléphone, ville..."
+                    placeholder="🔍 Recherche dans résultats filtrés: N° EXP, nom, tél, ville..."
                     className="w-full pl-11 pr-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm focus:outline-none text-sm font-medium placeholder:text-purple-300 transition-all duration-300"
                   />
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-purple-600 bg-purple-50 px-2 py-1 rounded-full">
+                    {ctlFiltered.length}
+                  </div>
                 </div>
-                <button
-                  onClick={runDeepSearch}
-                  disabled={deepSearching || ctlQuery.trim().length < 3}
-                  className="px-4 py-3 rounded-2xl text-xs font-black text-white bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 disabled:opacity-40 transition shadow-lg flex items-center gap-2"
-                  title="Recherche par index dans TOUTE la base (N° EXP exact, tracking, téléphone, nom exact)"
-                >
-                  {deepSearching ? (
-                    <><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Recherche...</>
-                  ) : (
-                    <><Database className="w-3.5 h-3.5" /> Chercher toute la base</>
-                  )}
-                </button>
                 <button
                   onClick={printControle}
                   className="px-4 py-3 rounded-2xl text-xs font-black text-emerald-700 bg-emerald-50 border-2 border-emerald-200 hover:bg-emerald-100 transition shadow-lg flex items-center gap-2"
