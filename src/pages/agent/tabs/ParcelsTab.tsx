@@ -4,7 +4,7 @@ import {
   LayoutGrid, Lock, Package, Printer, Search, Table2, Trash2, Truck,
   Unlock, User, X,
 } from 'lucide-react'
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { deleteField } from 'firebase/firestore'
 import {
   loadReturnedParcelOnTruck, validateReturnArrival, getMoreAgentParcels,
@@ -236,6 +236,10 @@ export default function ParcelsTab() {
   const [tableSearch, setTableSearch] = useState('')
   const searchInputRef = useRef<HTMLInputElement>(null)
 
+  // ⭐ Navigation au clavier
+  const [focusedIndex, setFocusedIndex] = useState(-1)
+  const parcelRowRefs = useRef<(HTMLDivElement | null)[]>([])
+
   // ⭐ Fonction pour vider et focus la recherche après sélection d'un colis
   const handleParcelRowClick = (e: React.MouseEvent) => {
     // Ne pas déclencher si on clique sur un bouton, input, select, ou lien
@@ -326,6 +330,65 @@ export default function ParcelsTab() {
     title: '',
     parcels: []
   })
+
+  // ⭐ Navigation au clavier dans la liste des expéditions
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignorer si on est dans un input/textarea
+      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) {
+        return
+      }
+
+      const pagedParcels = safeParcels.slice((parcelPage - 1) * PAGE_SIZE, parcelPage * PAGE_SIZE)
+
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setFocusedIndex(prev => {
+          const next = prev < pagedParcels.length - 1 ? prev + 1 : prev
+          // Scroll vers l'élément
+          setTimeout(() => {
+            parcelRowRefs.current[next]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+          }, 0)
+          return next
+        })
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setFocusedIndex(prev => {
+          const next = prev > 0 ? prev - 1 : prev
+          // Scroll vers l'élément
+          setTimeout(() => {
+            parcelRowRefs.current[next]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' })
+          }, 0)
+          return next
+        })
+      } else if (e.key === ' ' && focusedIndex >= 0 && focusedIndex < pagedParcels.length) {
+        e.preventDefault()
+        const parcel = pagedParcels[focusedIndex]
+
+        // Toggle sélection pour assignation livreur (chef d'agence et agentpro)
+        if (profile?.role === 'chef_agence' || profile?.role === 'agentpro') {
+          const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
+          const canAssign = !parcel.deliveredAt && !parcel.returnedAt && parcel.status !== 'Livré'
+
+          if (isInMyCity && canAssign) {
+            setBulkAssignSelectedIds((prev: any) =>
+              prev.includes(parcel.id)
+                ? prev.filter((id: any) => id !== parcel.id)
+                : [...new Set([...prev, parcel.id])]
+            )
+          }
+        }
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [focusedIndex, safeParcels, parcelPage, profile, setBulkAssignSelectedIds])
+
+  // Initialiser focusedIndex à 0 quand la page change
+  useEffect(() => {
+    setFocusedIndex(0)
+  }, [parcelPage])
 
   return (
     <>
@@ -1553,7 +1616,7 @@ export default function ParcelsTab() {
             </div>
 
             <div className="space-y-2">
-            {pagedParcels.map((parcel: any) => {
+            {pagedParcels.map((parcel: any, idx: number) => {
               const isOwn = canActAsParcelOwner(parcel)
               const isAideManagedByChef = !isParcelCreator(parcel) && isChefAgencyAideParcel(parcel)
               const sc    = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
@@ -1561,12 +1624,17 @@ export default function ParcelsTab() {
               const bulkSelected = bulkLoadSelectedIds.includes(parcel.id)
               const canSelectAideValidation = (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && isPendingAideParcelForAgency(parcel)
               const aideValidationSelected = selectedAideEntryIds.includes(parcel.id)
+              const isFocused = focusedIndex === idx
 
 
               return (
                 <div key={parcel.id}
+                  ref={el => parcelRowRefs.current[idx] = el}
+                  tabIndex={0}
                   onClick={handleParcelRowClick}
-                  className={`bg-white rounded-xl p-4 shadow-sm border-l-4 cursor-pointer ${isOwn ? 'border-l-blue-500 border border-blue-100' : 'border-l-orange-400 border border-orange-100'}`}
+                  className={`bg-white rounded-xl p-4 shadow-sm border-l-4 cursor-pointer transition-all ${
+                    isFocused ? 'ring-2 ring-blue-500 shadow-lg scale-[1.01]' : ''
+                  } ${isOwn ? 'border-l-blue-500 border border-blue-100' : 'border-l-orange-400 border border-orange-100'}`}
                 >
                   {/* NOUVELLE POLITIQUE : Plus de sélection validation nécessaire */}
                   {canLoadTransport && (
