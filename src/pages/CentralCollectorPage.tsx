@@ -29,6 +29,9 @@ import {
 } from '../firebase/firestore'
 import { Banknote, Building2, CheckCircle2, ClipboardCheck, Database, LogOut, MapPin, Package, Search, FileText, X, Save, Printer, Calendar, Filter, Edit, Trash2, Sparkles, TrendingUp, Wallet, Archive, Undo2 } from 'lucide-react'
 import ProfilePhotoUpload from '../components/ProfilePhotoUpload'
+import { useOperationalDaySelector } from '../hooks/useOperationalDay'
+import { getOperationalDayRange } from '../config/operationalDay'
+import { OperationalDaySelector } from '../components/OperationalDaySelector'
 
 const PAGE_SIZE = 800 // Chargement progressif par tranches de 800
 
@@ -58,7 +61,7 @@ const hasSearch = (values: any, q: any) => {
     return raw.includes(q) || normalizeSearch(raw).includes(compactQ)
   })
 }
-const inDateRange = (value: any, preset: any, from: any, to: any) => {
+const inDateRange = (value: any, preset: any, from: any, to: any, operationalDay?: Date) => {
   if (preset === 'all') return true
   const d = asDate(value)
   if (!d || Number.isNaN(d.getTime())) return false
@@ -75,6 +78,11 @@ const inDateRange = (value: any, preset: any, from: any, to: any) => {
     start.setHours(0, 0, 0, 0)
   } else if (preset === 'month') {
     start = new Date(now.getFullYear(), now.getMonth(), 1)
+  } else if (preset === 'operational' && operationalDay) {
+    // 🗓️ Mode journée opérationnelle: 08:00 → 06:00 (lendemain)
+    const range = getOperationalDayRange(operationalDay)
+    start = range.start
+    end = range.end
   } else if (preset === 'custom') {
     start = from ? new Date(from + 'T00:00:00') : null
     end = to ? new Date(to + 'T23:59:59') : end
@@ -118,6 +126,19 @@ export default function CentralCollectorPage() {
   const [datePreset, setDatePreset] = useState('all')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+
+  // 🗓️ Journée opérationnelle (contrôle COD)
+  const {
+    selectedDay: operationalDay,
+    setSelectedDay: setOperationalDay,
+  } = useOperationalDaySelector()
+
+  // 🗓️ Journée opérationnelle (archives)
+  const {
+    selectedDay: archiveOperationalDay,
+    setSelectedDay: setArchiveOperationalDay,
+  } = useOperationalDaySelector()
+
   const [paymentFilter, setPaymentFilter] = useState('unpaid')
   const [minAmount, setMinAmount] = useState('')
   const [maxAmount, setMaxAmount] = useState('')
@@ -357,7 +378,7 @@ export default function CentralCollectorPage() {
 
     // Filtre de date
     filtered = filtered.filter((p: any) =>
-      inDateRange(p.archivedAt || p.createdAt, archiveDatePreset, archiveDateFrom, archiveDateTo)
+      inDateRange(p.archivedAt || p.createdAt, archiveDatePreset, archiveDateFrom, archiveDateTo, archiveOperationalDay)
     )
 
     // Filtre type de paiement COD
@@ -366,7 +387,7 @@ export default function CentralCollectorPage() {
     }
 
     return filtered
-  }, [archivedParcels, archiveSearch, archiveDatePreset, archiveDateFrom, archiveDateTo, archivePaymentType])
+  }, [archivedParcels, archiveSearch, archiveDatePreset, archiveDateFrom, archiveDateTo, archiveOperationalDay, archivePaymentType])
 
   // Filtre complet SAUF la ville (sert aux compteurs par ville)
   const ctlFilteredAllCities = useMemo(() => {
@@ -383,7 +404,7 @@ export default function CentralCollectorPage() {
       if (ctlControl === 'controlled' && !isControlled(p)) return false
       if (ctlControl === 'uncontrolled' && isControlled(p)) return false
       if (ctlParcelStatus !== 'all' && p.status !== ctlParcelStatus) return false
-      if (!inDateRange(p.createdAt, ctlDatePreset, ctlDateFrom, ctlDateTo)) return false
+      if (!inDateRange(p.createdAt, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay)) return false
       const n = parseFloat(p.codAmount) || 0
       if (mn !== null && !Number.isNaN(mn) && n < mn) return false
       if (mx !== null && !Number.isNaN(mx) && n > mx) return false
@@ -395,7 +416,7 @@ export default function CentralCollectorPage() {
         p.receiver?.city, p.codAmount, p.status, p.controlledBy,
       ], qq)
     })
-  }, [parcels, ctlDebounced, ctlPayType, ctlCodStatus, ctlControl, ctlParcelStatus, ctlDatePreset, ctlDateFrom, ctlDateTo, ctlMinAmount, ctlMaxAmount])
+  }, [parcels, ctlDebounced, ctlPayType, ctlCodStatus, ctlControl, ctlParcelStatus, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay, ctlMinAmount, ctlMaxAmount])
 
   // Compteurs par ville (pointage ville par ville)
   const ctlCityStats = useMemo(() => {
@@ -597,7 +618,7 @@ export default function CentralCollectorPage() {
 
   const filteredParcelsForSuppliers = useMemo(() => depositedParcels.filter(p => {
     if (cityFilter !== 'all' && p.centralDepositCity !== cityFilter) return false
-    if (!inDateRange(p.centralDepositAt || p.createdAt, datePreset, dateFrom, dateTo)) return false
+    if (!inDateRange(p.centralDepositAt || p.createdAt, datePreset, dateFrom, dateTo, operationalDay)) return false
     if (!amountOk(p.codAmount)) return false
     const paid = isParcelPaid(p)
     const prepared = isParcelPrepared(p)
@@ -610,7 +631,7 @@ export default function CentralCollectorPage() {
       p.centralChequeNum, p.centralChequeBank,
     ]
     return hasSearch(values, q)
-  }), [depositedParcels, cityFilter, datePreset, dateFrom, dateTo, minAmount, maxAmount, paymentFilter, q])
+  }), [depositedParcels, cityFilter, datePreset, dateFrom, dateTo, operationalDay, minAmount, maxAmount, paymentFilter, q])
 
   const supplierGroups = useMemo(() => {
     const map = new Map()
@@ -1455,14 +1476,29 @@ export default function CentralCollectorPage() {
                   <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-purple-400" />
                   <select value={ctlDatePreset} onChange={e => setCtlDatePreset(e.target.value)} className="w-full pl-9 pr-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-semibold text-purple-700 cursor-pointer transition-all duration-300">
                     <option value="all">🗓️ Toutes les dates</option>
+                    <option value="operational">🗓️ Journée opérationnelle</option>
                     <option value="today">📅 Aujourd'hui</option>
                     <option value="week">📆 7 jours</option>
                     <option value="month">🌙 Ce mois</option>
                     <option value="custom">🎯 Personnalisé</option>
                   </select>
                 </div>
-                <input type="date" value={ctlDateFrom} onChange={e => { setCtlDateFrom(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
-                <input type="date" value={ctlDateTo} onChange={e => { setCtlDateTo(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
+                {ctlDatePreset === 'operational' ? (
+                  <div className="col-span-2">
+                    <OperationalDaySelector
+                      selectedDay={operationalDay}
+                      onDayChange={setOperationalDay}
+                      showTimeRange={true}
+                      showTodayButton={true}
+                      className="text-sm"
+                    />
+                  </div>
+                ) : (
+                  <>
+                    <input type="date" value={ctlDateFrom} onChange={e => { setCtlDateFrom(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
+                    <input type="date" value={ctlDateTo} onChange={e => { setCtlDateTo(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
+                  </>
+                )}
                 <input type="number" min="0" value={ctlMinAmount} onChange={e => setCtlMinAmount(e.target.value)} placeholder="Min DH" className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium placeholder:text-purple-300 transition-all duration-300" />
                 <input type="number" min="0" value={ctlMaxAmount} onChange={e => setCtlMaxAmount(e.target.value)} placeholder="Max DH" className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium placeholder:text-purple-300 transition-all duration-300" />
               </div>
@@ -2306,11 +2342,23 @@ export default function CentralCollectorPage() {
                           className="w-full px-3 py-2 rounded-xl border border-purple-200 text-sm focus:ring-2 focus:ring-purple-400 focus:outline-none"
                         >
                           <option value="all">Toutes les dates</option>
+                          <option value="operational">🗓️ Journée opérationnelle</option>
                           <option value="today">Aujourd'hui</option>
                           <option value="week">7 derniers jours</option>
                           <option value="month">30 derniers jours</option>
                           <option value="custom">Période personnalisée</option>
                         </select>
+                        {archiveDatePreset === 'operational' && (
+                          <div className="mt-3">
+                            <OperationalDaySelector
+                              selectedDay={archiveOperationalDay}
+                              onDayChange={setArchiveOperationalDay}
+                              showTimeRange={true}
+                              showTodayButton={true}
+                              className="text-xs"
+                            />
+                          </div>
+                        )}
                       </div>
 
                       {/* Type de paiement */}

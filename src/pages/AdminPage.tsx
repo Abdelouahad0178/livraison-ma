@@ -5,6 +5,9 @@ import { auth, authSecondary, db } from '../firebase/config'
 import { useNavigate } from 'react-router-dom'
 import { useFuseSearch } from '../hooks/useFuseSearch'
 import { ADMIN_SEARCH_CONFIG, SEARCH_PLACEHOLDERS } from '../config/searchConfig'
+import { useOperationalDaySelector } from '../hooks/useOperationalDay'
+import { getOperationalDayRange } from '../config/operationalDay'
+import { OperationalDaySelector } from '../components/OperationalDaySelector'
 import {
   subscribeAllParcels, subscribeAllUsers,
   updateParcel, updateParcelStatus, markParcelAsReturned, remitCod, settleCodToSender, batchSettleCods, updateUser, deleteUserDoc,
@@ -111,7 +114,7 @@ const caisseEntryDate = (e: any) => {
   if (e.createdAt) return new Date(e.createdAt)
   return new Date(0)
 }
-const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parcelDate) => {
+const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parcelDate, operationalDay?: Date) => {
   if (preset === 'all') return list
   const now = new Date()
   let start: any = null, end: any = now
@@ -119,6 +122,12 @@ const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parc
   else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate()-6); start.setHours(0,0,0,0) }
   else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
   else if (preset === 'custom') { start = from ? new Date(from) : null; end = to ? new Date(to+'T23:59:59') : now }
+  else if (preset === 'operational' && operationalDay) {
+    // 🗓️ Mode journée opérationnelle: 08:00 → 06:00 (lendemain)
+    const range = getOperationalDayRange(operationalDay)
+    start = range.start
+    end = range.end
+  }
   if (!Array.isArray(list)) return []
   return list.filter((p: any) => {
     const d = getDate(p)
@@ -128,11 +137,14 @@ const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parc
   })
 }
 
-const formatPeriod = (preset: any, from: any, to: any) => {
+const formatPeriod = (preset: any, from: any, to: any, operationalDay?: Date) => {
   const fmtDate = (value: any) => value ? new Date(value + 'T00:00:00').toLocaleDateString('fr-MA') : ''
   if (preset === 'today') return "Aujourd'hui"
   if (preset === 'week') return '7 derniers jours'
   if (preset === 'month') return 'Ce mois'
+  if (preset === 'operational' && operationalDay) {
+    return operationalDay.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
+  }
   if (preset === 'custom') {
     if (from && to) return `Du ${fmtDate(from)} au ${fmtDate(to)}`
     if (from) return `Depuis le ${fmtDate(from)}`
@@ -317,6 +329,15 @@ export default function AdminPage() {
   const [adminDatePreset, setAdminDatePreset] = useState('all')
   const [adminDateFrom,   setAdminDateFrom]   = useState('')
   const [adminDateTo,     setAdminDateTo]     = useState('')
+
+  // 🗓️ Journée opérationnelle
+  const {
+    selectedDay: operationalDay,
+    setSelectedDay: setOperationalDay,
+    formatted: operationalDayFormatted,
+    isToday: operationalIsToday,
+  } = useOperationalDaySelector()
+
   const [codDatePreset, setCodDatePreset] = useState('all')
   const [codDateFrom,   setCodDateFrom]   = useState('')
   const [codDateTo,     setCodDateTo]     = useState('')
@@ -504,7 +525,7 @@ export default function AdminPage() {
   const setActivityDatePreset = setAdminDatePreset
   const setActivityDateFrom = setAdminDateFrom
   const setActivityDateTo = setAdminDateTo
-  const periodLabel = formatPeriod(adminDatePreset, adminDateFrom, adminDateTo)
+  const periodLabel = formatPeriod(adminDatePreset, adminDateFrom, adminDateTo, operationalDay)
 
   // ✅ useEffect de recherche déplacés après useFuseSearch hook (ligne ~1090)
 
@@ -799,18 +820,18 @@ export default function AdminPage() {
       if (p.createdAt?.toDate) return p.createdAt.toDate()
       if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
       return new Date(0)
-    })
-  , [allParcels, adminDatePreset, adminDateFrom, adminDateTo])
+    }, operationalDay)
+  , [allParcels, adminDatePreset, adminDateFrom, adminDateTo, operationalDay])
 
   const periodUsers = useMemo(() =>
     filterByDate(users, adminDatePreset, adminDateFrom, adminDateTo, (u: any) =>
-      u.createdAt ? new Date(u.createdAt) : new Date(0))
-  , [users, adminDatePreset, adminDateFrom, adminDateTo])
+      u.createdAt ? new Date(u.createdAt) : new Date(0), operationalDay)
+  , [users, adminDatePreset, adminDateFrom, adminDateTo, operationalDay])
 
   const periodDirectorLogs = useMemo(() =>
     filterByDate(directorLogs, adminDatePreset, adminDateFrom, adminDateTo, (l: any) =>
-      l.timestamp?.toDate ? l.timestamp.toDate() : l.timestamp ? new Date(l.timestamp) : new Date(0))
-  , [directorLogs, adminDatePreset, adminDateFrom, adminDateTo])
+      l.timestamp?.toDate ? l.timestamp.toDate() : l.timestamp ? new Date(l.timestamp) : new Date(0), operationalDay)
+  , [directorLogs, adminDatePreset, adminDateFrom, adminDateTo, operationalDay])
 
   const codDateFiltered = useMemo(() =>
     filterByDate(allParcels.filter((p: any) => parseFloat(p.codAmount) > 0),
@@ -895,7 +916,7 @@ export default function AdminPage() {
     }
     const pDate = (p: any) => p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt || 0)
     const eDate = (e: any) => e.createdAt?.toDate ? e.createdAt.toDate() : new Date(e.createdAt || 0)
-    const periodEntries = filterByDate(caisseEntries, adminDatePreset, adminDateFrom, adminDateTo, eDate)
+    const periodEntries = filterByDate(caisseEntries, adminDatePreset, adminDateFrom, adminDateTo, eDate, operationalDay)
     if (!Array.isArray(periodEntries)) return []
     return users
       .filter((u: any) => ['agent','chauffeur','livreur','caissier'].includes(u.role))
@@ -1432,6 +1453,7 @@ export default function AdminPage() {
             <div className="flex flex-wrap gap-2 items-center lg:ml-auto">
               {[
                 { key: 'all',    label: 'Tout' },
+                { key: 'operational', label: '🗓️ Journée opérationnelle' },
                 { key: 'today',  label: "Aujourd'hui" },
                 { key: 'week',   label: '7 derniers jours' },
                 { key: 'month',  label: 'Ce mois' },
@@ -1458,6 +1480,18 @@ export default function AdminPage() {
                 {periodParcels.length} colis à {periodUsers.length} utilisateurs
               </span>
             </div>
+
+            {/* 🗓️ Sélecteur de journée opérationnelle */}
+            {adminDatePreset === 'operational' && (
+              <div className="mt-4">
+                <OperationalDaySelector
+                  selectedDay={operationalDay}
+                  onDayChange={setOperationalDay}
+                  showTimeRange={true}
+                  showTodayButton={true}
+                />
+              </div>
+            )}
           </div>
         </div>
 

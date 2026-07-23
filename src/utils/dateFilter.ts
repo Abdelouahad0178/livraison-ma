@@ -1,4 +1,5 @@
 import type { DateFilterPreset } from '../types'
+import { getOperationalDayRange } from '../config/operationalDay'
 
 // ── Date string helpers ───────────────────────────────────────────────────────
 
@@ -44,6 +45,7 @@ export const filterByDate = <T>(
   from?: string | null,
   to?: string | null,
   getDate: (item: T) => Date = parcelDate as unknown as (item: T) => Date,
+  operationalDay?: Date,
 ): T[] => {
   if (preset === 'all') return list
   const now = new Date()
@@ -56,6 +58,11 @@ export const filterByDate = <T>(
     start = new Date(); start.setDate(now.getDate() - 6); start.setHours(0, 0, 0, 0)
   } else if (preset === 'month') {
     start = new Date(now.getFullYear(), now.getMonth(), 1)
+  } else if (preset === 'operational' && operationalDay) {
+    // 🗓️ Mode journée opérationnelle: 08:00 → 06:00 (lendemain)
+    const range = getOperationalDayRange(operationalDay)
+    start = range.start
+    end = range.end
   } else if (preset === 'day') {
     start = from ? new Date(from) : null
     if (start) { start.setHours(0, 0, 0, 0); end = new Date(from + 'T23:59:59') }

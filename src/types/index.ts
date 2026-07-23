@@ -35,7 +35,7 @@ export type UserRole =
 
 export type CustomerMode = 'client' | 'personal'
 
-export type DateFilterPreset = 'all' | 'today' | 'week' | 'month' | 'day' | 'custom'
+export type DateFilterPreset = 'all' | 'operational' | 'today' | 'week' | 'month' | 'day' | 'custom'
 
 // ── Sub-objects ────────────────────────────────────────────────────────────
 

@@ -77,6 +77,7 @@ import { printCharge, printTable, printBonRamassage } from '../utils/agentPrintU
 import DateFilter from './agent/DateFilter'
 import ParcelsTab from './agent/tabs/ParcelsTab'  // ⭐ Import direct pour mise à jour temps réel
 import DirectorCaisseSimple from './director/DirectorCaisseSimple'  // ⭐ Nouveau système de caisse simple
+import { useOperationalDaySelector } from '../hooks/useOperationalDay' // 🗓️ Journée opérationnelle
 const HomeTab = lazy(() => import('./agent/tabs/HomeTab'))
 const NewTab = lazy(() => import('./agent/tabs/NewTab'))
 const CodTab = lazy(() => import('./agent/tabs/CodTab'))
@@ -278,6 +279,13 @@ export default function AgentPage() {
   const [datePreset, setDatePreset]     = useState('all')
   const [dateFrom, setDateFrom]         = useState('')
   const [dateTo, setDateTo]             = useState('')
+
+  // 🗓️ Journée opérationnelle
+  const {
+    selectedDay: operationalDay,
+    setSelectedDay: setOperationalDay,
+  } = useOperationalDaySelector()
+
   const [parcelDirection, setParcelDirection] = useState('all')
   const [serviceFilter, setServiceFilter]   = useState('all')
   const [parcelStatusFilter, setParcelStatusFilter] = useState('Initialisé')
@@ -1196,7 +1204,7 @@ export default function AgentPage() {
     // ⭐ Si un livreur est filtré, ne pas appliquer le filtre par date (montrer tous ses colis)
     const dateFilteredData = driverFilter !== 'all'
       ? sourceData
-      : filterByDate(sourceData, datePreset, dateFrom, dateTo)
+      : filterByDate(sourceData, datePreset, dateFrom, dateTo, parcelDate, operationalDay)
 
     return dateFilteredData.filter((p: any) => {
     // 🔒 FILTRE VILLE OBLIGATOIRE : Le chef d'agence ne voit QUE les colis de sa ville
@@ -1261,7 +1269,7 @@ export default function AgentPage() {
     }
     return true
     })
-  }, [allDisplayParcels, datePreset, dateFrom, dateTo, profileCity, profileRole, subTab, uid, serviceFilter,
+  }, [allDisplayParcels, datePreset, dateFrom, dateTo, operationalDay, profileCity, profileRole, subTab, uid, serviceFilter,
        parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, debouncedSearch, serverSearchResults])
 
   // ── Phase 3: memoized stats — only recompute when Firestore sends new data ──
@@ -1740,6 +1748,7 @@ export default function AgentPage() {
     datePreset, setDatePreset,
     dateFrom, setDateFrom,
     dateTo, setDateTo,
+    operationalDay, setOperationalDay,  // 🗓️ Journée opérationnelle
     parcelDirection, setParcelDirection,
     serviceFilter, setServiceFilter,
     parcelStatusFilter, setParcelStatusFilter,
