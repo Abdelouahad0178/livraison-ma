@@ -11,7 +11,7 @@ import {
 import {
   Package, LogOut, Search, Filter, X, Check, User, Phone,
   Calendar, MapPin, CreditCard, AlertTriangle, CheckCircle2, Clock,
-  FileText, TrendingUp, Eye, PackageCheck, HandCoins,
+  FileText, TrendingUp, Eye, PackageCheck, HandCoins, RefreshCw,
 } from 'lucide-react'
 
 type CodStatus = 'pending' | 'collected' | 'remis' | 'all'
@@ -31,6 +31,9 @@ export default function DRFCPage() {
   const [search, setSearch] = useState('')
   const [statusFilter, setStatusFilter] = useState<CodStatus>('all')
   const [showFilters, setShowFilters] = useState(false)
+  const [dateFilter, setDateFilter] = useState<'all' | 'today' | 'week' | 'month'>('all')
+  const [cityFilter, setCityFilter] = useState('')
+  const [typeFilter, setTypeFilter] = useState<'all' | 'cheque' | 'traite'>('all')
 
   // Modals
   const [viewModal, setViewModal] = useState<Parcel | null>(null)
@@ -98,6 +101,7 @@ export default function DRFCPage() {
   // Filtered data
   const filtered = useMemo(() => {
     return parcels.filter((p) => {
+      // Search filter
       if (search) {
         const q = search.toLowerCase()
         const matches = [
@@ -113,9 +117,39 @@ export default function DRFCPage() {
         if (!matches) return false
       }
 
+      // City filter
+      if (cityFilter) {
+        const q = cityFilter.toLowerCase()
+        const cityMatches = [
+          p.sender.city,
+          p.receiver.city,
+          p.originCity,
+          p.destinationCity,
+        ].some((v) => v?.toLowerCase().includes(q))
+        if (!cityMatches) return false
+      }
+
+      // Type filter (chèque/traite)
+      if (typeFilter !== 'all') {
+        if (p.serviceType !== typeFilter) return false
+      }
+
+      // Date filter
+      if (dateFilter !== 'all') {
+        const createdAt = typeof p.createdAt === 'string'
+          ? new Date(p.createdAt)
+          : p.createdAt.toDate()
+        const now = new Date()
+        const diffDays = Math.floor((now.getTime() - createdAt.getTime()) / (1000 * 60 * 60 * 24))
+
+        if (dateFilter === 'today' && diffDays > 0) return false
+        if (dateFilter === 'week' && diffDays > 7) return false
+        if (dateFilter === 'month' && diffDays > 30) return false
+      }
+
       return true
     })
-  }, [parcels, search])
+  }, [parcels, search, cityFilter, typeFilter, dateFilter])
 
   // Statistics
   const stats = useMemo(() => {
@@ -277,6 +311,14 @@ export default function DRFCPage() {
               />
             </div>
             <button
+              onClick={() => window.location.reload()}
+              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700"
+              title="Rafraîchir"
+            >
+              <RefreshCw className="w-4 h-4" />
+              Rafraîchir
+            </button>
+            <button
               onClick={() => setShowFilters(!showFilters)}
               className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
             >
@@ -286,47 +328,160 @@ export default function DRFCPage() {
           </div>
 
           {showFilters && (
-            <div className="mt-4 pt-4 border-t flex flex-wrap gap-2">
-              <button
-                onClick={() => setStatusFilter('all')}
-                className={`px-4 py-2 rounded-lg ${
-                  statusFilter === 'all'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Tous
-              </button>
-              <button
-                onClick={() => setStatusFilter('pending')}
-                className={`px-4 py-2 rounded-lg ${
-                  statusFilter === 'pending'
-                    ? 'bg-orange-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                En attente
-              </button>
-              <button
-                onClick={() => setStatusFilter('collected')}
-                className={`px-4 py-2 rounded-lg ${
-                  statusFilter === 'collected'
-                    ? 'bg-blue-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                En caisse
-              </button>
-              <button
-                onClick={() => setStatusFilter('remis')}
-                className={`px-4 py-2 rounded-lg ${
-                  statusFilter === 'remis'
-                    ? 'bg-green-600 text-white'
-                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
-                }`}
-              >
-                Remis
-              </button>
+            <div className="mt-4 pt-4 border-t space-y-4">
+              {/* Statut COD */}
+              <div>
+                <label className="text-xs font-semibold text-gray-600 mb-2 block">Statut COD</label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setStatusFilter('all')}
+                    className={`px-4 py-2 rounded-lg ${
+                      statusFilter === 'all'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Tous
+                  </button>
+                  <button
+                    onClick={() => setStatusFilter('pending')}
+                    className={`px-4 py-2 rounded-lg ${
+                      statusFilter === 'pending'
+                        ? 'bg-orange-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    En attente
+                  </button>
+                  <button
+                    onClick={() => setStatusFilter('collected')}
+                    className={`px-4 py-2 rounded-lg ${
+                      statusFilter === 'collected'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    En caisse
+                  </button>
+                  <button
+                    onClick={() => setStatusFilter('remis')}
+                    className={`px-4 py-2 rounded-lg ${
+                      statusFilter === 'remis'
+                        ? 'bg-green-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Remis
+                  </button>
+                </div>
+              </div>
+
+              {/* Type (Chèque/Traite) */}
+              <div>
+                <label className="text-xs font-semibold text-gray-600 mb-2 block">Type de paiement</label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setTypeFilter('all')}
+                    className={`px-4 py-2 rounded-lg ${
+                      typeFilter === 'all'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Tous
+                  </button>
+                  <button
+                    onClick={() => setTypeFilter('cheque')}
+                    className={`px-4 py-2 rounded-lg ${
+                      typeFilter === 'cheque'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    💳 Chèques
+                  </button>
+                  <button
+                    onClick={() => setTypeFilter('traite')}
+                    className={`px-4 py-2 rounded-lg ${
+                      typeFilter === 'traite'
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    📝 Traites
+                  </button>
+                </div>
+              </div>
+
+              {/* Période */}
+              <div>
+                <label className="text-xs font-semibold text-gray-600 mb-2 block">Période</label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setDateFilter('all')}
+                    className={`px-4 py-2 rounded-lg ${
+                      dateFilter === 'all'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Toutes
+                  </button>
+                  <button
+                    onClick={() => setDateFilter('today')}
+                    className={`px-4 py-2 rounded-lg ${
+                      dateFilter === 'today'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Aujourd'hui
+                  </button>
+                  <button
+                    onClick={() => setDateFilter('week')}
+                    className={`px-4 py-2 rounded-lg ${
+                      dateFilter === 'week'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Cette semaine
+                  </button>
+                  <button
+                    onClick={() => setDateFilter('month')}
+                    className={`px-4 py-2 rounded-lg ${
+                      dateFilter === 'month'
+                        ? 'bg-blue-600 text-white'
+                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                    }`}
+                  >
+                    Ce mois
+                  </button>
+                </div>
+              </div>
+
+              {/* Ville */}
+              <div>
+                <label className="text-xs font-semibold text-gray-600 mb-2 block">Filtrer par ville</label>
+                <div className="relative">
+                  <MapPin className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                  <input
+                    type="text"
+                    placeholder="Ville..."
+                    value={cityFilter}
+                    onChange={(e) => setCityFilter(e.target.value)}
+                    className="w-full sm:w-64 pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                  />
+                  {cityFilter && (
+                    <button
+                      onClick={() => setCityFilter('')}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  )}
+                </div>
+              </div>
             </div>
           )}
         </div>
