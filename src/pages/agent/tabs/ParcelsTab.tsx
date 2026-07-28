@@ -1576,16 +1576,30 @@ export default function ParcelsTab() {
                             <td className="px-4 py-3 font-mono font-black text-blue-600 whitespace-nowrap text-sm border-r border-gray-100">
                               <div className="flex items-center gap-2">
                                 <span>{parcel.sender?.nic || '—'}</span>
-                                {parcel.portType === 'port_en_compte_destinataire' && (
-                                  <span className="inline-flex items-center px-1.5 py-0.5 bg-pink-100 text-pink-700 rounded text-xs font-bold border border-pink-300" title="Port en compte destinataire">
-                                    🖐️
-                                  </span>
-                                )}
-                                {(parcel.portType === 'port_en_compte' || parcel.portType === 'port_en_compte_expediteur') && (
-                                  <span className="inline-flex items-center px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-bold border border-purple-300" title="Port en compte expéditeur">
-                                    💼
-                                  </span>
-                                )}
+                                {(() => {
+                                  const isOriginAgency = parcel.originCity === profile?.city || parcel.sender?.city === profile?.city
+                                  const isDestinationAgency = parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city
+
+                                  // Afficher 🖐️ seulement dans l'agence DESTINATAIRE
+                                  if (parcel.portType === 'port_en_compte_destinataire' && isDestinationAgency) {
+                                    return (
+                                      <span className="inline-flex items-center px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded text-xs font-bold border border-teal-300" title="Port en compte destinataire">
+                                        🖐️
+                                      </span>
+                                    )
+                                  }
+
+                                  // Afficher 💼 seulement dans l'agence EXPÉDITEUR
+                                  if ((parcel.portType === 'port_en_compte' || parcel.portType === 'port_en_compte_expediteur') && isOriginAgency) {
+                                    return (
+                                      <span className="inline-flex items-center px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-bold border border-purple-300" title="Port en compte expéditeur">
+                                        💼
+                                      </span>
+                                    )
+                                  }
+
+                                  return null
+                                })()}
                               </div>
                             </td>
                           )}
@@ -1642,8 +1656,13 @@ export default function ParcelsTab() {
                             </td>
                           )}
                           {visibleColumns.destinataire && (
-                            <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap max-w-[200px] truncate border-r border-gray-100 bg-pink-50/30">
-                              {parcel.receiver?.name || '—'}
+                            <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap max-w-[200px] border-r border-gray-100 bg-pink-50/30">
+                              <div className="flex items-center gap-2">
+                                <span className="truncate">{parcel.receiver?.name || '—'}</span>
+                                {parcel.portType === 'port_en_compte_destinataire' && (
+                                  <span className="text-lg shrink-0" title="Port en compte destinataire">🖐️</span>
+                                )}
+                              </div>
                             </td>
                           )}
                           {visibleColumns.telDest && (
@@ -2031,16 +2050,30 @@ export default function ParcelsTab() {
                             N EXP {parcel.sender.nic}
                           </span>
                         )}
-                        {parcel.portType === 'port_en_compte_destinataire' && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 bg-pink-100 text-pink-700 rounded text-xs font-bold border border-pink-300" title="Port en compte destinataire">
-                            🖐️ Compte Dest
-                          </span>
-                        )}
-                        {(parcel.portType === 'port_en_compte' || parcel.portType === 'port_en_compte_expediteur') && (
-                          <span className="inline-flex items-center px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-bold border border-purple-300" title="Port en compte expéditeur">
-                            💼 Compte Exp
-                          </span>
-                        )}
+                        {(() => {
+                          const isOriginAgency = parcel.originCity === profile?.city || parcel.sender?.city === profile?.city
+                          const isDestinationAgency = parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city
+
+                          // Afficher 🖐️ seulement dans l'agence DESTINATAIRE
+                          if (parcel.portType === 'port_en_compte_destinataire' && isDestinationAgency) {
+                            return (
+                              <span className="inline-flex items-center px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded text-xs font-bold border border-teal-300" title="Port en compte destinataire">
+                                🖐️ Compte Dest
+                              </span>
+                            )
+                          }
+
+                          // Afficher 💼 seulement dans l'agence EXPÉDITEUR
+                          if ((parcel.portType === 'port_en_compte' || parcel.portType === 'port_en_compte_expediteur') && isOriginAgency) {
+                            return (
+                              <span className="inline-flex items-center px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-bold border border-purple-300" title="Port en compte expéditeur">
+                                💼 Compte Exp
+                              </span>
+                            )
+                          }
+
+                          return null
+                        })()}
                         <span className="font-mono text-xs font-bold text-gray-700">{parcel.trackingId}</span>
                         <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${sc.bg} ${sc.text}`}>
                           <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
@@ -2093,8 +2126,12 @@ export default function ParcelsTab() {
                         <span className="text-gray-400 shrink-0">→</span>
                         <span className="truncate">{parcel.receiver?.city}</span>
                       </div>
-                      <div className="mt-0.5 text-xs text-gray-400">
-                        {parcel.receiver?.name} · {parcel.weight} kg · <span className="font-semibold text-gray-500">{parcel.price} DH</span>
+                      <div className="mt-0.5 text-xs text-gray-400 flex items-center gap-1 flex-wrap">
+                        <span>{parcel.receiver?.name}</span>
+                        {parcel.portType === 'port_en_compte_destinataire' && (
+                          <span className="text-base" title="Port en compte destinataire">🖐️</span>
+                        )}
+                        <span>· {parcel.weight} kg · <span className="font-semibold text-gray-500">{parcel.price} DH</span></span>
                         {parcel.codAmount > 0 && <span className="text-orange-500 font-medium"> · RETOUR FOND {parcel.codAmount} DH</span>}
                       </div>
                       {(parcel.natureOfGoods || (parcel.arrivedNbColis ?? parcel.nbColis) > 1 || parcel.hasRetourBL) && (
