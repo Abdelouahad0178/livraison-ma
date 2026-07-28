@@ -440,8 +440,8 @@ export default function DRFEPage() {
             <div className="p-6 space-y-6">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <label className="text-xs text-gray-500 font-medium">N° Expédition</label>
-                  <div className="font-mono font-bold text-blue-600">{viewModal.trackingId}</div>
+                  <label className="text-xs text-gray-500 font-medium">N° EXP (NIC)</label>
+                  <div className="font-mono font-bold text-blue-600">{viewModal.sender.nic || viewModal.trackingId}</div>
                 </div>
                 <div>
                   <label className="text-xs text-gray-500 font-medium">Montant COD</label>
