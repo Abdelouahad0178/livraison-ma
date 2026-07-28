@@ -45,6 +45,8 @@ const PointeurPageNew  = lazy(() => import('./pages/PointeurPageNew'))
 const CentralCollectorPage = lazy(() => import('./pages/CentralCollectorPage'))
 const SeedPage         = lazy(() => import('./pages/SeedPage'))
 const ArchivePage      = lazy(() => import('./pages/ArchivePage'))
+const DRFEPage         = lazy(() => import('./pages/DRFEPage'))
+const DRFCPage         = lazy(() => import('./pages/DRFCPage'))
 
 // Auth vérifié UNE SEULE FOIS au niveau App — pas à chaque navigation
 function BlockedScreen({ profile, operationLocks }: any) {
@@ -333,6 +335,18 @@ function AppContent() {
           <Route path="/archive" element={
             <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole={['chef_agence', 'admin']}>
               <ArchivePage />
+            </PrivateRoute>
+          } />
+
+          <Route path="/drfe" element={
+            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="distributeur_especes">
+              <DRFEPage />
+            </PrivateRoute>
+          } />
+
+          <Route path="/drfc" element={
+            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="distributeur_cheques">
+              <DRFCPage />
             </PrivateRoute>
           } />
 

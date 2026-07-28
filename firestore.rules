@@ -18,7 +18,8 @@ service cloud.firestore {
       return role() == 'admin' || role() == 'directeur' || role() == 'agent'
           || role() == 'chef_agence' || role() == 'agentpro' || role() == 'caissier'
           || role() == 'aide_agent' || role() == 'pointeur_encaisseur'
-          || role() == 'encaisseur_central';
+          || role() == 'encaisseur_central' || role() == 'distributeur_especes'
+          || role() == 'distributeur_cheques';
     }
 
     function isPointeurEncaisseur() {
@@ -27,6 +28,14 @@ service cloud.firestore {
 
     function isCentralCollector() {
       return role() == 'encaisseur_central';
+    }
+
+    function isDistributeurEspeces() {
+      return role() == 'distributeur_especes';
+    }
+
+    function isDistributeurCheques() {
+      return role() == 'distributeur_cheques';
     }
 
     function isAdmin() {
@@ -992,6 +1001,34 @@ service cloud.firestore {
       // Mise à jour : Admin ou chef d'agence de la même ville
       allow update: if isAdmin()
         || (isChefAgence() && resource.data.agencyCity == userCity());
+      // Suppression : Admin uniquement
+      allow delete: if isAdmin();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DISTRIBUTION RETOUR DE FOND ESPECES (DRFE)
+    // ═══════════════════════════════════════════════════════════════════════════
+    match /return_funds_especes/{docId} {
+      // Lecture : Distributeur espèces ou Admin
+      allow read: if isDistributeurEspeces() || isAdmin();
+      // Création : Distributeur espèces ou Admin
+      allow create: if isDistributeurEspeces() || isAdmin();
+      // Mise à jour : Distributeur espèces ou Admin
+      allow update: if isDistributeurEspeces() || isAdmin();
+      // Suppression : Admin uniquement
+      allow delete: if isAdmin();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DISTRIBUTION RETOUR DE FOND CHEQUES/TRAITES (DRFC)
+    // ═══════════════════════════════════════════════════════════════════════════
+    match /return_funds_cheques/{docId} {
+      // Lecture : Distributeur chèques ou Admin
+      allow read: if isDistributeurCheques() || isAdmin();
+      // Création : Distributeur chèques ou Admin
+      allow create: if isDistributeurCheques() || isAdmin();
+      // Mise à jour : Distributeur chèques ou Admin
+      allow update: if isDistributeurCheques() || isAdmin();
       // Suppression : Admin uniquement
       allow delete: if isAdmin();
     }
