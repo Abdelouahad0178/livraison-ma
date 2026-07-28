@@ -107,7 +107,7 @@ export default function DRFCPage() {
           p.receiver.tel,
           p.receiver.phone,
           p.codAmount.toString(),
-          p.codPaymentType,
+          p.serviceType,
         ].some((v) => v?.toLowerCase().includes(q))
         if (!matches) return false
       }
@@ -126,8 +126,8 @@ export default function DRFCPage() {
     const totalCollected = collected.reduce((sum, p) => sum + p.codAmount, 0)
     const totalRemis = remis.reduce((sum, p) => sum + p.codAmount, 0)
 
-    const cheques = parcels.filter((p) => p.codPaymentType === 'cheque')
-    const traites = parcels.filter((p) => p.codPaymentType === 'traite')
+    const cheques = parcels.filter((p) => p.serviceType === 'cheque')
+    const traites = parcels.filter((p) => p.serviceType === 'traite')
 
     return {
       pending: { count: pending.length, amount: totalPending },
@@ -367,7 +367,7 @@ export default function DRFCPage() {
                     const typeConfig = {
                       cheque: { label: 'Chèque', emoji: '💳', color: 'text-blue-600' },
                       traite: { label: 'Traite', emoji: '📝', color: 'text-purple-600' },
-                    }[parcel.codPaymentType || 'cheque']
+                    }[parcel.serviceType as 'cheque' | 'traite' || 'cheque']
 
                     return (
                       <tr key={parcel.id} className="hover:bg-gray-50">
@@ -462,7 +462,7 @@ export default function DRFCPage() {
                 <div>
                   <label className="text-xs text-gray-500 font-medium">Type de paiement</label>
                   <div className="font-bold text-purple-600">
-                    {viewModal.codPaymentType === 'cheque' ? '💳 Chèque' : '📝 Traite'}
+                    {viewModal.serviceType === 'cheque' ? '💳 Chèque' : '📝 Traite'}
                   </div>
                 </div>
                 <div>

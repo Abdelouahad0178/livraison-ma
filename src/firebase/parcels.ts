@@ -1542,9 +1542,7 @@ export function subscribeCodParcelsEspeces(
 ) {
   let q = query(
     collection(db, 'parcels'),
-    where('codPaymentType', '==', 'especes'),
-    where('codAmount', '>', 0),
-    orderBy('codAmount', 'desc'),
+    where('serviceType', '==', 'especes'),
     orderBy('createdAt', 'desc'),
     limit(limitCount)
   )
@@ -1552,10 +1550,8 @@ export function subscribeCodParcelsEspeces(
   if (codStatusFilter) {
     q = query(
       collection(db, 'parcels'),
-      where('codPaymentType', '==', 'especes'),
-      where('codAmount', '>', 0),
+      where('serviceType', '==', 'especes'),
       where('codStatus', '==', codStatusFilter),
-      orderBy('codAmount', 'desc'),
       orderBy('createdAt', 'desc'),
       limit(limitCount)
     )
@@ -1582,9 +1578,7 @@ export async function getMoreCodParcelsEspeces(
 ) {
   let q = query(
     collection(db, 'parcels'),
-    where('codPaymentType', '==', 'especes'),
-    where('codAmount', '>', 0),
-    orderBy('codAmount', 'desc'),
+    where('serviceType', '==', 'especes'),
     orderBy('createdAt', 'desc'),
     startAfter(lastDoc),
     limit(limitCount)
@@ -1593,10 +1587,8 @@ export async function getMoreCodParcelsEspeces(
   if (codStatusFilter) {
     q = query(
       collection(db, 'parcels'),
-      where('codPaymentType', '==', 'especes'),
-      where('codAmount', '>', 0),
+      where('serviceType', '==', 'especes'),
       where('codStatus', '==', codStatusFilter),
-      orderBy('codAmount', 'desc'),
       orderBy('createdAt', 'desc'),
       startAfter(lastDoc),
       limit(limitCount)
@@ -1620,9 +1612,7 @@ export function subscribeCodParcelsCheques(
 ) {
   let q = query(
     collection(db, 'parcels'),
-    where('codPaymentType', 'in', ['cheque', 'traite']),
-    where('codAmount', '>', 0),
-    orderBy('codAmount', 'desc'),
+    where('serviceType', 'in', ['cheque', 'traite']),
     orderBy('createdAt', 'desc'),
     limit(limitCount)
   )
@@ -1630,10 +1620,8 @@ export function subscribeCodParcelsCheques(
   if (codStatusFilter) {
     q = query(
       collection(db, 'parcels'),
-      where('codPaymentType', 'in', ['cheque', 'traite']),
-      where('codAmount', '>', 0),
+      where('serviceType', 'in', ['cheque', 'traite']),
       where('codStatus', '==', codStatusFilter),
-      orderBy('codAmount', 'desc'),
       orderBy('createdAt', 'desc'),
       limit(limitCount)
     )
@@ -1660,9 +1648,7 @@ export async function getMoreCodParcelsCheques(
 ) {
   let q = query(
     collection(db, 'parcels'),
-    where('codPaymentType', 'in', ['cheque', 'traite']),
-    where('codAmount', '>', 0),
-    orderBy('codAmount', 'desc'),
+    where('serviceType', 'in', ['cheque', 'traite']),
     orderBy('createdAt', 'desc'),
     startAfter(lastDoc),
     limit(limitCount)
@@ -1671,10 +1657,8 @@ export async function getMoreCodParcelsCheques(
   if (codStatusFilter) {
     q = query(
       collection(db, 'parcels'),
-      where('codPaymentType', 'in', ['cheque', 'traite']),
-      where('codAmount', '>', 0),
+      where('serviceType', 'in', ['cheque', 'traite']),
       where('codStatus', '==', codStatusFilter),
-      orderBy('codAmount', 'desc'),
       orderBy('createdAt', 'desc'),
       startAfter(lastDoc),
       limit(limitCount)
