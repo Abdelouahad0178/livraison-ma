@@ -2082,16 +2082,6 @@ export default function ParcelsTab() {
                             📮 Port dû
                           </span>
                         )}
-                        {parcel.portType === 'port_en_compte_destinataire' && (
-                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold bg-pink-100 text-pink-700 border border-pink-300">
-                            🖐️ Compte Dest
-                          </span>
-                        )}
-                        {(parcel.portType === 'port_en_compte' || parcel.portType === 'port_en_compte_expediteur') && (
-                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold bg-purple-100 text-purple-700 border border-purple-300">
-                            💼 Compte Exp
-                          </span>
-                        )}
                         {parcel.returnedAt && parcel.status === 'Livré' && (
                           <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-orange-100 text-orange-700">
                             ↩️ Retourné à l'expéditeur
