@@ -1,8 +1,16 @@
 import { useMemo, useState } from 'react'
 import { Clock, Building2, User, Calendar, Filter, TrendingUp, TrendingDown, Wallet, CheckCircle } from 'lucide-react'
-import { PORT_ECHEANCES } from '../../../firebase/constants'
 import { doc, updateDoc } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
+
+// Échéances temporaires (à déplacer dans constants.ts si besoin)
+const PORT_ECHEANCES = [
+  { key: 'j7', label: '7 jours', days: 7 },
+  { key: 'j15', label: '15 jours', days: 15 },
+  { key: 'j30', label: '30 jours', days: 30 },
+  { key: 'j45', label: '45 jours', days: 45 },
+  { key: 'j60', label: '60 jours', days: 60 },
+]
 
 interface Props {
   allParcels: any[]
