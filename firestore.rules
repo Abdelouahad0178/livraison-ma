@@ -981,6 +981,21 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // Bons de livraison (Delivery Sheets)
+    match /deliverySheets/{sheetId} {
+      // Lecture : Staff de la même ville ou admin
+      allow read: if isStaff() && (isAdmin() || resource.data.agencyCity == userCity());
+      // Création : Chef d'agence et agentpro uniquement
+      allow create: if signedIn() && isChefAgence()
+        && request.resource.data.agencyCity == userCity()
+        && request.resource.data.createdById == request.auth.uid;
+      // Mise à jour : Admin ou chef d'agence de la même ville
+      allow update: if isAdmin()
+        || (isChefAgence() && resource.data.agencyCity == userCity());
+      // Suppression : Admin uniquement
+      allow delete: if isAdmin();
+    }
+
     match /{document=**} {
       allow read:  if isStaff();
       allow write: if isAdmin();

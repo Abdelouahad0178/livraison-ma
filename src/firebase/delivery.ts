@@ -522,3 +522,216 @@ export async function saveArrivagePointage(arrivageId: any, {
     ))
   }
 }
+
+// ── BONS DE LIVRAISON (DELIVERY SHEETS) ──────────────────────────────────────
+
+/**
+ * Crée un bon de livraison (snapshot des colis assignés à un livreur)
+ * Appelé automatiquement à chaque impression de tableau livreur
+ */
+export async function createDeliverySheet(params: {
+  agencyCity: string
+  driverId: string
+  driverName: string
+  driverPhone?: string
+  sectorId?: string
+  sectorName?: string
+  sectorCode?: string
+  parcels: any[]
+  createdBy: string
+  createdById: string
+}) {
+  const now = new Date().toISOString()
+  const parcelIds = params.parcels.map(p => p.id)
+
+  // Snapshot des données des colis au moment de la création
+  const parcelsSnapshot = params.parcels.map(p => ({
+    id: p.id,
+    trackingId: p.trackingId,
+    status: p.status,
+    sender: p.sender,
+    receiver: p.receiver,
+    destinationCity: p.destinationCity,
+    price: p.price,
+    codAmount: p.codAmount,
+    weight: p.weight,
+    nbColis: p.nbColis,
+    natureOfGoods: p.natureOfGoods,
+  }))
+
+  // Calculer les stats initiales
+  const stats = {
+    total: parcelsSnapshot.length,
+    delivered: parcelsSnapshot.filter(p => p.status === 'Livré').length,
+    inTransit: parcelsSnapshot.filter(p => p.status === 'En transit').length,
+    returned: parcelsSnapshot.filter(p => p.status === 'Retourné').length,
+    pending: parcelsSnapshot.filter(p => !['Livré', 'En transit', 'Retourné'].includes(p.status)).length,
+  }
+
+  const sheet = {
+    createdAt: serverTimestamp(),
+    createdAtString: now,
+    agencyCity: params.agencyCity,
+    driverId: params.driverId,
+    driverName: params.driverName,
+    driverPhone: params.driverPhone || '',
+    sectorId: params.sectorId || '',
+    sectorName: params.sectorName || '',
+    sectorCode: params.sectorCode || '',
+    parcelIds,
+    parcelsSnapshot,
+    createdBy: params.createdBy,
+    createdById: params.createdById,
+    status: 'active' as const,
+    stats,
+    lastPrintedAt: now,
+    printCount: 1,
+  }
+
+  const docRef = await addDoc(collection(db, 'deliverySheets'), sheet)
+  return { id: docRef.id, ...sheet }
+}
+
+/**
+ * Récupère les bons de livraison d'une agence
+ */
+export function subscribeDeliverySheets(
+  agencyCity: string,
+  callback: (sheets: any[]) => void,
+  onError: (err?: any) => void = () => {}
+) {
+  const since = daysAgoTimestamp(90) // 90 jours d'historique
+  const q = query(
+    collection(db, 'deliverySheets'),
+    where('agencyCity', '==', agencyCity),
+    where('createdAt', '>=', since),
+    orderBy('createdAt', 'desc'),
+    limit(200)
+  )
+  return onSnapshot(
+    q,
+    snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+    onError
+  )
+}
+
+/**
+ * Récupère un bon de livraison par ID
+ */
+export async function getDeliverySheet(sheetId: string) {
+  const docSnap = await getDoc(doc(db, 'deliverySheets', sheetId))
+  if (!docSnap.exists()) return null
+  return { id: docSnap.id, ...docSnap.data() }
+}
+
+/**
+ * Met à jour un bon de livraison
+ */
+export async function updateDeliverySheet(sheetId: string, updates: any) {
+  await updateDoc(doc(db, 'deliverySheets', sheetId), {
+    ...updates,
+    updatedAt: serverTimestamp(),
+  })
+}
+
+/**
+ * Marque un bon comme réimprimé
+ */
+export async function markDeliverySheetReprinted(sheetId: string) {
+  await updateDoc(doc(db, 'deliverySheets', sheetId), {
+    lastPrintedAt: new Date().toISOString(),
+    printCount: increment(1),
+  })
+}
+
+/**
+ * Ajoute des colis à un bon existant
+ */
+export async function addParcelsToDeliverySheet(sheetId: string, parcels: any[]) {
+  const sheet = await getDeliverySheet(sheetId)
+  if (!sheet) throw new Error('Bon de livraison introuvable')
+
+  const newParcelIds = parcels.map(p => p.id).filter(id => !sheet.parcelIds.includes(id))
+  if (newParcelIds.length === 0) return
+
+  const newSnapshots = parcels
+    .filter(p => !sheet.parcelIds.includes(p.id))
+    .map(p => ({
+      id: p.id,
+      trackingId: p.trackingId,
+      status: p.status,
+      sender: p.sender,
+      receiver: p.receiver,
+      destinationCity: p.destinationCity,
+      price: p.price,
+      codAmount: p.codAmount,
+      weight: p.weight,
+      nbColis: p.nbColis,
+      natureOfGoods: p.natureOfGoods,
+    }))
+
+  // Recalculer les stats avec les nouveaux colis
+  const updatedSnapshots = [...sheet.parcelsSnapshot, ...newSnapshots]
+  const stats = {
+    total: updatedSnapshots.length,
+    delivered: updatedSnapshots.filter(p => p.status === 'Livré').length,
+    inTransit: updatedSnapshots.filter(p => p.status === 'En transit').length,
+    returned: updatedSnapshots.filter(p => p.status === 'Retourné').length,
+    pending: updatedSnapshots.filter(p => !['Livré', 'En transit', 'Retourné'].includes(p.status)).length,
+  }
+
+  await updateDoc(doc(db, 'deliverySheets', sheetId), {
+    parcelIds: arrayUnion(...newParcelIds),
+    parcelsSnapshot: arrayUnion(...newSnapshots),
+    stats,
+    updatedAt: serverTimestamp(),
+  })
+}
+
+/**
+ * Retire des colis d'un bon
+ */
+export async function removeParcelsFromDeliverySheet(sheetId: string, parcelIds: string[]) {
+  const sheet = await getDeliverySheet(sheetId)
+  if (!sheet) throw new Error('Bon de livraison introuvable')
+
+  const updatedParcelIds = sheet.parcelIds.filter((id: string) => !parcelIds.includes(id))
+  const updatedSnapshots = sheet.parcelsSnapshot.filter((p: any) => !parcelIds.includes(p.id))
+
+  // Recalculer les stats après suppression
+  const stats = {
+    total: updatedSnapshots.length,
+    delivered: updatedSnapshots.filter(p => p.status === 'Livré').length,
+    inTransit: updatedSnapshots.filter(p => p.status === 'En transit').length,
+    returned: updatedSnapshots.filter(p => p.status === 'Retourné').length,
+    pending: updatedSnapshots.filter(p => !['Livré', 'En transit', 'Retourné'].includes(p.status)).length,
+  }
+
+  await updateDoc(doc(db, 'deliverySheets', sheetId), {
+    parcelIds: updatedParcelIds,
+    parcelsSnapshot: updatedSnapshots,
+    stats,
+    updatedAt: serverTimestamp(),
+  })
+}
+
+/**
+ * Marque un bon comme terminé
+ */
+export async function completeDeliverySheet(sheetId: string) {
+  await updateDoc(doc(db, 'deliverySheets', sheetId), {
+    status: 'completed',
+    completedAt: serverTimestamp(),
+  })
+}
+
+/**
+ * Annule un bon
+ */
+export async function cancelDeliverySheet(sheetId: string, reason?: string) {
+  await updateDoc(doc(db, 'deliverySheets', sheetId), {
+    status: 'cancelled',
+    cancelledAt: serverTimestamp(),
+    cancelReason: reason || '',
+  })
+}

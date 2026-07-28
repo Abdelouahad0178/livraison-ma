@@ -358,6 +358,14 @@
         { "fieldPath": "agencyCity", "order": "ASCENDING"  },
         { "fieldPath": "createdAt",  "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "deliverySheets",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "agencyCity", "order": "ASCENDING"  },
+        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

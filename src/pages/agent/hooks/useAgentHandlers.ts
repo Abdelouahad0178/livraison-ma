@@ -208,8 +208,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 
         console.log('✅ updateParcelStatus terminé pour', parcel.trackingId)
       }
-      // Réinitialiser après succès
-      setBulkAssignSelectedIds([])
+      // ✅ NE PAS vider la sélection pour permettre l'impression des colis assignés
+      // setBulkAssignSelectedIds([])  // ← Commenté
       setBulkAssignDriverId('')
       setBulkAssignSectorId('')
     } catch (err: any) {
@@ -1157,12 +1157,92 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 
   const handlePrintCharge = (groups: any, profileData: any) => printCharge(groups, profileData)
 
-  const handlePrintTable = async (parcelsArg: any, driverName?: string, visibleColumns?: any, orientation?: 'portrait' | 'landscape') => {
+  const handlePrintTable = async (
+    parcelsArg: any,
+    driverName?: string,
+    visibleColumns?: any,
+    orientation?: 'portrait' | 'landscape',
+    driverInfo?: { id?: string; name?: string; phone?: string; sectorId?: string; sectorName?: string; sectorCode?: string }
+  ) => {
     try {
+      console.log('🖨️ handlePrintTable appelé avec:', {
+        nbColis: parcelsArg?.length,
+        driverName,
+        driverInfo
+      })
+
+      // 📋 Sauvegarder automatiquement un bon de livraison
+      if (driverInfo?.id && parcelsArg?.length > 0) {
+        console.log('✅ Conditions OK pour créer un bon - Importation...')
+        alert(`📋 Création d'un bon de livraison pour ${driverInfo.name} avec ${parcelsArg.length} colis...`)
+
+        try {
+          const { createDeliverySheet } = await import('../../../firebase/delivery')
+          const { auth } = await import('../../../firebase/config')
+          console.log('✅ Module importé, création du bon...')
+
+          const { profile } = s.current
+          const userUid = auth.currentUser?.uid
+
+          // Vérifier le profil utilisateur
+          console.log('👤 Profil utilisateur:', {
+            uid: userUid,
+            role: profile?.role,
+            city: profile?.city,
+            name: profile?.name
+          })
+
+          const sheetData = {
+            agencyCity: profile?.city || '',
+            driverId: driverInfo.id,
+            driverName: driverInfo.name || driverName || 'Livreur',
+            driverPhone: driverInfo.phone,
+            sectorId: driverInfo.sectorId,
+            sectorName: driverInfo.sectorName,
+            sectorCode: driverInfo.sectorCode,
+            parcels: parcelsArg,
+            createdBy: profile?.name || 'Agent',
+            createdById: userUid || '',
+          }
+          console.log('📋 Données du bon:', sheetData)
+
+          // Vérifier les champs requis
+          if (!userUid) {
+            throw new Error('UID utilisateur manquant! Êtes-vous connecté?')
+          }
+          if (!profile?.city) {
+            throw new Error('Ville utilisateur manquante!')
+          }
+          if (profile?.role !== 'chef_agence' && profile?.role !== 'agentpro') {
+            throw new Error(`Rôle insuffisant: ${profile?.role}. Vous devez être chef_agence ou agentpro.`)
+          }
+
+          const sheet = await createDeliverySheet(sheetData)
+          console.log('✅ Bon de livraison créé:', sheet.id)
+          alert(`✅ Bon de livraison créé avec succès! ID: ${sheet.id}`)
+        } catch (err: any) {
+          console.error('⚠️ Erreur création bon de livraison:', err)
+          alert(`❌ ERREUR création bon: ${err.message}`)
+          // Ne pas bloquer l'impression si la création du bon échoue
+        }
+      } else {
+        console.log('⚠️ Pas de création de bon:', {
+          hasDriverInfo: !!driverInfo,
+          hasDriverId: !!driverInfo?.id,
+          nbColis: parcelsArg?.length
+        })
+        if (!driverInfo?.id) {
+          alert('⚠️ Pas de bon créé: Aucun livreur sélectionné')
+        }
+      }
+
+      // Imprimer le tableau
+      console.log('🖨️ Lancement impression...')
       await printTable(parcelsArg, driverName, s.current.profile, visibleColumns, orientation)
-    } catch (err) {
+      console.log('✅ Impression terminée')
+    } catch (err: any) {
       console.error('Erreur impression tableau:', err)
-      alert('Erreur lors de l\'impression du tableau')
+      alert(`❌ Erreur impression: ${err.message}`)
     }
   }
 

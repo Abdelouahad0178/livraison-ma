@@ -2,7 +2,7 @@ import { signOut } from 'firebase/auth'
 import { auth } from '../../firebase/config'
 import {
   Package, LogOut, MapPin, Archive, Menu, X, Plus, Wallet, Users, Printer,
-  LayoutGrid, Truck, MessageCircle, User, BarChart2, ChevronDown,
+  LayoutGrid, Truck, MessageCircle, User, BarChart2, ChevronDown, FileText,
 } from 'lucide-react'
 import LiveClock from '../../components/LiveClock'
 import ProfilePhotoUpload from '../../components/ProfilePhotoUpload'
@@ -143,6 +143,7 @@ export default function AgentHeader({
             { key: 'clientportdu',  label: '🏦 Ports en compte',        onClick: () => setTab('clientportdu'),                                                                                                    hidden: profile?.role !== 'chef_agence' && profile?.role !== 'agentpro' },
             { key: 'clients',       label: '👥 Mes clients',            onClick: () => setTab('clients'),                                                                                                         hidden: profile?.role === 'aide_agent' },
             { key: 'charge',        label: '📋 Feuille de charge',      onClick: () => setTab('charge'),                                                                                                          hidden: profile?.role === 'aide_agent' },
+            { key: 'deliverysheets', label: '📄 Bons de livraison',     onClick: () => setTab('deliverysheets'),                                                                                                  hidden: profile?.role === 'aide_agent' },
             { key: 'secteurs',      label: '🏢 Secteurs',               onClick: () => setTab('secteurs'),                                                                                                        hidden: profile?.role === 'aide_agent' },
             { key: 'arrivage',      label: '🚛 Arrivages',              onClick: () => { setTab('arrivage'); setArrivageTab('nouveau'); setArrivageSuccess(null) },                                               hidden: profile?.role === 'aide_agent' },
             { key: 'retours',       label: '↩️ Retours',                onClick: () => setTab('retours'),                                                                                                         hidden: profile?.role === 'aide_agent' },

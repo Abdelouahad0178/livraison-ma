@@ -841,8 +841,10 @@ export function subscribeAgencyParcels(
   city: any,
   callback: any,
   onError: (err?: any) => void = () => {},
-  pageLimit = 600, // Limite configurable (600 par défaut)
-  callbackWithLastDoc?: (lastDoc: any) => void // Callback pour retourner le dernier document (pagination)
+  pageLimit = 1000,
+  callbackWithLastDoc?: (lastDoc: any) => void,
+  dateFrom?: Date | null,
+  dateTo?: Date | null
 ) {
   let created: any[] = [], arrived: any[] = []
   let timer: ReturnType<typeof setTimeout> | undefined = undefined
@@ -857,16 +859,22 @@ export function subscribeAgencyParcels(
       arrived.forEach(p => map.set(p.id, p))
       const sorted = sortByCreatedDesc([...map.values()])
       callback(sorted)
-      // Retourner les derniers documents pour la pagination
       if (callbackWithLastDoc) {
         callbackWithLastDoc({ lastCreatedDoc, lastArrivedDoc })
       }
     }, 50)
   }
 
-  const since = daysAgoTimestamp(60)
-  const q1 = query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
-  const q2 = query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
+  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(90)
+  const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
+
+  const q1 = dateTo
+    ? query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('createdAt', 'desc'), limit(pageLimit))
+    : query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
+
+  const q2 = dateTo
+    ? query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('createdAt', 'desc'), limit(pageLimit))
+    : query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
 
   const unsub1 = onSnapshot(q1, snap => {
     created = snap.docs.map(d => ({ id: d.id, ...d.data() }))
@@ -893,9 +901,12 @@ export function subscribeAgencyParcels(
 export async function getMoreAgencyParcels(
   city: string,
   lastDocs: { lastCreatedDoc: any; lastArrivedDoc: any },
-  pageSize = 600
+  pageSize = 1000,
+  dateFrom?: Date | null,
+  dateTo?: Date | null
 ): Promise<{ docs: any[]; lastDocs: any; hasMore: boolean }> {
-  const since = daysAgoTimestamp(60)
+  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(90)
+  const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
   const results: any[] = []
   let newLastCreatedDoc: any = null
   let newLastArrivedDoc: any = null
@@ -903,14 +914,24 @@ export async function getMoreAgencyParcels(
   try {
     // Query 1: colis créés dans cette ville
     if (lastDocs.lastCreatedDoc) {
-      const q1 = query(
-        collection(db, 'parcels'),
-        where('originCity', '==', city),
-        where('createdAt', '>=', since),
-        orderBy('createdAt', 'desc'),
-        startAfter(lastDocs.lastCreatedDoc),
-        limit(pageSize)
-      )
+      const q1 = dateTo
+        ? query(
+            collection(db, 'parcels'),
+            where('originCity', '==', city),
+            where('createdAt', '>=', since),
+            where('createdAt', '<=', until),
+            orderBy('createdAt', 'desc'),
+            startAfter(lastDocs.lastCreatedDoc),
+            limit(pageSize)
+          )
+        : query(
+            collection(db, 'parcels'),
+            where('originCity', '==', city),
+            where('createdAt', '>=', since),
+            orderBy('createdAt', 'desc'),
+            startAfter(lastDocs.lastCreatedDoc),
+            limit(pageSize)
+          )
       const snap1 = await getDocs(q1)
       const created = snap1.docs.map(d => ({ id: d.id, ...d.data() }))
       results.push(...created)
@@ -919,14 +940,24 @@ export async function getMoreAgencyParcels(
 
     // Query 2: colis arrivés dans cette ville
     if (lastDocs.lastArrivedDoc) {
-      const q2 = query(
-        collection(db, 'parcels'),
-        where('destinationCity', '==', city),
-        where('createdAt', '>=', since),
-        orderBy('createdAt', 'desc'),
-        startAfter(lastDocs.lastArrivedDoc),
-        limit(pageSize)
-      )
+      const q2 = dateTo
+        ? query(
+            collection(db, 'parcels'),
+            where('destinationCity', '==', city),
+            where('createdAt', '>=', since),
+            where('createdAt', '<=', until),
+            orderBy('createdAt', 'desc'),
+            startAfter(lastDocs.lastArrivedDoc),
+            limit(pageSize)
+          )
+        : query(
+            collection(db, 'parcels'),
+            where('destinationCity', '==', city),
+            where('createdAt', '>=', since),
+            orderBy('createdAt', 'desc'),
+            startAfter(lastDocs.lastArrivedDoc),
+            limit(pageSize)
+          )
       const snap2 = await getDocs(q2)
       const arrived = (snap2.docs.map(d => ({ id: d.id, ...d.data() })) as any[]).filter((p: any) => {
         if (p.wasReturned && (p.returnToCity === city || p.destinationCity === city)) return true
