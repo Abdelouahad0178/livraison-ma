@@ -13,6 +13,7 @@ import {
   Timestamp,
   onSnapshot,
   limit,
+  startAfter,
 } from 'firebase/firestore'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -140,14 +141,15 @@ export async function deleteReturnFundEspeces(id: string) {
  * S'abonner aux retours de fond espèces
  */
 export function subscribeReturnFundsEspeces(
-  callback: (data: ReturnFundEspeces[]) => void,
+  callback: (data: ReturnFundEspeces[], lastDoc: any) => void,
   onError?: (err: any) => void,
-  statusFilter?: ReturnFundStatus
+  statusFilter?: ReturnFundStatus,
+  limitCount = 9000
 ) {
   let q = query(
     collection(db, 'return_funds_especes'),
     orderBy('createdAt', 'desc'),
-    limit(500)
+    limit(limitCount)
   )
 
   if (statusFilter) {
@@ -155,7 +157,7 @@ export function subscribeReturnFundsEspeces(
       collection(db, 'return_funds_especes'),
       where('status', '==', statusFilter),
       orderBy('createdAt', 'desc'),
-      limit(500)
+      limit(limitCount)
     )
   }
 
@@ -163,10 +165,42 @@ export function subscribeReturnFundsEspeces(
     q,
     (snapshot) => {
       const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as ReturnFundEspeces))
-      callback(data)
+      const lastDoc = snapshot.docs[snapshot.docs.length - 1]
+      callback(data, lastDoc)
     },
     onError || (() => {})
   )
+}
+
+/**
+ * Charger plus de retours de fond espèces
+ */
+export async function getMoreReturnFundsEspeces(
+  lastDoc: any,
+  statusFilter?: ReturnFundStatus,
+  limitCount = 9000
+) {
+  let q = query(
+    collection(db, 'return_funds_especes'),
+    orderBy('createdAt', 'desc'),
+    startAfter(lastDoc),
+    limit(limitCount)
+  )
+
+  if (statusFilter) {
+    q = query(
+      collection(db, 'return_funds_especes'),
+      where('status', '==', statusFilter),
+      orderBy('createdAt', 'desc'),
+      startAfter(lastDoc),
+      limit(limitCount)
+    )
+  }
+
+  const snapshot = await getDocs(q)
+  const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as ReturnFundEspeces))
+  const newLastDoc = snapshot.docs[snapshot.docs.length - 1]
+  return { data, lastDoc: newLastDoc, hasMore: snapshot.docs.length === limitCount }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -233,14 +267,15 @@ export async function deleteReturnFundCheque(id: string) {
  * S'abonner aux retours de fond chèques/traites
  */
 export function subscribeReturnFundsCheques(
-  callback: (data: ReturnFundCheque[]) => void,
+  callback: (data: ReturnFundCheque[], lastDoc: any) => void,
   onError?: (err: any) => void,
-  statusFilter?: ReturnFundStatus
+  statusFilter?: ReturnFundStatus,
+  limitCount = 9000
 ) {
   let q = query(
     collection(db, 'return_funds_cheques'),
     orderBy('createdAt', 'desc'),
-    limit(500)
+    limit(limitCount)
   )
 
   if (statusFilter) {
@@ -248,7 +283,7 @@ export function subscribeReturnFundsCheques(
       collection(db, 'return_funds_cheques'),
       where('status', '==', statusFilter),
       orderBy('createdAt', 'desc'),
-      limit(500)
+      limit(limitCount)
     )
   }
 
@@ -256,10 +291,42 @@ export function subscribeReturnFundsCheques(
     q,
     (snapshot) => {
       const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as ReturnFundCheque))
-      callback(data)
+      const lastDoc = snapshot.docs[snapshot.docs.length - 1]
+      callback(data, lastDoc)
     },
     onError || (() => {})
   )
+}
+
+/**
+ * Charger plus de retours de fond chèques/traites
+ */
+export async function getMoreReturnFundsCheques(
+  lastDoc: any,
+  statusFilter?: ReturnFundStatus,
+  limitCount = 9000
+) {
+  let q = query(
+    collection(db, 'return_funds_cheques'),
+    orderBy('createdAt', 'desc'),
+    startAfter(lastDoc),
+    limit(limitCount)
+  )
+
+  if (statusFilter) {
+    q = query(
+      collection(db, 'return_funds_cheques'),
+      where('status', '==', statusFilter),
+      orderBy('createdAt', 'desc'),
+      startAfter(lastDoc),
+      limit(limitCount)
+    )
+  }
+
+  const snapshot = await getDocs(q)
+  const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as ReturnFundCheque))
+  const newLastDoc = snapshot.docs[snapshot.docs.length - 1]
+  return { data, lastDoc: newLastDoc, hasMore: snapshot.docs.length === limitCount }
 }
 
 /**

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { auth } from '../firebase/config'
 import {
   subscribeReturnFundsCheques,
+  getMoreReturnFundsCheques,
   createReturnFundCheque,
   updateReturnFundCheque,
   deliverReturnFundCheque,
@@ -25,6 +26,9 @@ export default function DRFCPage() {
 
   // Data
   const [returnFunds, setReturnFunds] = useState<ReturnFundCheque[]>([])
+  const [hasMore, setHasMore] = useState(true)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [lastDoc, setLastDoc] = useState<any>(null)
 
   // Filters
   const [search, setSearch] = useState('')
@@ -84,12 +88,18 @@ export default function DRFCPage() {
     if (!profile) return
 
     const unsub = subscribeReturnFundsCheques(
-      (data) => {
+      (data, doc) => {
         setReturnFunds(data)
+        setLastDoc(doc)
+        if (data.length < 9000) {
+          setHasMore(false)
+        }
       },
       (err) => {
         console.error('Error loading return funds:', err)
-      }
+      },
+      undefined,
+      9000
     )
 
     return () => unsub()
@@ -229,6 +239,23 @@ export default function DRFCPage() {
     }
   }
 
+  // Load more
+  const handleLoadMore = async () => {
+    if (!lastDoc || loadingMore || !hasMore) return
+    setLoadingMore(true)
+    try {
+      const result = await getMoreReturnFundsCheques(lastDoc, undefined, 9000)
+      setReturnFunds(prev => [...prev, ...result.data])
+      setLastDoc(result.lastDoc)
+      setHasMore(result.hasMore)
+    } catch (err) {
+      console.error('Error loading more:', err)
+      alert('❌ Erreur lors du chargement')
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
   const getStatusBadge = (status: ReturnFundStatus) => {
     const map: Record<ReturnFundStatus, { label: string; bg: string; text: string }> = {
       pending: { label: 'En attente', bg: 'bg-yellow-100', text: 'text-yellow-700' },
@@ -273,16 +300,37 @@ export default function DRFCPage() {
               <CreditCard className="w-8 h-8 text-blue-600" />
               <div>
                 <h1 className="text-xl font-bold text-gray-900">DRFC - Distribution Retour de Fond Chèques/Traites</h1>
-                <p className="text-sm text-gray-600">{profile?.name}</p>
+                <p className="text-sm text-gray-600">{profile?.name} • {returnFunds.length} chèques/traites</p>
               </div>
             </div>
-            <button
-              onClick={() => auth.signOut()}
-              className="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition"
-            >
-              <LogOut className="w-5 h-5" />
-              <span className="hidden sm:inline">Déconnexion</span>
-            </button>
+            <div className="flex items-center gap-2">
+              {hasMore && (
+                <button
+                  onClick={handleLoadMore}
+                  disabled={loadingMore}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-semibold disabled:opacity-50"
+                >
+                  {loadingMore ? (
+                    <>
+                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      Chargement...
+                    </>
+                  ) : (
+                    <>
+                      <TrendingUp className="w-5 h-5" />
+                      Charger plus
+                    </>
+                  )}
+                </button>
+              )}
+              <button
+                onClick={() => auth.signOut()}
+                className="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition"
+              >
+                <LogOut className="w-5 h-5" />
+                <span className="hidden sm:inline">Déconnexion</span>
+              </button>
+            </div>
           </div>
         </div>
       </div>
