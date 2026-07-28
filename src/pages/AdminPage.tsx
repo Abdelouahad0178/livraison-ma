@@ -312,6 +312,8 @@ const ROLES = [
   { key: 'agentpro',             label: 'Agent Pro',          emoji: '⭐',   badge: 'bg-purple-100 text-purple-700'  },
   { key: 'pointeur_encaisseur', label: 'Pointeur-Encaisseur', emoji: '💰',   badge: 'bg-indigo-100 text-indigo-700'  },
   { key: 'encaisseur_central',   label: 'Encaisseur central',  emoji: '🏦',   badge: 'bg-emerald-100 text-emerald-700' },
+  { key: 'distributeur_especes', label: 'Distributeur Espèces', emoji: '💵',   badge: 'bg-green-100 text-green-700'    },
+  { key: 'distributeur_cheques', label: 'Distributeur Chèques', emoji: '📋',   badge: 'bg-blue-100 text-blue-700'      },
   { key: 'chauffeur',            label: 'Chauffeur',           emoji: '🚗',   badge: 'bg-orange-100 text-orange-700'  },
   { key: 'livreur',              label: 'Livreur',             emoji: '🚚',   badge: 'bg-amber-100 text-amber-700'    },
   { key: 'livreur-gare',         label: 'Livreur en gare',     emoji: '🚉',   badge: 'bg-yellow-100 text-yellow-700'  },
