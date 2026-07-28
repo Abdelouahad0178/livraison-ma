@@ -587,7 +587,8 @@ export default function AgentPage() {
         filterDateFrom = opStart
         filterDateTo = opEnd
       } else {
-        filterDateFrom = new Date(); filterDateFrom.setDate(filterDateFrom.getDate() - 90); filterDateFrom.setHours(0, 0, 0, 0)
+        // Mode "Tout": charger 365 jours (1 an) au lieu de 90 jours
+        filterDateFrom = new Date(); filterDateFrom.setDate(filterDateFrom.getDate() - 365); filterDateFrom.setHours(0, 0, 0, 0)
         filterDateTo = null
       }
 

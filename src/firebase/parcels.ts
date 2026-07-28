@@ -865,7 +865,7 @@ export function subscribeAgencyParcels(
     }, 50)
   }
 
-  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(90)
+  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(365)
   const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
 
   const q1 = dateTo
@@ -905,7 +905,7 @@ export async function getMoreAgencyParcels(
   dateFrom?: Date | null,
   dateTo?: Date | null
 ): Promise<{ docs: any[]; lastDocs: any; hasMore: boolean }> {
-  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(90)
+  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(365)
   const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
   const results: any[] = []
   let newLastCreatedDoc: any = null
