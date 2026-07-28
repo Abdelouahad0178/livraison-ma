@@ -262,7 +262,7 @@ export default function AgentPage() {
   const [pendingAideParcels, setPendingAideParcels] = useState<any[]>([])
 
   // Système de chargement automatique pour chef d'agence
-  const AGENCY_PAGE_SIZE = 600
+  const AGENCY_PAGE_SIZE = 4000
   const [liveParcels, setLiveParcels] = useState<any[]>([]) // Premiers 600 en temps réel
   const [moreParcels, setMoreParcels] = useState<any[]>([]) // Chargés progressivement
   const [hasMoreAgency, setHasMoreAgency] = useState(true)
@@ -271,6 +271,7 @@ export default function AgentPage() {
   const [loadAllAgencyProgress, setLoadAllAgencyProgress] = useState(0)
   const agencyLastDocsRef = useRef<any>(null)
   const agencyPagedRef = useRef(false)
+  const agencyDateFilterRef = useRef<{ dateFrom: Date | null; dateTo: Date | null }>({ dateFrom: null, dateTo: null })
 
   const [search, setSearch]             = useState('')
   const [serverSearchResults, setServerSearchResults] = useState<any[] | null>(null) // Résultats recherche serveur
@@ -561,26 +562,55 @@ export default function AgentPage() {
       }
     }
     if ((profile.role === 'chef_agence' || profile.role === 'agentpro') && profile.city) {
-      // NOUVELLE POLITIQUE : Le chef et agentpro voient TOUS les colis de l'agence directement
-      // Chargement automatique par blocs de 600
-      console.log(`📦 [Chef d'agence/AgentPro] Chargement automatique des colis de ${profile.city} (blocs de ${AGENCY_PAGE_SIZE})`)
+      // Calculer les dates du filtre
+      let filterDateFrom: Date | null = null
+      let filterDateTo: Date | null = null
+
+      if (datePreset === 'today') {
+        filterDateFrom = new Date(); filterDateFrom.setHours(0, 0, 0, 0)
+        filterDateTo = new Date(); filterDateTo.setHours(23, 59, 59, 999)
+      } else if (datePreset === 'yesterday') {
+        filterDateFrom = new Date(); filterDateFrom.setDate(filterDateFrom.getDate() - 1); filterDateFrom.setHours(0, 0, 0, 0)
+        filterDateTo = new Date(); filterDateTo.setDate(filterDateTo.getDate() - 1); filterDateTo.setHours(23, 59, 59, 999)
+      } else if (datePreset === 'week') {
+        filterDateFrom = new Date(); filterDateFrom.setDate(filterDateFrom.getDate() - 7); filterDateFrom.setHours(0, 0, 0, 0)
+        filterDateTo = new Date(); filterDateTo.setHours(23, 59, 59, 999)
+      } else if (datePreset === 'month') {
+        filterDateFrom = new Date(); filterDateFrom.setMonth(filterDateFrom.getMonth() - 1); filterDateFrom.setHours(0, 0, 0, 0)
+        filterDateTo = new Date(); filterDateTo.setHours(23, 59, 59, 999)
+      } else if (datePreset === 'custom' && dateFrom && dateTo) {
+        filterDateFrom = new Date(dateFrom); filterDateFrom.setHours(0, 0, 0, 0)
+        filterDateTo = new Date(dateTo); filterDateTo.setHours(23, 59, 59, 999)
+      } else if (datePreset === 'operational' && operationalDay) {
+        const opStart = new Date(operationalDay); opStart.setHours(8, 0, 0, 0)
+        const opEnd = new Date(operationalDay); opEnd.setDate(opEnd.getDate() + 1); opEnd.setHours(6, 0, 0, 0)
+        filterDateFrom = opStart
+        filterDateTo = opEnd
+      } else {
+        filterDateFrom = new Date(); filterDateFrom.setDate(filterDateFrom.getDate() - 90); filterDateFrom.setHours(0, 0, 0, 0)
+        filterDateTo = null
+      }
+
+      agencyDateFilterRef.current = { dateFrom: filterDateFrom, dateTo: filterDateTo }
+      console.log(`📦 [Chef] Filtre: ${datePreset || 'all'}, Du: ${filterDateFrom?.toLocaleDateString()}, Au: ${filterDateTo?.toLocaleDateString() || 'maintenant'}`)
 
       const unsubAgency = subscribeAgencyParcels(
         profile.city,
         (data: any) => {
-          console.log(`✅ [Chef d'agence] ${data.length} colis chargés en temps réel pour ${profile.city}`)
+          console.log(`✅ [Chef d'agence] ${data.length} colis chargés`)
           setLiveParcels(data)
           setLoadingParcels(false)
           if (data.length < AGENCY_PAGE_SIZE) setHasMoreAgency(false)
         },
         onError,
-        AGENCY_PAGE_SIZE, // Limite de 600
+        AGENCY_PAGE_SIZE,
         (lastDocs: any) => {
-          // Callback pour capturer les derniers documents (pagination)
           if (!agencyPagedRef.current) {
             agencyLastDocsRef.current = lastDocs
           }
-        }
+        },
+        filterDateFrom,
+        filterDateTo
       )
 
       // Souscrire aussi aux retours pour cette agence
@@ -600,7 +630,7 @@ export default function AgentPage() {
       setLoadingParcels(false)
     }, onError)
     return () => unsub()
-  }, [profile?.role, profile?.city, authTick])
+  }, [profile?.role, profile?.city, authTick, datePreset, dateFrom, dateTo, operationalDay])
 
   // 🚀 Chargement automatique de tous les colis du chef d'agence en arrière-plan
   useEffect(() => {
@@ -635,7 +665,7 @@ export default function AgentPage() {
     if (!hasMoreAgency || loadingMoreAgency || loadingAllAgency || !agencyLastDocsRef.current || !profile?.city) return
     setLoadingMoreAgency(true)
     try {
-      const result = await getMoreAgencyParcels(profile.city, agencyLastDocsRef.current, AGENCY_PAGE_SIZE)
+      const result = await getMoreAgencyParcels(profile.city, agencyLastDocsRef.current, AGENCY_PAGE_SIZE, agencyDateFilterRef.current.dateFrom, agencyDateFilterRef.current.dateTo)
       agencyPagedRef.current = true
       setMoreParcels(prev => {
         const map = new Map()
@@ -1991,6 +2021,11 @@ export default function AgentPage() {
     histSearchParcel,
     histAddSearchResult,
     histSavePointage,
+
+    // ── Agency parcels loading (for chef_agence)
+    hasMoreAgency,
+    loadMoreAgencyParcels,
+    loadingMoreAgency,
   }
 
   // ⭐ Calculer le nombre de COD qui nécessitent une action (badge notification)

@@ -1,6 +1,6 @@
 import {
   AlertTriangle, Banknote, Calendar, Car, Check, CheckSquare,
-  ChevronDown, ChevronLeft, ChevronRight, Edit2, Filter,
+  ChevronDown, ChevronLeft, ChevronRight, Edit2, Filter, Hand,
   LayoutGrid, Lock, Package, Printer, Search, Table2, Trash2, Truck,
   Unlock, User, X,
 } from 'lucide-react'
@@ -55,6 +55,9 @@ export default function ParcelsTab() {
     hasMoreParcels, setHasMoreParcels,
     loadingMore, setLoadingMore,
     setExtraParcels,
+    hasMoreAgency,
+    loadMoreAgencyParcels,
+    loadingMoreAgency,
 
     // Search / filters
     search, setSearch,
@@ -395,6 +398,46 @@ export default function ParcelsTab() {
     portType: '',
     title: '',
     parcels: []
+  })
+
+  // État pour modal changement livreur
+  const [changeDriverModal, setChangeDriverModal] = useState<{ open: boolean; parcel: any; newDriverId: string; loading: boolean; error: string }>({
+    open: false,
+    parcel: null,
+    newDriverId: '',
+    loading: false,
+    error: ''
+  })
+
+  // ⭐ Modal édition complète pour Chef d'Agence et AGENT PRO
+  const [quickEditModal, setQuickEditModal] = useState<{
+    open: boolean
+    parcel: any
+    price: string
+    portType: string
+    status: string
+    codAmount: string
+    codType: string
+    nbColis: string
+    poids: string
+    contenu: string
+    remarque: string
+    loading: boolean
+    error: string
+  }>({
+    open: false,
+    parcel: null,
+    price: '',
+    portType: '',
+    status: '',
+    codAmount: '',
+    codType: '',
+    nbColis: '',
+    poids: '',
+    contenu: '',
+    remarque: '',
+    loading: false,
+    error: ''
   })
 
   // ⭐ Navigation au clavier - Focus uniquement sur les checkboxes d'assignation
@@ -792,26 +835,98 @@ export default function ParcelsTab() {
                     </button>
                   </div>
 
-                  {/* Bouton imprimer */}
+                  {/* Boutons imprimer */}
+                  {bulkAssignSelectedIds.length > 0 && (
+                    <button
+                      onClick={() => {
+                        const parcelsToPrint = filteredParcels.filter((p: any) => bulkAssignSelectedIds.includes(p.id))
+
+                        // Trouver le livreur soit via le filtre, soit via les colis sélectionnés
+                        let selectedDriver = driverFilter !== 'all'
+                          ? availableDrivers.find((d: any) => d.id === driverFilter)
+                          : null
+
+                        // Si pas de filtre livreur, détecter automatiquement depuis les colis sélectionnés
+                        if (!selectedDriver && parcelsToPrint.length > 0) {
+                          const firstParcel = parcelsToPrint[0]
+                          const driverId = firstParcel.deliveryDriverId || firstParcel.chauffeurId
+                          if (driverId) {
+                            selectedDriver = availableDrivers.find((d: any) => d.id === driverId)
+                          }
+                        }
+
+                        const driverInfo = selectedDriver ? {
+                          id: selectedDriver.id,
+                          name: selectedDriver.name,
+                          phone: selectedDriver.phone,
+                          sectorId: selectedDriver.sectorId,
+                          sectorName: selectedDriver.sectorName,
+                          sectorCode: selectedDriver.sectorCode,
+                        } : undefined
+
+                        handlePrintTable(parcelsToPrint, selectedDriver?.name, visibleColumns, printOrientation, driverInfo)
+                      }}
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-orange-600 text-white hover:bg-orange-700 transition"
+                      title="Imprimer uniquement les colis sélectionnés"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      Sélection ({bulkAssignSelectedIds.length})
+                    </button>
+                  )}
+
                   <button
                     onClick={() => {
-                      const selectedDriver = driverFilter !== 'all'
+                      console.log('🔍 Début détection livreur')
+                      console.log('driverFilter:', driverFilter)
+                      console.log('availableDrivers:', availableDrivers)
+                      console.log('filteredParcels:', filteredParcels.length, 'colis')
+
+                      // Trouver le livreur soit via le filtre, soit via les colis à imprimer
+                      let selectedDriver = driverFilter !== 'all'
                         ? availableDrivers.find((d: any) => d.id === driverFilter)
                         : null
 
-                      // Filtrer les parcels: si des lignes sont sélectionnées, n'imprimer que celles-ci
-                      const parcelsToPrint = bulkAssignSelectedIds.length > 0
-                        ? filteredParcels.filter((p: any) => bulkAssignSelectedIds.includes(p.id))
-                        : filteredParcels
+                      console.log('selectedDriver (via filtre):', selectedDriver)
 
-                      // Appeler la fonction d'impression avec les colonnes visibles et l'orientation
-                      handlePrintTable(parcelsToPrint, selectedDriver?.name, visibleColumns, printOrientation)
+                      // Si pas de filtre livreur, détecter automatiquement depuis les colis
+                      if (!selectedDriver && filteredParcels.length > 0) {
+                        const firstParcel = filteredParcels[0]
+                        console.log('Premier colis pour détection:', {
+                          trackingId: firstParcel.trackingId,
+                          deliveryDriverId: firstParcel.deliveryDriverId,
+                          chauffeurId: firstParcel.chauffeurId,
+                          chauffeurName: firstParcel.chauffeurName,
+                          allKeys: Object.keys(firstParcel)
+                        })
+
+                        const driverId = firstParcel.deliveryDriverId || firstParcel.chauffeurId
+                        console.log('driverId détecté:', driverId)
+
+                        if (driverId) {
+                          selectedDriver = availableDrivers.find((d: any) => d.id === driverId)
+                          console.log('Livreur trouvé dans availableDrivers:', selectedDriver)
+                        }
+                      }
+
+                      const driverInfo = selectedDriver ? {
+                        id: selectedDriver.id,
+                        name: selectedDriver.name,
+                        phone: selectedDriver.phone,
+                        sectorId: selectedDriver.sectorId,
+                        sectorName: selectedDriver.sectorName,
+                        sectorCode: selectedDriver.sectorCode,
+                      } : undefined
+
+                      console.log('driverInfo final:', driverInfo)
+
+                      handlePrintTable(filteredParcels, selectedDriver?.name, visibleColumns, printOrientation, driverInfo)
                     }}
                     disabled={filteredParcels.length === 0}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                    title={driverFilter !== 'all' ? "Imprimer tous les colis de ce livreur" : "Imprimer tous les colis visibles"}
                   >
                     <Printer className="w-3.5 h-3.5" />
-                    Imprimer {bulkAssignSelectedIds.length > 0 && `(${bulkAssignSelectedIds.length})`}
+                    {driverFilter !== 'all' ? `Tout (${filteredParcels.length})` : `Imprimer (${filteredParcels.length})`}
                   </button>
 
                   {/* Toggle orientation impression */}
@@ -1320,7 +1435,7 @@ export default function ParcelsTab() {
                           </div>
                         </th>
                       )}
-                      {visibleColumns.statut && <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">Statut</th>}
+                      <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">Statut</th>
                       {visibleColumns.expediteur && (
                         <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30 bg-blue-600/30">
                           <div className="flex items-center gap-1">
@@ -1396,10 +1511,11 @@ export default function ParcelsTab() {
                       const serviceType = SERVICE_TYPES.find(st => st.key === parcel.serviceType)
                       const driver = drivers?.find((d: any) => d.id === parcel.deliveryDriverId || d.id === parcel.chauffeurId)
 
-                      // Vérifier si ce colis peut être assigné
+                      // Vérifier si ce colis peut être sélectionné (reçus ET envoyés)
                       const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
+                      const isFromMyCity = (parcel.originCity === profile?.city || parcel.sender?.city === profile?.city)
                       const canAssign = !parcel.deliveredAt && !parcel.returnedAt && parcel.status !== 'Livré'
-                      const isAssignable = (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && isInMyCity && canAssign
+                      const isAssignable = (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (isInMyCity || isFromMyCity) && canAssign
                       const assignSelected = bulkAssignSelectedIds.includes(parcel.id)
 
                       return (
@@ -1456,13 +1572,34 @@ export default function ParcelsTab() {
                               </span>
                             </td>
                           )}
-                          {visibleColumns.statut && (
-                            <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
+                          <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
+                            <div className="flex items-center gap-2">
                               <span className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm ${sc}`}>
                                 {parcel.status || 'Initialisé'}
                               </span>
-                            </td>
-                          )}
+                              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && parcel.status !== 'Livré' && (
+                                <button
+                                  onClick={async () => {
+                                    if (confirm(`Marquer cette expédition comme LIVRÉE?\n\nN° EXP: ${parcel.sender?.nic || parcel.trackingId}`)) {
+                                      try {
+                                        const { updateParcelStatus } = await import('../../../firebase/parcels')
+                                        await updateParcelStatus(parcel.id, 'Livré', {
+                                          deliveredAt: new Date().toISOString(),
+                                        })
+                                        alert('✅ Expédition marquée comme LIVRÉE!')
+                                      } catch (err: any) {
+                                        alert(`❌ Erreur: ${err.message}`)
+                                      }
+                                    }
+                                  }}
+                                  className="text-base hover:scale-110 transition-transform cursor-pointer"
+                                  title="Marquer comme Livré"
+                                >
+                                  🖐️
+                                </button>
+                              )}
+                            </div>
+                          </td>
                           {visibleColumns.expediteur && (
                             <td className="px-4 py-3 font-semibold text-gray-900 whitespace-nowrap max-w-[200px] truncate border-r border-gray-100 bg-blue-50/30">
                               {parcel.sender?.name || '—'}
@@ -1567,11 +1704,22 @@ export default function ParcelsTab() {
                             </td>
                           )}
                           {visibleColumns.livreur && (
-                            <td className="px-4 py-3 whitespace-nowrap max-w-[150px] truncate border-r border-gray-100">
-                              {driver?.name ? (
-                                <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded-lg font-semibold">
-                                  🚚 {driver.name}
-                                </span>
+                            <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
+                              {parcel.deliveryDriverName ? (
+                                <div className="inline-flex items-center gap-1.5">
+                                  <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded-lg font-semibold">
+                                    🚚 {parcel.deliveryDriverName}
+                                  </span>
+                                  {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                                    <button
+                                      onClick={() => setChangeDriverModal({ open: true, parcel, newDriverId: '', loading: false, error: '' })}
+                                      className="hover:scale-125 transition-transform cursor-pointer text-base"
+                                      title="Changer le livreur"
+                                    >
+                                      🖐️
+                                    </button>
+                                  )}
+                                </div>
                               ) : (
                                 <span className="text-gray-400 text-xs">Non assigné</span>
                               )}
@@ -1579,44 +1727,30 @@ export default function ParcelsTab() {
                           )}
                           <td className="px-4 py-3 whitespace-nowrap">
                             <div className="flex items-center justify-center gap-1.5">
-                              <button
-                                onClick={() => handlePrintTicket(parcel)}
-                                tabIndex={-1}
-                                className="p-2 rounded-lg bg-gradient-to-r from-blue-500 to-blue-600 hover:from-blue-600 hover:to-blue-700 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-110"
-                                title="Imprimer"
-                              >
-                                <Printer className="w-4 h-4" />
-                              </button>
-                              {canEditParcelDetails(parcel) && (
-                                <button
-                                  onClick={() => handleEditClick(parcel)}
-                                  tabIndex={-1}
-                                  className="p-2 rounded-lg bg-gradient-to-r from-purple-500 to-purple-600 hover:from-purple-600 hover:to-purple-700 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-110"
-                                  title="Modifier"
-                                >
-                                  <Edit2 className="w-4 h-4" />
-                                </button>
-                              )}
                               {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
-                                <select
-                                  onChange={(e) => {
-                                    if (e.target.value && e.target.value !== parcel.status) {
-                                      handleChangeParcelStatus(parcel.id, e.target.value)
-                                      e.target.value = parcel.status // Reset to current status
-                                    }
-                                  }}
-                                  value={parcel.status}
+                                <button
+                                  onClick={() => setQuickEditModal({
+                                    open: true,
+                                    parcel,
+                                    price: parcel.price?.toString() || '',
+                                    portType: parcel.portType || '',
+                                    status: parcel.status || '',
+                                    codAmount: parcel.codAmount?.toString() || '',
+                                    codType: parcel.codType || '',
+                                    nbColis: parcel.nbColis?.toString() || '',
+                                    poids: parcel.poids?.toString() || '',
+                                    contenu: parcel.contenu || '',
+                                    remarque: parcel.remarque || '',
+                                    loading: false,
+                                    error: ''
+                                  })}
                                   tabIndex={-1}
-                                  className="px-2 py-1 text-xs font-semibold rounded-lg bg-gradient-to-r from-amber-500 to-amber-600 hover:from-amber-600 hover:to-amber-700 text-white shadow-md cursor-pointer"
-                                  title="Changer le statut"
+                                  className="px-4 py-2 rounded-lg bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-105 flex items-center gap-2"
+                                  title="Édition complète"
                                 >
-                                  <option value={parcel.status} disabled>📋 Statut: {parcel.status}</option>
-                                  {STATUSES.map((status) => (
-                                    <option key={status} value={status} className="bg-white text-gray-900">
-                                      {status}
-                                    </option>
-                                  ))}
-                                </select>
+                                  <span className="text-lg">🖐️</span>
+                                  <span className="font-semibold text-sm">Éditer</span>
+                                </button>
                               )}
                               {isOwn && (
                                 <button
@@ -1989,8 +2123,19 @@ export default function ParcelsTab() {
                         </div>
                       )}
                       {parcel.deliveryDriverName && (
-                        <div className="mt-1 inline-flex items-center gap-1 text-xs bg-orange-50 text-orange-600 px-2 py-0.5 rounded-full border border-orange-200">
-                          <User className="w-3 h-3" /> Livraison : {parcel.deliveryDriverName}
+                        <div className="mt-1 inline-flex items-center gap-1.5">
+                          <div className="inline-flex items-center gap-1 text-xs bg-orange-50 text-orange-600 px-2 py-0.5 rounded-full border border-orange-200">
+                            <User className="w-3 h-3" /> Livraison : {parcel.deliveryDriverName}
+                          </div>
+                          {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                            <button
+                              onClick={() => setChangeDriverModal({ open: true, parcel, newDriverId: '', loading: false, error: '' })}
+                              className="p-1 hover:bg-orange-100 rounded-full transition"
+                              title="Changer le livreur"
+                            >
+                              <Hand className="w-3.5 h-3.5 text-orange-600" />
+                            </button>
+                          )}
                         </div>
                       )}
                       {(parcel.deliverySectorCode || parcel.deliveryVehicleLabel) && (
@@ -2613,6 +2758,21 @@ export default function ParcelsTab() {
                 {loadingMore
                   ? <><span className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /> Chargement...</>
                   : "↓ Charger l'historique plus ancien"}
+              </button>
+            )}
+
+            {/* Charger plus d'expéditions pour Chef d'Agence / Agent Pro */}
+            {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && hasMoreAgency && isLastPage && (
+              <button
+                onClick={() => {
+                  if (loadMoreAgencyParcels) loadMoreAgencyParcels()
+                }}
+                disabled={loadingMoreAgency}
+                className="w-full mt-2 py-3 rounded-xl border-2 border-green-300 bg-green-50 text-green-700 text-sm font-bold hover:bg-green-100 disabled:opacity-50 transition flex items-center justify-center gap-2"
+              >
+                {loadingMoreAgency
+                  ? <><span className="w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full animate-spin" /> Chargement...</>
+                  : "📦 Charger plus d'expéditions"}
               </button>
             )}
           </div>
@@ -3460,6 +3620,373 @@ export default function ParcelsTab() {
                 className="w-full py-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold transition"
               >
                 Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL CHANGEMENT LIVREUR ── */}
+      {changeDriverModal.open && (
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-bold text-gray-800">Changer le livreur</h3>
+                <p className="text-xs font-mono text-blue-600 mt-0.5">{changeDriverModal.parcel?.trackingId}</p>
+              </div>
+              <button
+                onClick={() => setChangeDriverModal({ open: false, parcel: null, newDriverId: '', loading: false, error: '' })}
+                className="p-2 hover:bg-gray-100 rounded-xl transition"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            {changeDriverModal.error && (
+              <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm mb-4">
+                ⚠️ {changeDriverModal.error}
+              </div>
+            )}
+
+            <div className="mb-4 p-3 bg-gray-50 rounded-xl">
+              <p className="text-xs text-gray-500 mb-1">Livreur actuel</p>
+              <p className="text-sm font-bold text-gray-800">
+                {changeDriverModal.parcel?.chauffeurName || changeDriverModal.parcel?.deliveryDriverName || 'Aucun'}
+              </p>
+            </div>
+
+            <div className="mb-4">
+              <label className="block text-xs font-bold text-gray-500 mb-2">Nouveau livreur *</label>
+              <select
+                value={changeDriverModal.newDriverId}
+                onChange={e => setChangeDriverModal(m => ({ ...m, newDriverId: e.target.value, error: '' }))}
+                className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500"
+              >
+                <option value="">-- Sélectionner un livreur --</option>
+                {drivers.map((driver: any) => (
+                  <option key={driver.id} value={driver.id}>
+                    {driver.name} {driver.phone ? `(${driver.phone})` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setChangeDriverModal({ open: false, parcel: null, newDriverId: '', loading: false, error: '' })}
+                className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={async () => {
+                  const { parcel, newDriverId } = changeDriverModal
+                  if (!newDriverId) {
+                    setChangeDriverModal(m => ({ ...m, error: 'Sélectionnez un livreur' }))
+                    return
+                  }
+
+                  setChangeDriverModal(m => ({ ...m, loading: true, error: '' }))
+                  try {
+                    const newDriver = drivers.find((d: any) => d.id === newDriverId)
+                    if (!newDriver) throw new Error('Livreur introuvable')
+
+                    // Importer et utiliser la fonction d'assignation
+                    const { assignDeliveryDriver } = await import('../../../firebase/delivery')
+                    await assignDeliveryDriver(
+                      parcel.id,
+                      newDriverId,
+                      newDriver.name,
+                      {
+                        deliverySectorId: '',
+                        deliverySectorCode: '',
+                        deliverySectorName: '',
+                        deliveryAssignedBy: profile?.name || 'Chef agence',
+                      }
+                    )
+
+                    // Fermer le modal
+                    setChangeDriverModal({ open: false, parcel: null, newDriverId: '', loading: false, error: '' })
+                    alert(`✅ Livreur changé avec succès! Nouveau livreur: ${newDriver.name}`)
+                  } catch (err: any) {
+                    console.error('Erreur changement livreur:', err)
+                    setChangeDriverModal(m => ({ ...m, loading: false, error: err.message || 'Erreur lors du changement' }))
+                  }
+                }}
+                disabled={changeDriverModal.loading}
+                className="py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 disabled:opacity-60 text-white font-semibold transition flex items-center justify-center gap-2"
+              >
+                {changeDriverModal.loading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Changement...
+                  </>
+                ) : (
+                  <>
+                    🖐️ Changer
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ⭐ MODAL ÉDITION RAPIDE (Prix, Statut, COD) - AGENT PRO uniquement */}
+      {quickEditModal.open && (
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                  <span className="text-lg">🖐️</span>
+                  Édition complète
+                </h3>
+                <p className="text-xs font-mono text-blue-600 mt-0.5">
+                  {quickEditModal.parcel?.sender?.nic || quickEditModal.parcel?.trackingId}
+                </p>
+              </div>
+              <button
+                onClick={() => setQuickEditModal({
+                  open: false,
+                  parcel: null,
+                  price: '',
+                  portType: '',
+                  status: '',
+                  codAmount: '',
+                  codType: '',
+                  nbColis: '',
+                  poids: '',
+                  contenu: '',
+                  remarque: '',
+                  loading: false,
+                  error: ''
+                })}
+                className="p-2 hover:bg-gray-100 rounded-xl transition"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            {quickEditModal.error && (
+              <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm mb-4">
+                ⚠️ {quickEditModal.error}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+              {/* Prix du port */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-2">💰 Prix du port (DH)</label>
+                <input
+                  type="number"
+                  value={quickEditModal.price}
+                  onChange={e => setQuickEditModal(m => ({ ...m, price: e.target.value, error: '' }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-green-500"
+                  placeholder="Ex: 35"
+                />
+              </div>
+
+              {/* Type de port */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-2">📋 Type de port</label>
+                <select
+                  value={quickEditModal.portType}
+                  onChange={e => setQuickEditModal(m => ({ ...m, portType: e.target.value, error: '' }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500"
+                >
+                  <option value="">-- Sélectionner --</option>
+                  <option value="port_paye">✅ Port Payé</option>
+                  <option value="port_du">📮 Port Dû</option>
+                  <option value="port_en_compte">💼 Port En Compte</option>
+                </select>
+              </div>
+
+              {/* Statut */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-2">🔄 Statut</label>
+                <select
+                  value={quickEditModal.status}
+                  onChange={e => setQuickEditModal(m => ({ ...m, status: e.target.value, error: '' }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500"
+                >
+                  <option value="">-- Sélectionner --</option>
+                  <option value="Initialisé">Initialisé</option>
+                  <option value="Collecté">Collecté</option>
+                  <option value="En transit">En transit</option>
+                  <option value="Arrivé à destination">Arrivé à destination</option>
+                  <option value="En cours de livraison">En cours de livraison</option>
+                  <option value="Livré">Livré</option>
+                  <option value="Retourné">Retourné</option>
+                  <option value="Annulé">Annulé</option>
+                </select>
+              </div>
+
+              {/* Montant COD */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-2">💵 Montant COD (DH)</label>
+                <input
+                  type="number"
+                  value={quickEditModal.codAmount}
+                  onChange={e => setQuickEditModal(m => ({ ...m, codAmount: e.target.value, error: '' }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-green-500"
+                  placeholder="Ex: 150"
+                />
+              </div>
+
+              {/* Type COD */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-2">🏷️ Type COD</label>
+                <select
+                  value={quickEditModal.codType}
+                  onChange={e => setQuickEditModal(m => ({ ...m, codType: e.target.value, error: '' }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-orange-500"
+                >
+                  <option value="">-- Sélectionner --</option>
+                  <option value="cash">💵 Cash</option>
+                  <option value="cheque">📝 Chèque</option>
+                  <option value="virement">🏦 Virement</option>
+                </select>
+              </div>
+
+              {/* Nombre de colis */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-2">📦 Nombre de colis</label>
+                <input
+                  type="number"
+                  value={quickEditModal.nbColis}
+                  onChange={e => setQuickEditModal(m => ({ ...m, nbColis: e.target.value, error: '' }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500"
+                  placeholder="Ex: 2"
+                />
+              </div>
+
+              {/* Poids */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-2">⚖️ Poids (kg)</label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={quickEditModal.poids}
+                  onChange={e => setQuickEditModal(m => ({ ...m, poids: e.target.value, error: '' }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500"
+                  placeholder="Ex: 5.5"
+                />
+              </div>
+
+              {/* Contenu */}
+              <div className="col-span-2">
+                <label className="block text-xs font-bold text-gray-700 mb-2">📝 Contenu</label>
+                <input
+                  type="text"
+                  value={quickEditModal.contenu}
+                  onChange={e => setQuickEditModal(m => ({ ...m, contenu: e.target.value, error: '' }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500"
+                  placeholder="Description du contenu"
+                />
+              </div>
+
+              {/* Remarque */}
+              <div className="col-span-2">
+                <label className="block text-xs font-bold text-gray-700 mb-2">💬 Remarque</label>
+                <textarea
+                  value={quickEditModal.remarque}
+                  onChange={e => setQuickEditModal(m => ({ ...m, remarque: e.target.value, error: '' }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500"
+                  placeholder="Notes ou remarques..."
+                  rows={2}
+                />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setQuickEditModal({
+                  open: false,
+                  parcel: null,
+                  price: '',
+                  portType: '',
+                  status: '',
+                  codAmount: '',
+                  codType: '',
+                  nbColis: '',
+                  poids: '',
+                  contenu: '',
+                  remarque: '',
+                  loading: false,
+                  error: ''
+                })}
+                className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={async () => {
+                  const { parcel, price, portType, status, codAmount, codType, nbColis, poids, contenu, remarque } = quickEditModal
+
+                  setQuickEditModal(m => ({ ...m, loading: true, error: '' }))
+                  try {
+                    // Importer la fonction de mise à jour
+                    const { updateParcel } = await import('../../../firebase/parcels')
+
+                    // Préparer les données à mettre à jour
+                    const updates: any = {}
+                    if (price !== parcel.price?.toString()) updates.price = price ? Number.parseFloat(price) : null
+                    if (portType && portType !== parcel.portType) updates.portType = portType
+                    if (status && status !== parcel.status) updates.status = status
+                    if (codAmount !== parcel.codAmount?.toString()) updates.codAmount = codAmount ? Number.parseFloat(codAmount) : null
+                    if (codType && codType !== parcel.codType) updates.codType = codType
+                    if (nbColis !== parcel.nbColis?.toString()) updates.nbColis = nbColis ? Number.parseInt(nbColis) : null
+                    if (poids !== parcel.poids?.toString()) updates.poids = poids ? Number.parseFloat(poids) : null
+                    if (contenu !== parcel.contenu) updates.contenu = contenu || null
+                    if (remarque !== parcel.remarque) updates.remarque = remarque || null
+
+                    // Vérifier qu'il y a au moins une modification
+                    if (Object.keys(updates).length === 0) {
+                      setQuickEditModal(m => ({ ...m, loading: false, error: 'Aucune modification détectée' }))
+                      return
+                    }
+
+                    // Mettre à jour le colis
+                    await updateParcel(parcel.id, updates)
+
+                    // Fermer le modal
+                    setQuickEditModal({
+                      open: false,
+                      parcel: null,
+                      price: '',
+                      portType: '',
+                      status: '',
+                      codAmount: '',
+                      codType: '',
+                      nbColis: '',
+                      poids: '',
+                      contenu: '',
+                      remarque: '',
+                      loading: false,
+                      error: ''
+                    })
+                    alert('✅ Modifications enregistrées avec succès!')
+                  } catch (err: any) {
+                    console.error('Erreur édition complète:', err)
+                    setQuickEditModal(m => ({ ...m, loading: false, error: err.message || 'Erreur lors de la mise à jour' }))
+                  }
+                }}
+                disabled={quickEditModal.loading}
+                className="py-3 rounded-xl bg-green-600 hover:bg-green-700 disabled:opacity-60 text-white font-semibold transition flex items-center justify-center gap-2"
+              >
+                {quickEditModal.loading ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Enregistrement...
+                  </>
+                ) : (
+                  <>
+                    <Check className="w-4 h-4" />
+                    Enregistrer
+                  </>
+                )}
               </button>
             </div>
           </div>
