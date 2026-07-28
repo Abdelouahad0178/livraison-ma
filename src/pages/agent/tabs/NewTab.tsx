@@ -1157,23 +1157,25 @@ export default function NewTab() {
           <h3 className="text-xs font-bold text-orange-700 mb-2 flex items-center gap-1.5">
             <span className="text-base">💰</span> Frais de port
           </h3>
-          <div className="grid grid-cols-3 gap-2 mb-2">
+          <div className="grid grid-cols-4 gap-2 mb-2">
             {[
               { key: 'port_paye', emoji: '💵', label: 'Port Payé', active: 'bg-blue-600 text-white' },
               { key: 'port_du',   emoji: '🧾', label: 'Port Dû', active: 'bg-orange-500 text-white' },
-              { key: 'port_en_compte', emoji: '🏢', label: 'En Compte', active: 'bg-purple-600 text-white' },
+              { key: 'port_en_compte_expediteur', emoji: '💼', label: 'Compte Exp', active: 'bg-purple-600 text-white' },
+              { key: 'port_en_compte_destinataire', emoji: '🖐️', label: 'Compte Dest', active: 'bg-teal-600 text-white' },
             ].map(pt => (
               <button type="button" key={pt.key}
                 onClick={() => {
                   setForm((p: any) => {
+                    const isCompteType = pt.key === 'port_en_compte_expediteur' || pt.key === 'port_en_compte_destinataire'
                     const updates: any = {
                       portType: pt.key,
-                      shipmentMode: pt.key === 'port_en_compte' ? 'client' : (pt.key === 'port_du' && p.portType === 'port_en_compte' ? 'personal' : p.shipmentMode),
+                      shipmentMode: isCompteType ? 'client' : (pt.key === 'port_du' && (p.portType === 'port_en_compte' || p.portType === 'port_en_compte_expediteur' || p.portType === 'port_en_compte_destinataire') ? 'personal' : p.shipmentMode),
                       portPayeMethod: pt.key === 'port_paye' ? 'espece' : p.portPayeMethod,
                     }
 
-                    // Si "En Compte" est sélectionné et qu'il y a un expéditeur
-                    if (pt.key === 'port_en_compte' && p.senderName && p.senderName.trim() !== '') {
+                    // Si "En Compte Expéditeur" est sélectionné et qu'il y a un expéditeur
+                    if (pt.key === 'port_en_compte_expediteur' && p.senderName && p.senderName.trim() !== '') {
                       // Automatiquement définir l'expéditeur comme client en compte
                       updates.clientName = p.senderName
                       updates.clientId = p.clientId || '' // Garder l'ID si déjà présent
