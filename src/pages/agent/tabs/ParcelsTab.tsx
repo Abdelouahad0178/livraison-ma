@@ -1695,9 +1695,13 @@ export default function ParcelsTab() {
                                 <span className="inline-flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 rounded-lg text-xs font-bold">
                                   📮 Dû
                                 </span>
-                              ) : parcel.portType === 'port_en_compte' ? (
+                              ) : parcel.portType === 'port_en_compte_destinataire' ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-1 bg-pink-100 text-pink-700 rounded-lg text-xs font-bold">
+                                  🖐️ C/Dest
+                                </span>
+                              ) : (parcel.portType === 'port_en_compte' || parcel.portType === 'port_en_compte_expediteur') ? (
                                 <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-xs font-bold">
-                                  💼 En compte
+                                  💼 C/Exp
                                 </span>
                               ) : (
                                 <span className="text-gray-400">—</span>
@@ -2056,9 +2060,14 @@ export default function ParcelsTab() {
                             📮 Port dû
                           </span>
                         )}
-                        {parcel.portType === 'port_en_compte' && (
+                        {parcel.portType === 'port_en_compte_destinataire' && (
+                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold bg-pink-100 text-pink-700 border border-pink-300">
+                            🖐️ Compte Dest
+                          </span>
+                        )}
+                        {(parcel.portType === 'port_en_compte' || parcel.portType === 'port_en_compte_expediteur') && (
                           <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold bg-purple-100 text-purple-700 border border-purple-300">
-                            💼 En compte
+                            💼 Compte Exp
                           </span>
                         )}
                         {parcel.returnedAt && parcel.status === 'Livré' && (
@@ -2299,9 +2308,14 @@ export default function ParcelsTab() {
                   )}
 
                   {/* En compte — badge */}
-                  {parcel.portType === 'port_en_compte' && (
+                  {parcel.portType === 'port_en_compte_destinataire' && (
+                    <div className="mt-2 inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium border bg-pink-50 text-pink-700 border-pink-200">
+                      🖐️ En compte Destinataire {parcel.price > 0 ? `${parcel.price} DH` : ''}
+                    </div>
+                  )}
+                  {(parcel.portType === 'port_en_compte' || parcel.portType === 'port_en_compte_expediteur') && (
                     <div className="mt-2 inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium border bg-purple-50 text-purple-700 border-purple-200">
-                      💼 En compte {parcel.price > 0 ? `${parcel.price} DH` : ''}
+                      💼 En compte Expéditeur {parcel.price > 0 ? `${parcel.price} DH` : ''}
                     </div>
                   )}
 
@@ -3816,7 +3830,9 @@ export default function ParcelsTab() {
                   <option value="">-- Sélectionner --</option>
                   <option value="port_paye">✅ Port Payé</option>
                   <option value="port_du">📮 Port Dû</option>
-                  <option value="port_en_compte">💼 Port En Compte</option>
+                  <option value="port_en_compte_expediteur">💼 Compte Expéditeur</option>
+                  <option value="port_en_compte_destinataire">🖐️ Compte Destinataire</option>
+                  <option value="port_en_compte">💼 Compte (ancien)</option>
                 </select>
               </div>
 

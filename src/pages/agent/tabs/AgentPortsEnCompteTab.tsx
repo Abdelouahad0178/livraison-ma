@@ -37,9 +37,9 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
     return Array.from(livreurSet).sort()
   }, [allParcels, myCity])
 
-  // Fonction pour régler un port en compte
+  // Fonction pour verser un port en compte à l'ADMIN
   const handleReglement = async (parcelId: string) => {
-    if (!confirm('Confirmer le règlement de ce port en compte ?')) return
+    if (!confirm('Confirmer le versement de ce port en compte à l\'ADMIN ?')) return
 
     setReglementLoading(parcelId)
     try {
@@ -48,11 +48,11 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
         portPaidAt: new Date().toISOString(),
         portPaidBy: profile?.name || 'Chef d\'agence'
       })
-      setMsg({ type: 'success', text: '✅ Port en compte réglé avec succès !' })
+      setMsg({ type: 'success', text: '✅ Versement à l\'ADMIN enregistré avec succès !' })
       setTimeout(() => setMsg(null), 3000)
     } catch (error) {
-      console.error('Erreur lors du règlement:', error)
-      setMsg({ type: 'error', text: '❌ Erreur lors du règlement' })
+      console.error('Erreur lors du versement:', error)
+      setMsg({ type: 'error', text: '❌ Erreur lors du versement' })
       setTimeout(() => setMsg(null), 3000)
     } finally {
       setReglementLoading(null)
@@ -208,35 +208,35 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
         <div>
           <h2 className="text-2xl font-bold text-gray-900 flex items-center gap-2">
             <Wallet className="w-7 h-7 text-purple-600" />
-            Ports en Compte - {myCity}
+            Ports en Compte - Versements à l'ADMIN - {myCity}
           </h2>
           <p className="text-sm text-gray-600 mt-1">
-            Suivi des ports en compte expéditeur et destinataire de votre agence
+            💼 Compte Expéditeur (origine) • 🖐️ Compte Destinataire (destination) • Suivez et versez à l'administration
           </p>
         </div>
       </div>
 
       {/* Statistiques globales */}
       <div className="grid grid-cols-1 md:grid-cols-5 gap-4">
-        <div className="bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 rounded-lg p-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-xs font-medium text-blue-700">Ports en compte expéditeur</p>
-              <p className="text-2xl font-bold text-blue-900 mt-1">{stats.countExpediteur}</p>
-              <p className="text-sm font-semibold text-blue-800 mt-1">{formatAmount(stats.totalExpediteur)} DH</p>
-            </div>
-            <TrendingUp className="w-8 h-8 text-blue-600 opacity-50" />
-          </div>
-        </div>
-
         <div className="bg-gradient-to-br from-purple-50 to-purple-100 border border-purple-200 rounded-lg p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-medium text-purple-700">Ports en compte destinataire</p>
-              <p className="text-2xl font-bold text-purple-900 mt-1">{stats.countDestinataire}</p>
-              <p className="text-sm font-semibold text-purple-800 mt-1">{formatAmount(stats.totalDestinataire)} DH</p>
+              <p className="text-xs font-medium text-purple-700 flex items-center gap-1">💼 Ports en compte expéditeur</p>
+              <p className="text-2xl font-bold text-purple-900 mt-1">{stats.countExpediteur}</p>
+              <p className="text-sm font-semibold text-purple-800 mt-1">{formatAmount(stats.totalExpediteur)} DH</p>
             </div>
-            <TrendingDown className="w-8 h-8 text-purple-600 opacity-50" />
+            <TrendingUp className="w-8 h-8 text-purple-600 opacity-50" />
+          </div>
+        </div>
+
+        <div className="bg-gradient-to-br from-pink-50 to-pink-100 border border-pink-200 rounded-lg p-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-xs font-medium text-pink-700 flex items-center gap-1">🖐️ Ports en compte destinataire</p>
+              <p className="text-2xl font-bold text-pink-900 mt-1">{stats.countDestinataire}</p>
+              <p className="text-sm font-semibold text-pink-800 mt-1">{formatAmount(stats.totalDestinataire)} DH</p>
+            </div>
+            <TrendingDown className="w-8 h-8 text-pink-600 opacity-50" />
           </div>
         </div>
 
@@ -265,7 +265,7 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
         <div className="bg-gradient-to-br from-emerald-50 to-emerald-100 border border-emerald-200 rounded-lg p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-medium text-emerald-700">Ports réglés</p>
+              <p className="text-xs font-medium text-emerald-700">Versés à l'ADMIN</p>
               <p className="text-2xl font-bold text-emerald-900 mt-1">{stats.countRegles}</p>
               <p className="text-sm font-semibold text-emerald-800 mt-1">{formatAmount(stats.totalRegles)} DH</p>
             </div>
@@ -274,12 +274,12 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
         </div>
       </div>
 
-      {/* Deuxième ligne de statistiques : Non réglés */}
+      {/* Deuxième ligne de statistiques : Non versés */}
       <div className="grid grid-cols-1 md:grid-cols-1 gap-4">
         <div className="bg-gradient-to-br from-amber-50 to-amber-100 border border-amber-200 rounded-lg p-4">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-medium text-amber-700">Ports non réglés (En attente)</p>
+              <p className="text-xs font-medium text-amber-700">À verser à l'ADMIN (En attente)</p>
               <p className="text-2xl font-bold text-amber-900 mt-1">{stats.countNonRegles}</p>
               <p className="text-sm font-semibold text-amber-800 mt-1">{formatAmount(stats.totalNonRegles)} DH</p>
             </div>
@@ -397,17 +397,17 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
             </select>
           </div>
 
-          {/* Filtre par paiement */}
+          {/* Filtre par versement */}
           <div>
-            <label className="block text-xs font-medium text-gray-700 mb-1">Paiement</label>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Versement ADMIN</label>
             <select
               value={filterPaiement}
               onChange={(e) => setFilterPaiement(e.target.value as any)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
             >
               <option value="all">Tous</option>
-              <option value="regle">✅ Réglés</option>
-              <option value="nonRegle">⏳ Non réglés</option>
+              <option value="regle">✅ Versés</option>
+              <option value="nonRegle">⏳ À verser</option>
             </select>
           </div>
 
@@ -442,7 +442,7 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Échéance</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Date</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Statut</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Paiement</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Versement ADMIN</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Action</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-700">Colis</th>
               </tr>
@@ -468,10 +468,10 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
                           parcel.portType === 'port_en_compte_expediteur'
-                            ? 'bg-blue-100 text-blue-700'
-                            : 'bg-purple-100 text-purple-700'
+                            ? 'bg-purple-100 text-purple-700'
+                            : 'bg-pink-100 text-pink-700'
                         }`}>
-                          {parcel.portType === 'port_en_compte_expediteur' ? '📤 Expéditeur' : '📥 Destinataire'}
+                          {parcel.portType === 'port_en_compte_expediteur' ? '💼 Expéditeur' : '🖐️ Destinataire'}
                         </span>
                       </td>
                       <td className="px-4 py-3">
@@ -521,11 +521,11 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
                         {parcel.portPaid ? (
                           <span className="inline-flex items-center px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 text-xs font-semibold">
                             <CheckCircle className="w-3 h-3 mr-1" />
-                            Réglé
+                            Versé
                           </span>
                         ) : (
                           <span className="inline-flex items-center px-2 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-medium">
-                            ⏳ Non réglé
+                            ⏳ À verser
                           </span>
                         )}
                       </td>
@@ -537,17 +537,17 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
                             className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-400 text-white text-xs font-semibold rounded-lg transition flex items-center gap-1.5"
                           >
                             {reglementLoading === parcel.id ? (
-                              <>⏳ Règlement...</>
+                              <>⏳ Versement...</>
                             ) : (
                               <>
                                 <CheckCircle className="w-3.5 h-3.5" />
-                                Régler
+                                Verser
                               </>
                             )}
                           </button>
                         ) : (
                           <span className="text-xs text-gray-400">
-                            Réglé le {new Date(parcel.portPaidAt).toLocaleDateString('fr-FR')}
+                            Versé le {new Date(parcel.portPaidAt).toLocaleDateString('fr-FR')}
                           </span>
                         )}
                       </td>

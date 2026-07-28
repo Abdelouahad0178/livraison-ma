@@ -93,6 +93,7 @@ const RetoursTab = lazy(() => import('./agent/tabs/RetoursTab'))
 const NotesAgentsTab = lazy(() => import('./agent/tabs/NotesAgentsTab'))
 const LostParcelsTab = lazy(() => import('./agent/tabs/LostParcelsTab'))
 const AgentClientPortDuTab = lazy(() => import('./agent/tabs/AgentClientPortDuTab'))
+const AgentPortsEnCompteTab = lazy(() => import('./agent/tabs/AgentPortsEnCompteTab'))
 
 const MOD_STATUS = {
   pending:  { label: 'En attente', bg: 'bg-amber-100', text: 'text-amber-700' },
@@ -2218,11 +2219,11 @@ export default function AgentPage() {
         </Suspense>
       )}
 
-      {/* ── PORTS DÛS EN COMPTE CLIENTS TAB ── */}
+      {/* ── PORTS EN COMPTE TAB ── */}
       {tab === 'clientportdu' && (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
         <Suspense fallback={null}>
-          <AgentClientPortDuTab
-            agencyCity={profile?.city || ''}
+          <AgentPortsEnCompteTab
+            allParcels={allDisplayParcels}
             profile={profile}
           />
         </Suspense>
