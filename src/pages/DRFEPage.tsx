@@ -101,6 +101,7 @@ export default function DRFEPage() {
       if (search) {
         const q = search.toLowerCase()
         const matches = [
+          p.sender.nic,
           p.trackingId,
           p.sender.name,
           p.receiver.name,
@@ -360,7 +361,7 @@ export default function DRFEPage() {
                     return (
                       <tr key={parcel.id} className="hover:bg-gray-50">
                         <td className="px-6 py-4 font-mono text-sm font-semibold text-blue-600">
-                          {parcel.trackingId}
+                          {parcel.sender.nic || parcel.trackingId}
                         </td>
                         <td className="px-6 py-4">
                           <div className="font-medium text-gray-900">{parcel.sender.name}</div>
