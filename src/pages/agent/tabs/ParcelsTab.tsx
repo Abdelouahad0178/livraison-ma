@@ -1574,7 +1574,19 @@ export default function ParcelsTab() {
                           )}
                           {visibleColumns.nexp && (
                             <td className="px-4 py-3 font-mono font-black text-blue-600 whitespace-nowrap text-sm border-r border-gray-100">
-                              {parcel.sender?.nic || '—'}
+                              <div className="flex items-center gap-2">
+                                <span>{parcel.sender?.nic || '—'}</span>
+                                {parcel.portType === 'port_en_compte_destinataire' && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 bg-pink-100 text-pink-700 rounded text-xs font-bold border border-pink-300" title="Port en compte destinataire">
+                                    🖐️
+                                  </span>
+                                )}
+                                {(parcel.portType === 'port_en_compte' || parcel.portType === 'port_en_compte_expediteur') && (
+                                  <span className="inline-flex items-center px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-bold border border-purple-300" title="Port en compte expéditeur">
+                                    💼
+                                  </span>
+                                )}
+                              </div>
                             </td>
                           )}
                           {visibleColumns.date && (
@@ -2017,6 +2029,16 @@ export default function ParcelsTab() {
                         {parcel.sender?.nic && (
                           <span className="font-mono text-xs font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
                             N EXP {parcel.sender.nic}
+                          </span>
+                        )}
+                        {parcel.portType === 'port_en_compte_destinataire' && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 bg-pink-100 text-pink-700 rounded text-xs font-bold border border-pink-300" title="Port en compte destinataire">
+                            🖐️ Compte Dest
+                          </span>
+                        )}
+                        {(parcel.portType === 'port_en_compte' || parcel.portType === 'port_en_compte_expediteur') && (
+                          <span className="inline-flex items-center px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-bold border border-purple-300" title="Port en compte expéditeur">
+                            💼 Compte Exp
                           </span>
                         )}
                         <span className="font-mono text-xs font-bold text-gray-700">{parcel.trackingId}</span>
