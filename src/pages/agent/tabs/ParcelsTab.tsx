@@ -1290,10 +1290,17 @@ export default function ParcelsTab() {
             return sum + (p.portType === 'port_paye' && isOrigin ? (parseFloat(p.price) || 0) : 0)
           }, 0)
 
-          // En Compte: collecté à l'ORIGINE (colis expédiés depuis cette ville)
-          const totalPortEnCompte = parcelsForTotals.reduce((sum: number, p: any) => {
+          // En Compte EXPÉDITEUR: à l'ORIGINE (NE se paie PAS par le chef - service compta gère)
+          const totalPortEnCompteExp = parcelsForTotals.reduce((sum: number, p: any) => {
             const isOrigin = p.originCity === agencyCity || p.sender?.city === agencyCity
-            return sum + (p.portType === 'port_en_compte' && isOrigin ? (parseFloat(p.price) || 0) : 0)
+            const isEnCompteExp = p.portType === 'port_en_compte' || p.portType === 'port_en_compte_expediteur'
+            return sum + (isEnCompteExp && isOrigin ? (parseFloat(p.price) || 0) : 0)
+          }, 0)
+
+          // En Compte DESTINATAIRE: à la DESTINATION (NE se paie PAS par le chef - destinataire paie)
+          const totalPortEnCompteDest = parcelsForTotals.reduce((sum: number, p: any) => {
+            const isDestination = p.destinationCity === agencyCity || p.receiver?.city === agencyCity
+            return sum + (p.portType === 'port_en_compte_destinataire' && isDestination ? (parseFloat(p.price) || 0) : 0)
           }, 0)
 
           return viewMode === 'table' ? (
@@ -1359,10 +1366,15 @@ export default function ParcelsTab() {
                       <span className="text-xs text-gray-600">Total Port dû :</span>
                       <span className="text-base font-black text-orange-700">{totalPortDu.toLocaleString('fr-MA')} DH</span>
                     </button>
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 opacity-60">
                       <span className="text-xl">💼</span>
-                      <span className="text-xs text-gray-600">Total Port en compte :</span>
-                      <span className="text-base font-black text-purple-700">{totalPortEnCompte.toLocaleString('fr-MA')} DH</span>
+                      <span className="text-xs text-gray-500">Port en compte Exp. (service compta) :</span>
+                      <span className="text-base font-bold text-gray-600">{totalPortEnCompteExp.toLocaleString('fr-MA')} DH</span>
+                    </div>
+                    <div className="flex items-center gap-2 opacity-60">
+                      <span className="text-xl">🎯</span>
+                      <span className="text-xs text-gray-500">Port en compte Dest. (client paie) :</span>
+                      <span className="text-base font-bold text-gray-600">{totalPortEnCompteDest.toLocaleString('fr-MA')} DH</span>
                     </div>
                   </div>
                 </div>
@@ -1872,10 +1884,15 @@ export default function ParcelsTab() {
                     <span className="text-xs text-gray-600">Total Port dû :</span>
                     <span className="text-base font-black text-orange-700">{totalPortDu.toLocaleString('fr-MA')} DH</span>
                   </button>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 opacity-60">
                     <span className="text-xl">💼</span>
-                    <span className="text-xs text-gray-600">Total Port en compte :</span>
-                    <span className="text-base font-black text-purple-700">{totalPortEnCompte.toLocaleString('fr-MA')} DH</span>
+                    <span className="text-xs text-gray-500">Port en compte Exp. (service compta) :</span>
+                    <span className="text-base font-bold text-gray-600">{totalPortEnCompteExp.toLocaleString('fr-MA')} DH</span>
+                  </div>
+                  <div className="flex items-center gap-2 opacity-60">
+                    <span className="text-xl">🎯</span>
+                    <span className="text-xs text-gray-500">Port en compte Dest. (client paie) :</span>
+                    <span className="text-base font-bold text-gray-600">{totalPortEnCompteDest.toLocaleString('fr-MA')} DH</span>
                   </div>
                 </div>
               </div>
