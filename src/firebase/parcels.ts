@@ -882,14 +882,8 @@ export function subscribeAgencyParcels(
     merge()
   }, onError)
   const unsub2 = onSnapshot(q2, snap => {
-    // Chef d'agence voit TOUS les colis de destination (incluant les retours)
-    // Filtrer seulement les colis visibles OU les retours qui reviennent ici
-    arrived = (snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[]).filter((p: any) => {
-      // Si c'est un retour qui revient vers cette ville, le montrer
-      if (p.wasReturned && (p.returnToCity === city || p.destinationCity === city)) return true
-      // Sinon, utiliser le filtre normal pour les colis non-retournés
-      return isParcelVisibleInDestinationAgency(p)
-    })
+    // Chef d'agence voit TOUS les colis de destination sans filtre restrictif
+    arrived = snap.docs.map(d => ({ id: d.id, ...d.data() }))
     lastArrivedDoc = snap.docs[snap.docs.length - 1] || null
     merge()
   }, onError)
