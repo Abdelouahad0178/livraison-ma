@@ -2,22 +2,19 @@ import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { auth } from '../firebase/config'
 import {
-  subscribeReturnFundsCheques,
-  getMoreReturnFundsCheques,
-  createReturnFundCheque,
-  updateReturnFundCheque,
-  deliverReturnFundCheque,
-  deleteReturnFundCheque,
-  checkExpiringCheques,
-  ReturnFundCheque,
-  ReturnFundStatus,
-} from '../firebase/returnFunds'
+  subscribeCodParcelsCheques,
+  getMoreCodParcelsCheques,
+  markCodAsCollected,
+  markCodAsRemis,
+  type Parcel,
+} from '../firebase/parcels'
 import {
-  Package, LogOut, Plus, Search, Filter, X, Check, User, Phone,
+  Package, LogOut, Search, Filter, X, Check, User, Phone,
   Calendar, MapPin, CreditCard, AlertTriangle, CheckCircle2, Clock,
-  FileText, TrendingUp, Users, Eye, Trash2, Edit2, Building2,
+  FileText, TrendingUp, Eye, PackageCheck, HandCoins,
 } from 'lucide-react'
-import { Timestamp } from 'firebase/firestore'
+
+type CodStatus = 'pending' | 'collected' | 'remis' | 'all'
 
 export default function DRFCPage() {
   const navigate = useNavigate()
@@ -25,43 +22,18 @@ export default function DRFCPage() {
   const [loading, setLoading] = useState(true)
 
   // Data
-  const [returnFunds, setReturnFunds] = useState<ReturnFundCheque[]>([])
+  const [parcels, setParcels] = useState<Parcel[]>([])
   const [hasMore, setHasMore] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [lastDoc, setLastDoc] = useState<any>(null)
 
   // Filters
   const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState<'all' | ReturnFundStatus>('all')
-  const [typeFilter, setTypeFilter] = useState<'all' | 'cheque' | 'traite'>('all')
+  const [statusFilter, setStatusFilter] = useState<CodStatus>('all')
   const [showFilters, setShowFilters] = useState(false)
 
   // Modals
-  const [createModal, setCreateModal] = useState(false)
-  const [deliverModal, setDeliverModal] = useState<ReturnFundCheque | null>(null)
-  const [viewModal, setViewModal] = useState<ReturnFundCheque | null>(null)
-
-  // Form states
-  const [form, setForm] = useState({
-    type: 'cheque' as 'cheque' | 'traite',
-    encaisseurName: '',
-    encaisseurCity: '',
-    clientName: '',
-    clientPhone: '',
-    clientCin: '',
-    trackingId: '',
-    amount: '',
-    checkNumber: '',
-    bankName: '',
-    expiryDate: '',
-    notes: '',
-  })
-
-  const [deliverForm, setDeliverForm] = useState({
-    cinPhotoUrl: '',
-    signaturePhotoUrl: '',
-    notes: '',
-  })
+  const [viewModal, setViewModal] = useState<Parcel | null>(null)
 
   // Load user profile
   useEffect(() => {
@@ -83,169 +55,36 @@ export default function DRFCPage() {
     return () => unsubAuth()
   }, [navigate])
 
-  // Subscribe to return funds
+  // Subscribe to COD parcels
   useEffect(() => {
     if (!profile) return
 
-    const unsub = subscribeReturnFundsCheques(
+    const filterStatus = statusFilter === 'all' ? undefined : statusFilter
+
+    const unsub = subscribeCodParcelsCheques(
       (data, doc) => {
-        setReturnFunds(data)
+        setParcels(data)
         setLastDoc(doc)
-        if (data.length < 9000) {
-          setHasMore(false)
-        }
+        setHasMore(data.length >= 9000)
       },
       (err) => {
-        console.error('Error loading return funds:', err)
+        console.error('Error loading COD parcels:', err)
       },
-      undefined,
+      filterStatus,
       9000
     )
 
     return () => unsub()
-  }, [profile])
-
-  // Filtered data
-  const filteredData = useMemo(() => {
-    return returnFunds.filter((rf) => {
-      if (statusFilter !== 'all' && rf.status !== statusFilter) return false
-      if (typeFilter !== 'all' && rf.type !== typeFilter) return false
-
-      if (search) {
-        const q = search.toLowerCase()
-        const matches = [
-          rf.clientName,
-          rf.clientPhone,
-          rf.clientCin,
-          rf.trackingId,
-          rf.checkNumber,
-          rf.bankName,
-          rf.encaisseurName,
-          rf.encaisseurCity,
-          rf.amount.toString(),
-        ].some((v) => v?.toLowerCase().includes(q))
-        if (!matches) return false
-      }
-
-      return true
-    })
-  }, [returnFunds, statusFilter, typeFilter, search])
-
-  // Statistics
-  const stats = useMemo(() => {
-    const pending = returnFunds.filter((rf) => rf.status === 'pending' || rf.status === 'verified' || rf.status === 'ready')
-    const delivered = returnFunds.filter((rf) => rf.status === 'delivered')
-    const totalPending = pending.reduce((sum, rf) => sum + rf.amount, 0)
-    const totalDelivered = delivered.reduce((sum, rf) => sum + rf.amount, 0)
-
-    const expiry = checkExpiringCheques(returnFunds)
-
-    return {
-      totalPending: pending.length,
-      totalDelivered: delivered.length,
-      amountPending: totalPending,
-      amountDelivered: totalDelivered,
-      expiring: expiry.expiringSoon.length + expiry.expiringUrgent.length,
-      expired: expiry.expired.length,
-    }
-  }, [returnFunds])
-
-  // Create new return fund
-  const handleCreate = async (e: React.FormEvent) => {
-    e.preventDefault()
-    try {
-      await createReturnFundCheque({
-        type: form.type,
-        encaisseurId: '',
-        encaisseurName: form.encaisseurName,
-        encaisseurCity: form.encaisseurCity,
-        clientName: form.clientName,
-        clientPhone: form.clientPhone,
-        clientCin: form.clientCin,
-        trackingId: form.trackingId,
-        amount: parseFloat(form.amount),
-        checkNumber: form.checkNumber,
-        bankName: form.bankName,
-        expiryDate: Timestamp.fromDate(new Date(form.expiryDate)),
-        notes: form.notes,
-      } as any)
-      setCreateModal(false)
-      setForm({
-        type: 'cheque',
-        encaisseurName: '',
-        encaisseurCity: '',
-        clientName: '',
-        clientPhone: '',
-        clientCin: '',
-        trackingId: '',
-        amount: '',
-        checkNumber: '',
-        bankName: '',
-        expiryDate: '',
-        notes: '',
-      })
-      alert('✅ Chèque/Traite enregistré!')
-    } catch (err) {
-      console.error(err)
-      alert('❌ Erreur lors de la création')
-    }
-  }
-
-  // Mark as ready
-  const handleMarkReady = async (id: string) => {
-    if (!confirm('Marquer comme prêt pour retrait?')) return
-    try {
-      await updateReturnFundCheque(id, { status: 'ready' })
-      alert('✅ Marqué comme prêt!')
-    } catch (err) {
-      console.error(err)
-      alert('❌ Erreur')
-    }
-  }
-
-  // Deliver
-  const handleDeliver = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!deliverModal) return
-    if (!confirm(`Confirmer la remise du ${deliverModal.type} n°${deliverModal.checkNumber} à ${deliverModal.clientName}?`)) return
-
-    try {
-      await deliverReturnFundCheque(
-        deliverModal.id,
-        profile.id,
-        profile.name,
-        deliverForm.cinPhotoUrl,
-        deliverForm.signaturePhotoUrl,
-        deliverForm.notes
-      )
-      setDeliverModal(null)
-      setDeliverForm({ cinPhotoUrl: '', signaturePhotoUrl: '', notes: '' })
-      alert('✅ Chèque/Traite remis au client!')
-    } catch (err) {
-      console.error(err)
-      alert('❌ Erreur lors de la remise')
-    }
-  }
-
-  // Delete
-  const handleDelete = async (id: string) => {
-    if (!confirm('Supprimer ce retour de fond?')) return
-    try {
-      await deleteReturnFundCheque(id)
-      alert('✅ Supprimé!')
-    } catch (err) {
-      console.error(err)
-      alert('❌ Erreur')
-    }
-  }
+  }, [profile, statusFilter])
 
   // Load more
   const handleLoadMore = async () => {
     if (!lastDoc || loadingMore || !hasMore) return
     setLoadingMore(true)
     try {
-      const result = await getMoreReturnFundsCheques(lastDoc, undefined, 9000)
-      setReturnFunds(prev => [...prev, ...result.data])
+      const filterStatus = statusFilter === 'all' ? undefined : statusFilter
+      const result = await getMoreCodParcelsCheques(lastDoc, filterStatus, 9000)
+      setParcels((prev) => [...prev, ...result.data])
       setLastDoc(result.lastDoc)
       setHasMore(result.hasMore)
     } catch (err) {
@@ -256,329 +95,343 @@ export default function DRFCPage() {
     }
   }
 
-  const getStatusBadge = (status: ReturnFundStatus) => {
-    const map: Record<ReturnFundStatus, { label: string; bg: string; text: string }> = {
-      pending: { label: 'En attente', bg: 'bg-yellow-100', text: 'text-yellow-700' },
-      verified: { label: 'Vérifié', bg: 'bg-blue-100', text: 'text-blue-700' },
-      ready: { label: 'Prêt', bg: 'bg-green-100', text: 'text-green-700' },
-      delivered: { label: 'Remis', bg: 'bg-gray-100', text: 'text-gray-700' },
-      dispute: { label: 'Litige', bg: 'bg-red-100', text: 'text-red-700' },
-      problem: { label: 'Problème', bg: 'bg-red-100', text: 'text-red-700' },
-      expired: { label: 'Expiré', bg: 'bg-red-100', text: 'text-red-700' },
+  // Filtered data
+  const filtered = useMemo(() => {
+    return parcels.filter((p) => {
+      if (search) {
+        const q = search.toLowerCase()
+        const matches = [
+          p.trackingId,
+          p.sender.name,
+          p.receiver.name,
+          p.receiver.tel,
+          p.receiver.phone,
+          p.codAmount.toString(),
+          p.codPaymentType,
+        ].some((v) => v?.toLowerCase().includes(q))
+        if (!matches) return false
+      }
+
+      return true
+    })
+  }, [parcels, search])
+
+  // Statistics
+  const stats = useMemo(() => {
+    const pending = parcels.filter((p) => !p.codStatus || p.codStatus === 'pending')
+    const collected = parcels.filter((p) => p.codStatus === 'collected')
+    const remis = parcels.filter((p) => p.codStatus === 'remis')
+
+    const totalPending = pending.reduce((sum, p) => sum + p.codAmount, 0)
+    const totalCollected = collected.reduce((sum, p) => sum + p.codAmount, 0)
+    const totalRemis = remis.reduce((sum, p) => sum + p.codAmount, 0)
+
+    const cheques = parcels.filter((p) => p.codPaymentType === 'cheque')
+    const traites = parcels.filter((p) => p.codPaymentType === 'traite')
+
+    return {
+      pending: { count: pending.length, amount: totalPending },
+      collected: { count: collected.length, amount: totalCollected },
+      remis: { count: remis.length, amount: totalRemis },
+      cheques: cheques.length,
+      traites: traites.length,
     }
-    const s = map[status] || map.pending
-    return <span className={`px-2 py-1 rounded-lg text-xs font-bold ${s.bg} ${s.text}`}>{s.label}</span>
+  }, [parcels])
+
+  // Mark as collected
+  const handleMarkCollected = async (parcel: Parcel) => {
+    if (!confirm(`Marquer ${parcel.trackingId} comme reçu du collecteur (${parcel.codAmount} DH)?`)) return
+    try {
+      await markCodAsCollected(parcel.id, profile.id, profile.name)
+      alert('✅ Marqué comme collecté!')
+    } catch (err) {
+      console.error(err)
+      alert('❌ Erreur')
+    }
   }
 
-  const getDaysUntilExpiry = (expiryDate: Timestamp) => {
-    const days = Math.ceil((expiryDate.toDate().getTime() - Date.now()) / (1000 * 60 * 60 * 24))
-    if (days < 0) return <span className="text-red-600 font-bold">Expiré ({Math.abs(days)}j)</span>
-    if (days === 0) return <span className="text-red-600 font-bold">Expire aujourd'hui</span>
-    if (days <= 1) return <span className="text-red-600 font-bold">{days}j</span>
-    if (days <= 3) return <span className="text-orange-600 font-bold">{days}j</span>
-    return <span className="text-gray-600">{days}j</span>
+  // Mark as remis
+  const handleMarkRemis = async (parcel: Parcel) => {
+    if (!confirm(`Confirmer remise de ${parcel.codAmount} DH à ${parcel.sender.name}?`)) return
+    try {
+      await markCodAsRemis(parcel.id, profile.id, profile.name)
+      alert('✅ Chèque/Traite remis au client!')
+    } catch (err) {
+      console.error(err)
+      alert('❌ Erreur')
+    }
+  }
+
+  // Logout
+  const handleLogout = async () => {
+    await auth.signOut()
+    navigate('/login')
   }
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gray-50 flex items-center justify-center">
-        <div className="text-center">
-          <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
-          <p className="text-gray-600">Chargement...</p>
-        </div>
+      <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 flex items-center justify-center">
+        <div className="text-blue-600 text-xl font-semibold animate-pulse">Chargement...</div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
       {/* Header */}
-      <div className="bg-white border-b sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 py-4">
-          <div className="flex items-center justify-between">
+      <div className="bg-white border-b shadow-sm sticky top-0 z-10">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex justify-between items-center">
             <div className="flex items-center gap-3">
-              <CreditCard className="w-8 h-8 text-blue-600" />
+              <div className="bg-gradient-to-br from-blue-500 to-indigo-600 p-3 rounded-xl shadow-lg">
+                <FileText className="w-6 h-6 text-white" />
+              </div>
               <div>
-                <h1 className="text-xl font-bold text-gray-900">DRFC - Distribution Retour de Fond Chèques/Traites</h1>
-                <p className="text-sm text-gray-600">{profile?.name} • {returnFunds.length} chèques/traites</p>
+                <h1 className="text-2xl font-bold text-gray-900">DRFC - Distribution Retour de Fond Chèques/Traites</h1>
+                <p className="text-sm text-gray-500">Distributeur • {parcels.length} chèques/traites ({stats.cheques} chèques, {stats.traites} traites)</p>
               </div>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
               {hasMore && (
                 <button
                   onClick={handleLoadMore}
                   disabled={loadingMore}
-                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-semibold disabled:opacity-50"
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
                 >
                   {loadingMore ? (
                     <>
-                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
                       Chargement...
                     </>
                   ) : (
                     <>
-                      <TrendingUp className="w-5 h-5" />
+                      <TrendingUp className="w-4 h-4" />
                       Charger plus
                     </>
                   )}
                 </button>
               )}
               <button
-                onClick={() => auth.signOut()}
-                className="flex items-center gap-2 px-4 py-2 text-red-600 hover:bg-red-50 rounded-lg transition"
+                onClick={handleLogout}
+                className="flex items-center gap-2 px-4 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50"
               >
-                <LogOut className="w-5 h-5" />
-                <span className="hidden sm:inline">Déconnexion</span>
+                <LogOut className="w-4 h-4" />
+                Déconnexion
               </button>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="max-w-7xl mx-auto px-4 py-6">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-4">
-          <div className="bg-white rounded-xl p-4 border-2 border-yellow-200">
+      {/* Statistics */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <div className="bg-gradient-to-br from-orange-50 to-orange-100 rounded-xl p-6 border border-orange-200">
             <div className="flex items-center gap-3">
-              <Clock className="w-10 h-10 text-yellow-600" />
+              <Clock className="w-8 h-8 text-orange-600" />
               <div>
-                <p className="text-2xl font-bold text-gray-900">{stats.totalPending}</p>
-                <p className="text-xs text-gray-600">En attente</p>
+                <div className="text-3xl font-bold text-orange-900">{stats.pending.count}</div>
+                <div className="text-sm text-orange-700">En attente</div>
+                <div className="text-lg font-semibold text-orange-800 mt-1">{stats.pending.amount.toLocaleString()} DH</div>
               </div>
             </div>
           </div>
 
-          <div className="bg-white rounded-xl p-4 border-2 border-green-200">
+          <div className="bg-gradient-to-br from-blue-50 to-blue-100 rounded-xl p-6 border border-blue-200">
             <div className="flex items-center gap-3">
-              <CheckCircle2 className="w-10 h-10 text-green-600" />
+              <PackageCheck className="w-8 h-8 text-blue-600" />
               <div>
-                <p className="text-2xl font-bold text-gray-900">{stats.totalDelivered}</p>
-                <p className="text-xs text-gray-600">Remis</p>
+                <div className="text-3xl font-bold text-blue-900">{stats.collected.count}</div>
+                <div className="text-sm text-blue-700">En caisse</div>
+                <div className="text-lg font-semibold text-blue-800 mt-1">{stats.collected.amount.toLocaleString()} DH</div>
               </div>
             </div>
           </div>
 
-          <div className="bg-white rounded-xl p-4 border-2 border-blue-200">
+          <div className="bg-gradient-to-br from-green-50 to-green-100 rounded-xl p-6 border border-green-200">
             <div className="flex items-center gap-3">
-              <CreditCard className="w-10 h-10 text-blue-600" />
+              <CheckCircle2 className="w-8 h-8 text-green-600" />
               <div>
-                <p className="text-lg font-bold text-gray-900">{stats.amountPending.toLocaleString()} DH</p>
-                <p className="text-xs text-gray-600">En stock</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl p-4 border-2 border-gray-200">
-            <div className="flex items-center gap-3">
-              <TrendingUp className="w-10 h-10 text-gray-600" />
-              <div>
-                <p className="text-lg font-bold text-gray-900">{stats.amountDelivered.toLocaleString()} DH</p>
-                <p className="text-xs text-gray-600">Remis total</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl p-4 border-2 border-orange-200">
-            <div className="flex items-center gap-3">
-              <AlertTriangle className="w-10 h-10 text-orange-600" />
-              <div>
-                <p className="text-2xl font-bold text-gray-900">{stats.expiring}</p>
-                <p className="text-xs text-gray-600">Expiration proche</p>
-              </div>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-xl p-4 border-2 border-red-200">
-            <div className="flex items-center gap-3">
-              <X className="w-10 h-10 text-red-600" />
-              <div>
-                <p className="text-2xl font-bold text-gray-900">{stats.expired}</p>
-                <p className="text-xs text-gray-600">Expirés</p>
+                <div className="text-3xl font-bold text-green-900">{stats.remis.count}</div>
+                <div className="text-sm text-green-700">Remis</div>
+                <div className="text-lg font-semibold text-green-800 mt-1">{stats.remis.amount.toLocaleString()} DH</div>
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Actions and Filters */}
-      <div className="max-w-7xl mx-auto px-4 pb-4">
-        <div className="bg-white rounded-xl p-4 border">
-          <div className="flex flex-wrap gap-3 items-center justify-between">
-            <button
-              onClick={() => setCreateModal(true)}
-              className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-semibold"
-            >
-              <Plus className="w-5 h-5" />
-              Nouvelle réception
-            </button>
-
-            <div className="flex-1 max-w-md">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                <input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Rechercher client, n° chèque, banque..."
-                  className="w-full pl-10 pr-4 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
-                />
-              </div>
+      {/* Filters & Search */}
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mb-6">
+        <div className="bg-white rounded-xl shadow-sm border p-4">
+          <div className="flex flex-col sm:flex-row gap-3">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Rechercher N° EXP, client, téléphone, montant..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+              />
             </div>
-
             <button
               onClick={() => setShowFilters(!showFilters)}
-              className="flex items-center gap-2 px-4 py-2 border rounded-lg hover:bg-gray-50 transition"
+              className="flex items-center gap-2 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50"
             >
-              <Filter className="w-5 h-5" />
+              <Filter className="w-4 h-4" />
               Filtres
             </button>
           </div>
 
           {showFilters && (
-            <div className="mt-4 pt-4 border-t space-y-3">
-              <div className="flex gap-2 flex-wrap">
-                <span className="text-sm font-semibold text-gray-700">Statut:</span>
-                <button
-                  onClick={() => setStatusFilter('all')}
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold ${
-                    statusFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 hover:bg-gray-200'
-                  }`}
-                >
-                  Tous
-                </button>
-                <button
-                  onClick={() => setStatusFilter('ready')}
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold ${
-                    statusFilter === 'ready' ? 'bg-green-600 text-white' : 'bg-gray-100 hover:bg-gray-200'
-                  }`}
-                >
-                  Prêt
-                </button>
-                <button
-                  onClick={() => setStatusFilter('delivered')}
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold ${
-                    statusFilter === 'delivered' ? 'bg-gray-600 text-white' : 'bg-gray-100 hover:bg-gray-200'
-                  }`}
-                >
-                  Remis
-                </button>
-              </div>
-              <div className="flex gap-2 flex-wrap">
-                <span className="text-sm font-semibold text-gray-700">Type:</span>
-                <button
-                  onClick={() => setTypeFilter('all')}
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold ${
-                    typeFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 hover:bg-gray-200'
-                  }`}
-                >
-                  Tous
-                </button>
-                <button
-                  onClick={() => setTypeFilter('cheque')}
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold ${
-                    typeFilter === 'cheque' ? 'bg-blue-600 text-white' : 'bg-gray-100 hover:bg-gray-200'
-                  }`}
-                >
-                  📋 Chèques
-                </button>
-                <button
-                  onClick={() => setTypeFilter('traite')}
-                  className={`px-3 py-1 rounded-lg text-xs font-semibold ${
-                    typeFilter === 'traite' ? 'bg-blue-600 text-white' : 'bg-gray-100 hover:bg-gray-200'
-                  }`}
-                >
-                  📝 Traites
-                </button>
-              </div>
+            <div className="mt-4 pt-4 border-t flex flex-wrap gap-2">
+              <button
+                onClick={() => setStatusFilter('all')}
+                className={`px-4 py-2 rounded-lg ${
+                  statusFilter === 'all'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Tous
+              </button>
+              <button
+                onClick={() => setStatusFilter('pending')}
+                className={`px-4 py-2 rounded-lg ${
+                  statusFilter === 'pending'
+                    ? 'bg-orange-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                En attente
+              </button>
+              <button
+                onClick={() => setStatusFilter('collected')}
+                className={`px-4 py-2 rounded-lg ${
+                  statusFilter === 'collected'
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                En caisse
+              </button>
+              <button
+                onClick={() => setStatusFilter('remis')}
+                className={`px-4 py-2 rounded-lg ${
+                  statusFilter === 'remis'
+                    ? 'bg-green-600 text-white'
+                    : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                }`}
+              >
+                Remis
+              </button>
             </div>
           )}
         </div>
       </div>
 
       {/* Table */}
-      <div className="max-w-7xl mx-auto px-4 pb-8">
-        <div className="bg-white rounded-xl border overflow-hidden">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 pb-8">
+        <div className="bg-white rounded-xl shadow-sm border overflow-hidden">
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead className="bg-gray-50 border-b">
                 <tr>
-                  <th className="px-4 py-3 text-left text-xs font-bold text-gray-700">Type</th>
-                  <th className="px-4 py-3 text-left text-xs font-bold text-gray-700">Client</th>
-                  <th className="px-4 py-3 text-left text-xs font-bold text-gray-700">N° Chèque</th>
-                  <th className="px-4 py-3 text-left text-xs font-bold text-gray-700">Banque</th>
-                  <th className="px-4 py-3 text-left text-xs font-bold text-gray-700">Montant</th>
-                  <th className="px-4 py-3 text-left text-xs font-bold text-gray-700">Échéance</th>
-                  <th className="px-4 py-3 text-left text-xs font-bold text-gray-700">Jours restants</th>
-                  <th className="px-4 py-3 text-left text-xs font-bold text-gray-700">Statut</th>
-                  <th className="px-4 py-3 text-left text-xs font-bold text-gray-700">Actions</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">N° EXP</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Client expéditeur</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Téléphone</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Montant</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date création</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Statut</th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y">
-                {filteredData.length === 0 ? (
+              <tbody className="divide-y divide-gray-200">
+                {filtered.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-4 py-12 text-center text-gray-500">
-                      Aucun chèque/traite trouvé
+                    <td colSpan={8} className="px-6 py-12 text-center text-gray-500">
+                      Aucune expédition COD chèque/traite trouvée
                     </td>
                   </tr>
                 ) : (
-                  filteredData.map((rf) => (
-                    <tr key={rf.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3">
-                        <span className="text-xl">{rf.type === 'cheque' ? '📋' : '📝'}</span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="font-semibold text-gray-900">{rf.clientName}</div>
-                        <div className="text-xs text-gray-500">{rf.clientPhone}</div>
-                      </td>
-                      <td className="px-4 py-3 font-mono text-sm text-gray-700">{rf.checkNumber}</td>
-                      <td className="px-4 py-3 text-sm text-gray-700">{rf.bankName}</td>
-                      <td className="px-4 py-3">
-                        <span className="font-bold text-blue-700">{rf.amount.toLocaleString()} DH</span>
-                      </td>
-                      <td className="px-4 py-3 text-sm text-gray-700">
-                        {rf.expiryDate.toDate().toLocaleDateString('fr-FR')}
-                      </td>
-                      <td className="px-4 py-3">{getDaysUntilExpiry(rf.expiryDate)}</td>
-                      <td className="px-4 py-3">{getStatusBadge(rf.status)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => setViewModal(rf)}
-                            className="p-1.5 hover:bg-gray-100 rounded transition"
-                            title="Voir détails"
-                          >
-                            <Eye className="w-4 h-4 text-gray-600" />
-                          </button>
-                          {rf.status === 'pending' && (
+                  filtered.map((parcel) => {
+                    const codStatus = parcel.codStatus || 'pending'
+                    const statusConfig = {
+                      pending: { label: 'En attente', color: 'bg-orange-100 text-orange-700' },
+                      collected: { label: 'En caisse', color: 'bg-blue-100 text-blue-700' },
+                      remis: { label: 'Remis', color: 'bg-green-100 text-green-700' },
+                    }[codStatus]
+
+                    const typeConfig = {
+                      cheque: { label: 'Chèque', emoji: '💳', color: 'text-blue-600' },
+                      traite: { label: 'Traite', emoji: '📝', color: 'text-purple-600' },
+                    }[parcel.codPaymentType || 'cheque']
+
+                    return (
+                      <tr key={parcel.id} className="hover:bg-gray-50">
+                        <td className="px-6 py-4 font-mono text-sm font-semibold text-blue-600">
+                          {parcel.trackingId}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`font-semibold ${typeConfig.color}`}>
+                            {typeConfig.emoji} {typeConfig.label}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="font-medium text-gray-900">{parcel.sender.name}</div>
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-600">
+                          {parcel.sender.tel}
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="font-bold text-blue-700">{parcel.codAmount.toLocaleString()} DH</div>
+                        </td>
+                        <td className="px-6 py-4 text-sm text-gray-600">
+                          {typeof parcel.createdAt === 'string'
+                            ? new Date(parcel.createdAt).toLocaleDateString('fr-FR')
+                            : parcel.createdAt.toDate().toLocaleDateString('fr-FR')}
+                        </td>
+                        <td className="px-6 py-4">
+                          <span className={`px-3 py-1 rounded-full text-xs font-semibold ${statusConfig.color}`}>
+                            {statusConfig.label}
+                          </span>
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="flex items-center gap-2">
                             <button
-                              onClick={() => handleMarkReady(rf.id)}
-                              className="p-1.5 hover:bg-green-100 rounded transition"
-                              title="Marquer comme prêt"
+                              onClick={() => setViewModal(parcel)}
+                              className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"
+                              title="Voir détails"
                             >
-                              <Check className="w-4 h-4 text-green-600" />
+                              <Eye className="w-4 h-4" />
                             </button>
-                          )}
-                          {rf.status === 'ready' && (
-                            <button
-                              onClick={() => setDeliverModal(rf)}
-                              className="px-2 py-1 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 transition font-semibold"
-                            >
-                              🤝 Remettre
-                            </button>
-                          )}
-                          {rf.status !== 'delivered' && (
-                            <button
-                              onClick={() => handleDelete(rf.id)}
-                              className="p-1.5 hover:bg-red-100 rounded transition"
-                              title="Supprimer"
-                            >
-                              <Trash2 className="w-4 h-4 text-red-600" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))
+
+                            {codStatus === 'pending' && (
+                              <button
+                                onClick={() => handleMarkCollected(parcel)}
+                                className="p-2 text-green-600 hover:bg-green-50 rounded-lg"
+                                title="Marquer comme collecté"
+                              >
+                                <PackageCheck className="w-4 h-4" />
+                              </button>
+                            )}
+
+                            {codStatus === 'collected' && (
+                              <button
+                                onClick={() => handleMarkRemis(parcel)}
+                                className="p-2 text-emerald-600 hover:bg-emerald-50 rounded-lg"
+                                title="Remettre au client"
+                              >
+                                <HandCoins className="w-4 h-4" />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )
+                  })
                 )}
               </tbody>
             </table>
@@ -586,289 +439,85 @@ export default function DRFCPage() {
         </div>
       </div>
 
-      {/* Create Modal */}
-      {createModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between p-5 border-b sticky top-0 bg-white rounded-t-2xl">
-              <h3 className="font-bold text-gray-800">Nouvelle réception chèque/traite</h3>
-              <button onClick={() => setCreateModal(false)} className="p-2 hover:bg-gray-100 rounded-xl transition">
-                <X className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
-            <form onSubmit={handleCreate} className="p-5 space-y-4">
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Type *</label>
-                <select
-                  required
-                  value={form.type}
-                  onChange={(e) => setForm({ ...form, type: e.target.value as 'cheque' | 'traite' })}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                >
-                  <option value="cheque">📋 Chèque</option>
-                  <option value="traite">📝 Traite</option>
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Encaisseur *</label>
-                <input
-                  type="text"
-                  required
-                  value={form.encaisseurName}
-                  onChange={(e) => setForm({ ...form, encaisseurName: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                  placeholder="Nom de l'encaisseur"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Ville d'origine *</label>
-                <input
-                  type="text"
-                  required
-                  value={form.encaisseurCity}
-                  onChange={(e) => setForm({ ...form, encaisseurCity: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                  placeholder="Ville"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Client bénéficiaire *</label>
-                <input
-                  type="text"
-                  required
-                  value={form.clientName}
-                  onChange={(e) => setForm({ ...form, clientName: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                  placeholder="Nom complet"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Téléphone *</label>
-                <input
-                  type="tel"
-                  required
-                  value={form.clientPhone}
-                  onChange={(e) => setForm({ ...form, clientPhone: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                  placeholder="06xxxxxxxx"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Numéro {form.type} *</label>
-                <input
-                  type="text"
-                  required
-                  value={form.checkNumber}
-                  onChange={(e) => setForm({ ...form, checkNumber: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                  placeholder="Ex: 1234567"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Banque *</label>
-                <input
-                  type="text"
-                  required
-                  value={form.bankName}
-                  onChange={(e) => setForm({ ...form, bankName: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                  placeholder="Nom de la banque"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Montant (DH) *</label>
-                <input
-                  type="number"
-                  required
-                  step="0.01"
-                  value={form.amount}
-                  onChange={(e) => setForm({ ...form, amount: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                  placeholder="0.00"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Date d'échéance *</label>
-                <input
-                  type="date"
-                  required
-                  value={form.expiryDate}
-                  onChange={(e) => setForm({ ...form, expiryDate: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">N° Expédition</label>
-                <input
-                  type="text"
-                  value={form.trackingId}
-                  onChange={(e) => setForm({ ...form, trackingId: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                  placeholder="N° EXP"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-1">Notes</label>
-                <textarea
-                  value={form.notes}
-                  onChange={(e) => setForm({ ...form, notes: e.target.value })}
-                  className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                  rows={2}
-                  placeholder="Remarques..."
-                />
-              </div>
-              <button
-                type="submit"
-                className="w-full py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition"
-              >
-                Enregistrer
-              </button>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* Deliver Modal */}
-      {deliverModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between p-5 border-b sticky top-0 bg-white rounded-t-2xl">
-              <h3 className="font-bold text-gray-800">Remettre {deliverModal.type} au client</h3>
-              <button onClick={() => setDeliverModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
-                <X className="w-5 h-5 text-gray-500" />
-              </button>
-            </div>
-            <div className="p-5">
-              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
-                <div className="flex items-center gap-2 mb-2">
-                  <User className="w-5 h-5 text-blue-700" />
-                  <span className="font-bold text-blue-900">{deliverModal.clientName}</span>
-                </div>
-                <div className="text-sm text-blue-700 space-y-1">
-                  <div>📞 {deliverModal.clientPhone}</div>
-                  <div>N° {deliverModal.checkNumber} - {deliverModal.bankName}</div>
-                  <div className="font-bold text-2xl mt-2">{deliverModal.amount.toLocaleString()} DH</div>
-                </div>
-              </div>
-              <form onSubmit={handleDeliver} className="space-y-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">Photo CIN</label>
-                  <input
-                    type="text"
-                    value={deliverForm.cinPhotoUrl}
-                    onChange={(e) => setDeliverForm({ ...deliverForm, cinPhotoUrl: e.target.value })}
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                    placeholder="URL de la photo CIN"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">Photo signature + décharge</label>
-                  <input
-                    type="text"
-                    value={deliverForm.signaturePhotoUrl}
-                    onChange={(e) => setDeliverForm({ ...deliverForm, signaturePhotoUrl: e.target.value })}
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                    placeholder="URL de la photo signature"
-                  />
-                </div>
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-1">Notes</label>
-                  <textarea
-                    value={deliverForm.notes}
-                    onChange={(e) => setDeliverForm({ ...deliverForm, notes: e.target.value })}
-                    className="w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-blue-500"
-                    rows={2}
-                  />
-                </div>
-                <button
-                  type="submit"
-                  className="w-full py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition"
-                >
-                  ✅ Confirmer la remise
-                </button>
-              </form>
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* View Modal */}
       {viewModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-            <div className="flex items-center justify-between p-5 border-b sticky top-0 bg-white rounded-t-2xl">
-              <h3 className="font-bold text-gray-800">Détails du {viewModal.type}</h3>
-              <button onClick={() => setViewModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
-                <X className="w-5 h-5 text-gray-500" />
+          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <div className="sticky top-0 bg-white border-b px-6 py-4 flex justify-between items-center">
+              <h2 className="text-xl font-bold text-gray-900">Détails de l'expédition</h2>
+              <button
+                onClick={() => setViewModal(null)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X className="w-5 h-5" />
               </button>
             </div>
-            <div className="p-5 space-y-4">
+
+            <div className="p-6 space-y-6">
               <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <p className="text-xs text-gray-500 mb-1">Type</p>
-                  <p className="font-semibold text-gray-900">{viewModal.type === 'cheque' ? '📋 Chèque' : '📝 Traite'}</p>
+                  <label className="text-xs text-gray-500 font-medium">N° Expédition</label>
+                  <div className="font-mono font-bold text-blue-600">{viewModal.trackingId}</div>
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500 mb-1">Numéro</p>
-                  <p className="font-mono font-semibold text-gray-900">{viewModal.checkNumber}</p>
+                  <label className="text-xs text-gray-500 font-medium">Type de paiement</label>
+                  <div className="font-bold text-purple-600">
+                    {viewModal.codPaymentType === 'cheque' ? '💳 Chèque' : '📝 Traite'}
+                  </div>
                 </div>
                 <div>
-                  <p className="text-xs text-gray-500 mb-1">Banque</p>
-                  <p className="font-semibold text-gray-900">{viewModal.bankName}</p>
+                  <label className="text-xs text-gray-500 font-medium">Montant COD</label>
+                  <div className="font-bold text-blue-700 text-xl">{viewModal.codAmount.toLocaleString()} DH</div>
                 </div>
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Montant</p>
-                  <p className="font-bold text-2xl text-blue-700">{viewModal.amount.toLocaleString()} DH</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Client</p>
-                  <p className="font-semibold text-gray-900">{viewModal.clientName}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Téléphone</p>
-                  <p className="font-semibold text-gray-900">{viewModal.clientPhone}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Date d'échéance</p>
-                  <p className="font-semibold text-gray-900">{viewModal.expiryDate.toDate().toLocaleDateString('fr-FR')}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Jours restants</p>
-                  {getDaysUntilExpiry(viewModal.expiryDate)}
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Encaisseur</p>
-                  <p className="font-semibold text-gray-900">{viewModal.encaisseurName}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Ville</p>
-                  <p className="font-semibold text-gray-900">{viewModal.encaisseurCity}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Date de réception</p>
-                  <p className="font-semibold text-gray-900">{viewModal.receivedAt.toDate().toLocaleDateString('fr-FR')}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Statut</p>
-                  {getStatusBadge(viewModal.status)}
-                </div>
-                {viewModal.deliveredAt && (
-                  <>
-                    <div>
-                      <p className="text-xs text-gray-500 mb-1">Date de remise</p>
-                      <p className="font-semibold text-gray-900">{viewModal.deliveredAt.toDate().toLocaleDateString('fr-FR')}</p>
-                    </div>
-                    <div>
-                      <p className="text-xs text-gray-500 mb-1">Remis par</p>
-                      <p className="font-semibold text-gray-900">{viewModal.deliveredByName || 'N/A'}</p>
-                    </div>
-                  </>
-                )}
               </div>
-              {viewModal.notes && (
-                <div>
-                  <p className="text-xs text-gray-500 mb-1">Notes</p>
-                  <p className="text-sm text-gray-700 bg-gray-50 p-3 rounded-lg">{viewModal.notes}</p>
+
+              <div className="border-t pt-4">
+                <h3 className="font-semibold text-gray-900 mb-3">📤 Expéditeur (Client propriétaire)</h3>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <label className="text-xs text-gray-500">Nom</label>
+                    <div className="font-medium">{viewModal.sender.name}</div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Téléphone</label>
+                    <div className="font-medium">{viewModal.sender.tel}</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t pt-4">
+                <h3 className="font-semibold text-gray-900 mb-3">📥 Destinataire</h3>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <label className="text-xs text-gray-500">Nom</label>
+                    <div className="font-medium">{viewModal.receiver.name}</div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Téléphone</label>
+                    <div className="font-medium">{viewModal.receiver.tel}</div>
+                  </div>
+                  <div>
+                    <label className="text-xs text-gray-500">Ville</label>
+                    <div className="font-medium">{viewModal.receiver.city}</div>
+                  </div>
+                </div>
+              </div>
+
+              {viewModal.codCollectedAt && (
+                <div className="border-t pt-4">
+                  <h3 className="font-semibold text-gray-900 mb-3">✅ Collecté</h3>
+                  <div className="text-sm text-gray-600">
+                    Le {new Date(viewModal.codCollectedAt).toLocaleString('fr-FR')}
+                  </div>
+                </div>
+              )}
+
+              {viewModal.codRemisAt && (
+                <div className="border-t pt-4">
+                  <h3 className="font-semibold text-gray-900 mb-3">🎉 Remis au client</h3>
+                  <div className="text-sm text-gray-600">
+                    Le {new Date(viewModal.codRemisAt).toLocaleString('fr-FR')}
+                  </div>
                 </div>
               )}
             </div>

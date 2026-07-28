@@ -1527,4 +1527,196 @@ export async function autoArchiveParcels(options: {
  * Convertir un colis "Port Dû" en "En compte destinataire"
  * Utilisé par le chef d'agence ou le livreur lors de la livraison
  */
+// ─────────────────────────────────────────────────────────────────────────────
+// COD (Contre-remboursement) - Distribution retours de fond
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * S'abonner aux expéditions COD en espèces
+ */
+export function subscribeCodParcelsEspeces(
+  callback: (data: Parcel[], lastDoc: any) => void,
+  onError?: (err: any) => void,
+  codStatusFilter?: 'pending' | 'collected' | 'remis',
+  limitCount = 9000
+) {
+  let q = query(
+    collection(db, 'parcels'),
+    where('codPaymentType', '==', 'especes'),
+    where('codAmount', '>', 0),
+    orderBy('codAmount', 'desc'),
+    orderBy('createdAt', 'desc'),
+    limit(limitCount)
+  )
+
+  if (codStatusFilter) {
+    q = query(
+      collection(db, 'parcels'),
+      where('codPaymentType', '==', 'especes'),
+      where('codAmount', '>', 0),
+      where('codStatus', '==', codStatusFilter),
+      orderBy('codAmount', 'desc'),
+      orderBy('createdAt', 'desc'),
+      limit(limitCount)
+    )
+  }
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Parcel))
+      const lastDoc = snapshot.docs[snapshot.docs.length - 1]
+      callback(data, lastDoc)
+    },
+    onError || (() => {})
+  )
+}
+
+/**
+ * Charger plus d'expéditions COD en espèces
+ */
+export async function getMoreCodParcelsEspeces(
+  lastDoc: any,
+  codStatusFilter?: 'pending' | 'collected' | 'remis',
+  limitCount = 9000
+) {
+  let q = query(
+    collection(db, 'parcels'),
+    where('codPaymentType', '==', 'especes'),
+    where('codAmount', '>', 0),
+    orderBy('codAmount', 'desc'),
+    orderBy('createdAt', 'desc'),
+    startAfter(lastDoc),
+    limit(limitCount)
+  )
+
+  if (codStatusFilter) {
+    q = query(
+      collection(db, 'parcels'),
+      where('codPaymentType', '==', 'especes'),
+      where('codAmount', '>', 0),
+      where('codStatus', '==', codStatusFilter),
+      orderBy('codAmount', 'desc'),
+      orderBy('createdAt', 'desc'),
+      startAfter(lastDoc),
+      limit(limitCount)
+    )
+  }
+
+  const snapshot = await getDocs(q)
+  const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Parcel))
+  const newLastDoc = snapshot.docs[snapshot.docs.length - 1]
+  return { data, lastDoc: newLastDoc, hasMore: snapshot.docs.length === limitCount }
+}
+
+/**
+ * S'abonner aux expéditions COD en chèques/traites
+ */
+export function subscribeCodParcelsCheques(
+  callback: (data: Parcel[], lastDoc: any) => void,
+  onError?: (err: any) => void,
+  codStatusFilter?: 'pending' | 'collected' | 'remis',
+  limitCount = 9000
+) {
+  let q = query(
+    collection(db, 'parcels'),
+    where('codPaymentType', 'in', ['cheque', 'traite']),
+    where('codAmount', '>', 0),
+    orderBy('codAmount', 'desc'),
+    orderBy('createdAt', 'desc'),
+    limit(limitCount)
+  )
+
+  if (codStatusFilter) {
+    q = query(
+      collection(db, 'parcels'),
+      where('codPaymentType', 'in', ['cheque', 'traite']),
+      where('codAmount', '>', 0),
+      where('codStatus', '==', codStatusFilter),
+      orderBy('codAmount', 'desc'),
+      orderBy('createdAt', 'desc'),
+      limit(limitCount)
+    )
+  }
+
+  return onSnapshot(
+    q,
+    (snapshot) => {
+      const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Parcel))
+      const lastDoc = snapshot.docs[snapshot.docs.length - 1]
+      callback(data, lastDoc)
+    },
+    onError || (() => {})
+  )
+}
+
+/**
+ * Charger plus d'expéditions COD en chèques/traites
+ */
+export async function getMoreCodParcelsCheques(
+  lastDoc: any,
+  codStatusFilter?: 'pending' | 'collected' | 'remis',
+  limitCount = 9000
+) {
+  let q = query(
+    collection(db, 'parcels'),
+    where('codPaymentType', 'in', ['cheque', 'traite']),
+    where('codAmount', '>', 0),
+    orderBy('codAmount', 'desc'),
+    orderBy('createdAt', 'desc'),
+    startAfter(lastDoc),
+    limit(limitCount)
+  )
+
+  if (codStatusFilter) {
+    q = query(
+      collection(db, 'parcels'),
+      where('codPaymentType', 'in', ['cheque', 'traite']),
+      where('codAmount', '>', 0),
+      where('codStatus', '==', codStatusFilter),
+      orderBy('codAmount', 'desc'),
+      orderBy('createdAt', 'desc'),
+      startAfter(lastDoc),
+      limit(limitCount)
+    )
+  }
+
+  const snapshot = await getDocs(q)
+  const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Parcel))
+  const newLastDoc = snapshot.docs[snapshot.docs.length - 1]
+  return { data, lastDoc: newLastDoc, hasMore: snapshot.docs.length === limitCount }
+}
+
+/**
+ * Marquer COD comme collecté (reçu du collecteur central)
+ */
+export async function markCodAsCollected(
+  parcelId: string,
+  collectedBy: string,
+  collectedByName: string
+) {
+  const docRef = doc(db, 'parcels', parcelId)
+  await updateDoc(docRef, {
+    codStatus: 'collected',
+    codCollectedAt: new Date().toISOString(),
+    codCollectedBy: collectedBy,
+  })
+}
+
+/**
+ * Marquer COD comme remis au client propriétaire
+ */
+export async function markCodAsRemis(
+  parcelId: string,
+  remisBy: string,
+  remisByName: string
+) {
+  const docRef = doc(db, 'parcels', parcelId)
+  await updateDoc(docRef, {
+    codStatus: 'remis',
+    codRemisAt: new Date().toISOString(),
+    codRemisBy: remisBy,
+  })
+}
+
 // -- Règlements (Pointeur-Encaisseur) -------------------------------------
