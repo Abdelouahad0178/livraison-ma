@@ -15,6 +15,8 @@ const AUTH_ROLES = [
   { key: 'agentpro',             label: 'Agent Pro',            emoji: '⭐' },
   { key: 'pointeur_encaisseur',  label: 'Pointeur-Encaisseur',  emoji: '💼' },
   { key: 'encaisseur_central',   label: 'Encaisseur central',   emoji: '🏦' },
+  { key: 'distributeur_especes', label: 'Distributeur Espèces', emoji: '💵' },
+  { key: 'distributeur_cheques', label: 'Distributeur Chèques', emoji: '📋' },
   { key: 'chauffeur',            label: 'Chauffeur',            emoji: '🚚' },
   { key: 'livreur',              label: 'Livreur',              emoji: '🛵' },
   { key: 'livreur-gare',         label: 'Livreur en gare',      emoji: '🚉' },
@@ -151,6 +153,8 @@ export default function LoginPage() {
       else if (r === 'agentpro')             navigate('/agent')
       else if (r === 'pointeur_encaisseur')  navigate('/pointeur')
       else if (r === 'encaisseur_central')   navigate('/central')
+      else if (r === 'distributeur_especes') navigate('/drfe')
+      else if (r === 'distributeur_cheques') navigate('/drfc')
       else if (r === 'chauffeur')            navigate('/driver')
       else if (r === 'livreur')              navigate('/driver')
       else if (r === 'livreur-gare')         navigate('/gare-driver')
