@@ -105,7 +105,7 @@ export default function FacturierPage() {
                 }`}
               >
                 <Package className="w-4 h-4" />
-                Expéditions (Port Dû / Payé)
+                Expéditions (Tous types de ports)
               </button>
               <button
                 onClick={() => setActiveTab('factures')}

@@ -10,7 +10,8 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [cityFilter, setCityFilter] = useState('Toutes')
-  const [portTypeFilter, setPortTypeFilter] = useState<'all' | 'port_du' | 'port_paye'>('all')
+  const [portTypeFilter, setPortTypeFilter] = useState<'all' | 'port_du' | 'port_paye' | 'port_en_compte_expediteur' | 'port_en_compte_destinataire'>('all')
+  const [clientRoleFilter, setClientRoleFilter] = useState<'all' | 'expediteur' | 'destinataire'>('all')
   const [dateFilter, setDateFilter] = useState('all')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -96,9 +97,6 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
   // Filtrer les colis
   const filteredParcels = useMemo(() => {
     let result = parcels.filter(p => {
-      // Filtrer seulement les colis avec port dû ou port payé
-      if (p.portType !== 'port_du' && p.portType !== 'port_paye') return false
-
       // Si profileCity est défini (mode agence), filtrer par ville d'origine
       if (profileCity) {
         const originCity = p.sender?.city || p.originCity
@@ -112,8 +110,21 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
       }
 
       // Filtre par type de port
-      if (portTypeFilter === 'port_du' && p.portType !== 'port_du') return false
-      if (portTypeFilter === 'port_paye' && p.portType !== 'port_paye') return false
+      if (portTypeFilter !== 'all' && p.portType !== portTypeFilter) return false
+
+      // Filtre par rôle du client (expéditeur ou destinataire)
+      // Ce filtre est conceptuel - il aide à identifier quel rôle du client on veut facturer
+      // Pour port_du, port_paye, port_en_compte_expediteur: le client est l'expéditeur
+      // Pour port_en_compte_destinataire: le client est le destinataire
+      if (clientRoleFilter !== 'all') {
+        if (clientRoleFilter === 'expediteur') {
+          // Colis où le client à facturer est l'expéditeur
+          if (p.portType === 'port_en_compte_destinataire') return false
+        } else if (clientRoleFilter === 'destinataire') {
+          // Colis où le client à facturer est le destinataire
+          if (p.portType !== 'port_en_compte_destinataire') return false
+        }
+      }
 
       // Filtre par recherche
       if (search) {
@@ -174,7 +185,7 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
     }
 
     return result
-  }, [parcels, cityFilter, portTypeFilter, search, dateFilter, dateFrom, dateTo])
+  }, [parcels, cityFilter, portTypeFilter, clientRoleFilter, search, dateFilter, dateFrom, dateTo])
 
   // Statistiques
   const stats = useMemo(() => {
@@ -327,8 +338,19 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
             className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-cyan-500"
           >
             <option value="all">Tous les ports</option>
-            <option value="port_du">Port Dû</option>
-            <option value="port_paye">Port Payé</option>
+            <option value="port_du">💰 Port Dû</option>
+            <option value="port_paye">✅ Port Payé</option>
+            <option value="port_en_compte_expediteur">📤 Port en Compte (Expéditeur)</option>
+            <option value="port_en_compte_destinataire">📥 Port en Compte (Destinataire)</option>
+          </select>
+          <select
+            value={clientRoleFilter}
+            onChange={e => setClientRoleFilter(e.target.value as any)}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-cyan-500"
+          >
+            <option value="all">Client: Tous les rôles</option>
+            <option value="expediteur">📤 Client = Expéditeur</option>
+            <option value="destinataire">📥 Client = Destinataire</option>
           </select>
           <select
             value={dateFilter}
@@ -346,6 +368,7 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
               setSearch('')
               setCityFilter('Toutes')
               setPortTypeFilter('all')
+              setClientRoleFilter('all')
               setDateFilter('all')
               setDateFrom('')
               setDateTo('')
@@ -358,6 +381,7 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
             onClick={() => printFacturation(filteredParcels, stats, {
               cityFilter,
               portTypeFilter,
+              clientRoleFilter,
               dateFilter,
               dateFrom,
               dateTo,
@@ -464,12 +488,12 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
             </tbody>
           </table>
         </div>
-        {!search && dateFilter === 'all' && cityFilter === 'Toutes' && portTypeFilter === 'all' && filteredParcels.length > 500 && (
+        {!search && dateFilter === 'all' && cityFilter === 'Toutes' && portTypeFilter === 'all' && clientRoleFilter === 'all' && filteredParcels.length > 500 && (
           <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 text-sm text-gray-600">
             Affichage de 500 sur {filteredParcels.length} expéditions. Utilisez les filtres pour afficher tous les résultats.
           </div>
         )}
-        {(search || dateFilter !== 'all' || cityFilter !== 'Toutes' || portTypeFilter !== 'all') && (
+        {(search || dateFilter !== 'all' || cityFilter !== 'Toutes' || portTypeFilter !== 'all' || clientRoleFilter !== 'all') && (
           <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 text-sm text-cyan-700 font-medium">
             {filteredParcels.length} expédition(s) trouvée(s) - Tous les résultats affichés
           </div>
@@ -488,6 +512,10 @@ function printFacturation(parcels: any[], stats: any, filters: any) {
   if (filters.cityFilter !== 'Toutes') activeFilters.push(`Agence: ${filters.cityFilter}`)
   if (filters.portTypeFilter === 'port_du') activeFilters.push('Type: Port Dû')
   if (filters.portTypeFilter === 'port_paye') activeFilters.push('Type: Port Payé')
+  if (filters.portTypeFilter === 'port_en_compte_expediteur') activeFilters.push('Type: Port en Compte (Expéditeur)')
+  if (filters.portTypeFilter === 'port_en_compte_destinataire') activeFilters.push('Type: Port en Compte (Destinataire)')
+  if (filters.clientRoleFilter === 'expediteur') activeFilters.push('Client: Expéditeur')
+  if (filters.clientRoleFilter === 'destinataire') activeFilters.push('Client: Destinataire')
   if (filters.dateFilter === 'today') activeFilters.push('Période: Aujourd\'hui')
   if (filters.dateFilter === 'week') activeFilters.push('Période: 7 derniers jours')
   if (filters.dateFilter === 'month') activeFilters.push('Période: 30 derniers jours')
