@@ -15,6 +15,9 @@ const PAYMENT_TYPES: Record<string, { label: string; emoji: string; color: strin
 const TYPE_META: Record<string, { label: string; emoji: string; cls: string }> = {
   port_du: { label: 'Port Dû', emoji: '📮', cls: 'bg-orange-100 text-orange-700' },
   cod: { label: 'COD', emoji: '💰', cls: 'bg-green-100 text-green-700' },
+  ports_payes: { label: 'Ports Payés', emoji: '💵', cls: 'bg-blue-100 text-blue-700' },
+  compte_expediteur: { label: 'Compte Expéditeur', emoji: '💼', cls: 'bg-purple-100 text-purple-700' },
+  compte_destinataire: { label: 'Compte Destinataire', emoji: '🖐️', cls: 'bg-teal-100 text-teal-700' },
 }
 
 const transferType = (t: any): string => (t.type === 'cod' ? 'cod' : 'port_du')
@@ -36,7 +39,8 @@ export default function AdminVersementsTab({
   const [statusFilter, setStatusFilter] = useState('all') // all, pending, confirmed, rejected
   const [cityFilter, setCityFilter] = useState('all')
   const [paymentFilter, setPaymentFilter] = useState('all') // all, especes, cheque, virement
-  const [typeFilter, setTypeFilter] = useState('all') // all, port_du, cod
+  const [typeFilter, setTypeFilter] = useState('all') // all, port_du, cod, ports_payes, etc.
+  const [fromRoleFilter, setFromRoleFilter] = useState('all') // all, agent (livreur), chef_agence
   const [datePreset, setDatePreset] = useState<DateFilterPreset>('all')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -67,19 +71,20 @@ export default function AdminVersementsTab({
     [adminTransfers]
   )
 
-  // Base filtrée (ville + paiement + période + recherche) — les totaux reflètent ces filtres
+  // Base filtrée (ville + paiement + type + fromRole + période + recherche) — les totaux reflètent ces filtres
   const baseFiltered = useMemo(() => {
     let list = adminTransfers
     if (cityFilter !== 'all') list = list.filter((t: any) => t.city === cityFilter)
     if (paymentFilter !== 'all') list = list.filter((t: any) => (t.paymentType || 'especes') === paymentFilter)
     if (typeFilter !== 'all') list = list.filter((t: any) => transferType(t) === typeFilter)
+    if (fromRoleFilter !== 'all') list = list.filter((t: any) => (t.fromRole || 'agent') === fromRoleFilter)
     if (search.trim()) {
       const q = search.toLowerCase()
       list = list.filter((t: any) => (t.fromName || '').toLowerCase().includes(q))
     }
     list = filterByDate(list, datePreset, dateFrom, dateTo, transferDate)
     return list
-  }, [adminTransfers, cityFilter, paymentFilter, typeFilter, search, datePreset, dateFrom, dateTo])
+  }, [adminTransfers, cityFilter, paymentFilter, typeFilter, fromRoleFilter, search, datePreset, dateFrom, dateTo])
 
   const filtered = baseFiltered.filter((t: any) => {
     if (statusFilter === 'all') return true
@@ -370,7 +375,42 @@ export default function AdminVersementsTab({
           ))}
         </div>
 
-        {/* Type de versement (Port Dû / COD) */}
+        {/* Flux versements (Livreur → Chef ou Chef → Admin) */}
+        <div className="flex gap-2 flex-wrap">
+          <span className="text-sm font-semibold text-gray-700 flex items-center">Flux:</span>
+          <button
+            onClick={() => setFromRoleFilter('all')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
+              fromRoleFilter === 'all'
+                ? 'bg-indigo-600 text-white border-indigo-600'
+                : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+            }`}
+          >
+            Tous
+          </button>
+          <button
+            onClick={() => setFromRoleFilter('agent')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
+              fromRoleFilter === 'agent'
+                ? 'bg-indigo-600 text-white border-indigo-600'
+                : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+            }`}
+          >
+            🚗 Livreur → Chef d'agence
+          </button>
+          <button
+            onClick={() => setFromRoleFilter('chef_agence')}
+            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
+              fromRoleFilter === 'chef_agence'
+                ? 'bg-indigo-600 text-white border-indigo-600'
+                : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
+            }`}
+          >
+            👔 Chef d'agence → Admin
+          </button>
+        </div>
+
+        {/* Type de versement (Port Dû / COD / Ports Payés / Comptes) */}
         <div className="flex gap-2 flex-wrap">
           <button
             onClick={() => setTypeFilter('all')}
@@ -823,6 +863,9 @@ export default function AdminVersementsTab({
                   >
                     <option value="port_du">📮 Port Dû</option>
                     <option value="cod">💰 COD</option>
+                    <option value="ports_payes">💵 Ports Payés</option>
+                    <option value="compte_expediteur">💼 Compte Expéditeur</option>
+                    <option value="compte_destinataire">🖐️ Compte Destinataire</option>
                   </select>
                 </div>
               </div>

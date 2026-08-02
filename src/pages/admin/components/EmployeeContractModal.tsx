@@ -68,6 +68,19 @@ export default function EmployeeContractModal({ contractModal, setContractModal 
           </div>
 
           <div>
+            <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">
+              📅 Date de redaction du contrat <span className="text-[10px] text-gray-400 normal-case">(optionnel - par defaut: aujourd'hui)</span>
+            </label>
+            <input
+              type="date"
+              value={form.dateRedaction || ''}
+              onChange={e => updateFormField('dateRedaction', e.target.value)}
+              placeholder="JJ/MM/AAAA"
+              className="w-full border border-gray-300 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
+            />
+          </div>
+
+          <div>
             <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Poste / Fonction</label>
             <input
               value={form.poste}

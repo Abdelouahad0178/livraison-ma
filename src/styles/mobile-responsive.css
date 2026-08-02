@@ -1,0 +1,215 @@
+/* Styles responsive pour mobile - Chef d'agence */
+
+/* Containers et layouts */
+@media (max-width: 768px) {
+  /* Tables responsive - Scroll horizontal */
+  .table-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Forcer les tableaux à garder leur largeur */
+  table {
+    min-width: 800px;
+  }
+
+  /* Grilles - Passage en colonne sur mobile */
+  .grid-cols-2,
+  .grid-cols-3,
+  .grid-cols-4,
+  .grid-cols-5,
+  .grid-cols-6,
+  .md\\:grid-cols-2,
+  .md\\:grid-cols-3,
+  .md\\:grid-cols-4,
+  .md\\:grid-cols-5,
+  .md\\:grid-cols-6 {
+    grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+  }
+
+  /* Stats cards - Stack verticalement */
+  .stats-grid {
+    grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+  }
+
+  /* Formulaires - Pleine largeur */
+  .form-grid {
+    grid-template-columns: repeat(1, minmax(0, 1fr)) !important;
+  }
+
+  /* Boutons - Pleine largeur ou stack */
+  .button-group {
+    flex-direction: column !important;
+    width: 100%;
+  }
+
+  .button-group > button {
+    width: 100%;
+  }
+
+  /* Modals - Plein écran sur mobile */
+  .modal-content {
+    max-width: 100vw !important;
+    max-height: 100vh !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+  }
+
+  /* Headers sticky */
+  .sticky-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: white;
+  }
+
+  /* Réduire les padding sur mobile */
+  .p-6, .p-8 {
+    padding: 1rem !important;
+  }
+
+  .px-6, .px-8 {
+    padding-left: 1rem !important;
+    padding-right: 1rem !important;
+  }
+
+  .py-6, .py-8 {
+    padding-top: 1rem !important;
+    padding-bottom: 1rem !important;
+  }
+
+  /* Text sizing sur mobile */
+  .text-3xl {
+    font-size: 1.5rem !important;
+  }
+
+  .text-2xl {
+    font-size: 1.25rem !important;
+  }
+
+  .text-xl {
+    font-size: 1.125rem !important;
+  }
+
+  /* Cacher certains éléments non essentiels sur mobile */
+  .hide-mobile {
+    display: none !important;
+  }
+
+  /* Stack les filtres verticalement */
+  .filters-container {
+    flex-direction: column !important;
+    gap: 0.5rem !important;
+  }
+
+  .filters-container > * {
+    width: 100% !important;
+  }
+
+  /* Scroll horizontal pour nav tabs */
+  .nav-tabs {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: none;
+  }
+
+  .nav-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  /* Cartes - Pleine largeur */
+  .card {
+    border-radius: 0.5rem !important;
+  }
+
+  /* Fix overflow sur les containers */
+  .overflow-container {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* Améliorer les inputs sur mobile */
+  input, select, textarea {
+    font-size: 16px !important; /* Empêche le zoom sur iOS */
+  }
+
+  /* Boutons flottants pour actions rapides */
+  .floating-action {
+    position: fixed;
+    bottom: 1rem;
+    right: 1rem;
+    z-index: 50;
+    box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  }
+
+  /* Espacements réduits */
+  .space-y-6 > * + * {
+    margin-top: 1rem !important;
+  }
+
+  .space-y-4 > * + * {
+    margin-top: 0.75rem !important;
+  }
+
+  .gap-6 {
+    gap: 1rem !important;
+  }
+
+  .gap-4 {
+    gap: 0.75rem !important;
+  }
+}
+
+/* Extra small screens (< 480px) */
+@media (max-width: 480px) {
+  /* Tables encore plus compactes */
+  table {
+    font-size: 0.75rem !important;
+  }
+
+  th, td {
+    padding: 0.5rem 0.25rem !important;
+  }
+
+  /* Très petit texte pour les stats */
+  .stat-value {
+    font-size: 1.25rem !important;
+  }
+
+  /* Réduire encore plus les padding */
+  .p-4 {
+    padding: 0.75rem !important;
+  }
+
+  .px-4 {
+    padding-left: 0.75rem !important;
+    padding-right: 0.75rem !important;
+  }
+}
+
+/* Landscape mode sur mobile */
+@media (max-width: 768px) and (orientation: landscape) {
+  /* Réduire la hauteur des headers */
+  .header {
+    padding-top: 0.5rem !important;
+    padding-bottom: 0.5rem !important;
+  }
+
+  /* Maximiser l'espace vertical */
+  .min-h-screen {
+    min-height: 100vh !important;
+  }
+}
+
+/* Touch targets - Améliorer l'accessibilité tactile */
+@media (max-width: 768px) {
+  button, a, input[type="checkbox"], input[type="radio"] {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Espacer les éléments cliquables */
+  .clickable-list > * {
+    margin-bottom: 0.5rem;
+  }
+}

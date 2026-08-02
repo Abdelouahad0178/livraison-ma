@@ -1,11 +1,13 @@
 export function printEmployeeContract(employee: any, form: any) {
-  const logoUrl = window.location.origin + '/LOGO.jpg'
-  const today = new Date().toLocaleDateString('fr-MA', { day: '2-digit', month: 'long', year: 'numeric' })
+  const logoUrl = window.location.origin + '/LOGO3.jpg'
+  // Utiliser la date personnalisée si fournie, sinon la date du jour
+  const contractDate = form.dateRedaction
+    ? new Date(form.dateRedaction).toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    : new Date().toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: 'numeric' })
   const fmt = (d: any) => d ? new Date(d).toLocaleDateString('fr-MA', { day: '2-digit', month: 'long', year: 'numeric' }) : '_______________'
   const fmtSalaire = (s: any) => s ? parseFloat(s).toLocaleString('fr-MA') + ' DH' : '_______________'
   const typeLabel = form.typeContrat === 'CDI' ? 'INDETERMINEE' : 'DETERMINEE'
   const dureeCDD = form.typeContrat === 'CDD' && form.dateFin ? `du ${fmt(form.dateDebut)} au ${fmt(form.dateFin)}` : ''
-  const ftxt = `BG EXPRESS &nbsp;|&nbsp; N 19, Rue 5, Hay Tissir2 - Casablanca &nbsp;|&nbsp; 0522 62 92 89 &nbsp;|&nbsp; bgexpress2019@gmail.com &nbsp;|&nbsp; Genere le ${today}`
 
   const html = `<!DOCTYPE html>
 <html lang="fr">
@@ -23,6 +25,7 @@ export function printEmployeeContract(employee: any, form: any) {
     .hdr { display:flex; align-items:center; border:2px solid #1e3a8a; padding:6px 12px; gap:12px; margin-bottom:7px; background:#eff6ff; }
     .hdr-info { font-size:8pt; color:#374151; line-height:1.45; }
     .hdr-info b { color:#1e3a8a; font-size:10.5pt; display:block; }
+    .logo-text { font-size:24pt; font-weight:900; color:#1e3a8a; letter-spacing:2px; text-transform:uppercase; background:linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); -webkit-background-clip:text; -webkit-text-fill-color:transparent; background-clip:text; }
     .hdr2 { display:flex; align-items:center; border:1px solid #1e3a8a; padding:4px 10px; gap:10px; margin-bottom:6px; background:#eff6ff; }
     h1 { font-size:12.5pt; text-align:center; text-transform:uppercase; letter-spacing:1px; margin:7px 0 2px; color:#1e3a8a; }
     .subtitle { text-align:center; font-size:8pt; color:#374151; margin-bottom:7px; border-bottom:1px solid #e5e7eb; padding-bottom:5px; }
@@ -44,15 +47,15 @@ export function printEmployeeContract(employee: any, form: any) {
 <div class="page">
   <div class="body">
     <div class="hdr">
-      <img src="${logoUrl}" style="height:40px;object-fit:contain" onerror="this.style.display='none'">
-      <div class="hdr-info"><b>BG EXPRESS</b>N 19, Rue 5, Hay Tissir2 - Casablanca &nbsp;|&nbsp; 0522 62 92 89 &nbsp;|&nbsp; 0661 97 86 12 &nbsp;|&nbsp; bgexpress2019@gmail.com</div>
-      <div style="margin-left:auto;text-align:right;font-size:8pt;color:#374151;white-space:nowrap">Fait a Casablanca<br><strong>Le : ${today}</strong></div>
+      <img src="${logoUrl}" style="height:80px;object-fit:contain" onerror="this.style.display='none'">
+      <div class="hdr-info">LOTISSEMENT AL MOSTAQBAL SN LAAYOUNE - LAAYOUNE &nbsp;|&nbsp; 0661 97 86 12 &nbsp;|&nbsp; bgonline2024@gmail.com</div>
+      <div style="margin-left:auto;text-align:right;font-size:8pt;color:#374151;white-space:nowrap">Fait a LAAYOUNE<br><strong>Le : ${contractDate}</strong></div>
     </div>
     <h1>Contrat de Travail a Duree ${typeLabel}</h1>
     <div class="subtitle">Regi par le Code du Travail Marocain - Loi n 65-99 et ses textes d'application</div>
     <h2>Article 1 - Parties au contrat</h2>
     <div class="art">
-      <p><strong>L'Employeur :</strong> La societe <strong>BG EXPRESS</strong>, societe a responsabilite limitee de droit marocain, dont le siege social est sis N 19, Rue 5, Hay Tissir2 - Casablanca, representee par son gerant, ci-apres denommee l'Employeur.</p>
+      <p><strong>L'Employeur :</strong> La societe <strong>BG ONLINE</strong>, societe a responsabilite limitee de droit marocain, dont le siege social est sis LOTISSEMENT AL MOSTAQBAL SN LAAYOUNE - LAAYOUNE, representee par son gerant, ci-apres denommee l'Employeur.</p>
       <p style="margin-top:4px"><strong>Le(la) Salarie(e) :</strong></p>
       <table class="info">
         <tr><td class="lbl">Nom et prenom</td><td><strong>${employee.name || '_______________'}</strong></td><td class="lbl">N CIN</td><td>${employee.cin || '_______________'}</td></tr>
@@ -65,12 +68,12 @@ export function printEmployeeContract(employee: any, form: any) {
     </div>
     <h2>Article 2 - Objet et lieu de travail</h2>
     <div class="art">
-      <p>L'employeur engage le(la) salarie(e) en qualite de <strong>${form.poste}</strong>, au sein du departement <strong>${form.departement}</strong>, pour exercer ses fonctions dans l'agence de <strong>${form.lieuTravail || 'Casablanca'}</strong>.</p>
+      <p>L'employeur engage le(la) salarie(e) en qualite de <strong>${form.poste}</strong>, au sein du departement <strong>${form.departement}</strong>, pour exercer ses fonctions dans toutes les agences du maroc.</p>
       <p>Le(la) salarie(e) s'engage a executer les taches inherentes a son poste avec diligence, loyaute et professionnalisme, conformement aux directives de la hierarchie et au reglement interieur de la societe.</p>
     </div>
     <h2>Article 2.1 - Clause de mobilite geographique</h2>
     <div class="art">
-      <p>Le(la) salarie(e) accepte expressement que la societe BG EXPRESS puisse, en fonction des necessites du service et de l'organisation de l'entreprise, l'affecter dans toute agence ou site d'exploitation situe sur le territoire marocain. Cette mobilite geographique fait partie integrante des conditions d'execution du present contrat.</p>
+      <p>Le(la) salarie(e) accepte expressement que la societe BG ONLINE puisse, en fonction des necessites du service et de l'organisation de l'entreprise, l'affecter dans toute agence ou site d'exploitation situe sur le territoire marocain. Cette mobilite geographique fait partie integrante des conditions d'execution du present contrat.</p>
       <p>En cas de mutation definitive, l'employeur s'engage a en informer le(la) salarie(e) par ecrit avec un preavis raisonnable.</p>
     </div>
     <h2>Article 3 - Duree et prise d'effet</h2>
@@ -85,13 +88,12 @@ export function printEmployeeContract(employee: any, form: any) {
     <h2>Article 5 - Remuneration</h2>
     <div class="art"><p>En contrepartie de ses services, le(la) salarie(e) percevra un <strong>salaire brut mensuel de ${fmtSalaire(form.salaireBrut)}</strong>, soumis aux retenues legales obligatoires, verse au plus tard le dernier jour ouvrable de chaque mois.${form.avantages ? ` <strong>Avantages :</strong> ${form.avantages}.` : ''}</p></div>
   </div>
-  <div class="footer">${ftxt}</div>
 </div>
 <div class="page">
   <div class="body">
     <div class="hdr2">
-      <img src="${logoUrl}" style="height:26px;object-fit:contain" onerror="this.style.display='none'">
-      <div style="font-size:8pt;font-weight:bold;color:#1e3a8a">BG EXPRESS - Contrat de Travail a Duree ${typeLabel} - ${employee.name || ''}</div>
+      <img src="${logoUrl}" style="height:50px;object-fit:contain" onerror="this.style.display='none'">
+      <div style="font-size:8pt;font-weight:bold;color:#1e3a8a">BG ONLINE - Contrat de Travail a Duree ${typeLabel} - ${employee.name || ''}</div>
       <div style="margin-left:auto;font-size:7.5pt;color:#6b7280">Page 2 / 2</div>
     </div>
     <h2>Article 6 - Duree et organisation du travail</h2>
@@ -121,11 +123,10 @@ export function printEmployeeContract(employee: any, form: any) {
     <div class="art"><p>Tout differend relatif a l'execution, l'interpretation ou la resiliation du present contrat sera soumis, a defaut de reglement amiable, aux juridictions du travail competentes. Convention collective applicable : <em>${form.conventionColl}</em>.</p></div>
     <div class="mention">Le present contrat est etabli en deux exemplaires originaux de valeur egale, un exemplaire remis a chaque partie.</div>
     <div class="sig-block">
-      <div class="sig-col"><div><strong>L'Employeur</strong></div><div style="color:#374151;margin-top:2px;font-size:8.5pt">BG EXPRESS - Casablanca</div><div class="sig-line">Cachet et Signature</div></div>
+      <div class="sig-col"><div><strong>L'Employeur</strong></div><div style="color:#374151;margin-top:2px;font-size:8.5pt">BG ONLINE</div><div class="sig-line">Cachet et Signature</div></div>
       <div class="sig-col"><div><strong>Le(la) Salarie(e)</strong></div><div style="color:#374151;margin-top:2px;font-size:8.5pt">${employee.name || ''}</div><div class="sig-line">Lu et approuve - Signature</div></div>
     </div>
   </div>
-  <div class="footer">${ftxt}</div>
 </div>
 <script>window.onload = function() { window.print(); };<\/script>
 </body>

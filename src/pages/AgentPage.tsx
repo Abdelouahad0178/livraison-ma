@@ -9,8 +9,9 @@ import {
   createParcel, subscribeAgentParcels, getMoreAgentParcels, getAccurateAgencyStats,
   updateParcel, deleteParcel, markParcelAsReturned, loadReturnedParcelOnTruck, validateReturnArrival, validateParcelEntry,
   updateParcelStatus, isParcelVisibleInDestinationAgency,
-  subscribeAgencyParcels, subscribeAgencyReturnParcels, subscribePendingAideAgentParcels,
-  createReturnParcel, searchParcelByTrackingId, searchParcels, getMoreAgencyParcels,
+  subscribeAgencyParcels, subscribeAgencyReturnParcels, subscribePendingAideAgentParcels, subscribeAllParcels,
+  createReturnParcel, searchParcelByTrackingId, searchParcels, getMoreAgencyParcels, getParcelsPage,
+  subscribeAllParcelsWithArchives, loadMoreParcelsWithArchives,
 } from '../firebase/parcels'
 import { markPortDuReceivedByChef, markParcelChefPointed } from '../firebase/finance'
 import { collectPortDu } from '../firebase/cod'
@@ -74,6 +75,7 @@ import AgentHeader from './agent/AgentHeader'
 import AgentReceiveModal from './agent/modals/AgentReceiveModal'
 import AgentReturnModal from './agent/modals/AgentReturnModal'
 import { printCharge, printTable, printBonRamassage } from '../utils/agentPrintUtils'
+import { getOperationalDayRange } from '../config/operationalDay'
 import DateFilter from './agent/DateFilter'
 import ParcelsTab from './agent/tabs/ParcelsTab'  // ⭐ Import direct pour mise à jour temps réel
 import DirectorCaisseSimple from './director/DirectorCaisseSimple'  // ⭐ Nouveau système de caisse simple
@@ -94,6 +96,8 @@ const NotesAgentsTab = lazy(() => import('./agent/tabs/NotesAgentsTab'))
 const LostParcelsTab = lazy(() => import('./agent/tabs/LostParcelsTab'))
 const AgentClientPortDuTab = lazy(() => import('./agent/tabs/AgentClientPortDuTab'))
 const AgentPortsEnCompteTab = lazy(() => import('./agent/tabs/AgentPortsEnCompteTab'))
+const AgentVersementsTab = lazy(() => import('./agent/tabs/AgentVersementsTab'))
+const AgentInvoicesTab = lazy(() => import('./agent/tabs/AgentInvoicesTab'))
 
 const MOD_STATUS = {
   pending:  { label: 'En attente', bg: 'bg-amber-100', text: 'text-amber-700' },
@@ -271,6 +275,12 @@ export default function AgentPage() {
   const [loadingAllAgency, setLoadingAllAgency] = useState(false)
   const [loadAllAgencyProgress, setLoadAllAgencyProgress] = useState(0)
   const agencyLastDocsRef = useRef<any>(null)
+  // Mode "Toutes villes" pour agent pro uniquement
+  const [showAllCities, setShowAllCities] = useState(false)
+  // Curseurs séparés pour chargement progressif (parcels + archives)
+  const [allCitiesParcelsLastSnap, setAllCitiesParcelsLastSnap] = useState<any>(null)
+  const [allCitiesArchivesLastSnap, setAllCitiesArchivesLastSnap] = useState<any>(null)
+  const [allCitiesTotalLoaded, setAllCitiesTotalLoaded] = useState(0)
   const agencyPagedRef = useRef(false)
   const agencyDateFilterRef = useRef<{ dateFrom: Date | null; dateTo: Date | null }>({ dateFrom: null, dateTo: null })
 
@@ -295,6 +305,7 @@ export default function AgentPage() {
   const [destinationCityFilter, setDestinationCityFilter] = useState('all')  // ⭐ Filtre ville de destination
   const [driverFilter, setDriverFilter] = useState('all')  // ⭐ Filtre par livreur/chauffeur
   const [portTypeFilter, setPortTypeFilter] = useState('all')  // ⭐ Filtre par type de port
+  const [encaissementFilter, setEncaissementFilter] = useState('all')  // ⭐ Filtre par type d'encaissement
   const [driverFilteredParcels, setDriverFilteredParcels] = useState<any[]>([]) // Colis du livreur filtré
   const [loadingDriverParcels, setLoadingDriverParcels] = useState(false)
   const [extraParcels, setExtraParcels]             = useState<any[]>([])
@@ -562,6 +573,27 @@ export default function AgentPage() {
         auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
       }
     }
+    // 🌍 Mode TOUTES VILLES PROGRESSIF pour Agent Pro (charge initial: 1000, puis auto-load)
+    if (profile.role === 'agentpro' && showAllCities) {
+      console.log(`🚀 [Agent Pro] Chargement progressif de TOUTES les villes + archives (initial: 1000)`)
+      const unsubAll = subscribeAllParcelsWithArchives(
+        (result: any) => {
+          console.log(`✅ [Agent Pro - Toutes villes] ${result.totalLoaded} colis chargés (parcels + archives)`)
+          setLiveParcels(result.docs)
+          setLoadingParcels(false)
+          setAllCitiesParcelsLastSnap(result.parcelsLastSnap)
+          setAllCitiesArchivesLastSnap(result.archivesLastSnap)
+          setAllCitiesTotalLoaded(result.totalLoaded)
+          setHasMoreAgency(result.canLoadMore)
+        },
+        onError,
+        1000 // Chargement initial réduit pour démarrage rapide
+      )
+      setReturnParcels([])
+      setPendingAideParcels([])
+      return () => unsubAll()
+    }
+
     if ((profile.role === 'chef_agence' || profile.role === 'agentpro') && profile.city) {
       // Calculer les dates du filtre
       let filterDateFrom: Date | null = null
@@ -632,7 +664,7 @@ export default function AgentPage() {
       setLoadingParcels(false)
     }, onError)
     return () => unsub()
-  }, [profile?.role, profile?.city, authTick, datePreset, dateFrom, dateTo, operationalDay])
+  }, [profile?.role, profile?.city, authTick, datePreset, dateFrom, dateTo, operationalDay, showAllCities])
 
   // 🚀 Chargement automatique de tous les colis du chef d'agence en arrière-plan
   useEffect(() => {
@@ -718,6 +750,36 @@ export default function AgentPage() {
       console.error('[Chef d\'agence] loadAll error:', err)
     } finally {
       setLoadingAllAgency(false)
+    }
+  }
+
+  // 🌍 Charger plus de colis en mode "Toutes villes" (Agent Pro uniquement)
+  const loadMoreAllCitiesParcels = async () => {
+    if (!showAllCities || !hasMoreAgency || loadingMoreAgency) return
+    if (!allCitiesParcelsLastSnap && !allCitiesArchivesLastSnap) return
+
+    setLoadingMoreAgency(true)
+    try {
+      console.log(`⏳ [Agent Pro] Chargement du lot suivant... (actuellement: ${allCitiesTotalLoaded})`)
+
+      const result = await loadMoreParcelsWithArchives(
+        allCitiesParcelsLastSnap,
+        allCitiesArchivesLastSnap,
+        liveParcels,
+        1000 // Charger par lots de 1000
+      )
+
+      setLiveParcels(result.docs)
+      setAllCitiesParcelsLastSnap(result.parcelsLastSnap)
+      setAllCitiesArchivesLastSnap(result.archivesLastSnap)
+      setAllCitiesTotalLoaded(result.totalLoaded)
+      setHasMoreAgency(result.canLoadMore)
+
+      console.log(`✅ [Agent Pro] +${result.newItemsCount} nouveaux colis | Total: ${result.totalLoaded}`)
+    } catch (err) {
+      console.error('[Agent Pro - Chargement progressif] Erreur:', err)
+    } finally {
+      setLoadingMoreAgency(false)
     }
   }
 
@@ -1186,16 +1248,25 @@ export default function AgentPage() {
     ;(parcels || []).forEach(p => map.set(p.id, p))
     ;(returnParcels || []).forEach(p => map.set(p.id, p))
     ;(extraParcels || []).forEach(p => map.set(p.id, p))
-    // Si un livreur est filtré, inclure tous ses colis
+    // Si un livreur est filtré, inclure ses colis (filtrés par date opérationnelle si actif)
     if (driverFilter !== 'all') {
-      ;(driverFilteredParcels || []).forEach(p => map.set(p.id, p))
+      let driverParcels = driverFilteredParcels || []
+      // ⚠️ FILTRE CRITIQUE: Si le jour d'opération est sélectionné, ne garder QUE les colis de ce jour
+      if (datePreset === 'operational' && operationalDay) {
+        const { start: opStart, end: opEnd } = getOperationalDayRange(operationalDay)
+        driverParcels = driverParcels.filter((p: any) => {
+          const pDate = p.createdAt?.toDate?.() || new Date(0)
+          return pDate >= opStart && pDate <= opEnd
+        })
+      }
+      driverParcels.forEach(p => map.set(p.id, p))
     }
     return [...map.values()].sort((a, b) => {
       const ta = a.createdAt?.toDate?.() || new Date(0)
       const tb = b.createdAt?.toDate?.() || new Date(0)
       return tb - ta
     })
-  }, [parcels, returnParcels, extraParcels, driverFilter, driverFilteredParcels])
+  }, [parcels, returnParcels, extraParcels, driverFilter, driverFilteredParcels, datePreset, operationalDay])
 
   const profileCity = profile?.city
   const profileRole = profile?.role
@@ -1206,14 +1277,13 @@ export default function AgentPage() {
       ? serverSearchResults
       : allDisplayParcels
 
-    // ⭐ Si un livreur est filtré, ne pas appliquer le filtre par date (montrer tous ses colis)
-    const dateFilteredData = driverFilter !== 'all'
-      ? sourceData
-      : filterByDate(sourceData, datePreset, dateFrom, dateTo, parcelDate, operationalDay)
+    // ✅ Toujours appliquer le filtre par date (même si un livreur est sélectionné)
+    const dateFilteredData = filterByDate(sourceData, datePreset, dateFrom, dateTo, parcelDate, operationalDay)
 
     return dateFilteredData.filter((p: any) => {
-    // 🔒 FILTRE VILLE OBLIGATOIRE : Le chef d'agence ne voit QUE les colis de sa ville
-    if (profileCity && (profileRole === 'chef_agence' || profileRole === 'agentpro')) {
+    // 🔒 FILTRE VILLE OBLIGATOIRE (sauf en mode "Toutes les villes")
+    // Le chef d'agence ne voit QUE les colis de sa ville, SAUF si showAllCities est activé
+    if (!showAllCities && profileCity && (profileRole === 'chef_agence' || profileRole === 'agentpro')) {
       // Pour les retours, vérifier destinationCity directement (après swap, c'est la ville de retour)
       const isReturnToThisCity = (p.status?.includes('Retour') || p.wasReturned) && p.destinationCity === profileCity
       const destinationVisible = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
@@ -1258,6 +1328,13 @@ export default function AgentPage() {
     if (portTypeFilter !== 'all' && p.portType !== portTypeFilter) {
       return false
     }
+    // ⭐ Filtre par type d'encaissement
+    if (encaissementFilter !== 'all') {
+      if (encaissementFilter === 'simple' && p.codAmount > 0) return false
+      if (encaissementFilter === 'especes' && p.serviceType !== 'especes') return false
+      if (encaissementFilter === 'cheque' && p.serviceType !== 'cheque') return false
+      if (encaissementFilter === 'traite' && p.serviceType !== 'traite') return false
+    }
     if (debouncedSearch) {
       // Si on utilise serverSearchResults, pas besoin de refiltrer par recherche
       // (déjà fait par searchParcels côté serveur)
@@ -1265,17 +1342,31 @@ export default function AgentPage() {
         return true
       }
       // Sinon, recherche locale dans les colis chargés
+      const searchLower = debouncedSearch.toLowerCase()
+
+      // Recherche spéciale pour chèques/traites : "c" suivi du montant
+      if (searchLower.startsWith('c') && searchLower.length > 1) {
+        const amountStr = searchLower.substring(1).trim()
+        if (/^\d+$/.test(amountStr)) {
+          // C'est une recherche de type "c150"
+          const isCheckOrTraite = p.serviceType === 'cheque' || p.serviceType === 'traite' || p.serviceType === 'especes'
+          const amountMatch = Math.floor(p.codAmount || 0).toString().includes(amountStr)
+          return isCheckOrTraite && amountMatch
+        }
+      }
+
+      // Recherche normale
       const matches = matchesSearch([
         p.id, p.trackingId, p.senderNic, p.sender?.nic, p.sender?.name, p.sender?.tel,
         p.sender?.city, p.receiver?.name, p.receiver?.tel, p.receiver?.city,
         p.originCity, p.destinationCity,
-      ], debouncedSearch.toLowerCase())
+      ], searchLower)
       return matches
     }
     return true
     })
   }, [allDisplayParcels, datePreset, dateFrom, dateTo, operationalDay, profileCity, profileRole, subTab, uid, serviceFilter,
-       parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, debouncedSearch, serverSearchResults])
+       parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, debouncedSearch, serverSearchResults, showAllCities])
 
   // ── Phase 3: memoized stats — only recompute when Firestore sends new data ──
 
@@ -1761,6 +1852,7 @@ export default function AgentPage() {
     destinationCityFilter, setDestinationCityFilter,  // ⭐ Filtre ville de destination
     driverFilter, setDriverFilter,  // ⭐ Filtre par livreur/chauffeur
     portTypeFilter, setPortTypeFilter,  // ⭐ Filtre par type de port
+    encaissementFilter, setEncaissementFilter,  // ⭐ Filtre par type d'encaissement
     parcelPage, setParcelPage,
     scanOpen, setScanOpen,
     scanQuery, setScanQuery,
@@ -2028,6 +2120,11 @@ export default function AgentPage() {
     hasMoreAgency,
     loadMoreAgencyParcels,
     loadingMoreAgency,
+
+    // ── Agent Pro: Toutes villes (chargement progressif)
+    showAllCities, setShowAllCities,
+    loadMoreAllCitiesParcels,
+    allCitiesTotalLoaded,
   }
 
   // ⭐ Calculer le nombre de COD qui nécessitent une action (badge notification)
@@ -2226,6 +2323,20 @@ export default function AgentPage() {
             allParcels={allDisplayParcels}
             profile={profile}
           />
+        </Suspense>
+      )}
+
+      {/* ── VERSEMENTS ADMIN TAB ── */}
+      {tab === 'versements' && (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+        <Suspense fallback={null}>
+          <AgentVersementsTab profile={profile} />
+        </Suspense>
+      )}
+
+      {/* ── FACTURES TAB ── */}
+      {tab === 'invoices' && (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+        <Suspense fallback={null}>
+          <AgentInvoicesTab profileCity={profile?.city} uid={uid} />
         </Suspense>
       )}
 

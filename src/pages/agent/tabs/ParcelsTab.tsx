@@ -72,9 +72,15 @@ export default function ParcelsTab() {
     destinationCityFilter, setDestinationCityFilter,  // ⭐ Filtre ville de destination
     driverFilter, setDriverFilter,  // ⭐ Filtre par livreur
     portTypeFilter, setPortTypeFilter,  // ⭐ Filtre par type de port
+    encaissementFilter, setEncaissementFilter,  // ⭐ Filtre par type d'encaissement
     showFilters, setShowFilters,
     subTab, setSubTab,
     parcelPage, setParcelPage,
+
+    // Agent Pro: Toutes villes (chargement progressif)
+    showAllCities, setShowAllCities,
+    loadMoreAllCitiesParcels,
+    allCitiesTotalLoaded,
 
     // Azerty fix (component-level, in context)
     needsAzertyFix, azertyFix,
@@ -248,6 +254,18 @@ export default function ParcelsTab() {
   // ⭐ État pour gérer les couleurs des colis par livreur
   const [parcelColors, setParcelColors] = useState<{[key: string]: string}>({})
 
+  // ⭐ État pour transformation groupée Port Dû → Compte Destinataire
+  const [bulkPortDuSelectedIds, setBulkPortDuSelectedIds] = useState<string[]>([])
+  const [bulkPortDuBusy, setBulkPortDuBusy] = useState(false)
+  const [bulkPortDuError, setBulkPortDuError] = useState('')
+
+  // ⭐ États pour la feuille de charge personnalisée
+  const [customSheetSearch, setCustomSheetSearch] = useState('')
+  const [customSheetParcels, setCustomSheetParcels] = useState<any[]>([])
+  const [customSheetDriver, setCustomSheetDriver] = useState('')
+  const [customSheetSearchResult, setCustomSheetSearchResult] = useState<any | null>(null)
+  const [customSheetPointage, setCustomSheetPointage] = useState<{[key: string]: 'livre' | 'non_livre' | 'souffrance'}>({})
+
   // ⭐ Palette de couleurs pour les livreurs (12 couleurs vives)
   const DRIVER_COLORS = [
     '#FFE5E5', // Rose pâle
@@ -349,6 +367,40 @@ export default function ParcelsTab() {
 
     // Ensuite faire l'assignation normale
     await handleBulkAssignDriver(assignableParcels)
+  }
+
+  // ⭐ Transformation groupée Port Dû → Compte Destinataire
+  const handleBulkPortDuToCompte = async () => {
+    if (bulkPortDuSelectedIds.length === 0) {
+      setBulkPortDuError('Aucune expédition sélectionnée')
+      return
+    }
+
+    if (!confirm(`Transformer ${bulkPortDuSelectedIds.length} expédition(s) Port Dû en Port en compte destinataire ?`)) {
+      return
+    }
+
+    setBulkPortDuBusy(true)
+    setBulkPortDuError('')
+
+    try {
+      // Transformer chaque expédition sélectionnée
+      for (const parcelId of bulkPortDuSelectedIds) {
+        await updateParcel(parcelId, {
+          portType: 'port_en_compte_destinataire'
+        })
+      }
+
+      alert(`✅ ${bulkPortDuSelectedIds.length} expédition(s) transformée(s) en Compte Destinataire`)
+
+      // Réinitialiser la sélection
+      setBulkPortDuSelectedIds([])
+    } catch (err: any) {
+      console.error('Erreur transformation groupée:', err)
+      setBulkPortDuError(err.message || 'Erreur lors de la transformation')
+    } finally {
+      setBulkPortDuBusy(false)
+    }
   }
 
   // ⭐ Fonction pour gérer la touche Espace sur le champ de recherche
@@ -528,7 +580,7 @@ export default function ParcelsTab() {
         {<div className="relative">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-blue-500" />
           <input
-            placeholder="🔍 Rechercher par N° EXP, Nom Expéditeur, Nom Destinataire, Téléphone, Ville..."
+            placeholder="🔍 Rechercher par N° EXP, Nom, Téléphone, Ville | c+montant pour chèques (ex: c150)"
             value={search}
             onChange={e => setSearch(e.target.value)}
             onKeyDown={e => {
@@ -584,6 +636,74 @@ export default function ParcelsTab() {
                   {showDeliveredByOthers && <Check className="w-3 h-3 text-white" />}
                 </div>
               </button>
+
+              {/* 🌍 Mode Toutes villes (Agent Pro uniquement) */}
+              {profile?.role === 'agentpro' && (
+                <button
+                  onClick={() => setShowAllCities((v: any) => !v)}
+                  className={`w-full flex items-center justify-between px-4 py-2.5 border rounded-xl shadow-sm transition ${
+                    showAllCities
+                      ? 'bg-blue-50 border-blue-300 hover:bg-blue-100'
+                      : 'bg-white border-gray-200 hover:border-blue-400 hover:bg-blue-50'
+                  }`}
+                >
+                  <div className="flex items-center gap-2">
+                    <span className={`text-lg transition ${showAllCities ? '' : 'grayscale opacity-50'}`}>🌍</span>
+                    <div className="text-left">
+                      <span className={`text-xs font-semibold transition block ${showAllCities ? 'text-blue-700' : 'text-gray-600'}`}>
+                        Toutes les villes (base complète)
+                      </span>
+                      {showAllCities && (
+                        <span className="text-[10px] text-orange-600 font-medium">
+                          ⚠️ Filtres de date et ville désactivés
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className={`w-4 h-4 rounded border transition flex items-center justify-center ${
+                    showAllCities ? 'bg-blue-600 border-blue-600' : 'border-gray-300'
+                  }`}>
+                    {showAllCities && <Check className="w-3 h-3 text-white" />}
+                  </div>
+                </button>
+              )}
+
+              {/* 📦 Charger plus + Indicateur de progression */}
+              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && hasMoreAgency && (
+                <button
+                  onClick={() => {
+                    // En mode "Toutes villes", utiliser loadMoreAllCitiesParcels
+                    if (showAllCities && loadMoreAllCitiesParcels) {
+                      loadMoreAllCitiesParcels()
+                    } else if (loadMoreAgencyParcels) {
+                      loadMoreAgencyParcels()
+                    }
+                  }}
+                  disabled={loadingMoreAgency}
+                  className="w-full flex flex-col items-center justify-center gap-1 px-4 py-2.5 rounded-xl border-2 border-green-300 bg-green-50 text-green-700 text-sm font-bold hover:bg-green-100 disabled:opacity-50 transition shadow-sm"
+                >
+                  {loadingMoreAgency ? (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <span className="w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full animate-spin" />
+                        <span>Chargement en cours...</span>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center gap-2">
+                        <Package className="w-4 h-4" />
+                        {showAllCities ? "🌍 Charger plus (toutes villes)" : "📦 Charger plus d'expéditions"}
+                      </div>
+                      {showAllCities && allCitiesTotalLoaded > 0 && (
+                        <span className="text-[10px] text-green-600 font-normal">
+                          📊 {allCitiesTotalLoaded.toLocaleString()} expéditions chargées
+                        </span>
+                      )}
+                    </>
+                  )}
+                </button>
+              )}
 
               <button
                 onClick={() => setShowFilters((v: any) => !v)}
@@ -686,6 +806,24 @@ export default function ParcelsTab() {
                     ))}
                   </div>
 
+                  {/* Type d'encaissement */}
+                  <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Encaiss.</span>
+                    {[
+                      { key: 'all', label: 'Tous', emoji: '📦' },
+                      { key: 'simple', label: 'Simple', emoji: '💰' },
+                      { key: 'especes', label: 'Espèces', emoji: '💵' },
+                      { key: 'cheque', label: 'Chèque', emoji: '📝' },
+                      { key: 'traite', label: 'Traite', emoji: '📄' },
+                    ].map(({ key, label, emoji }) => (
+                      <button key={key} onClick={() => setEncaissementFilter(key)}
+                        className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
+                          encaissementFilter === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >{emoji} {label}</button>
+                    ))}
+                  </div>
+
                   {/* Créateur */}
                   {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
                     <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
@@ -746,6 +884,7 @@ export default function ParcelsTab() {
                         >{label}</button>
                       ))}
                     </div>
+
                     {datePreset === 'operational' && (
                       <div className="px-4 py-3">
                         <OperationalDaySelector
@@ -1245,6 +1384,398 @@ export default function ParcelsTab() {
                   </div>
                 )
               })()}
+
+              {/* ⭐ FEUILLE DE CHARGE PERSONNALISÉE */}
+              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                <div className="mb-4 bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-300 rounded-2xl p-5 space-y-4">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                      <h3 className="text-base font-bold text-blue-800 flex items-center gap-2">
+                        📋 Feuille de charge personnalisée
+                      </h3>
+                      <p className="text-xs text-blue-600 mt-0.5">
+                        Recherchez et ajoutez des expéditions manuellement
+                      </p>
+                    </div>
+                    {customSheetParcels.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCustomSheetParcels([])
+                          setCustomSheetPointage({})
+                          setCustomSheetDriver('')
+                        }}
+                        className="px-3 py-2 rounded-xl text-xs font-bold bg-red-100 hover:bg-red-200 text-red-700 border border-red-300 transition flex items-center gap-1"
+                      >
+                        <Trash2 className="w-3 h-3" />
+                        Vider la feuille ({customSheetParcels.length})
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Sélection du livreur */}
+                  <div className="bg-white border border-blue-200 rounded-xl px-4 py-3 space-y-3">
+                    <div>
+                      <label className="text-xs font-bold text-blue-700 uppercase tracking-wider block mb-2">
+                        Livreur pour cette feuille *
+                      </label>
+                      <select
+                        value={customSheetDriver}
+                        onChange={e => setCustomSheetDriver(e.target.value)}
+                        className="w-full text-sm font-semibold text-gray-800 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+                      >
+                        <option value="">-- Choisir un livreur --</option>
+                        {(drivers || [])
+                          .filter((d: any) => d.city === profile?.city && ['livreur', 'chauffeur'].includes(d.role) && d.sectorId)
+                          .map((d: any) => (
+                            <option key={d.id} value={d.id}>{d.name}</option>
+                          ))}
+                      </select>
+                    </div>
+                    {customSheetDriver && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          // Charger tous les colis assignés à ce livreur
+                          const driverParcels = allDisplayParcels.filter((p: any) =>
+                            p.deliveryDriverId === customSheetDriver &&
+                            !p.deliveredAt
+                          )
+                          setCustomSheetParcels(driverParcels)
+                          setCustomSheetPointage({})
+                        }}
+                        className="w-full px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold transition flex items-center justify-center gap-2"
+                      >
+                        <Truck className="w-4 h-4" />
+                        Charger la feuille du livreur ({allDisplayParcels.filter((p: any) => p.deliveryDriverId === customSheetDriver && !p.deliveredAt).length} colis)
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Zone de recherche */}
+                  <div className="bg-white border border-blue-200 rounded-xl px-4 py-3 space-y-3">
+                    <label className="text-xs font-bold text-blue-700 uppercase tracking-wider block">
+                      🔍 Rechercher une expédition
+                    </label>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={customSheetSearch}
+                        onChange={e => {
+                          setCustomSheetSearch(e.target.value)
+                          setCustomSheetSearchResult(null)
+                        }}
+                        placeholder="N° EXP, nom, téléphone..."
+                        className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const query = customSheetSearch.trim().toLowerCase()
+                          if (!query) return
+
+                          // Chercher dans TOUTES les expéditions de l'agence
+                          const found = allDisplayParcels.find((p: any) => {
+                            const searchValues = [
+                              p.parcelNumber,
+                              p.sender?.name,
+                              p.sender?.phone,
+                              p.receiver?.name,
+                              p.receiver?.phone,
+                            ]
+                            return matchesSearch(searchValues, query)
+                          })
+
+                          setCustomSheetSearchResult(found || null)
+                        }}
+                        className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold transition flex items-center gap-2"
+                      >
+                        <Search className="w-4 h-4" />
+                        Chercher
+                      </button>
+                    </div>
+
+                    {/* Résultat de recherche */}
+                    {customSheetSearchResult && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="flex-1 space-y-1">
+                            <p className="text-sm font-bold text-gray-800">
+                              📦 {customSheetSearchResult.parcelNumber}
+                            </p>
+                            <p className="text-xs text-gray-600">
+                              <strong>Expéditeur:</strong> {customSheetSearchResult.sender?.name} ({customSheetSearchResult.sender?.phone})
+                            </p>
+                            <p className="text-xs text-gray-600">
+                              <strong>Destinataire:</strong> {customSheetSearchResult.receiver?.name} ({customSheetSearchResult.receiver?.phone})
+                            </p>
+                            <p className="text-xs text-gray-600">
+                              <strong>Destination:</strong> {customSheetSearchResult.destinationCity || customSheetSearchResult.receiver?.city}
+                            </p>
+                          </div>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!customSheetParcels.find((p: any) => p.id === customSheetSearchResult.id)) {
+                                setCustomSheetParcels([...customSheetParcels, customSheetSearchResult])
+                                setCustomSheetSearch('')
+                                setCustomSheetSearchResult(null)
+                              }
+                            }}
+                            disabled={customSheetParcels.find((p: any) => p.id === customSheetSearchResult.id)}
+                            className="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold transition"
+                          >
+                            ➕ Ajouter
+                          </button>
+                        </div>
+                      </div>
+                    )}
+
+                    {customSheetSearch.trim() && !customSheetSearchResult && (
+                      <p className="text-xs text-red-600 font-semibold">
+                        ❌ Aucune expédition trouvée
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Liste des expéditions ajoutées */}
+                  {customSheetParcels.length > 0 && (
+                    <div className="bg-white border border-blue-200 rounded-xl p-4 space-y-3">
+                      <h4 className="text-sm font-bold text-blue-800 flex items-center gap-2">
+                        📋 Expéditions dans la feuille ({customSheetParcels.length})
+                      </h4>
+                      <div className="space-y-2 max-h-96 overflow-y-auto">
+                        {customSheetParcels.map((parcel: any) => (
+                          <div key={parcel.id} className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                            <div className="flex items-start justify-between gap-3 mb-2">
+                              <div className="flex-1 space-y-1">
+                                <p className="text-sm font-bold text-gray-800">
+                                  📦 {parcel.parcelNumber}
+                                </p>
+                                <p className="text-xs text-gray-600">
+                                  {parcel.receiver?.name} - {parcel.receiver?.phone}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {parcel.destinationCity || parcel.receiver?.city}
+                                </p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setCustomSheetParcels(customSheetParcels.filter((p: any) => p.id !== parcel.id))
+                                  const newPointage = {...customSheetPointage}
+                                  delete newPointage[parcel.id]
+                                  setCustomSheetPointage(newPointage)
+                                }}
+                                className="px-2 py-1 rounded-lg bg-red-100 hover:bg-red-200 text-red-700 text-xs font-bold transition"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+
+                            {/* Système de pointage */}
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="text-[10px] font-bold text-gray-500 uppercase">Pointage:</span>
+                              {[
+                                { key: 'livre', label: 'Livré', emoji: '✅', color: 'green' },
+                                { key: 'non_livre', label: 'Non livré', emoji: '❌', color: 'red' },
+                                { key: 'souffrance', label: 'Souffrance', emoji: '⚠️', color: 'orange' },
+                              ].map(({ key, label, emoji, color }) => (
+                                <button
+                                  key={key}
+                                  type="button"
+                                  onClick={() => {
+                                    setCustomSheetPointage({
+                                      ...customSheetPointage,
+                                      [parcel.id]: key as any
+                                    })
+                                  }}
+                                  className={`px-2 py-1 rounded-lg text-[10px] font-bold transition ${
+                                    customSheetPointage[parcel.id] === key
+                                      ? `bg-${color}-600 text-white`
+                                      : `bg-${color}-100 text-${color}-700 hover:bg-${color}-200`
+                                  }`}
+                                >
+                                  {emoji} {label}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* Bouton d'impression */}
+                      <div className="pt-3 border-t border-blue-200 flex items-center justify-between gap-3">
+                        <p className="text-xs text-blue-700">
+                          <strong>{Object.values(customSheetPointage).filter(v => v === 'livre').length}</strong> livrée(s) ·
+                          <strong className="ml-1">{Object.values(customSheetPointage).filter(v => v === 'non_livre').length}</strong> non livrée(s) ·
+                          <strong className="ml-1">{Object.values(customSheetPointage).filter(v => v === 'souffrance').length}</strong> en souffrance
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            // Filtrer uniquement les expéditions livrées (sans les en compte expéditeur)
+                            const livrees = customSheetParcels.filter((p: any) =>
+                              customSheetPointage[p.id] === 'livre' &&
+                              p.portType !== 'en_compte_expediteur'
+                            )
+
+                            if (livrees.length === 0) {
+                              alert('Aucune expédition livrée à imprimer')
+                              return
+                            }
+
+                            // Créer la feuille d'impression
+                            const driverName = drivers?.find((d: any) => d.id === customSheetDriver)?.name || 'Non assigné'
+                            const html = `
+                              <!DOCTYPE html>
+                              <html>
+                              <head>
+                                <meta charset="UTF-8">
+                                <title>Feuille de charge - ${driverName}</title>
+                                <style>
+                                  body { font-family: Arial; padding: 20px; }
+                                  h1 { text-align: center; color: #1e40af; }
+                                  table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+                                  th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
+                                  th { background: #1e40af; color: white; }
+                                  .header { display: flex; justify-content: space-between; margin-bottom: 20px; }
+                                </style>
+                              </head>
+                              <body>
+                                <h1>📋 Feuille de charge - Expéditions livrées</h1>
+                                <div class="header">
+                                  <div><strong>Livreur:</strong> ${driverName}</div>
+                                  <div><strong>Date:</strong> ${new Date().toLocaleDateString('fr-FR')}</div>
+                                  <div><strong>Total:</strong> ${livrees.length} expédition(s)</div>
+                                </div>
+                                <table>
+                                  <thead>
+                                    <tr>
+                                      <th>N° EXP</th>
+                                      <th>Destinataire</th>
+                                      <th>Téléphone</th>
+                                      <th>Ville</th>
+                                      <th>Signature</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    ${livrees.map((p: any) => `
+                                      <tr>
+                                        <td>${p.parcelNumber}</td>
+                                        <td>${p.receiver?.name || ''}</td>
+                                        <td>${p.receiver?.phone || ''}</td>
+                                        <td>${p.destinationCity || p.receiver?.city || ''}</td>
+                                        <td style="height: 40px;"></td>
+                                      </tr>
+                                    `).join('')}
+                                  </tbody>
+                                </table>
+                              </body>
+                              </html>
+                            `
+
+                            const win = window.open('', '_blank')
+                            if (win) {
+                              win.document.write(html)
+                              win.document.close()
+                              win.print()
+                            }
+                          }}
+                          disabled={!customSheetDriver || Object.values(customSheetPointage).filter(v => v === 'livre').length === 0}
+                          className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold transition flex items-center gap-2"
+                        >
+                          <Printer className="w-4 h-4" />
+                          Imprimer feuille finale
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* ⭐ TRANSFORMATION GROUPÉE PORT DÛ → COMPTE DESTINATAIRE */}
+              {(() => {
+                // Filtrer les parcels Port Dû dans ma ville de destination (non livrés)
+                const portDuParcels = filteredParcels.filter((p: any) => {
+                  const isDestinationAgency = p.destinationCity === profile?.city || p.receiver?.city === profile?.city
+                  const isPortDu = p.portType === 'port_du'
+                  const notDelivered = !p.deliveredAt && p.status !== 'Livré'
+                  return isPortDu && isDestinationAgency && notDelivered
+                })
+
+                const selectedPortDuCount = bulkPortDuSelectedIds.filter((id: string) => portDuParcels.some((p: any) => p.id === id)).length
+                const allPortDuSelected = portDuParcels.length > 0 && selectedPortDuCount === portDuParcels.length
+
+                if ((profile?.role === 'chef_agence' || profile?.role === 'agentpro') && portDuParcels.length > 0) {
+                  return (
+                    <div className="mb-4 bg-gradient-to-br from-teal-50 to-cyan-50 border border-teal-200 rounded-2xl p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-2xl">🖐️</span>
+                          <h3 className="font-bold text-teal-800">Transformation Port Dû → Compte Destinataire</h3>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setBulkPortDuError('')
+                            if (allPortDuSelected) {
+                              setBulkPortDuSelectedIds([])
+                            } else {
+                              setBulkPortDuSelectedIds(portDuParcels.map((p: any) => p.id))
+                            }
+                          }}
+                          className={`px-3 py-2 rounded-xl text-xs font-bold border transition ${
+                            allPortDuSelected
+                              ? 'bg-teal-600 text-white border-teal-600 hover:bg-teal-700'
+                              : 'bg-white text-teal-700 border-teal-300 hover:bg-teal-50'
+                          }`}
+                        >
+                          {allPortDuSelected ? 'Désélectionner tout' : 'Sélectionner tout'}
+                        </button>
+                      </div>
+
+                      <p className="text-xs text-teal-700">
+                        {portDuParcels.length} expédition(s) Port Dû disponible(s) · Sélectionnez celles à mettre en compte destinataire
+                      </p>
+
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <p className="text-sm font-semibold text-teal-800">
+                          {selectedPortDuCount} expédition(s) sélectionnée(s)
+                        </p>
+                        {bulkPortDuError && <p className="text-xs font-semibold text-red-600">{bulkPortDuError}</p>}
+                        <div className="ml-auto flex items-center gap-2">
+                          {selectedPortDuCount > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setBulkPortDuError('')
+                                setBulkPortDuSelectedIds([])
+                              }}
+                              className="px-3 py-2 rounded-xl text-xs font-bold border border-red-300 bg-white text-red-700 hover:bg-red-50 transition flex items-center gap-1"
+                            >
+                              <X className="w-3 h-3" />
+                              Annuler ({selectedPortDuCount})
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={handleBulkPortDuToCompte}
+                            disabled={bulkPortDuBusy || selectedPortDuCount === 0}
+                            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-40 text-white text-sm font-bold transition"
+                          >
+                            {bulkPortDuBusy
+                              ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Transformation...</>
+                              : <>🖐️ Transformer en Compte Dest</>
+                            }
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  )
+                }
+                return null
+              })()}
             </div>
           )
         })()}
@@ -1542,34 +2073,67 @@ export default function ParcelsTab() {
                         >
                           {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
                             <td className="px-3 py-3 text-center border-r border-gray-100 bg-green-50/30">
-                              {isAssignable ? (
-                                <input
-                                  type="checkbox"
-                                  checked={assignSelected}
-                                  onChange={e => {
-                                    setBulkAssignError('')
-                                    const checked = e.target.checked
+                              <div className="flex flex-col items-center gap-1">
+                                {/* Checkbox assignation livreur */}
+                                {isAssignable ? (
+                                  <input
+                                    type="checkbox"
+                                    checked={assignSelected}
+                                    onChange={e => {
+                                      e.stopPropagation()
+                                      setBulkAssignError('')
+                                      const checked = e.target.checked
 
-                                    setBulkAssignSelectedIds((prev: any) => {
-                                      if (checked) {
-                                        return [...new Set([...prev, parcel.id])]
-                                      } else {
-                                        return prev.filter((id: any) => id !== parcel.id)
+                                      setBulkAssignSelectedIds((prev: any) => {
+                                        if (checked) {
+                                          return [...new Set([...prev, parcel.id])]
+                                        } else {
+                                          return prev.filter((id: any) => id !== parcel.id)
+                                        }
+                                      })
+
+                                      // Colorer immédiatement si un livreur est sélectionné et on coche
+                                      if (checked && bulkAssignDriverId) {
+                                        const driverColor = getDriverColor(bulkAssignDriverId)
+                                        setParcelColors(prev => ({ ...prev, [parcel.id]: driverColor }))
                                       }
-                                    })
+                                    }}
+                                    tabIndex={0}
+                                    className="w-4 h-4 accent-green-600 cursor-pointer checkbox-assign-table"
+                                    title="Assignation livreur"
+                                  />
+                                ) : (
+                                  <span className="text-gray-300 text-xs">—</span>
+                                )}
 
-                                    // Colorer immédiatement si un livreur est sélectionné et on coche
-                                    if (checked && bulkAssignDriverId) {
-                                      const driverColor = getDriverColor(bulkAssignDriverId)
-                                      setParcelColors(prev => ({ ...prev, [parcel.id]: driverColor }))
-                                    }
-                                  }}
-                                  tabIndex={0}
-                                  className="w-4 h-4 accent-green-600 cursor-pointer checkbox-assign-table"
-                                />
-                              ) : (
-                                <span className="text-gray-300">—</span>
-                              )}
+                                {/* Checkbox transformation Port Dû → Compte Destinataire */}
+                                {(() => {
+                                  const isDestinationAgency = parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city
+                                  const isPortDu = parcel.portType === 'port_du'
+                                  const notDelivered = !parcel.deliveredAt && parcel.status !== 'Livré'
+
+                                  if (!isPortDu || !isDestinationAgency || !notDelivered) return null
+
+                                  const portDuSelected = bulkPortDuSelectedIds.includes(parcel.id)
+                                  return (
+                                    <input
+                                      type="checkbox"
+                                      checked={portDuSelected}
+                                      onChange={e => {
+                                        e.stopPropagation()
+                                        setBulkPortDuError('')
+                                        setBulkPortDuSelectedIds((prev: string[]) => e.target.checked
+                                          ? [...new Set([...prev, parcel.id])]
+                                          : prev.filter((id: string) => id !== parcel.id)
+                                        )
+                                      }}
+                                      tabIndex={0}
+                                      className="w-4 h-4 accent-teal-600 cursor-pointer"
+                                      title="🖐️ Transformer en Compte Destinataire"
+                                    />
+                                  )
+                                })()}
+                              </div>
                             </td>
                           )}
                           {visibleColumns.nexp && (
@@ -1633,7 +2197,7 @@ export default function ParcelsTab() {
                                   className="text-base hover:scale-110 transition-transform cursor-pointer"
                                   title="Marquer comme Livré"
                                 >
-                                  🖐️
+                                  ✅
                                 </button>
                               )}
                             </div>
@@ -1963,13 +2527,17 @@ export default function ParcelsTab() {
                   >
                   {/* NOUVELLE POLITIQUE : Plus de sélection validation nécessaire */}
                   {canLoadTransport && (
-                    <label className={`mb-3 flex items-center gap-2 rounded-xl border px-3 py-2 cursor-pointer transition ${
-                      bulkSelected ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-blue-200'
-                    }`}>
+                    <label
+                      onClick={e => e.stopPropagation()}
+                      className={`mb-3 flex items-center gap-2 rounded-xl border px-3 py-2 cursor-pointer transition ${
+                        bulkSelected ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-blue-200'
+                      }`}
+                    >
                       <input
                         type="checkbox"
                         checked={bulkSelected}
                         onChange={e => {
+                          e.stopPropagation()
                           setBulkLoadError('')
                           setBulkLoadSelectedIds((prev: any) => e.target.checked
                             ? [...new Set([...prev, parcel.id])]
@@ -2021,6 +2589,44 @@ export default function ParcelsTab() {
                         </div>
                         <span className="text-xs font-bold">Sélection assignation livreur</span>
                       </div>
+                    )
+                  })()}
+
+                  {/* ⭐ NOUVEAU: Checkbox pour transformation Port Dû → Compte Destinataire */}
+                  {(() => {
+                    if (profile?.role !== 'chef_agence' && profile?.role !== 'agentpro') return null
+                    const isDestinationAgency = parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city
+                    const isPortDu = parcel.portType === 'port_du'
+                    const notDelivered = !parcel.deliveredAt && parcel.status !== 'Livré'
+
+                    if (!isPortDu || !isDestinationAgency || !notDelivered) return null
+
+                    const portDuSelected = bulkPortDuSelectedIds.includes(parcel.id)
+                    return (
+                      <label
+                        onClick={e => e.stopPropagation()}
+                        className={`mb-3 flex items-center gap-2 rounded-xl border px-3 py-2 cursor-pointer transition ${
+                          portDuSelected ? 'bg-teal-50 border-teal-300 text-teal-700' : 'bg-gray-50 border-gray-200 text-gray-500 hover:border-teal-200'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={portDuSelected}
+                          onChange={e => {
+                            e.stopPropagation()
+                            setBulkPortDuError('')
+                            setBulkPortDuSelectedIds((prev: string[]) => e.target.checked
+                              ? [...new Set([...prev, parcel.id])]
+                              : prev.filter((id: string) => id !== parcel.id)
+                            )
+                          }}
+                          tabIndex={-1}
+                          className="w-4 h-4 accent-teal-600"
+                        />
+                        <span className="text-xs font-bold flex items-center gap-1">
+                          🖐️ Transformer en Compte Destinataire
+                        </span>
+                      </label>
                     )
                   })()}
 
@@ -2838,21 +3444,6 @@ export default function ParcelsTab() {
                 {loadingMore
                   ? <><span className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" /> Chargement...</>
                   : "↓ Charger l'historique plus ancien"}
-              </button>
-            )}
-
-            {/* Charger plus d'expéditions pour Chef d'Agence / Agent Pro */}
-            {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && hasMoreAgency && isLastPage && (
-              <button
-                onClick={() => {
-                  if (loadMoreAgencyParcels) loadMoreAgencyParcels()
-                }}
-                disabled={loadingMoreAgency}
-                className="w-full mt-2 py-3 rounded-xl border-2 border-green-300 bg-green-50 text-green-700 text-sm font-bold hover:bg-green-100 disabled:opacity-50 transition flex items-center justify-center gap-2"
-              >
-                {loadingMoreAgency
-                  ? <><span className="w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full animate-spin" /> Chargement...</>
-                  : "📦 Charger plus d'expéditions"}
               </button>
             )}
           </div>

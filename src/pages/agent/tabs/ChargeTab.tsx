@@ -20,14 +20,35 @@ export default function ChargeTab() {
     if (p.createdAt) return new Date(p.createdAt)
     return new Date(0)
   }
+
+  // Colis assignés à un chauffeur
   const assigned = parcels.filter((p: any) => p.chauffeurName && p.status === 'En transit')
-  const filtered = filterByDate(assigned, chargeDatePreset, chargeDateFrom, chargeDateTo, chargeDate)
-  const visible = chargeDriverId ? filtered.filter(p => (p.chauffeurName || '') === chargeDriverId) : filtered
+
+  // Colis en cours de livraison mais non assignés à un chauffeur
+  const unassigned = parcels.filter((p: any) =>
+    !p.chauffeurName &&
+    (p.status === 'En cours de livraison' || p.status === 'Arrivé en agence')
+  )
+
+  const allForCharge = chargeDriverId === '__UNASSIGNED__'
+    ? filterByDate(unassigned, chargeDatePreset, chargeDateFrom, chargeDateTo, chargeDate)
+    : filterByDate(assigned, chargeDatePreset, chargeDateFrom, chargeDateTo, chargeDate)
+
+  const visible = chargeDriverId && chargeDriverId !== '__UNASSIGNED__'
+    ? allForCharge.filter(p => (p.chauffeurName || '') === chargeDriverId)
+    : allForCharge
+
   const uniqueDriverNames = ([...new Set(assigned.map((p: any) => p.chauffeurName).filter(Boolean))] as string[]).sort()
   const groupsMap: Record<string, any> = {}
   visible.forEach(p => {
-    const key = (p.chauffeurName || '').trim()
-    if (!groupsMap[key]) groupsMap[key] = { id: key, name: p.chauffeurName || key, phone: p.chauffeurPhone || '', matricule: p.chauffeurMatricule || '', parcels: [] }
+    const key = (p.chauffeurName || 'Non assigné').trim()
+    if (!groupsMap[key]) groupsMap[key] = {
+      id: key,
+      name: p.chauffeurName || 'Non assigné',
+      phone: p.chauffeurPhone || '',
+      matricule: p.chauffeurMatricule || '',
+      parcels: []
+    }
     groupsMap[key].parcels.push(p)
   })
   const groups = Object.values(groupsMap)
@@ -49,6 +70,21 @@ export default function ChargeTab() {
           <button onClick={() => setChargeDriverId('')} className={`px-3 py-1.5 rounded-lg text-sm font-semibold border transition ${!chargeDriverId ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:border-blue-400'}`}>
             Tous les chauffeurs
           </button>
+          {unassigned.length > 0 && (
+            <button
+              onClick={() => setChargeDriverId('__UNASSIGNED__')}
+              className={`px-3 py-1.5 rounded-lg text-sm font-semibold border transition flex items-center gap-2 ${
+                chargeDriverId === '__UNASSIGNED__'
+                  ? 'bg-orange-600 text-white border-orange-600'
+                  : 'bg-orange-50 text-orange-700 border-orange-200 hover:border-orange-400'
+              }`}
+            >
+              <span>🚫 Non assigné</span>
+              <span className="bg-white/30 px-2 py-0.5 rounded-full text-xs font-bold">
+                {unassigned.length}
+              </span>
+            </button>
+          )}
           {uniqueDriverNames.map(name => (
             <button key={name} onClick={() => setChargeDriverId(name)} className={`px-3 py-1.5 rounded-lg text-sm font-semibold border transition ${chargeDriverId === name ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-600 border-gray-200 hover:border-blue-400'}`}>
               {name}

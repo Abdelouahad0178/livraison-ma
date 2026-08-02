@@ -84,6 +84,7 @@ const AdminLostParcelsTab = lazy(() => import('./admin/tabs/AdminLostParcelsTab'
 const AdminClientsTab = lazy(() => import('./admin/tabs/AdminClientsTab'))
 const AdminUtilitiesTab = lazy(() => import('./admin/tabs/AdminUtilitiesTab'))
 const AdminPermissionsTab = lazy(() => import('./admin/tabs/AdminPermissionsTab'))
+const AdminInvoicesTab = lazy(() => import('./admin/tabs/AdminInvoicesTab'))
 const EmployeeContractModal = lazy(() => import('./admin/components/EmployeeContractModal'))
 import { useAdminHandlers, downloadCsv, downloadJson, copyText } from './admin/hooks/useAdminHandlers'
 import UserEditModal from './admin/modals/UserEditModal'
@@ -314,6 +315,7 @@ const ROLES = [
   { key: 'encaisseur_central',   label: 'Encaisseur central',  emoji: '🏦',   badge: 'bg-emerald-100 text-emerald-700' },
   { key: 'distributeur_especes', label: 'Distributeur Espèces', emoji: '💵',   badge: 'bg-green-100 text-green-700'    },
   { key: 'distributeur_cheques', label: 'Distributeur Chèques', emoji: '📋',   badge: 'bg-blue-100 text-blue-700'      },
+  { key: 'facturier',            label: 'Facturier',           emoji: '🧾',   badge: 'bg-cyan-100 text-cyan-700'      },
   { key: 'chauffeur',            label: 'Chauffeur',           emoji: '🚗',   badge: 'bg-orange-100 text-orange-700'  },
   { key: 'livreur',              label: 'Livreur',             emoji: '🚚',   badge: 'bg-amber-100 text-amber-700'    },
   { key: 'livreur-gare',         label: 'Livreur en gare',     emoji: '🚉',   badge: 'bg-yellow-100 text-yellow-700'  },
@@ -1351,7 +1353,7 @@ export default function AdminPage() {
               </button>
               <span className="text-gray-200 font-light">/</span>
               <span className="text-sm font-bold text-blue-600">
-                {{ expeditions:'Expéditions', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', clients:'Clients', exports:'Exports', caisse:'Caisse', versements:'Versements Admin', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires' }[mainTab] || mainTab}
+                {{ expeditions:'Expéditions', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', clients:'Clients', exports:'Exports', caisse:'Caisse', versements:'Versements Admin', invoices:'Facturation', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires' }[mainTab] || mainTab}
               </span>
             </div>
           )}
@@ -1379,6 +1381,7 @@ export default function AdminPage() {
                 { key: 'exports',     label: 'Exports',              icon: Download },
                 { key: 'caisse',      label: 'Caisse',               icon: Wallet    },
                 { key: 'versements',  label: '💰 Versements Admin',  icon: Banknote  },
+                { key: 'invoices',    label: '🧾 Facturation',       icon: FileText  },
                 { key: 'employees',   label: 'Dossiers RH',          icon: FileText  },
                 { key: 'reglements',  label: 'Règlements',            icon: Banknote  },
                 { key: 'banque',      label: 'Banque RETOUR FOND',    icon: Building2 },
@@ -1740,6 +1743,16 @@ export default function AdminPage() {
               updateAdminTransfer={updateAdminTransfer}
               deleteAdminTransfer={deleteAdminTransfer}
               auth={auth}
+            />
+          </Suspense>
+        )}
+
+        {/* TAB: FACTURATION */}
+        {mainTab === 'invoices' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminInvoicesTab
+              uid={auth.currentUser?.uid}
+              userName={auth.currentUser?.displayName || auth.currentUser?.email || 'Admin'}
             />
           </Suspense>
         )}

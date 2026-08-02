@@ -748,6 +748,143 @@ export function subscribeAllParcels(callback: any, onError: (err?: any) => void 
   }, onError)
 }
 
+// 🚀 SYSTÈME DE CHARGEMENT PROGRESSIF ET INTELLIGENT
+// Charge initialement un petit lot, puis continue automatiquement en arrière-plan
+export function subscribeAllParcelsWithArchives(callback: any, onError: (err?: any) => void = () => {}, initialPageSize = 1000) {
+  let parcelsData: any[] = []
+  let archivesData: any[] = []
+  let parcelsLastSnap: any = null
+  let archivesLastSnap: any = null
+  let isLoadingMore = false
+
+  const mergeAndCallback = () => {
+    // Fusionner les deux listes
+    const allDocs = [...parcelsData, ...archivesData]
+
+    // Trier par date décroissante (optimisé avec cache des timestamps)
+    const docsWithTime = allDocs.map(doc => ({
+      doc,
+      time: doc.createdAt?.toMillis?.() || 0
+    }))
+    docsWithTime.sort((a, b) => b.time - a.time)
+    const sortedDocs = docsWithTime.map(item => item.doc)
+
+    // Retourner les documents triés avec info de pagination
+    callback({
+      docs: sortedDocs,
+      parcelsLastSnap,
+      archivesLastSnap,
+      totalLoaded: sortedDocs.length,
+      canLoadMore: !!(parcelsLastSnap || archivesLastSnap)
+    })
+  }
+
+  // Chargement initial réduit pour démarrage rapide
+  const qParcels = query(
+    collection(db, 'parcels'),
+    orderBy('createdAt', 'desc'),
+    limit(initialPageSize)
+  )
+
+  const qArchives = query(
+    collection(db, 'parcels_archive'),
+    orderBy('createdAt', 'desc'),
+    limit(initialPageSize)
+  )
+
+  const unsubParcels = onSnapshot(qParcels, snap => {
+    parcelsData = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    parcelsLastSnap = snap.docs.length === initialPageSize ? snap.docs[snap.docs.length - 1] : null
+    mergeAndCallback()
+  }, onError)
+
+  const unsubArchives = onSnapshot(qArchives, snap => {
+    archivesData = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    archivesLastSnap = snap.docs.length === initialPageSize ? snap.docs[snap.docs.length - 1] : null
+    mergeAndCallback()
+  }, onError)
+
+  return () => {
+    unsubParcels()
+    unsubArchives()
+  }
+}
+
+// Charge le lot suivant (appelé manuellement ou par infinite scroll)
+export async function loadMoreParcelsWithArchives(
+  parcelsLastSnap: any,
+  archivesLastSnap: any,
+  currentDocs: any[],
+  batchSize = 1000
+) {
+  const promises: Promise<any>[] = []
+
+  // Charger depuis parcels si on a encore des données
+  if (parcelsLastSnap) {
+    const qParcels = query(
+      collection(db, 'parcels'),
+      orderBy('createdAt', 'desc'),
+      startAfter(parcelsLastSnap),
+      limit(batchSize)
+    )
+    promises.push(getDocs(qParcels))
+  } else {
+    promises.push(Promise.resolve({ docs: [] }))
+  }
+
+  // Charger depuis archives si on a encore des données
+  if (archivesLastSnap) {
+    const qArchives = query(
+      collection(db, 'parcels_archive'),
+      orderBy('createdAt', 'desc'),
+      startAfter(archivesLastSnap),
+      limit(batchSize)
+    )
+    promises.push(getDocs(qArchives))
+  } else {
+    promises.push(Promise.resolve({ docs: [] }))
+  }
+
+  const [snapParcels, snapArchives] = await Promise.all(promises)
+
+  // Fusionner avec les docs existants
+  const newParcels = snapParcels.docs.map((d: any) => ({ id: d.id, ...d.data() }))
+  const newArchives = snapArchives.docs.map((d: any) => ({ id: d.id, ...d.data() }))
+
+  // Créer un Map pour éviter les doublons
+  const docsMap = new Map()
+  currentDocs.forEach(doc => docsMap.set(doc.id, doc))
+  newParcels.forEach(doc => docsMap.set(doc.id, doc))
+  newArchives.forEach(doc => docsMap.set(doc.id, doc))
+
+  const allDocs = Array.from(docsMap.values())
+
+  // Trier
+  const docsWithTime = allDocs.map(doc => ({
+    doc,
+    time: doc.createdAt?.toMillis?.() || 0
+  }))
+  docsWithTime.sort((a, b) => b.time - a.time)
+  const sortedDocs = docsWithTime.map(item => item.doc)
+
+  // Nouveaux curseurs
+  const newParcelsLastSnap = snapParcels.docs.length === batchSize
+    ? snapParcels.docs[snapParcels.docs.length - 1]
+    : null
+  const newArchivesLastSnap = snapArchives.docs.length === batchSize
+    ? snapArchives.docs[snapArchives.docs.length - 1]
+    : null
+
+  return {
+    docs: sortedDocs,
+    parcelsLastSnap: newParcelsLastSnap,
+    archivesLastSnap: newArchivesLastSnap,
+    totalLoaded: sortedDocs.length,
+    newItemsCount: newParcels.length + newArchives.length,
+    canLoadMore: !!(newParcelsLastSnap || newArchivesLastSnap)
+  }
+}
+
 // Charge une page supplémentaire de colis avec curseur document (startAfter)
 // lastDocSnap = QueryDocumentSnapshot retourné par la page précédente
 export async function getParcelsPage(lastDocSnap: any, pageSize = FIRESTORE_PAGE_LIMITS.adminNextParcels) {
@@ -764,6 +901,9 @@ export async function getParcelsPage(lastDocSnap: any, pageSize = FIRESTORE_PAGE
     hasMore: snap.docs.length === pageSize,
   }
 }
+
+// Charge une page supplémentaire depuis parcels + archives
+// Note: getParcelsPageWithArchives supprimée - utilisez loadMoreParcelsWithArchives à la place
 
 // Colis d'un agent spécifique (créés + reçus) — requêtes ciblées
 // Réduit drastiquement les lectures : l'agent ne reçoit que SES colis
@@ -1399,7 +1539,7 @@ export async function archiveParcelManual(parcelId: string): Promise<void> {
   const parcelData = { id: parcelSnap.id, ...parcelSnap.data() }
 
   // Ajouter à la collection archives avec metadata
-  const archiveRef = doc(db, 'parcels_archived', parcelId)
+  const archiveRef = doc(db, 'parcels_archive', parcelId)
   await setDoc(archiveRef, {
     ...parcelData,
     archivedAt: serverTimestamp(),
@@ -1414,7 +1554,7 @@ export async function archiveParcelManual(parcelId: string): Promise<void> {
  * 📦 Restaurer une expédition archivée
  */
 export async function unarchiveParcel(parcelId: string): Promise<void> {
-  const archiveRef = doc(db, 'parcels_archived', parcelId)
+  const archiveRef = doc(db, 'parcels_archive', parcelId)
   const archiveSnap = await getDoc(archiveRef)
 
   if (!archiveSnap.exists()) {

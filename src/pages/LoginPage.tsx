@@ -17,6 +17,7 @@ const AUTH_ROLES = [
   { key: 'encaisseur_central',   label: 'Encaisseur central',   emoji: '🏦' },
   { key: 'distributeur_especes', label: 'Distributeur Espèces', emoji: '💵' },
   { key: 'distributeur_cheques', label: 'Distributeur Chèques', emoji: '📋' },
+  { key: 'facturier',            label: 'Facturier',            emoji: '🧾' },
   { key: 'chauffeur',            label: 'Chauffeur',            emoji: '🚚' },
   { key: 'livreur',              label: 'Livreur',              emoji: '🛵' },
   { key: 'livreur-gare',         label: 'Livreur en gare',      emoji: '🚉' },
@@ -155,6 +156,7 @@ export default function LoginPage() {
       else if (r === 'encaisseur_central')   navigate('/central')
       else if (r === 'distributeur_especes') navigate('/drfe')
       else if (r === 'distributeur_cheques') navigate('/drfc')
+      else if (r === 'facturier')            navigate('/facturier')
       else if (r === 'chauffeur')            navigate('/driver')
       else if (r === 'livreur')              navigate('/driver')
       else if (r === 'livreur-gare')         navigate('/gare-driver')

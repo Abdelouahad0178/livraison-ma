@@ -1340,7 +1340,9 @@ export async function createAdminTransferFromCaissier(data: any) {
 export async function createAdminTransferFromChefAgence(data: any) {
   const amount = parseFloat(data.amount) || 0
   const paymentType = data.paymentType || 'especes' // especes, cheque, virement
-  const type = data.type === 'cod' ? 'cod' : 'port_du' // port_du (défaut) | cod
+  // Types étendus : port_du, cod, ports_payes, compte_expediteur, compte_destinataire
+  const validTypes = ['port_du', 'cod', 'ports_payes', 'compte_expediteur', 'compte_destinataire']
+  const type = validTypes.includes(data.type) ? data.type : 'port_du'
   if (!data.city || amount <= 0) throw new Error('Données invalides.')
 
   return runTransaction(db, async tx => {
@@ -1374,12 +1376,19 @@ export async function createAdminTransferFromChefAgence(data: any) {
 
     // Créer l'entrée de caisse (sortie)
     const entryRef = doc(collection(db, 'caisseEntries'))
+    const typeLabels: Record<string, string> = {
+      port_du: 'Port Dû',
+      cod: 'COD',
+      ports_payes: 'Ports Payés',
+      compte_expediteur: 'Compte Expéditeur',
+      compte_destinataire: 'Compte Destinataire',
+    }
     tx.set(entryRef, {
       type: 'sortie',
       category: 'remise_admin',
       amount,
-      description: `Versement à l'Admin (${type === 'cod' ? 'COD' : 'Port Dû'} — ${paymentType})`,
-      reference: '',
+      description: `Versement à l'Admin (${typeLabels[type] || type} — ${paymentType})`,
+      reference: data.reference || '',
       city: data.city,
       agentId: data.fromId || null,
       agentName: data.fromName || '',
@@ -1584,7 +1593,8 @@ export async function deleteAdminTransfer(id: string, deleterId: string) {
 export async function createAdminTransferDirect(data: any, creatorId: string, creatorName: string) {
   const amount = parseFloat(data.amount) || 0
   const paymentType = data.paymentType || 'especes' // especes, cheque, virement
-  const type = data.type === 'cod' ? 'cod' : 'port_du' // port_du (défaut) | cod
+  const validTypes = ['port_du', 'cod', 'ports_payes', 'compte_expediteur', 'compte_destinataire']
+  const type = validTypes.includes(data.type) ? data.type : 'port_du'
   const city = data.city || ''
   const fromName = data.fromName || ''
 

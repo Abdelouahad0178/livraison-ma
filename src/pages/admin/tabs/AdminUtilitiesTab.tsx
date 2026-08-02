@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { db } from '../../../firebase/config'
-import { collection, query, where, getDocs, updateDoc, doc, deleteDoc } from 'firebase/firestore'
+import { collection, query, where, getDocs, updateDoc, doc, deleteDoc, getDoc } from 'firebase/firestore'
 import { AlertCircle, CheckCircle2, Wrench, Trash2, Package } from 'lucide-react'
 import WorkingDateManager from '../../../components/WorkingDateManager'
 
@@ -325,6 +325,90 @@ export default function AdminUtilitiesTab() {
     }
   }
 
+  const updateInvoicesWithNIC = async () => {
+    if (!confirm('⚠️ Cette opération va ajouter le N° EXP (NIC) à toutes les factures existantes.\n\nCela peut prendre quelques minutes.\n\nContinuer ?')) {
+      return
+    }
+
+    setLoading(true)
+    setResult(null)
+
+    try {
+      // Récupérer toutes les factures
+      const invoicesSnapshot = await getDocs(collection(db, 'invoices'))
+      console.log(`📋 ${invoicesSnapshot.size} factures trouvées`)
+
+      let updatedCount = 0
+      let errorCount = 0
+      let itemsUpdated = 0
+
+      for (const invoiceDoc of invoicesSnapshot.docs) {
+        const invoice = invoiceDoc.data()
+        const invoiceId = invoiceDoc.id
+
+        // Mettre à jour chaque item avec le NIC du parcel
+        const updatedItems = await Promise.all(
+          invoice.items.map(async (item: any) => {
+            // Si le senderNic existe déjà, le garder
+            if (item.senderNic) {
+              return item
+            }
+
+            try {
+              // Récupérer le parcel correspondant
+              const parcelDoc = await getDoc(doc(db, 'parcels', item.parcelId))
+
+              if (!parcelDoc.exists()) {
+                console.log(`⚠️ Parcel ${item.parcelId} non trouvé`)
+                return item
+              }
+
+              const parcel = parcelDoc.data()
+              const senderNic = parcel.sender?.nic || ''
+
+              if (senderNic) {
+                itemsUpdated++
+              }
+
+              return {
+                ...item,
+                senderNic: senderNic
+              }
+            } catch (error: any) {
+              console.error(`❌ Erreur pour item ${item.trackingId}:`, error.message)
+              return item
+            }
+          })
+        )
+
+        // Mettre à jour la facture dans Firestore
+        try {
+          await updateDoc(doc(db, 'invoices', invoiceId), {
+            items: updatedItems
+          })
+          updatedCount++
+        } catch (error: any) {
+          errorCount++
+          console.error(`❌ Erreur mise à jour facture ${invoice.invoiceNumber}:`, error.message)
+        }
+      }
+
+      setResult({
+        type: 'success',
+        message: `✅ Mise à jour terminée!\n\n📊 Total: ${invoicesSnapshot.size} factures\n✏️ Factures mises à jour: ${updatedCount}\n📝 Items mis à jour: ${itemsUpdated}\n❌ Erreurs: ${errorCount}`
+      })
+
+    } catch (error: any) {
+      console.error('Erreur:', error)
+      setResult({
+        type: 'error',
+        message: `❌ Erreur: ${error.message}`
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div className="p-6 max-w-4xl mx-auto">
       <div className="flex items-center gap-3 mb-6">
@@ -465,6 +549,35 @@ export default function AdminUtilitiesTab() {
             className="w-full px-4 py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white font-semibold rounded-lg hover:shadow-lg transition disabled:opacity-50"
           >
             {loading ? 'Correction en cours...' : 'Corriger les modes de paiement COD'}
+          </button>
+        </div>
+
+        {/* Mettre à jour factures avec NIC */}
+        <div className="bg-white rounded-xl border-2 border-green-200 p-6">
+          <div className="flex items-start justify-between">
+            <div className="flex-1">
+              <h3 className="font-bold text-gray-800 mb-2">
+                📄 Ajouter N° EXP (NIC) aux factures
+              </h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Ajoute le N° EXP (NIC de l'expéditeur) à toutes les factures existantes.
+                <br />
+                <span className="text-xs text-gray-500 mt-2 block">
+                  • Permet d'afficher le NIC au lieu du tracking ID dans les factures imprimées
+                  <br />
+                  • Les nouvelles factures auront automatiquement le NIC
+                  <br />
+                  • Cette opération met à jour uniquement les factures qui n'ont pas encore de NIC
+                </span>
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={updateInvoicesWithNIC}
+            disabled={loading}
+            className="w-full px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white font-semibold rounded-lg hover:shadow-lg transition disabled:opacity-50"
+          >
+            {loading ? 'Mise à jour en cours...' : 'Mettre à jour les factures'}
           </button>
         </div>
 

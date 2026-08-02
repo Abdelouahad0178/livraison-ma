@@ -38,6 +38,7 @@ const DriverGarePageTest = lazy(() => import('./pages/DriverGarePageTest'))
 const TestMinimal = lazy(() => import('./pages/TestMinimal'))
 const CaisseAdminPage = lazy(() => import('./pages/CaisseAdminPage'))
 const ClientPortalPage = lazy(() => import('./pages/ClientPortalPage'))
+const FacturierPage    = lazy(() => import('./pages/FacturierPage'))
 const SignaturePage    = lazy(() => import('./pages/SignaturePage'))
 const ArrivagePage     = lazy(() => import('./pages/ArrivagePage'))
 const PointeurPage     = lazy(() => import('./pages/PointeurPage'))
@@ -347,6 +348,12 @@ function AppContent() {
           <Route path="/drfc" element={
             <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="distributeur_cheques">
               <DRFCPage />
+            </PrivateRoute>
+          } />
+
+          <Route path="/facturier" element={
+            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="facturier">
+              <FacturierPage />
             </PrivateRoute>
           } />
 

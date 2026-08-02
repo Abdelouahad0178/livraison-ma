@@ -19,7 +19,11 @@ service cloud.firestore {
           || role() == 'chef_agence' || role() == 'agentpro' || role() == 'caissier'
           || role() == 'aide_agent' || role() == 'pointeur_encaisseur'
           || role() == 'encaisseur_central' || role() == 'distributeur_especes'
-          || role() == 'distributeur_cheques';
+          || role() == 'distributeur_cheques' || role() == 'facturier';
+    }
+
+    function isFacturier() {
+      return role() == 'facturier';
     }
 
     function isPointeurEncaisseur() {
@@ -215,14 +219,15 @@ service cloud.firestore {
     // codAmount modifiable uniquement par Admin (protection double : rÃ¨gle + code)
     match /parcels/{parcelId} {
       allow get:    if true;
-      allow list:   if isStaff()
+      allow list:   if isStaff() || isFacturier()
         || ownsClient(resource.data.clientId)
         || isDeliveryWorker()
         || (request.query.limit != null && request.query.limit <= 1);
-      // ✅ Autoriser les requêtes d'agrégation (count, sum) pour le staff
-      allow read:   if isStaff();
+      // ✅ Autoriser les requêtes d'agrégation (count, sum) pour le staff et facturier
+      allow read:   if isStaff() || isFacturier();
       allow create: if (signedIn() && request.resource.data.agentId == request.auth.uid)
-        || (isStaff() && isNotBlocked());
+        || (isStaff() && isNotBlocked())
+        || isCentralCollector();  // 📦 Permettre restauration archives
       allow delete: if ((resource.data.status != 'LivrÃ©' && resource.data.status != 'Livr\u00c3\u00a9') || isAdmin()) && (
         isAdmin()
         || isChefOfAideAgentParcelAgency()
@@ -603,8 +608,8 @@ service cloud.firestore {
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Clients
     match /clients/{clientId} {
-      // Lecture : Staff, portail client, ou livreurs (pour chercher clients destinataires)
-      allow read:  if isStaff() || isDeliveryWorker() || (signedIn() && resource.data.portalUid == request.auth.uid);
+      // Lecture : Staff, Facturier, portail client, ou livreurs (pour chercher clients destinataires)
+      allow read:  if isStaff() || isFacturier() || isDeliveryWorker() || (signedIn() && resource.data.portalUid == request.auth.uid);
       // Staff peut tout faire
       allow write: if isStaff();
       // Livreurs peuvent créer des clients destinataires uniquement
@@ -1031,6 +1036,36 @@ service cloud.firestore {
       allow update: if isDistributeurCheques() || isAdmin();
       // Suppression : Admin uniquement
       allow delete: if isAdmin();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ARCHIVES COLIS (parcels_archive)
+    // ═══════════════════════════════════════════════════════════════════════════
+    match /parcels_archive/{parcelId} {
+      // Lecture : tout le staff + encaisseur central
+      allow read: if isStaff() || isCentralCollector();
+      // Création : admin uniquement (archivage automatique)
+      allow create: if isAdmin();
+      // Mise à jour : admin ou encaisseur central (pour restauration)
+      allow update: if isAdmin() || isCentralCollector();
+      // Suppression : admin ou encaisseur central (pour restauration)
+      allow delete: if isAdmin() || isCentralCollector();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FACTURATION (invoices)
+    // ═══════════════════════════════════════════════════════════════════════════
+    match /invoices/{invoiceId} {
+      // Lecture : Admin, Facturier, ou Chef d'agence de la même ville
+      allow read: if isAdmin() || isFacturier()
+        || (isChefAgence() && resource.data.agencyCity == userCity());
+      // Création : Admin, Facturier, ou Chef d'agence
+      allow create: if isAdmin() || isFacturier() || isChefAgence();
+      // Mise à jour : Admin, Facturier, ou Chef d'agence de la même ville
+      allow update: if isAdmin() || isFacturier()
+        || (isChefAgence() && resource.data.agencyCity == userCity());
+      // Suppression : Admin ou Facturier uniquement
+      allow delete: if isAdmin() || isFacturier();
     }
 
     match /{document=**} {

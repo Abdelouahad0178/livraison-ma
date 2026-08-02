@@ -106,6 +106,7 @@ export default function CentralCollectorPage() {
   const [archiveDateTo, setArchiveDateTo] = useState('')
   const [archivePaymentType, setArchivePaymentType] = useState('all')
   const [restoringParcelId, setRestoringParcelId] = useState<string | null>(null)
+  const [archiveDisplayLimit, setArchiveDisplayLimit] = useState(500)
 
   // ── Chargement progressif des colis (tranches de 800) ────────────────────
   const [liveParcels, setLiveParcels] = useState<any[]>([])       // 800 derniers, temps réel
@@ -371,9 +372,9 @@ export default function CentralCollectorPage() {
       )
     }
 
-    // Filtre de date
+    // Filtre de date (basé sur la date de création de l'expédition)
     filtered = filtered.filter((p: any) =>
-      inDateRange(p.archivedAt || p.createdAt, archiveDatePreset, archiveDateFrom, archiveDateTo, archiveOperationalDay)
+      inDateRange(p.createdAt, archiveDatePreset, archiveDateFrom, archiveDateTo, archiveOperationalDay)
     )
 
     // Filtre type de paiement COD
@@ -2434,7 +2435,7 @@ export default function CentralCollectorPage() {
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-gray-100">
-                          {filteredArchives.slice(0, 500).map((p: any) => (
+                          {filteredArchives.slice(0, archiveDisplayLimit).map((p: any) => (
                             <tr key={p.id} className="hover:bg-purple-50/30 transition">
                               <td className="px-4 py-3">
                                 <div className="font-mono text-xs font-bold text-gray-800">{p.trackingId}</div>
@@ -2507,11 +2508,27 @@ export default function CentralCollectorPage() {
                       </table>
                     </div>
 
-                    {filteredArchives.length > 500 && (
-                      <div className="bg-purple-50 border-t border-purple-100 px-4 py-3 text-center">
-                        <p className="text-xs text-purple-700 font-semibold">
-                          Affichage limité à 500 expéditions · Total filtré : {filteredArchives.length}
-                        </p>
+                    {filteredArchives.length > archiveDisplayLimit && (
+                      <div className="bg-purple-50 border-t border-purple-100 px-4 py-3">
+                        <div className="flex items-center justify-between">
+                          <p className="text-xs text-purple-700 font-semibold">
+                            Affichage : {archiveDisplayLimit} / {filteredArchives.length} expéditions
+                          </p>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => setArchiveDisplayLimit(prev => Math.min(prev + 500, filteredArchives.length))}
+                              className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-lg transition-colors"
+                            >
+                              Charger 500 de plus
+                            </button>
+                            <button
+                              onClick={() => setArchiveDisplayLimit(filteredArchives.length)}
+                              className="px-3 py-1.5 bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 text-white text-xs font-bold rounded-lg transition-colors"
+                            >
+                              Tout afficher ({filteredArchives.length})
+                            </button>
+                          </div>
+                        </div>
                       </div>
                     )}
 
