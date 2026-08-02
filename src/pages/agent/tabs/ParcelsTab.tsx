@@ -759,28 +759,26 @@ export default function ParcelsTab() {
                   )}
 
                   {/* ⭐ Filtre par livreur/chauffeur */}
-                  {availableDrivers.length > 0 && (
-                    <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
-                      <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Livreur</span>
-                      <button onClick={() => setDriverFilter('all')}
+                  <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
+                    <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Livreur</span>
+                    <button onClick={() => setDriverFilter('all')}
+                      className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
+                        driverFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      }`}
+                    >Tous</button>
+                    <button onClick={() => setDriverFilter('unassigned')}
+                      className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
+                        driverFilter === 'unassigned' ? 'bg-gray-600 text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                      }`}
+                    >❓ Livreur inconnu</button>
+                    {availableDrivers.map((driver: any) => (
+                      <button key={driver.id} onClick={() => setDriverFilter(driver.id)}
                         className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
-                          driverFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                          driverFilter === driver.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                         }`}
-                      >Tous</button>
-                      <button onClick={() => setDriverFilter('unassigned')}
-                        className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
-                          driverFilter === 'unassigned' ? 'bg-gray-600 text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
-                        }`}
-                      >❓ Livreur inconnu</button>
-                      {availableDrivers.map((driver: any) => (
-                        <button key={driver.id} onClick={() => setDriverFilter(driver.id)}
-                          className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
-                            driverFilter === driver.id ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                          }`}
-                        >{driver.name}</button>
-                      ))}
-                    </div>
-                  )}
+                      >{driver.name}</button>
+                    ))}
+                  </div>
 
                   {/* Encaissement */}
                   <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
