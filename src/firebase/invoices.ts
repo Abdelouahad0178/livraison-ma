@@ -124,8 +124,6 @@ export function subscribeAgencyInvoices(
   agencyCity: string,
   callback: (invoices: Invoice[]) => void
 ): () => void {
-  console.log('📡 [subscribeAgencyInvoices] REQUÊTE FIRESTORE - agencyCity:', agencyCity)
-
   const q = query(
     collection(db, 'invoices'),
     where('agencyCity', '==', agencyCity),
@@ -134,22 +132,6 @@ export function subscribeAgencyInvoices(
 
   return onSnapshot(q,
     snapshot => {
-      console.log('📥 [subscribeAgencyInvoices] RÉPONSE FIRESTORE:', {
-        agencyCity,
-        nombreDocuments: snapshot.docs.length,
-        factures: snapshot.docs.map(doc => {
-          const data = doc.data()
-          return {
-            id: doc.id,
-            invoiceNumber: data.invoiceNumber,
-            agencyCity: data.agencyCity,
-            clientName: data.clientName,
-            totalAmount: data.totalAmount,
-            status: data.status
-          }
-        })
-      })
-
       const invoices = snapshot.docs.map(doc => ({
         id: doc.id,
         ...doc.data(),
@@ -157,10 +139,8 @@ export function subscribeAgencyInvoices(
       callback(invoices)
     },
     error => {
-      console.error('❌ [subscribeAgencyInvoices] ERREUR FIRESTORE:', error)
-      console.error('Code erreur:', error.code)
-      console.error('Message:', error.message)
-      callback([]) // Retourner un tableau vide en cas d'erreur
+      console.error('Erreur lors du chargement des factures:', error)
+      callback([])
     }
   )
 }

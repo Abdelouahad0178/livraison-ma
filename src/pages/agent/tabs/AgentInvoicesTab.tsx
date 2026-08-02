@@ -3,56 +3,30 @@ import {
   FileText, Search, Printer, Eye, Filter, Download, AlertCircle, CheckCircle2
 } from 'lucide-react'
 import {
-  subscribeAgencyInvoices, subscribeClientInvoices, subscribeAllInvoices,
+  subscribeAgencyInvoices, subscribeClientInvoices,
   type Invoice
 } from '../../../firebase/invoices'
 import { subscribeClients } from '../../../firebase/clients'
 
 export default function AgentInvoicesTab({ profileCity, uid }: any) {
-  console.log('🚀 [AgentInvoicesTab] COMPOSANT MONTÉ - profileCity:', profileCity, 'uid:', uid)
-
   const [invoices, setInvoices] = useState<Invoice[]>([])
-  const [allInvoices, setAllInvoices] = useState<Invoice[]>([]) // Pour debug
   const [clients, setClients] = useState<any[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'paid' | 'cancelled'>('all')
   const [clientFilter, setClientFilter] = useState<string>('all')
   const [viewingInvoice, setViewingInvoice] = useState<Invoice | null>(null)
-  const [showAllInvoices, setShowAllInvoices] = useState(false) // Toggle debug
 
   // Abonnements
   useEffect(() => {
-    console.log('🔍 [AgentInvoicesTab] DÉMARRAGE useEffect - ville recherchée:', profileCity)
-
     if (!profileCity) {
-      console.error('❌ [AgentInvoicesTab] ERREUR: profileCity est undefined/null!')
       return
     }
 
-    const unsubInvoices = subscribeAgencyInvoices(profileCity, (invoices) => {
-      console.log('✅ [AgentInvoicesTab] FACTURES REÇUES:', {
-        ville: profileCity,
-        nombre: invoices.length,
-        factures: invoices.map(inv => ({
-          id: inv.id,
-          numero: inv.invoiceNumber,
-          agencyCity: inv.agencyCity,
-          client: inv.clientName,
-          montant: inv.totalAmount
-        }))
-      })
-      setInvoices(invoices)
-    })
-
-    // DEBUG: Charger TOUTES les factures
-    const unsubAllInvoices = subscribeAllInvoices((allInvs) => {
-      setAllInvoices(allInvs)
-    })
-
+    const unsubInvoices = subscribeAgencyInvoices(profileCity, setInvoices)
     const unsubClients = subscribeClients(setClients)
+
     return () => {
       unsubInvoices()
-      unsubAllInvoices()
       unsubClients()
     }
   }, [profileCity])
@@ -102,35 +76,6 @@ export default function AgentInvoicesTab({ profileCity, uid }: any) {
             Mes factures
           </h2>
           <p className="text-sm text-gray-500 mt-1">Factures de l'agence {profileCity}</p>
-          {/* DEBUG */}
-          <div className="mt-2 p-2 bg-yellow-100 border border-yellow-400 rounded text-xs">
-            <div className="flex items-center justify-between mb-2">
-              <strong>🔍 DEBUG MODE</strong>
-              <button
-                onClick={() => setShowAllInvoices(!showAllInvoices)}
-                className="px-2 py-1 bg-yellow-600 text-white rounded text-xs hover:bg-yellow-700"
-              >
-                {showAllInvoices ? 'Masquer détails' : 'Voir toutes les factures'}
-              </button>
-            </div>
-            <div>profileCity reçu: <strong>{profileCity || 'undefined'}</strong></div>
-            <div>uid reçu: <strong>{uid || 'undefined'}</strong></div>
-            <div>Factures pour {profileCity}: <strong>{invoices.length}</strong></div>
-            <div>TOTAL factures dans la base: <strong>{allInvoices.length}</strong></div>
-
-            {showAllInvoices && allInvoices.length > 0 && (
-              <div className="mt-2 p-2 bg-white border border-yellow-300 rounded max-h-60 overflow-y-auto">
-                <div className="font-bold mb-1">TOUTES les factures:</div>
-                {allInvoices.map(inv => (
-                  <div key={inv.id} className="text-xs border-b border-gray-200 py-1">
-                    <strong>{inv.invoiceNumber}</strong> -
-                    agencyCity: <span className="font-mono bg-gray-200 px-1">"{inv.agencyCity}"</span> -
-                    Client: {inv.clientName}
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
         </div>
       </div>
 
