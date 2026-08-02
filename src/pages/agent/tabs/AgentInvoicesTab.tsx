@@ -354,7 +354,11 @@ function ViewInvoiceModal({ invoice, onClose }: any) {
                       {item.senderNic || item.trackingId}
                     </td>
                     <td className="px-3 py-2 text-sm text-gray-600">
-                      {item.createdAt ? (item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt)).toLocaleDateString('fr-MA') : '-'}
+                      {item.createdAt ? (
+                        item.createdAt.toDate
+                          ? item.createdAt.toDate().toLocaleDateString('fr-MA')
+                          : new Date(item.createdAt).toLocaleDateString('fr-MA')
+                      ) : '-'}
                     </td>
                     <td className="px-3 py-2 text-sm text-gray-700">{item.recipientName || '-'}</td>
                     <td className="px-3 py-2 text-sm text-gray-600">{item.recipientCity || '-'}</td>
