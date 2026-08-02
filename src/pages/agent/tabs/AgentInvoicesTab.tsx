@@ -398,9 +398,56 @@ function ViewInvoiceModal({ invoice, onClose }: any) {
   )
 }
 
-// Fonction d'impression (réutilisée de AdminInvoicesTab)
+// Fonction de conversion nombre en lettres (français)
+function numberToWords(num: number): string {
+  const units = ['', 'un', 'deux', 'trois', 'quatre', 'cinq', 'six', 'sept', 'huit', 'neuf']
+  const teens = ['dix', 'onze', 'douze', 'treize', 'quatorze', 'quinze', 'seize', 'dix-sept', 'dix-huit', 'dix-neuf']
+  const tens = ['', '', 'vingt', 'trente', 'quarante', 'cinquante', 'soixante', 'soixante-dix', 'quatre-vingt', 'quatre-vingt-dix']
+
+  if (num === 0) return 'zéro'
+
+  const convert = (n: number): string => {
+    if (n < 10) return units[n]
+    if (n < 20) return teens[n - 10]
+    if (n < 100) {
+      const ten = Math.floor(n / 10)
+      const unit = n % 10
+      if (ten === 7 || ten === 9) {
+        return tens[ten - 1] + '-' + teens[unit]
+      }
+      return tens[ten] + (unit ? '-' + units[unit] : '')
+    }
+    if (n < 1000) {
+      const hundred = Math.floor(n / 100)
+      const rest = n % 100
+      return (hundred > 1 ? units[hundred] + ' ' : '') + 'cent' + (hundred > 1 && rest === 0 ? 's' : '') + (rest ? ' ' + convert(rest) : '')
+    }
+    if (n < 1000000) {
+      const thousand = Math.floor(n / 1000)
+      const rest = n % 1000
+      return (thousand > 1 ? convert(thousand) + ' ' : '') + 'mille' + (rest ? ' ' + convert(rest) : '')
+    }
+    return n.toString()
+  }
+
+  const integerPart = Math.floor(num)
+  const decimalPart = Math.round((num - integerPart) * 100)
+
+  let result = convert(integerPart) + ' dirhams'
+  if (decimalPart > 0) {
+    result += ' et ' + convert(decimalPart) + ' centimes'
+  }
+  return result
+}
+
+// Fonction d'impression (identique à AdminInvoicesTab)
 function printInvoice(invoice: any) {
   const logoUrl = window.location.origin + '/LOGO.jpg'
+
+  // Calculs TTC -> HT et TVA
+  const totalTTC = invoice.totalAmount
+  const totalHT = totalTTC / 1.10
+  const totalTVA = totalTTC - totalHT
   const html = `<!DOCTYPE html>
 <html>
 <head>
@@ -409,7 +456,9 @@ function printInvoice(invoice: any) {
   <style>
     @page { size: A4; margin: 15mm; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: Arial, sans-serif; font-size: 10pt; color: #111; }
+    html { height: 100%; }
+    body { font-family: Arial, sans-serif; font-size: 10pt; color: #111; min-height: 100vh; display: flex; flex-direction: column; position: relative; }
+    .content { flex: 1; padding-bottom: 60px; }
     .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #1e3a8a; }
     .header img { height: 60px; object-fit: contain; }
     .header h1 { color: #1e3a8a; font-size: 24pt; margin-bottom: 5px; text-align: center; flex: 1; }
@@ -423,11 +472,14 @@ function printInvoice(invoice: any) {
     td { padding: 6px 8px; border-bottom: 1px solid #eee; font-size: 9pt; }
     .text-right { text-align: right; }
     .total-row { background: #f0f0f0; font-weight: bold; font-size: 12pt; }
-    .footer { position: fixed; bottom: 0; left: 0; right: 0; padding: 10px; border-top: 1px solid #ddd; text-align: center; font-size: 8pt; color: #666; background: white; }
-    @media print { .footer { position: fixed; bottom: 0; } }
+    .footer { position: fixed; bottom: 0; left: 0; right: 0; padding: 15px; border-top: 1px solid #ddd; text-align: center; font-size: 8pt; color: #666; background: white; }
+    @media print {
+      .footer { position: fixed; bottom: 0; }
+    }
   </style>
 </head>
 <body>
+  <div class="content">
   <div class="header">
     <img src="${logoUrl}" alt="Logo">
     <div style="flex: 1; text-align: center;">
@@ -476,25 +528,40 @@ function printInvoice(invoice: any) {
       </tr>
     </thead>
     <tbody>
-      ${invoice.items.map((item: any) => {
-        const itemDate = item.createdAt ? (item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt)) : null;
-        return `
+      ${invoice.items.map((item: any) => `
         <tr>
           <td>${item.senderNic || item.trackingId}</td>
-          <td>${itemDate ? itemDate.toLocaleDateString('fr-MA') : '-'}</td>
+          <td>${item.createdAt ? (item.createdAt.toDate ? item.createdAt.toDate().toLocaleDateString('fr-MA') : new Date(item.createdAt).toLocaleDateString('fr-MA')) : '-'}</td>
           <td>${item.recipientName || '-'}</td>
           <td>${item.recipientCity || '-'}</td>
           <td class="text-right">${item.portAmount.toLocaleString()}</td>
         </tr>
-      `}).join('')}
+      `).join('')}
     </tbody>
-    <tfoot>
-      <tr class="total-row">
-        <td colspan="4" class="text-right">TOTAL</td>
-        <td class="text-right">${invoice.totalAmount.toLocaleString()} DH</td>
-      </tr>
-    </tfoot>
   </table>
+
+  <div style="margin-top: 30px; page-break-inside: avoid;">
+    <table style="width: 100%; border-collapse: collapse; margin-bottom: 20px;">
+      <tr>
+        <td style="text-align: right; padding: 8px; font-weight: bold; font-size: 11pt;">TOTAL HT</td>
+        <td style="text-align: right; padding: 8px; font-weight: bold; font-size: 11pt; width: 150px;">${totalHT.toFixed(2)} DH</td>
+      </tr>
+      <tr>
+        <td style="text-align: right; padding: 8px; font-weight: bold; font-size: 11pt;">TVA 10%</td>
+        <td style="text-align: right; padding: 8px; font-weight: bold; font-size: 11pt;">${totalTVA.toFixed(2)} DH</td>
+      </tr>
+      <tr style="background: #f0f0f0;">
+        <td style="text-align: right; padding: 12px; font-weight: bold; font-size: 13pt;">TOTAL TTC</td>
+        <td style="text-align: right; padding: 12px; font-weight: bold; font-size: 13pt;">${totalTTC.toFixed(2)} DH</td>
+      </tr>
+    </table>
+
+    <div style="padding: 15px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 5px;">
+      <p style="margin: 0; font-size: 10pt; font-weight: bold; text-align: justify;">
+        Arrêté la présente facture à la somme de ${numberToWords(totalTTC)} (${totalTTC.toFixed(2)} DH) dont TVA est ${totalTVA.toFixed(2)} DH.
+      </p>
+    </div>
+  </div>
 
   ${invoice.status === 'paid' ? `
   <div style="background: #d1fae5; border: 1px solid #6ee7b7; padding: 10px; margin-top: 20px; border-radius: 5px;">
@@ -506,9 +573,10 @@ function printInvoice(invoice: any) {
     </div>
   </div>
   ` : ''}
+  </div>
 
   <div class="footer">
-    BG EXPRESS - BLOC H RUE 2 N°982 AIT MELLOUL - 0522 62 92 89 - bgexpress2019@gmail.com
+    BG EXPRESS - BLOC H RUE 2 N°982 AIT MELLOUL - 0661 97 86 12 - bgexpress2024@gmail.com
   </div>
 
   <script>window.onload = function() { window.print(); }<\/script>
