@@ -132,29 +132,37 @@ export function subscribeAgencyInvoices(
     orderBy('createdAt', 'desc')
   )
 
-  return onSnapshot(q, snapshot => {
-    console.log('📥 [subscribeAgencyInvoices] RÉPONSE FIRESTORE:', {
-      agencyCity,
-      nombreDocuments: snapshot.docs.length,
-      factures: snapshot.docs.map(doc => {
-        const data = doc.data()
-        return {
-          id: doc.id,
-          invoiceNumber: data.invoiceNumber,
-          agencyCity: data.agencyCity,
-          clientName: data.clientName,
-          totalAmount: data.totalAmount,
-          status: data.status
-        }
+  return onSnapshot(q,
+    snapshot => {
+      console.log('📥 [subscribeAgencyInvoices] RÉPONSE FIRESTORE:', {
+        agencyCity,
+        nombreDocuments: snapshot.docs.length,
+        factures: snapshot.docs.map(doc => {
+          const data = doc.data()
+          return {
+            id: doc.id,
+            invoiceNumber: data.invoiceNumber,
+            agencyCity: data.agencyCity,
+            clientName: data.clientName,
+            totalAmount: data.totalAmount,
+            status: data.status
+          }
+        })
       })
-    })
 
-    const invoices = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-    })) as Invoice[]
-    callback(invoices)
-  })
+      const invoices = snapshot.docs.map(doc => ({
+        id: doc.id,
+        ...doc.data(),
+      })) as Invoice[]
+      callback(invoices)
+    },
+    error => {
+      console.error('❌ [subscribeAgencyInvoices] ERREUR FIRESTORE:', error)
+      console.error('Code erreur:', error.code)
+      console.error('Message:', error.message)
+      callback([]) // Retourner un tableau vide en cas d'erreur
+    }
+  )
 }
 
 // S'abonner aux factures d'un client (pour chef d'agence)
