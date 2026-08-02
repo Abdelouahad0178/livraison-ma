@@ -758,8 +758,26 @@ export function subscribeAllParcelsWithArchives(callback: any, onError: (err?: a
   let isLoadingMore = false
 
   const mergeAndCallback = () => {
-    // Fusionner les deux listes
-    const allDocs = [...parcelsData, ...archivesData]
+    // Fusionner les deux listes et dédupliquer par ID
+    // Si une expédition existe dans les deux collections, on garde celle de parcels (plus récente)
+    const seenIds = new Set<string>()
+    const allDocs: any[] = []
+
+    // D'abord les parcels (prioritaires)
+    for (const doc of parcelsData) {
+      if (!seenIds.has(doc.id)) {
+        seenIds.add(doc.id)
+        allDocs.push(doc)
+      }
+    }
+
+    // Puis les archives (seulement si pas déjà dans parcels)
+    for (const doc of archivesData) {
+      if (!seenIds.has(doc.id)) {
+        seenIds.add(doc.id)
+        allDocs.push(doc)
+      }
+    }
 
     // Trier par date décroissante (optimisé avec cache des timestamps)
     const docsWithTime = allDocs.map(doc => ({

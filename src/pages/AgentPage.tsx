@@ -806,7 +806,7 @@ export default function AgentPage() {
 
   // Charger tous les colis d'un livreur quand le filtre livreur change
   useEffect(() => {
-    if (driverFilter === 'all') {
+    if (driverFilter === 'all' || driverFilter === 'unassigned') {
       setDriverFilteredParcels([])
       setLoadingDriverParcels(false)
       return
@@ -1249,7 +1249,7 @@ export default function AgentPage() {
     ;(returnParcels || []).forEach(p => map.set(p.id, p))
     ;(extraParcels || []).forEach(p => map.set(p.id, p))
     // Si un livreur est filtré, inclure ses colis (filtrés par date opérationnelle si actif)
-    if (driverFilter !== 'all') {
+    if (driverFilter !== 'all' && driverFilter !== 'unassigned') {
       let driverParcels = driverFilteredParcels || []
       // ⚠️ FILTRE CRITIQUE: Si le jour d'opération est sélectionné, ne garder QUE les colis de ce jour
       if (datePreset === 'operational' && operationalDay) {
@@ -1321,8 +1321,14 @@ export default function AgentPage() {
     }
     // ⭐ Filtre par livreur/chauffeur
     if (driverFilter !== 'all') {
-      const matchesDriver = p.deliveryDriverId === driverFilter || p.chauffeurId === driverFilter
-      if (!matchesDriver) return false
+      if (driverFilter === 'unassigned') {
+        // Afficher uniquement les expéditions non assignées
+        if (p.deliveryDriverId || p.chauffeurId) return false
+      } else {
+        // Filtre par livreur spécifique
+        const matchesDriver = p.deliveryDriverId === driverFilter || p.chauffeurId === driverFilter
+        if (!matchesDriver) return false
+      }
     }
     // ⭐ Filtre par type de port
     if (portTypeFilter !== 'all' && p.portType !== portTypeFilter) {

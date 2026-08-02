@@ -1,12 +1,15 @@
-import { useState, useEffect, useMemo } from 'react'
-import { subscribeAllParcelsWithArchives, loadMoreParcelsWithArchives } from '../firebase/parcels'
+import { useState, useEffect, useMemo, useRef } from 'react'
+import { subscribeAllParcels, getParcelsPage } from '../firebase/parcels'
 import { Search, Filter, Calendar, MapPin, Printer } from 'lucide-react'
 import { CITIES } from '../firebase/constants'
 
 export default function FacturierExpeditionsTab({ profileCity }: { profileCity?: string }) {
-  const [parcels, setParcels] = useState<any[]>([])
+  const PAGE_SIZE = 1000 // Chargement initial
+  const [liveParcels, setLiveParcels] = useState<any[]>([])
+  const [moreParcels, setMoreParcels] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [loadingMore, setLoadingMore] = useState(false)
+  const [loadingAll, setLoadingAll] = useState(false)
+  const [hasMore, setHasMore] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [cityFilter, setCityFilter] = useState('Toutes')
@@ -15,84 +18,80 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
   const [dateFilter, setDateFilter] = useState('all')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
-  const [lastSnaps, setLastSnaps] = useState<any>({ parcels: null, archives: null })
-  const [hasMore, setHasMore] = useState(true)
-  const [totalLoaded, setTotalLoaded] = useState(0)
+  const lastPageDocRef = useRef<any>(null)
 
-  // Charger tous les colis (parcels + archives) - charge initialement 10000, puis automatiquement le reste
+  // Fusion des expéditions temps réel + chargées progressivement
+  const parcels = useMemo(() => {
+    const map = new Map()
+    moreParcels.forEach((p: any) => map.set(p.id, p))
+    liveParcels.forEach((p: any) => map.set(p.id, p))
+    return [...map.values()]
+  }, [liveParcels, moreParcels])
+
+  // Charger les premiers colis en temps réel
   useEffect(() => {
-    let currentDocs: any[] = []
-    let currentParcelsSnap: any = null
-    let currentArchivesSnap: any = null
-
-    const unsubscribe = subscribeAllParcelsWithArchives(
-      async (data) => {
-        const docs = Array.isArray(data) ? data : (data?.docs || [])
-        currentDocs = docs
-        currentParcelsSnap = data?.parcelsLastSnap || null
-        currentArchivesSnap = data?.archivesLastSnap || null
-
-        setParcels(docs)
-        setLastSnaps({
-          parcels: currentParcelsSnap,
-          archives: currentArchivesSnap
-        })
-        setTotalLoaded(docs.length)
+    const unsubscribe = subscribeAllParcels(
+      (docs: any[], lastSnap: any) => {
+        setLiveParcels(docs)
         setLoading(false)
         setError(null)
-
-        // Charger automatiquement tous les documents restants
-        if (currentParcelsSnap || currentArchivesSnap) {
-          setLoadingMore(true)
-          try {
-            // Charger récursivement jusqu'à ce qu'il n'y ait plus de données
-            let parcelsSnap = currentParcelsSnap
-            let archivesSnap = currentArchivesSnap
-            let allDocs = [...docs]
-
-            while (parcelsSnap || archivesSnap) {
-              const result = await loadMoreParcelsWithArchives(
-                parcelsSnap,
-                archivesSnap,
-                allDocs,
-                5000  // Charger par lots de 5000
-              )
-
-              allDocs = result.docs
-              parcelsSnap = result.parcelsLastSnap
-              archivesSnap = result.archivesLastSnap
-
-              setParcels([...allDocs])
-              setTotalLoaded(allDocs.length)
-              setLastSnaps({
-                parcels: parcelsSnap,
-                archives: archivesSnap
-              })
-
-              // Si plus de snapshots, on a tout chargé
-              if (!parcelsSnap && !archivesSnap) {
-                setHasMore(false)
-                break
-              }
-            }
-          } catch (err) {
-            console.error('Erreur chargement complet:', err)
-          } finally {
-            setLoadingMore(false)
-          }
-        } else {
-          setHasMore(false)
-        }
+        if (!lastPageDocRef.current) lastPageDocRef.current = lastSnap
+        if (docs.length < PAGE_SIZE) setHasMore(false)
       },
       (err) => {
         console.error('Facturier - Erreur:', err)
         setError(`Erreur de chargement: ${err?.message || 'Erreur inconnue'}`)
         setLoading(false)
       },
-      10000  // Limite initiale : 10000 documents
+      0,
+      PAGE_SIZE
     )
     return unsubscribe
   }, [])
+
+  // Charger automatiquement TOUTE la base en arrière-plan
+  useEffect(() => {
+    if (!hasMore || loadingAll || !lastPageDocRef.current || liveParcels.length === 0) return
+
+    const timer = setTimeout(async () => {
+      if (!hasMore || loadingAll || !lastPageDocRef.current) return
+
+      setLoadingAll(true)
+      try {
+        let cursor = lastPageDocRef.current
+        let more = true
+        let loaded = 0
+        let safety = 0
+
+        while (more && cursor && safety < 500) {
+          const page = await getParcelsPage(cursor, 1000)
+          const pageDocs = page.docs
+          loaded += pageDocs.length
+
+          setMoreParcels(prev => {
+            const map = new Map()
+            prev.forEach((p: any) => map.set(p.id, p))
+            pageDocs.forEach((p: any) => map.set(p.id, p))
+            return [...map.values()]
+          })
+
+          cursor = page.lastDocSnap
+          more = page.hasMore && !!page.lastDocSnap
+          safety += 1
+        }
+
+        if (cursor) lastPageDocRef.current = cursor
+        setHasMore(false)
+        console.log(`✅ Facturier: ${loaded} expéditions supplémentaires chargées`)
+      } catch (err) {
+        console.error('Erreur chargement complet:', err)
+      } finally {
+        setLoadingAll(false)
+      }
+    }, 2000)
+
+    return () => clearTimeout(timer)
+  }, [liveParcels.length, hasMore])
 
   // Filtrer les colis
   const filteredParcels = useMemo(() => {
@@ -228,28 +227,11 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
         </div>
       )}
 
-      {/* Indicateur de chargement */}
-      {loadingMore && (
-        <div className="bg-cyan-50 border border-cyan-200 rounded-xl p-4">
-          <div className="flex items-center gap-3">
-            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-cyan-600"></div>
-            <div className="text-cyan-700">
-              Chargement de tous les documents... ({totalLoaded.toLocaleString()} chargés)
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Statistiques */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <div className="bg-white rounded-xl p-4 shadow-sm border border-gray-200">
           <div className="text-xs text-gray-500 uppercase font-semibold mb-1">Total expéditions</div>
           <div className="text-2xl font-bold text-gray-800">{stats.total}</div>
-          {loadingMore && (
-            <div className="text-xs text-cyan-600 mt-1">
-              Base complète: {totalLoaded.toLocaleString()}
-            </div>
-          )}
         </div>
         <div className="bg-orange-50 rounded-xl p-4 shadow-sm border border-orange-200">
           <div className="text-xs text-orange-700 uppercase font-semibold mb-1">Port Dû</div>

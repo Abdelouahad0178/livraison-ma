@@ -767,6 +767,11 @@ export default function ParcelsTab() {
                           driverFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                         }`}
                       >Tous</button>
+                      <button onClick={() => setDriverFilter('unassigned')}
+                        className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
+                          driverFilter === 'unassigned' ? 'bg-gray-600 text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
+                        }`}
+                      >❓ Livreur inconnu</button>
                       {availableDrivers.map((driver: any) => (
                         <button key={driver.id} onClick={() => setDriverFilter(driver.id)}
                           className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${

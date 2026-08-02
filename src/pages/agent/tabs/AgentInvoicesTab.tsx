@@ -340,7 +340,7 @@ function ViewInvoiceModal({ invoice, onClose }: any) {
             <table className="w-full">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">N° EXP</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">N° EXP (NIC)</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Date</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Destinataire</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Ville</th>
@@ -461,9 +461,9 @@ function printInvoice(invoice: any) {
     @page { size: A4; margin: 15mm; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html { height: 100%; }
-    body { font-family: Arial, sans-serif; font-size: 10pt; color: #111; min-height: 100vh; display: flex; flex-direction: column; position: relative; padding: 0 20px; }
+    body { font-family: Arial, sans-serif; font-size: 10pt; color: #111; min-height: 100vh; display: flex; flex-direction: column; position: relative; padding: 30px 40px 20px 40px; }
     .content { flex: 1; padding-bottom: 60px; }
-    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 30px; padding-bottom: 15px; border-bottom: 2px solid #1e3a8a; }
+    .header { display: flex; align-items: flex-end; justify-content: space-between; margin-bottom: 30px; padding-bottom: 15px; border-bottom: 2px solid #1e3a8a; }
     .header img { height: 60px; object-fit: contain; }
     .header h1 { color: #1e3a8a; font-size: 24pt; margin-bottom: 5px; text-align: center; flex: 1; }
     .header .subtitle { color: #666; font-size: 9pt; }
@@ -485,7 +485,15 @@ function printInvoice(invoice: any) {
 <body>
   <div class="content">
   <div class="header">
-    <img src="${logoUrl}" alt="Logo">
+    <div>
+      <img src="${logoUrl}" alt="Logo" style="height: 60px; margin-bottom: 8px;">
+      <div style="font-size: 8pt; line-height: 1.4;">
+        <div style="font-weight: bold;">Bloc H Rue 2 N°982 Agdal - Ait Melloul</div>
+        <div>Tél : 05 28 30 68 58</div>
+        <div>Gsm : 06 61 20 35 18 / 06 61 29 99 42</div>
+        <div>E-mail : bgexpress2019@gmail.com</div>
+      </div>
+    </div>
     <div style="flex: 1; text-align: center;">
       <h1 style="margin: 0;">FACTURE</h1>
       <div class="subtitle">N° ${invoice.invoiceNumber}</div>
@@ -524,7 +532,7 @@ function printInvoice(invoice: any) {
   <table>
     <thead>
       <tr>
-        <th>N° EXP</th>
+        <th>N° EXP (NIC)</th>
         <th>Date</th>
         <th>Destinataire</th>
         <th>Ville</th>
@@ -580,7 +588,13 @@ function printInvoice(invoice: any) {
   </div>
 
   <div class="footer">
-    BG EXPRESS - BLOC H RUE 2 N°982 AIT MELLOUL - 0661 97 86 12 - bgexpress2024@gmail.com
+    <div style="display: flex; justify-content: center; gap: 40px; font-size: 9pt;">
+      <span>R.C : 17447</span>
+      <span>T.P : 49803403</span>
+      <span>I.F : 31837263</span>
+      <span>CNSS : 1143595</span>
+      <span>ICE : 002158803000007</span>
+    </div>
   </div>
 
   <script>window.onload = function() { window.print(); }<\/script>

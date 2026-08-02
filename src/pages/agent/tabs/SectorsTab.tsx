@@ -10,6 +10,7 @@ export default function SectorsTab() {
   const {
     profile,
     uid,
+    parcels = [],
     sectors = [],
     drivers = [],
     bonBatches = [],
@@ -37,6 +38,48 @@ export default function SectorsTab() {
             </button>
           )}
         </div>
+
+      {/* Livreur anonyme - expéditions non assignées */}
+      {(() => {
+        const unassignedParcels = parcels.filter((p: any) =>
+          !p.deliveryDriverId &&
+          p.status !== 'delivered' &&
+          p.status !== 'cancelled'
+        )
+        return (
+          <div className="bg-white border-2 border-gray-300 border-dashed rounded-2xl overflow-hidden">
+            <div className="flex items-center gap-3 px-4 py-3 bg-gray-50 border-b border-gray-200">
+              <div className="w-10 h-10 bg-gray-400 rounded-xl flex items-center justify-center text-white font-bold text-sm shrink-0">
+                ?
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="font-bold text-gray-700 text-sm">Non assigné</p>
+                <p className="text-xs text-gray-500">Expéditions sans livreur</p>
+              </div>
+              <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-200 rounded-full">
+                <span className="text-xs font-bold text-gray-700">{unassignedParcels.length}</span>
+                <span className="text-xs text-gray-600">colis</span>
+              </div>
+            </div>
+
+            <div className="px-4 py-3">
+              <p className="text-[10px] font-bold text-gray-400 uppercase tracking-wider mb-2">Livreur virtuel</p>
+              <div className="flex items-center gap-2 bg-gray-100 rounded-xl px-3 py-2">
+                <div className="w-7 h-7 bg-gray-300 rounded-full flex items-center justify-center text-gray-600 font-bold text-xs shrink-0">
+                  ?
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-semibold text-gray-700 truncate">Anonyme</p>
+                  <p className="text-[10px] text-gray-500">Expéditions en attente d'affectation</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-gray-700">{unassignedParcels.length} exp.</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {sectors.length === 0 ? (
         <div className="text-center py-12 text-gray-400">
