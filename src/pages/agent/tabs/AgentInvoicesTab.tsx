@@ -340,7 +340,7 @@ function ViewInvoiceModal({ invoice, onClose }: any) {
             <table className="w-full">
               <thead className="bg-gray-50">
                 <tr>
-                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">N° Suivi</th>
+                  <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">N° EXP</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Date</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Destinataire</th>
                   <th className="px-3 py-2 text-left text-xs font-semibold text-gray-600">Ville</th>
@@ -351,10 +351,10 @@ function ViewInvoiceModal({ invoice, onClose }: any) {
                 {invoice.items.map((item: any, idx: number) => (
                   <tr key={idx} className="hover:bg-gray-50">
                     <td className="px-3 py-2 text-sm font-semibold text-indigo-600">
-                      {item.trackingId}
+                      {item.senderNic || item.trackingId}
                     </td>
                     <td className="px-3 py-2 text-sm text-gray-600">
-                      {item.createdAt ? new Date(item.createdAt).toLocaleDateString('fr-MA') : '-'}
+                      {item.createdAt ? (item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt)).toLocaleDateString('fr-MA') : '-'}
                     </td>
                     <td className="px-3 py-2 text-sm text-gray-700">{item.recipientName || '-'}</td>
                     <td className="px-3 py-2 text-sm text-gray-600">{item.recipientCity || '-'}</td>
@@ -423,7 +423,8 @@ function printInvoice(invoice: any) {
     td { padding: 6px 8px; border-bottom: 1px solid #eee; font-size: 9pt; }
     .text-right { text-align: right; }
     .total-row { background: #f0f0f0; font-weight: bold; font-size: 12pt; }
-    .footer { margin-top: 30px; padding-top: 10px; border-top: 1px solid #ddd; text-align: center; font-size: 8pt; color: #666; }
+    .footer { position: fixed; bottom: 0; left: 0; right: 0; padding: 10px; border-top: 1px solid #ddd; text-align: center; font-size: 8pt; color: #666; background: white; }
+    @media print { .footer { position: fixed; bottom: 0; } }
   </style>
 </head>
 <body>
@@ -467,7 +468,7 @@ function printInvoice(invoice: any) {
   <table>
     <thead>
       <tr>
-        <th>N° Suivi</th>
+        <th>N° EXP</th>
         <th>Date</th>
         <th>Destinataire</th>
         <th>Ville</th>
@@ -475,15 +476,17 @@ function printInvoice(invoice: any) {
       </tr>
     </thead>
     <tbody>
-      ${invoice.items.map((item: any) => `
+      ${invoice.items.map((item: any) => {
+        const itemDate = item.createdAt ? (item.createdAt instanceof Date ? item.createdAt : new Date(item.createdAt)) : null;
+        return `
         <tr>
-          <td>${item.trackingId}</td>
-          <td>${item.createdAt ? new Date(item.createdAt).toLocaleDateString('fr-MA') : '-'}</td>
+          <td>${item.senderNic || item.trackingId}</td>
+          <td>${itemDate ? itemDate.toLocaleDateString('fr-MA') : '-'}</td>
           <td>${item.recipientName || '-'}</td>
           <td>${item.recipientCity || '-'}</td>
           <td class="text-right">${item.portAmount.toLocaleString()}</td>
         </tr>
-      `).join('')}
+      `}).join('')}
     </tbody>
     <tfoot>
       <tr class="total-row">
@@ -505,7 +508,7 @@ function printInvoice(invoice: any) {
   ` : ''}
 
   <div class="footer">
-    BG ONLINE - LOTISSEMENT AL MOSTAQBAL SN LAAYOUNE - 0661 97 86 12 - bgonline2024@gmail.com
+    BG EXPRESS - BLOC H RUE 2 N°982 AIT MELLOUL - 0522 62 92 89 - bgexpress2019@gmail.com
   </div>
 
   <script>window.onload = function() { window.print(); }<\/script>
