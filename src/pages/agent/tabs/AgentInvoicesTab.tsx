@@ -461,9 +461,9 @@ function printInvoice(invoice: any) {
     @page { size: A4; margin: 15mm; }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     html { height: 100%; }
-    body { font-family: Arial, sans-serif; font-size: 10pt; color: #111; min-height: 100vh; display: flex; flex-direction: column; position: relative; }
+    body { font-family: Arial, sans-serif; font-size: 10pt; color: #111; min-height: 100vh; display: flex; flex-direction: column; position: relative; padding: 0 20px; }
     .content { flex: 1; padding-bottom: 60px; }
-    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 20px; padding-bottom: 10px; border-bottom: 2px solid #1e3a8a; }
+    .header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 30px; padding-bottom: 15px; border-bottom: 2px solid #1e3a8a; }
     .header img { height: 60px; object-fit: contain; }
     .header h1 { color: #1e3a8a; font-size: 24pt; margin-bottom: 5px; text-align: center; flex: 1; }
     .header .subtitle { color: #666; font-size: 9pt; }
