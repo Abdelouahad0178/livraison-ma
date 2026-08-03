@@ -2179,29 +2179,52 @@ export default function ParcelsTab() {
                           )}
                           <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
                             <div className="flex items-center gap-2">
-                              <span className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm ${sc}`}>
-                                {parcel.status || 'Initialisé'}
-                              </span>
-                              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && parcel.status !== 'Livré' && (
-                                <button
-                                  onClick={async () => {
-                                    if (confirm(`Marquer cette expédition comme LIVRÉE?\n\nN° EXP: ${parcel.sender?.nic || parcel.trackingId}`)) {
-                                      try {
-                                        const { updateParcelStatus } = await import('../../../firebase/parcels')
-                                        await updateParcelStatus(parcel.id, 'Livré', {
-                                          deliveredAt: new Date().toISOString(),
-                                        })
-                                        alert('✅ Expédition marquée comme LIVRÉE!')
-                                      } catch (err: any) {
-                                        alert(`❌ Erreur: ${err.message}`)
+                              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') ? (
+                                <>
+                                  <button
+                                    onClick={async () => {
+                                      if (parcel.status === 'Livré') {
+                                        // Revenir au statut précédent
+                                        const previousStatus = parcel.history?.[parcel.history.length - 2]?.status || 'En cours de livraison'
+                                        if (confirm(`Annuler la livraison et revenir au statut "${previousStatus}"?\n\nN° EXP: ${parcel.sender?.nic || parcel.trackingId}`)) {
+                                          try {
+                                            const { updateParcelStatus } = await import('../../../firebase/parcels')
+                                            const { deleteField } = await import('firebase/firestore')
+                                            await updateParcelStatus(parcel.id, previousStatus, {
+                                              deliveredAt: deleteField(),
+                                              note: 'Annulation livraison - retour au statut précédent'
+                                            })
+                                            alert(`✅ Retour au statut "${previousStatus}"`)
+                                          } catch (err: any) {
+                                            alert(`❌ Erreur: ${err.message}`)
+                                          }
+                                        }
+                                      } else {
+                                        // Marquer comme livré
+                                        if (confirm(`Marquer cette expédition comme LIVRÉE?\n\nN° EXP: ${parcel.sender?.nic || parcel.trackingId}`)) {
+                                          try {
+                                            const { updateParcelStatus } = await import('../../../firebase/parcels')
+                                            await updateParcelStatus(parcel.id, 'Livré', {
+                                              deliveredAt: new Date().toISOString(),
+                                            })
+                                            alert('✅ Expédition marquée comme LIVRÉE!')
+                                          } catch (err: any) {
+                                            alert(`❌ Erreur: ${err.message}`)
+                                          }
+                                        }
                                       }
-                                    }
-                                  }}
-                                  className="text-base hover:scale-110 transition-transform cursor-pointer"
-                                  title="Marquer comme Livré"
-                                >
-                                  ✅
-                                </button>
+                                    }}
+                                    className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm transition-all hover:scale-105 hover:shadow-md cursor-pointer ${sc}`}
+                                    title={parcel.status === 'Livré' ? 'Cliquer pour annuler la livraison' : 'Cliquer pour marquer comme Livré'}
+                                  >
+                                    {parcel.status || 'Initialisé'}
+                                    {parcel.status === 'Livré' && <span className="text-xs">↶</span>}
+                                  </button>
+                                </>
+                              ) : (
+                                <span className={`inline-flex items-center gap-1 px-3 py-1.5 rounded-lg text-xs font-bold shadow-sm ${sc}`}>
+                                  {parcel.status || 'Initialisé'}
+                                </span>
                               )}
                             </div>
                           </td>
