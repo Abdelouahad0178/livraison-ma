@@ -18,6 +18,7 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
   const [cityFilter, setCityFilter] = useState('Toutes')
   const [portTypeFilter, setPortTypeFilter] = useState<'all' | 'port_du' | 'port_paye' | 'port_en_compte_expediteur' | 'port_en_compte_destinataire'>('all')
   const [clientRoleFilter, setClientRoleFilter] = useState<'all' | 'expediteur' | 'destinataire'>('all')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
   const [dateFilter, setDateFilter] = useState('all')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
@@ -153,6 +154,9 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
         }
       }
 
+      // Filtre par statut
+      if (statusFilter !== 'all' && p.status !== statusFilter) return false
+
       // Filtre par recherche
       if (search) {
         const term = search.toLowerCase()
@@ -212,7 +216,7 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
     }
 
     return result
-  }, [parcels, cityFilter, portTypeFilter, clientRoleFilter, search, dateFilter, dateFrom, dateTo])
+  }, [parcels, cityFilter, portTypeFilter, clientRoleFilter, statusFilter, search, dateFilter, dateFrom, dateTo])
 
   // Statistiques
   const stats = useMemo(() => {
@@ -292,6 +296,7 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
       'Destinataire': parcel.receiver?.name || '-',
       'Agence': parcel.sender?.city || parcel.originCity || '-',
       'Ville Dest.': parcel.receiver?.city || parcel.recipientCity || '-',
+      'Nb Colis': parcel.nbColis || parcel.numberOfParcels || 1,
       'Type Port': parcel.portType === 'port_du' ? 'Port Dû' :
                    parcel.portType === 'port_paye' ? 'Port Payé' :
                    parcel.portType === 'port_en_compte_expediteur' ? 'Port en Compte (Expéditeur)' :
@@ -429,7 +434,7 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
 
       {/* Filtres */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
-        <div className="grid grid-cols-1 md:grid-cols-6 gap-3">
+        <div className="grid grid-cols-1 md:grid-cols-7 gap-3">
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
@@ -471,6 +476,18 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
             <option value="destinataire">📥 Client = Destinataire</option>
           </select>
           <select
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value)}
+            className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-cyan-500"
+          >
+            <option value="all">Tous les statuts</option>
+            <option value="Livré">✅ Livré</option>
+            <option value="En cours de livraison">🚚 En cours de livraison</option>
+            <option value="Arrivé en agence">🏢 Arrivé en agence</option>
+            <option value="En transit">📦 En transit</option>
+            <option value="Retourné">↩️ Retourné</option>
+          </select>
+          <select
             value={dateFilter}
             onChange={e => setDateFilter(e.target.value)}
             className="px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-cyan-500"
@@ -487,6 +504,7 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
               setCityFilter('Toutes')
               setPortTypeFilter('all')
               setClientRoleFilter('all')
+              setStatusFilter('all')
               setDateFilter('all')
               setDateFrom('')
               setDateTo('')
@@ -563,6 +581,7 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Destinataire</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">🏢 Agence</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Ville Dest.</th>
+                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Nb Colis</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Type Port</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Montant Port</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Date</th>
@@ -572,13 +591,13 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
             <tbody className="divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan={11} className="px-4 py-8 text-center text-gray-500">
                     Chargement...
                   </td>
                 </tr>
               ) : filteredParcels.length === 0 ? (
                 <tr>
-                  <td colSpan={10} className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan={11} className="px-4 py-8 text-center text-gray-500">
                     Aucune expédition trouvée
                   </td>
                 </tr>
@@ -597,6 +616,11 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
                     <td className="px-4 py-3 text-sm text-gray-700">{parcel.receiver?.name || '-'}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">{parcel.sender?.city || parcel.originCity || '-'}</td>
                     <td className="px-4 py-3 text-sm text-gray-600">{parcel.receiver?.city || parcel.recipientCity || '-'}</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className="inline-block px-2 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-bold">
+                        {parcel.nbColis || parcel.numberOfParcels || 1}
+                      </span>
+                    </td>
                     <td className="px-4 py-3">
                       {parcel.portType === 'port_du' ? (
                         <span className="inline-block px-2 py-1 rounded-full bg-orange-100 text-orange-700 text-xs font-semibold">
