@@ -298,16 +298,11 @@ export default function ParcelsTab() {
   // Fonction pour sauvegarder la date modifiée
   const handleSaveDate = async (parcelId: string, newDate: string) => {
     try {
-      // Convertir la date en timestamp Firestore
-      const dateObj = new Date(newDate)
-      dateObj.setHours(12, 0, 0, 0) // Midi pour éviter les problèmes de fuseau horaire
-
+      // Utiliser expeditionDate au lieu de modifier createdAt
+      // pour ne pas affecter les filtres système
       const { updateParcel } = await import('../../../firebase/parcels')
       await updateParcel(parcelId, {
-        createdAt: {
-          seconds: Math.floor(dateObj.getTime() / 1000),
-          nanoseconds: 0
-        }
+        expeditionDate: newDate // Format YYYY-MM-DD
       })
 
       setEditingDateId(null)
@@ -2211,7 +2206,15 @@ export default function ParcelsTab() {
                               {(() => {
                                 const isOriginAgency = parcel.originCity === profile?.city || parcel.sender?.city === profile?.city
                                 const canEditDate = profile?.role === 'chef_agence' && isOriginAgency
-                                const currentDate = parcel.createdAt ? new Date(parcel.createdAt.seconds * 1000) : null
+
+                                // Utiliser expeditionDate si défini, sinon createdAt
+                                let currentDate: Date | null = null
+                                if (parcel.expeditionDate) {
+                                  currentDate = new Date(parcel.expeditionDate)
+                                } else if (parcel.createdAt) {
+                                  currentDate = new Date(parcel.createdAt.seconds * 1000)
+                                }
+
                                 const isEditing = editingDateId === parcel.id
 
                                 if (canEditDate && isEditing) {
