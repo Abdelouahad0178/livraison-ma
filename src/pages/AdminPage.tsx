@@ -582,6 +582,27 @@ export default function AdminPage() {
     return () => unsubParcels()
   }, [isSearchActive])
 
+  // 🔄 Écouter les mises à jour de prix depuis d'autres pages (ex: Facturier)
+  useEffect(() => {
+    const handlePriceUpdate = (event: CustomEvent) => {
+      const { parcelId, newPrice } = event.detail
+      console.log(`💰 Prix mis à jour depuis une autre page: ${parcelId} = ${newPrice} DH`)
+
+      // Mettre à jour dans liveParcels
+      setLiveParcels(prev => prev.map(p =>
+        p.id === parcelId ? { ...p, price: newPrice } : p
+      ))
+
+      // Mettre à jour dans moreParcels
+      setMoreParcels(prev => prev.map(p =>
+        p.id === parcelId ? { ...p, price: newPrice } : p
+      ))
+    }
+
+    window.addEventListener('parcelPriceUpdated', handlePriceUpdate as EventListener)
+    return () => window.removeEventListener('parcelPriceUpdated', handlePriceUpdate as EventListener)
+  }, [])
+
   // 🚀 Chargement automatique de toute la base en arrière-plan (après premiers 800)
   useEffect(() => {
     if (!hasMore || loadingAll || loadingMore || !lastPageDocRef.current || isSearchActive) return

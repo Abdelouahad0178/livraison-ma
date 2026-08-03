@@ -241,6 +241,11 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
         priceModifiedAt: new Date().toISOString()
       })
 
+      // Émettre un événement global pour notifier les autres pages
+      window.dispatchEvent(new CustomEvent('parcelPriceUpdated', {
+        detail: { parcelId, newPrice, timestamp: new Date().toISOString() }
+      }))
+
       // Fermer l'éditeur et afficher le succès
       setEditingPriceId(null)
       setEditingPrice('')
