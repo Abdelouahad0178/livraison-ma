@@ -2219,12 +2219,12 @@ export default function ParcelsTab() {
 
                                 if (canEditDate && isEditing) {
                                   return (
-                                    <div className="flex items-center gap-1">
+                                    <div className="flex flex-col gap-2 py-1">
                                       <input
                                         type="date"
                                         value={editingDateValue}
                                         onChange={e => setEditingDateValue(e.target.value)}
-                                        className="border border-blue-400 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-600"
+                                        className="border-2 border-blue-500 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-200 shadow-sm"
                                         autoFocus
                                         onKeyDown={e => {
                                           if (e.key === 'Enter') handleSaveDate(parcel.id, editingDateValue)
@@ -2234,30 +2234,32 @@ export default function ParcelsTab() {
                                           }
                                         }}
                                       />
-                                      <button
-                                        onClick={() => handleSaveDate(parcel.id, editingDateValue)}
-                                        className="p-1 text-green-600 hover:bg-green-50 rounded"
-                                        title="Enregistrer"
-                                      >
-                                        <Check className="w-3.5 h-3.5" />
-                                      </button>
-                                      <button
-                                        onClick={() => {
-                                          setEditingDateId(null)
-                                          setEditingDateValue('')
-                                        }}
-                                        className="p-1 text-gray-400 hover:bg-gray-50 rounded"
-                                        title="Annuler"
-                                      >
-                                        <X className="w-3.5 h-3.5" />
-                                      </button>
+                                      <div className="flex items-center gap-2">
+                                        <button
+                                          onClick={() => handleSaveDate(parcel.id, editingDateValue)}
+                                          className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold bg-green-600 text-white hover:bg-green-700 transition shadow-sm"
+                                        >
+                                          <Check className="w-3.5 h-3.5" />
+                                          Enregistrer
+                                        </button>
+                                        <button
+                                          onClick={() => {
+                                            setEditingDateId(null)
+                                            setEditingDateValue('')
+                                          }}
+                                          className="flex-1 inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold bg-gray-200 text-gray-700 hover:bg-gray-300 transition shadow-sm"
+                                        >
+                                          <X className="w-3.5 h-3.5" />
+                                          Annuler
+                                        </button>
+                                      </div>
                                     </div>
                                   )
                                 }
 
                                 return (
                                   <div className="flex items-center gap-2">
-                                    <span className="text-gray-600 font-medium">
+                                    <span className="text-gray-700 font-semibold text-sm">
                                       {currentDate ? currentDate.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'}
                                     </span>
                                     {canEditDate && (
@@ -2271,10 +2273,10 @@ export default function ParcelsTab() {
                                             setEditingDateValue(`${yyyy}-${mm}-${dd}`)
                                           }
                                         }}
-                                        className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition"
-                                        title="Modifier la date"
+                                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 transition border border-blue-200 shadow-sm"
                                       >
                                         <Edit2 className="w-3.5 h-3.5" />
+                                        Modifier
                                       </button>
                                     )}
                                   </div>
