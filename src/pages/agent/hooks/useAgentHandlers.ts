@@ -208,10 +208,17 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 
         console.log('✅ updateParcelStatus terminé pour', parcel.trackingId)
       }
-      // ✅ NE PAS vider la sélection pour permettre l'impression des colis assignés
-      // setBulkAssignSelectedIds([])  // ← Commenté
+
+      // ✅ Vider la sélection après assignation pour feedback visuel
+      setBulkAssignSelectedIds([])
       setBulkAssignDriverId('')
       setBulkAssignSectorId('')
+
+      // ✅ Si on est sur le filtre "unassigned", petit délai pour laisser Firestore se mettre à jour
+      const { driverFilter } = s.current
+      if (driverFilter === 'unassigned') {
+        console.log('⏳ Attente mise à jour Firestore pour filtre unassigned...')
+      }
     } catch (err: any) {
       console.error('handleBulkAssignDriver:', err)
       setBulkAssignError(err?.message || 'Erreur lors de l\'assignation groupée.')
