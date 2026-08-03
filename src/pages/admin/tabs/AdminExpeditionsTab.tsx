@@ -109,6 +109,85 @@ export default function AdminExpeditionsTab({
     }
   }
 
+  // Fonction pour réparer les dates cassées
+  const [repairingDates, setRepairingDates] = useState(false)
+  const handleRepairDates = async () => {
+    if (!confirm(
+      '⚠️ Cette fonction va réparer les expéditions dont createdAt a été modifié par erreur.\n\n' +
+      'Elle va:\n' +
+      '1. Restaurer createdAt depuis l\'historique (history[0].timestamp)\n' +
+      '2. Définir expeditionDate à la date voulue\n\n' +
+      'Continuer?'
+    )) return
+
+    setRepairingDates(true)
+    let repaired = 0
+    let errors = 0
+
+    try {
+      const { updateDoc, Timestamp } = await import('firebase/firestore')
+
+      for (const parcel of allParcels) {
+        try {
+          // Vérifier si l'historique existe
+          if (!parcel.history || parcel.history.length === 0) continue
+
+          // Récupérer la date originale depuis le premier événement
+          const originalTimestamp = parcel.history[0].timestamp
+          if (!originalTimestamp) continue
+
+          const originalDate = new Date(originalTimestamp)
+          const currentDate = parcel.createdAt?.toDate ? parcel.createdAt.toDate() : null
+
+          if (!currentDate) continue
+
+          // Si les dates sont différentes de plus d'un jour, c'est probablement une erreur
+          const diffDays = Math.abs(originalDate.getTime() - currentDate.getTime()) / (1000 * 60 * 60 * 24)
+
+          if (diffDays > 0.1 && diffDays < 365) { // Plus d'un jour de différence mais moins d'un an
+            console.log(`🔧 Réparation ${parcel.trackingId}: ${currentDate.toLocaleDateString()} → ${originalDate.toLocaleDateString()}`)
+
+            // Restaurer createdAt
+            const restoredCreatedAt = Timestamp.fromDate(originalDate)
+
+            // Définir expeditionDate à la date que l'utilisateur voulait
+            const yyyy = currentDate.getFullYear()
+            const mm = String(currentDate.getMonth() + 1).padStart(2, '0')
+            const dd = String(currentDate.getDate()).padStart(2, '0')
+            const expeditionDate = `${yyyy}-${mm}-${dd}`
+
+            await updateDoc(doc(db, 'parcels', parcel.id), {
+              createdAt: restoredCreatedAt,
+              expeditionDate: expeditionDate
+            })
+
+            repaired++
+          }
+        } catch (err) {
+          console.error(`Erreur sur ${parcel.trackingId}:`, err)
+          errors++
+        }
+      }
+
+      alert(
+        `✅ Réparation terminée!\n\n` +
+        `📊 Résultats:\n` +
+        `- ${repaired} expédition(s) réparée(s)\n` +
+        `- ${errors} erreur(s)\n\n` +
+        `🔄 Rechargez la page pour voir les changements.`
+      )
+
+      if (repaired > 0) {
+        setTimeout(() => window.location.reload(), 2000)
+      }
+
+    } catch (error: any) {
+      alert('❌ Erreur: ' + error.message)
+    } finally {
+      setRepairingDates(false)
+    }
+  }
+
   return (
     <>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 mt-2">
@@ -429,6 +508,15 @@ export default function AdminExpeditionsTab({
             className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold bg-slate-900 text-white hover:bg-slate-800 transition shadow-sm"
           >
             <Archive className="w-4 h-4" /> Archiver
+          </button>
+          <button
+            onClick={handleRepairDates}
+            disabled={repairingDates}
+            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold bg-orange-600 text-white hover:bg-orange-700 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+            title="Réparer les expéditions dont createdAt a été modifié par erreur"
+          >
+            <RotateCcw className={`w-4 h-4 ${repairingDates ? 'animate-spin' : ''}`} />
+            {repairingDates ? 'Réparation...' : 'Réparer dates'}
           </button>
         </div>
       </div>
