@@ -603,6 +603,27 @@ export default function AdminPage() {
     return () => window.removeEventListener('parcelPriceUpdated', handlePriceUpdate as EventListener)
   }, [])
 
+  // 🔄 Écouter toutes les mises à jour de parcels (depuis n'importe quelle page)
+  useEffect(() => {
+    const handleParcelUpdate = (event: CustomEvent) => {
+      const { parcelId, data } = event.detail
+      console.log(`📦 Parcel mis à jour: ${parcelId}`, data)
+
+      // Mettre à jour dans liveParcels
+      setLiveParcels(prev => prev.map(p =>
+        p.id === parcelId ? { ...p, ...data } : p
+      ))
+
+      // Mettre à jour dans moreParcels
+      setMoreParcels(prev => prev.map(p =>
+        p.id === parcelId ? { ...p, ...data } : p
+      ))
+    }
+
+    window.addEventListener('parcelUpdated', handleParcelUpdate as EventListener)
+    return () => window.removeEventListener('parcelUpdated', handleParcelUpdate as EventListener)
+  }, [])
+
   // 🚀 Chargement automatique de toute la base en arrière-plan (après premiers 800)
   useEffect(() => {
     if (!hasMore || loadingAll || loadingMore || !lastPageDocRef.current || isSearchActive) return

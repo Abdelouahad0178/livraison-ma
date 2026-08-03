@@ -358,6 +358,13 @@ export async function updateParcelStatus(parcelId: string, status: string, extra
     }
   }
 
+  // Émettre un événement pour synchronisation temps réel entre les pages
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('parcelUpdated', {
+      detail: { parcelId, data: { status, ...extra }, timestamp: new Date().toISOString() }
+    }))
+  }
+
   return historyEntry
 }
 export async function getAllParcels() {
@@ -436,6 +443,13 @@ async function syncParcelSnapshotInArrivages(parcelId: any, data: any = {}) {
 export async function updateParcel(parcelId: string, data: Partial<Parcel> & Record<string, unknown>): Promise<void> {
   await updateDoc(doc(db, 'parcels', parcelId), data)
   await syncParcelSnapshotInArrivages(parcelId, data)
+
+  // Émettre un événement pour synchronisation temps réel entre les pages
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('parcelUpdated', {
+      detail: { parcelId, data, timestamp: new Date().toISOString() }
+    }))
+  }
 }
 export async function markParcelAsReturned(parcel: any, extra: any = {}) {
   const now = new Date().toISOString()

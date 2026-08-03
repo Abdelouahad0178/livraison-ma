@@ -100,6 +100,27 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
     return () => clearTimeout(timer)
   }, [liveParcels.length, hasMore])
 
+  // 🔄 Écouter les mises à jour de parcels depuis d'autres pages (ex: Admin)
+  useEffect(() => {
+    const handleParcelUpdate = (event: CustomEvent) => {
+      const { parcelId, data } = event.detail
+      console.log(`📦 Facturier: Parcel mis à jour: ${parcelId}`, data)
+
+      // Mettre à jour dans liveParcels
+      setLiveParcels(prev => prev.map(p =>
+        p.id === parcelId ? { ...p, ...data } : p
+      ))
+
+      // Mettre à jour dans moreParcels
+      setMoreParcels(prev => prev.map(p =>
+        p.id === parcelId ? { ...p, ...data } : p
+      ))
+    }
+
+    window.addEventListener('parcelUpdated', handleParcelUpdate as EventListener)
+    return () => window.removeEventListener('parcelUpdated', handleParcelUpdate as EventListener)
+  }, [])
+
   // Filtrer les colis
   const filteredParcels = useMemo(() => {
     let result = parcels.filter(p => {
