@@ -195,6 +195,10 @@ export default function ParcelsTab() {
   const [showColumnSelector, setShowColumnSelector] = useState(false)
   const [printOrientation, setPrintOrientation] = useState<'portrait' | 'landscape'>('portrait')
 
+  // État pour l'édition de date
+  const [editingDateId, setEditingDateId] = useState<string | null>(null)
+  const [editingDateValue, setEditingDateValue] = useState<string>('')
+
   // Sécurité : s'assurer que les tableaux ne sont jamais undefined
   const safeParcels = (() => {
     if (showDeliveredByOthers) {
@@ -290,6 +294,29 @@ export default function ParcelsTab() {
     '#FFE5CC', // Saumon pâle
     '#E5E5FF', // Lavande
   ]
+
+  // Fonction pour sauvegarder la date modifiée
+  const handleSaveDate = async (parcelId: string, newDate: string) => {
+    try {
+      // Convertir la date en timestamp Firestore
+      const dateObj = new Date(newDate)
+      dateObj.setHours(12, 0, 0, 0) // Midi pour éviter les problèmes de fuseau horaire
+
+      const { updateParcel } = await import('../../../firebase/parcels')
+      await updateParcel(parcelId, {
+        createdAt: {
+          seconds: Math.floor(dateObj.getTime() / 1000),
+          nanoseconds: 0
+        }
+      })
+
+      setEditingDateId(null)
+      setEditingDateValue('')
+    } catch (err: any) {
+      console.error('Erreur modification date:', err)
+      alert(`❌ Erreur: ${err.message}`)
+    }
+  }
 
   // ⭐ Générer une couleur pour un livreur basée sur son ID
   const getDriverColor = (driverId: string) => {
@@ -2181,9 +2208,75 @@ export default function ParcelsTab() {
                           )}
                           {visibleColumns.date && (
                             <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
-                              <span className="text-gray-600 font-medium">
-                                {parcel.createdAt ? new Date(parcel.createdAt.seconds * 1000).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'}
-                              </span>
+                              {(() => {
+                                const isOriginAgency = parcel.originCity === profile?.city || parcel.sender?.city === profile?.city
+                                const canEditDate = profile?.role === 'chef_agence' && isOriginAgency
+                                const currentDate = parcel.createdAt ? new Date(parcel.createdAt.seconds * 1000) : null
+                                const isEditing = editingDateId === parcel.id
+
+                                if (canEditDate && isEditing) {
+                                  return (
+                                    <div className="flex items-center gap-1">
+                                      <input
+                                        type="date"
+                                        value={editingDateValue}
+                                        onChange={e => setEditingDateValue(e.target.value)}
+                                        className="border border-blue-400 rounded px-2 py-1 text-xs focus:outline-none focus:border-blue-600"
+                                        autoFocus
+                                        onKeyDown={e => {
+                                          if (e.key === 'Enter') handleSaveDate(parcel.id, editingDateValue)
+                                          if (e.key === 'Escape') {
+                                            setEditingDateId(null)
+                                            setEditingDateValue('')
+                                          }
+                                        }}
+                                      />
+                                      <button
+                                        onClick={() => handleSaveDate(parcel.id, editingDateValue)}
+                                        className="p-1 text-green-600 hover:bg-green-50 rounded"
+                                        title="Enregistrer"
+                                      >
+                                        <Check className="w-3.5 h-3.5" />
+                                      </button>
+                                      <button
+                                        onClick={() => {
+                                          setEditingDateId(null)
+                                          setEditingDateValue('')
+                                        }}
+                                        className="p-1 text-gray-400 hover:bg-gray-50 rounded"
+                                        title="Annuler"
+                                      >
+                                        <X className="w-3.5 h-3.5" />
+                                      </button>
+                                    </div>
+                                  )
+                                }
+
+                                return (
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-gray-600 font-medium">
+                                      {currentDate ? currentDate.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' }) : '—'}
+                                    </span>
+                                    {canEditDate && (
+                                      <button
+                                        onClick={() => {
+                                          setEditingDateId(parcel.id)
+                                          if (currentDate) {
+                                            const yyyy = currentDate.getFullYear()
+                                            const mm = String(currentDate.getMonth() + 1).padStart(2, '0')
+                                            const dd = String(currentDate.getDate()).padStart(2, '0')
+                                            setEditingDateValue(`${yyyy}-${mm}-${dd}`)
+                                          }
+                                        }}
+                                        className="p-1 text-gray-400 hover:text-blue-600 hover:bg-blue-50 rounded transition"
+                                        title="Modifier la date"
+                                      >
+                                        <Edit2 className="w-3.5 h-3.5" />
+                                      </button>
+                                    )}
+                                  </div>
+                                )
+                              })()}
                             </td>
                           )}
                           <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
