@@ -477,11 +477,14 @@ export default function AdminExpeditionsTab({
                   // Utiliser serviceType en priorité (plus fiable), sinon codPaymentType en fallback
                   const paymentTypeKey = (p.serviceType?.split(',')[0]?.trim()) || p.codPaymentType
                   const cpt = paymentTypeKey ? COD_PAYMENT_TYPES.find(t => t.key === paymentTypeKey) : null
-                  const date = p.createdAt?.toDate?.()
-                    ? p.createdAt.toDate().toLocaleDateString('fr-MA')
-                    : p.history?.[0]?.timestamp
-                      ? new Date(p.history[0].timestamp).toLocaleDateString('fr-MA')
-                      : '-'
+                  // Utiliser expeditionDate en priorité, puis createdAt
+                  const date = p.expeditionDate
+                    ? new Date(p.expeditionDate).toLocaleDateString('fr-MA')
+                    : p.createdAt?.toDate?.()
+                      ? p.createdAt.toDate().toLocaleDateString('fr-MA')
+                      : p.history?.[0]?.timestamp
+                        ? new Date(p.history[0].timestamp).toLocaleDateString('fr-MA')
+                        : '-'
                   return (
                     <tr key={p.id} className="hover:bg-gray-50 transition">
                       <td className="px-4 py-3">

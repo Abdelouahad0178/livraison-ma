@@ -297,7 +297,9 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
                    parcel.portType === 'port_en_compte_expediteur' ? 'Port en Compte (Expéditeur)' :
                    parcel.portType === 'port_en_compte_destinataire' ? 'Port en Compte (Destinataire)' : '-',
       'Montant Port (DH)': parcel.price || 0,
-      'Date': parcel.createdAt?.toDate?.().toLocaleDateString('fr-MA') || '-',
+      'Date': parcel.expeditionDate
+        ? new Date(parcel.expeditionDate).toLocaleDateString('fr-MA')
+        : parcel.createdAt?.toDate?.().toLocaleDateString('fr-MA') || '-',
       'Statut': parcel.status || '-'
     }))
 
@@ -682,7 +684,9 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
                       )}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600">
-                      {parcel.createdAt?.toDate?.().toLocaleDateString('fr-MA')}
+                      {parcel.expeditionDate
+                        ? new Date(parcel.expeditionDate).toLocaleDateString('fr-MA')
+                        : parcel.createdAt?.toDate?.().toLocaleDateString('fr-MA')}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600">{parcel.status}</td>
                   </tr>
@@ -858,7 +862,7 @@ function printFacturation(parcels: any[], stats: any, filters: any) {
             </span>
           </td>
           <td class="text-right" style="font-weight: bold;">${(p.price || 0).toLocaleString()} DH</td>
-          <td>${p.createdAt?.toDate?.().toLocaleDateString('fr-MA') || '-'}</td>
+          <td>${p.expeditionDate ? new Date(p.expeditionDate).toLocaleDateString('fr-MA') : (p.createdAt?.toDate?.().toLocaleDateString('fr-MA') || '-')}</td>
         </tr>
       `).join('')}
     </tbody>
