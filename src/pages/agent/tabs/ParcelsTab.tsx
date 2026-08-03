@@ -1,7 +1,7 @@
 import {
   AlertTriangle, Banknote, Calendar, Car, Check, CheckSquare,
   ChevronDown, ChevronLeft, ChevronRight, Edit2, Filter, Hand,
-  LayoutGrid, Lock, Package, Printer, Search, Table2, Trash2, Truck,
+  LayoutGrid, Lock, Package, Pencil, Printer, Search, Table2, Trash2, Truck,
   Unlock, User, X,
 } from 'lucide-react'
 import { useState, useRef, useEffect, useMemo } from 'react'
@@ -2276,7 +2276,7 @@ export default function ParcelsTab() {
                                         className="p-2 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 transition border border-blue-200 shadow-sm"
                                         title="Modifier la date"
                                       >
-                                        <Edit2 className="w-4 h-4" />
+                                        <Pencil className="w-4 h-4" />
                                       </button>
                                     )}
                                   </div>
