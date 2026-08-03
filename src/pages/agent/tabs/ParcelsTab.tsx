@@ -2195,39 +2195,33 @@ export default function ParcelsTab() {
                                             }
                                           }
                                         }
-                                        if (confirm(`Annuler la livraison et revenir au statut "${previousStatus}"?\n\nN° EXP: ${parcel.sender?.nic || parcel.trackingId}`)) {
-                                          try {
-                                            const { updateParcelStatus } = await import('../../../firebase/parcels')
-                                            const { doc, updateDoc, deleteField } = await import('firebase/firestore')
-                                            const { db } = await import('../../../firebase/config')
 
-                                            // D'abord changer le statut
-                                            await updateParcelStatus(parcel.id, previousStatus, {
-                                              note: 'Annulation livraison - retour au statut précédent'
-                                            })
+                                        try {
+                                          const { updateParcelStatus } = await import('../../../firebase/parcels')
+                                          const { doc, updateDoc, deleteField } = await import('firebase/firestore')
+                                          const { db } = await import('../../../firebase/config')
 
-                                            // Ensuite supprimer deliveredAt dans une opération séparée
-                                            await updateDoc(doc(db, 'parcels', parcel.id), {
-                                              deliveredAt: deleteField()
-                                            })
+                                          // D'abord changer le statut
+                                          await updateParcelStatus(parcel.id, previousStatus, {
+                                            note: 'Annulation livraison - retour au statut précédent'
+                                          })
 
-                                            alert(`✅ Retour au statut "${previousStatus}"`)
-                                          } catch (err: any) {
-                                            alert(`❌ Erreur: ${err.message}`)
-                                          }
+                                          // Ensuite supprimer deliveredAt dans une opération séparée
+                                          await updateDoc(doc(db, 'parcels', parcel.id), {
+                                            deliveredAt: deleteField()
+                                          })
+                                        } catch (err: any) {
+                                          console.error('Erreur annulation livraison:', err)
                                         }
                                       } else {
-                                        // Marquer comme livré
-                                        if (confirm(`Marquer cette expédition comme LIVRÉE?\n\nN° EXP: ${parcel.sender?.nic || parcel.trackingId}`)) {
-                                          try {
-                                            const { updateParcelStatus } = await import('../../../firebase/parcels')
-                                            await updateParcelStatus(parcel.id, 'Livré', {
-                                              deliveredAt: new Date().toISOString(),
-                                            })
-                                            alert('✅ Expédition marquée comme LIVRÉE!')
-                                          } catch (err: any) {
-                                            alert(`❌ Erreur: ${err.message}`)
-                                          }
+                                        // Marquer comme livré directement
+                                        try {
+                                          const { updateParcelStatus } = await import('../../../firebase/parcels')
+                                          await updateParcelStatus(parcel.id, 'Livré', {
+                                            deliveredAt: new Date().toISOString(),
+                                          })
+                                        } catch (err: any) {
+                                          console.error('Erreur changement statut:', err)
                                         }
                                       }
                                     }}
