@@ -48,8 +48,10 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
 
   useEffect(() => {
     const unsubClients = subscribeClients((data: any[]) => {
-      // Filtrer les clients de cette agence
-      const agencyClients = data.filter((c: any) => c.city === agencyCity)
+      // Filtrer les clients de cette agence ET ajoutés manuellement
+      const agencyClients = data.filter((c: any) =>
+        c.city === agencyCity && c.manuallyAdded === true
+      )
       setClients(agencyClients as Client[])
       setLoading(false)
     })

@@ -49,6 +49,7 @@ export interface Client {
   secteurName?: string
   livreurIds?: string[]
   isLocal?: boolean // true = client de passage (localStorage), false/undefined = client régulier (Firestore)
+  manuallyAdded?: boolean // true = ajouté manuellement par chef d'agence, false/undefined = créé automatiquement
 }
 
 const rowFromDoc = (d: { id: string; data: () => DynamicData }): FirestoreRow => ({ id: d.id, ...d.data() })
@@ -77,6 +78,7 @@ export async function createClient(data: DynamicData) {
     secteurId: data.secteurId || '',
     secteurName: data.secteurName || '',
     livreurIds: data.livreurIds || [],
+    manuallyAdded: data.manuallyAdded !== undefined ? data.manuallyAdded : true, // Par défaut true pour createClient (ajout manuel)
   })
   return ref.id
 }
@@ -168,6 +170,7 @@ export async function findOrCreateClientForReceiver(
     createdByRole: 'livreur',
     isDestinataire: true,
     isExpediteur: false,
+    manuallyAdded: false, // Client créé automatiquement
     notes: 'Client créé automatiquement lors d\'une livraison en compte destinataire'
   })
 
