@@ -2273,7 +2273,7 @@ export default function ParcelsTab() {
                                             setEditingDateValue(`${yyyy}-${mm}-${dd}`)
                                           }
                                         }}
-                                        className="p-1.5 hover:opacity-70 transition text-lg cursor-pointer"
+                                        className="p-1 hover:opacity-70 transition text-sm cursor-pointer"
                                         title="Modifier la date"
                                       >
                                         ✏️
