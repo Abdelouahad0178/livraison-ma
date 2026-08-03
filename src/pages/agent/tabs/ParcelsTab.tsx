@@ -4,7 +4,7 @@ import {
   LayoutGrid, Lock, Package, Printer, Search, Table2, Trash2, Truck,
   Unlock, User, X,
 } from 'lucide-react'
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useMemo } from 'react'
 import { deleteField } from 'firebase/firestore'
 import {
   loadReturnedParcelOnTruck, validateReturnArrival, getMoreAgentParcels,
@@ -208,6 +208,15 @@ export default function ParcelsTab() {
     }
     return filteredParcels || []
   })()
+
+  // ⭐ Filtrer les livreurs de l'agence uniquement (même ville)
+  const agencyDrivers = useMemo(() => {
+    if (!profile?.city) return drivers || []
+    return (drivers || []).filter((d: any) =>
+      d.city === profile.city &&
+      (d.role === 'livreur' || (d.role === 'chauffeur' && d.chauffeurType !== 'transport'))
+    )
+  }, [drivers, profile?.city])
 
   // ⭐ Calculer les villes de destination disponibles
   const availableDestCities = (() => {
@@ -4372,7 +4381,7 @@ export default function ParcelsTab() {
                 className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500"
               >
                 <option value="">-- Sélectionner un livreur --</option>
-                {drivers.map((driver: any) => (
+                {agencyDrivers.map((driver: any) => (
                   <option key={driver.id} value={driver.id}>
                     {driver.name} {driver.phone ? `(${driver.phone})` : ''}
                   </option>
