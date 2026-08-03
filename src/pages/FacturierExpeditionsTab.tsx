@@ -25,6 +25,7 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
   const [editingPriceId, setEditingPriceId] = useState<string | null>(null)
   const [editingPrice, setEditingPrice] = useState<string>('')
   const [savingPrice, setSavingPrice] = useState(false)
+  const [successMessage, setSuccessMessage] = useState<string | null>(null)
 
   // Fusion des expéditions temps réel + chargées progressivement
   const parcels = useMemo(() => {
@@ -226,12 +227,27 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
     if (savingPrice) return
     setSavingPrice(true)
     try {
+      // Mise à jour locale immédiate pour feedback instantané
+      setLiveParcels(prev => prev.map(p =>
+        p.id === parcelId ? { ...p, price: newPrice } : p
+      ))
+      setMoreParcels(prev => prev.map(p =>
+        p.id === parcelId ? { ...p, price: newPrice } : p
+      ))
+
+      // Mise à jour dans Firestore
       await updateDoc(doc(db, 'parcels', parcelId), {
         price: newPrice,
         priceModifiedAt: new Date().toISOString()
       })
+
+      // Fermer l'éditeur et afficher le succès
       setEditingPriceId(null)
       setEditingPrice('')
+      setSuccessMessage(`Prix mis à jour: ${newPrice.toLocaleString()} DH`)
+
+      // Effacer le message après 3 secondes
+      setTimeout(() => setSuccessMessage(null), 3000)
     } catch (err) {
       console.error('Erreur mise à jour prix:', err)
       alert('Erreur lors de la mise à jour du prix')
@@ -290,6 +306,24 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
 
   return (
     <div className="space-y-4">
+      {/* Message de succès */}
+      {successMessage && (
+        <div className="bg-green-50 border border-green-200 rounded-xl p-4 flex items-center gap-3 animate-in fade-in slide-in-from-top-2 duration-300">
+          <div className="flex-shrink-0">
+            <Check className="w-5 h-5 text-green-600" />
+          </div>
+          <div className="flex-1">
+            <div className="text-green-700 font-semibold">{successMessage}</div>
+          </div>
+          <button
+            onClick={() => setSuccessMessage(null)}
+            className="flex-shrink-0 text-green-500 hover:text-green-700"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Message d'erreur */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-xl p-4">
@@ -549,24 +583,28 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
                     <td className="px-4 py-3 text-sm font-semibold text-gray-800">
                       {editingPriceId === parcel.id ? (
                         <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            value={editingPrice}
-                            onChange={e => setEditingPrice(e.target.value)}
-                            className="w-24 px-2 py-1 border border-cyan-500 rounded text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
-                            autoFocus
-                            onKeyDown={e => {
-                              if (e.key === 'Enter') {
-                                const newPrice = parseFloat(editingPrice)
-                                if (!isNaN(newPrice) && newPrice >= 0) {
-                                  handleSavePrice(parcel.id, newPrice)
+                          <div className="flex items-center gap-1">
+                            <input
+                              type="number"
+                              value={editingPrice}
+                              onChange={e => setEditingPrice(e.target.value)}
+                              className="w-28 px-3 py-1.5 border-2 border-cyan-500 rounded-lg text-sm font-semibold focus:outline-none focus:ring-2 focus:ring-cyan-400"
+                              autoFocus
+                              disabled={savingPrice}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  const newPrice = parseFloat(editingPrice)
+                                  if (!isNaN(newPrice) && newPrice >= 0) {
+                                    handleSavePrice(parcel.id, newPrice)
+                                  }
+                                } else if (e.key === 'Escape') {
+                                  setEditingPriceId(null)
+                                  setEditingPrice('')
                                 }
-                              } else if (e.key === 'Escape') {
-                                setEditingPriceId(null)
-                                setEditingPrice('')
-                              }
-                            }}
-                          />
+                              }}
+                            />
+                            <span className="text-gray-600 text-xs">DH</span>
+                          </div>
                           <button
                             onClick={() => {
                               const newPrice = parseFloat(editingPrice)
@@ -575,10 +613,19 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
                               }
                             }}
                             disabled={savingPrice}
-                            className="p-1 text-green-600 hover:bg-green-50 rounded transition"
-                            title="Valider"
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed"
                           >
-                            <Check className="w-4 h-4" />
+                            {savingPrice ? (
+                              <>
+                                <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                <span>Enregistrement...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Check className="w-3.5 h-3.5" />
+                                <span>Valider</span>
+                              </>
+                            )}
                           </button>
                           <button
                             onClick={() => {
@@ -586,10 +633,10 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
                               setEditingPrice('')
                             }}
                             disabled={savingPrice}
-                            className="p-1 text-red-600 hover:bg-red-50 rounded transition"
-                            title="Annuler"
+                            className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg text-xs font-semibold transition disabled:opacity-50 disabled:cursor-not-allowed"
                           >
-                            <X className="w-4 h-4" />
+                            <X className="w-3.5 h-3.5" />
+                            <span>Annuler</span>
                           </button>
                         </div>
                       ) : (
@@ -600,10 +647,10 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
                               setEditingPriceId(parcel.id)
                               setEditingPrice(String(parcel.price || 0))
                             }}
-                            className="opacity-0 group-hover:opacity-100 p-1 text-cyan-600 hover:bg-cyan-50 rounded transition"
-                            title="Modifier le prix"
+                            className="opacity-0 group-hover:opacity-100 flex items-center gap-1 px-2 py-1 text-xs bg-cyan-50 text-cyan-700 hover:bg-cyan-100 rounded-lg transition font-medium"
                           >
-                            <Edit2 className="w-3.5 h-3.5" />
+                            <Edit2 className="w-3 h-3" />
+                            <span>Modifier</span>
                           </button>
                         </div>
                       )}
