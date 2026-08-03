@@ -2184,8 +2184,17 @@ export default function ParcelsTab() {
                                   <button
                                     onClick={async () => {
                                       if (parcel.status === 'Livré') {
-                                        // Revenir au statut précédent
-                                        const previousStatus = parcel.history?.[parcel.history.length - 2]?.status || 'En cours de livraison'
+                                        // Revenir au statut précédent (chercher le dernier statut qui n'est pas "Livré")
+                                        let previousStatus = 'En cours de livraison'
+                                        if (parcel.history && parcel.history.length > 0) {
+                                          // Parcourir l'historique en sens inverse pour trouver le dernier statut différent de "Livré"
+                                          for (let i = parcel.history.length - 1; i >= 0; i--) {
+                                            if (parcel.history[i].status && parcel.history[i].status !== 'Livré') {
+                                              previousStatus = parcel.history[i].status
+                                              break
+                                            }
+                                          }
+                                        }
                                         if (confirm(`Annuler la livraison et revenir au statut "${previousStatus}"?\n\nN° EXP: ${parcel.sender?.nic || parcel.trackingId}`)) {
                                           try {
                                             const { updateParcelStatus } = await import('../../../firebase/parcels')
