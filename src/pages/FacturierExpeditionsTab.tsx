@@ -1,7 +1,10 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { subscribeAllParcels, getParcelsPage } from '../firebase/parcels'
-import { Search, Filter, Calendar, MapPin, Printer } from 'lucide-react'
+import { Search, Filter, Calendar, MapPin, Printer, FileSpreadsheet, Edit2, Check, X } from 'lucide-react'
 import { CITIES } from '../firebase/constants'
+import * as XLSX from 'xlsx'
+import { doc, updateDoc } from 'firebase/firestore'
+import { db } from '../firebase/config'
 
 export default function FacturierExpeditionsTab({ profileCity }: { profileCity?: string }) {
   const PAGE_SIZE = 1000 // Chargement initial
@@ -19,6 +22,9 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const lastPageDocRef = useRef<any>(null)
+  const [editingPriceId, setEditingPriceId] = useState<string | null>(null)
+  const [editingPrice, setEditingPrice] = useState<string>('')
+  const [savingPrice, setSavingPrice] = useState(false)
 
   // Fusion des expéditions temps réel + chargées progressivement
   const parcels = useMemo(() => {
@@ -211,8 +217,76 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
       portPaye: portPaye.length,
       portPayeAmount: portPaye.reduce((sum, p) => sum + (p.price || 0), 0),
       byAgency,
+      totalAmount: filteredParcels.reduce((sum, p) => sum + (p.price || 0), 0),
     }
   }, [filteredParcels])
+
+  // Fonction de modification du prix
+  async function handleSavePrice(parcelId: string, newPrice: number) {
+    if (savingPrice) return
+    setSavingPrice(true)
+    try {
+      await updateDoc(doc(db, 'parcels', parcelId), {
+        price: newPrice,
+        priceModifiedAt: new Date().toISOString()
+      })
+      setEditingPriceId(null)
+      setEditingPrice('')
+    } catch (err) {
+      console.error('Erreur mise à jour prix:', err)
+      alert('Erreur lors de la mise à jour du prix')
+    } finally {
+      setSavingPrice(false)
+    }
+  }
+
+  // Fonction d'export Excel
+  function exportToExcel(parcels: any[], stats: any, filters: any) {
+    // Préparer les données pour l'export
+    const excelData = parcels.map(parcel => ({
+      'N° EXP (NIC)': parcel.sender?.nic || parcel.trackingId || '-',
+      'Client': parcel.clientName || '-',
+      'Expéditeur': parcel.sender?.name || '-',
+      'Destinataire': parcel.receiver?.name || '-',
+      'Agence': parcel.sender?.city || parcel.originCity || '-',
+      'Ville Dest.': parcel.receiver?.city || parcel.recipientCity || '-',
+      'Type Port': parcel.portType === 'port_du' ? 'Port Dû' :
+                   parcel.portType === 'port_paye' ? 'Port Payé' :
+                   parcel.portType === 'port_en_compte_expediteur' ? 'Port en Compte (Expéditeur)' :
+                   parcel.portType === 'port_en_compte_destinataire' ? 'Port en Compte (Destinataire)' : '-',
+      'Montant Port (DH)': parcel.price || 0,
+      'Date': parcel.createdAt?.toDate?.().toLocaleDateString('fr-MA') || '-',
+      'Statut': parcel.status || '-'
+    }))
+
+    // Ajouter une ligne de résumé
+    const summary = {
+      'N° EXP (NIC)': 'TOTAL',
+      'Client': '',
+      'Expéditeur': '',
+      'Destinataire': '',
+      'Agence': `${parcels.length} expéditions`,
+      'Ville Dest.': '',
+      'Type Port': '',
+      'Montant Port (DH)': stats.totalAmount,
+      'Date': '',
+      'Statut': ''
+    }
+    excelData.push(summary)
+
+    // Créer le workbook et la feuille
+    const ws = XLSX.utils.json_to_sheet(excelData)
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, ws, 'Facturier')
+
+    // Générer le nom du fichier
+    const date = new Date().toLocaleDateString('fr-MA').replace(/\//g, '-')
+    const filterText = filters.cityFilter !== 'Toutes' ? `_${filters.cityFilter}` : ''
+    const filename = `Facturier_${date}${filterText}.xlsx`
+
+    // Télécharger le fichier
+    XLSX.writeFile(wb, filename)
+  }
 
   return (
     <div className="space-y-4">
@@ -360,6 +434,21 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
             Réinitialiser
           </button>
           <button
+            onClick={() => exportToExcel(filteredParcels, stats, {
+              cityFilter,
+              portTypeFilter,
+              clientRoleFilter,
+              dateFilter,
+              dateFrom,
+              dateTo,
+              search
+            })}
+            className="px-3 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-sm transition flex items-center justify-center gap-2"
+          >
+            <FileSpreadsheet className="w-4 h-4" />
+            Export Excel
+          </button>
+          <button
             onClick={() => printFacturation(filteredParcels, stats, {
               cityFilter,
               portTypeFilter,
@@ -458,7 +547,66 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
                       )}
                     </td>
                     <td className="px-4 py-3 text-sm font-semibold text-gray-800">
-                      {(parcel.price || 0).toLocaleString()} DH
+                      {editingPriceId === parcel.id ? (
+                        <div className="flex items-center gap-2">
+                          <input
+                            type="number"
+                            value={editingPrice}
+                            onChange={e => setEditingPrice(e.target.value)}
+                            className="w-24 px-2 py-1 border border-cyan-500 rounded text-sm focus:outline-none focus:ring-2 focus:ring-cyan-500"
+                            autoFocus
+                            onKeyDown={e => {
+                              if (e.key === 'Enter') {
+                                const newPrice = parseFloat(editingPrice)
+                                if (!isNaN(newPrice) && newPrice >= 0) {
+                                  handleSavePrice(parcel.id, newPrice)
+                                }
+                              } else if (e.key === 'Escape') {
+                                setEditingPriceId(null)
+                                setEditingPrice('')
+                              }
+                            }}
+                          />
+                          <button
+                            onClick={() => {
+                              const newPrice = parseFloat(editingPrice)
+                              if (!isNaN(newPrice) && newPrice >= 0) {
+                                handleSavePrice(parcel.id, newPrice)
+                              }
+                            }}
+                            disabled={savingPrice}
+                            className="p-1 text-green-600 hover:bg-green-50 rounded transition"
+                            title="Valider"
+                          >
+                            <Check className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setEditingPriceId(null)
+                              setEditingPrice('')
+                            }}
+                            disabled={savingPrice}
+                            className="p-1 text-red-600 hover:bg-red-50 rounded transition"
+                            title="Annuler"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 group">
+                          <span>{(parcel.price || 0).toLocaleString()} DH</span>
+                          <button
+                            onClick={() => {
+                              setEditingPriceId(parcel.id)
+                              setEditingPrice(String(parcel.price || 0))
+                            }}
+                            className="opacity-0 group-hover:opacity-100 p-1 text-cyan-600 hover:bg-cyan-50 rounded transition"
+                            title="Modifier le prix"
+                          >
+                            <Edit2 className="w-3.5 h-3.5" />
+                          </button>
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600">
                       {parcel.createdAt?.toDate?.().toLocaleDateString('fr-MA')}
