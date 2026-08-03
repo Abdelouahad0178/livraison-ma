@@ -1,7 +1,7 @@
 import {
   AlertTriangle, Banknote, Calendar, Car, Check, CheckSquare,
-  ChevronDown, ChevronLeft, ChevronRight, Edit2, Filter, Hand,
-  LayoutGrid, Lock, Package, Pencil, Printer, Search, Table2, Trash2, Truck,
+  ChevronDown, ChevronLeft, ChevronRight, Edit, Edit2, Filter, Hand,
+  LayoutGrid, Lock, Package, Pencil, PenTool, Printer, Search, Table2, Trash2, Truck,
   Unlock, User, X,
 } from 'lucide-react'
 import { useState, useRef, useEffect, useMemo } from 'react'
@@ -2273,10 +2273,10 @@ export default function ParcelsTab() {
                                             setEditingDateValue(`${yyyy}-${mm}-${dd}`)
                                           }
                                         }}
-                                        className="p-2 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800 transition border border-blue-200 shadow-sm"
+                                        className="flex items-center justify-center p-2 rounded-lg bg-blue-50 hover:bg-blue-100 transition border border-blue-200 shadow-sm text-base"
                                         title="Modifier la date"
                                       >
-                                        <Pencil className="w-4 h-4" />
+                                        ✏️
                                       </button>
                                     )}
                                   </div>
