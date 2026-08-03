@@ -2189,11 +2189,19 @@ export default function ParcelsTab() {
                                         if (confirm(`Annuler la livraison et revenir au statut "${previousStatus}"?\n\nN° EXP: ${parcel.sender?.nic || parcel.trackingId}`)) {
                                           try {
                                             const { updateParcelStatus } = await import('../../../firebase/parcels')
-                                            const { deleteField } = await import('firebase/firestore')
+                                            const { doc, updateDoc, deleteField } = await import('firebase/firestore')
+                                            const { db } = await import('../../../firebase/config')
+
+                                            // D'abord changer le statut
                                             await updateParcelStatus(parcel.id, previousStatus, {
-                                              deliveredAt: deleteField(),
                                               note: 'Annulation livraison - retour au statut précédent'
                                             })
+
+                                            // Ensuite supprimer deliveredAt dans une opération séparée
+                                            await updateDoc(doc(db, 'parcels', parcel.id), {
+                                              deliveredAt: deleteField()
+                                            })
+
                                             alert(`✅ Retour au statut "${previousStatus}"`)
                                           } catch (err: any) {
                                             alert(`❌ Erreur: ${err.message}`)
