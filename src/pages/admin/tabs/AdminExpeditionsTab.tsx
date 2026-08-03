@@ -317,7 +317,7 @@ export default function AdminExpeditionsTab({
                 Effacer
               </button>
               <button
-                onClick={() => setPortTypeFilter(['port_paye', 'port_du', 'port_en_compte'])}
+                onClick={() => setPortTypeFilter(['port_paye', 'port_du', 'port_en_compte', 'port_en_compte_expediteur', 'port_en_compte_destinataire'])}
                 className="text-[10px] text-blue-600 hover:text-blue-700 underline"
               >
                 Tout sélectionner
@@ -329,6 +329,8 @@ export default function AdminExpeditionsTab({
               { key: 'port_paye', label: 'Port payé', emoji: '✅', bg: 'bg-blue-100', text: 'text-blue-700' },
               { key: 'port_du', label: 'Port dû', emoji: '📮', bg: 'bg-orange-100', text: 'text-orange-700' },
               { key: 'port_en_compte', label: 'En compte', emoji: '💼', bg: 'bg-purple-100', text: 'text-purple-700' },
+              { key: 'port_en_compte_expediteur', label: 'En compte Exp.', emoji: '📤', bg: 'bg-purple-100', text: 'text-purple-700' },
+              { key: 'port_en_compte_destinataire', label: 'En compte Dest.', emoji: '📥', bg: 'bg-purple-100', text: 'text-purple-700' },
             ].map(pt => {
               const active = portTypeFilter.includes(pt.key)
               return (
@@ -538,7 +540,7 @@ export default function AdminExpeditionsTab({
                           : <span className="text-gray-300">-</span>}
                       </td>
                       <td className="px-4 py-3">
-                        {p.portType === 'port_en_compte'
+                        {(p.portType === 'port_en_compte' || p.portType === 'port_en_compte_expediteur' || p.portType === 'port_en_compte_destinataire')
                           ? <span className="text-purple-600 font-bold">💼 {p.price || 0} DH</span>
                           : <span className="text-gray-300">-</span>
                         }
