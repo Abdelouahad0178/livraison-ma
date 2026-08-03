@@ -70,10 +70,8 @@ export default function NewTab() {
   const [editableParcel, setEditableParcel] = useState<any>(null)
   const [isConfirmed, setIsConfirmed] = useState(false)
 
-  // États pour la recherche de clients (Mes Clients uniquement)
-  const [senderSearch, setSenderSearch] = useState('')
+  // États pour la recherche de clients destinataires (Mes Clients uniquement)
   const [receiverSearch, setReceiverSearch] = useState('')
-  const [showSenderResults, setShowSenderResults] = useState(false)
   const [showReceiverResults, setShowReceiverResults] = useState(false)
   const [myClients, setMyClients] = useState<Client[]>([])
 
@@ -94,17 +92,7 @@ export default function NewTab() {
     loadMyClients()
   }, [profile?.city])
 
-  // Filtrer les clients pour la recherche
-  const filteredSenders = myClients.filter(c => {
-    if (!senderSearch) return false
-    const search = senderSearch.toLowerCase()
-    return (
-      c.name?.toLowerCase().includes(search) ||
-      c.tel?.includes(search) ||
-      c.nic?.toLowerCase().includes(search)
-    )
-  }).slice(0, 5)
-
+  // Filtrer les clients pour la recherche destinataire
   const filteredReceivers = myClients.filter(c => {
     if (!receiverSearch) return false
     const search = receiverSearch.toLowerCase()
@@ -113,21 +101,6 @@ export default function NewTab() {
       c.tel?.includes(search)
     )
   }).slice(0, 5)
-
-  // Sélectionner un expéditeur depuis "Mes Clients"
-  const selectSender = (client: Client) => {
-    setForm((prev: any) => ({
-      ...prev,
-      senderName: client.name || '',
-      senderNic: client.nic || '',
-      senderTel: client.tel || '',
-      senderAddress: client.address || '',
-      clientId: client.id,
-      clientName: client.name || '',
-    }))
-    setSenderSearch('')
-    setShowSenderResults(false)
-  }
 
   // Sélectionner un destinataire depuis "Mes Clients"
   const selectReceiver = (client: Client) => {
@@ -854,41 +827,6 @@ export default function NewTab() {
               <span className="text-base">📤</span> Expéditeur
             </h3>
             <div className="space-y-2">
-              {/* Recherche dans "Mes Clients" */}
-              <div className="relative">
-                <div className="relative">
-                  <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="🔍 Chercher dans Mes Clients (nom/tél/n°)..."
-                    value={senderSearch}
-                    onChange={e => {
-                      setSenderSearch(e.target.value)
-                      setShowSenderResults(e.target.value.length > 0)
-                    }}
-                    onFocus={() => senderSearch && setShowSenderResults(true)}
-                    className="w-full pl-8 pr-2 py-1.5 text-xs border-2 border-blue-300 rounded-lg focus:border-blue-500 focus:outline-none bg-white"
-                  />
-                </div>
-                {showSenderResults && filteredSenders.length > 0 && (
-                  <div className="absolute z-50 w-full mt-1 bg-white border-2 border-blue-300 rounded-lg shadow-lg max-h-48 overflow-y-auto">
-                    {filteredSenders.map(client => (
-                      <button
-                        key={client.id}
-                        type="button"
-                        onClick={() => selectSender(client)}
-                        className="w-full text-left px-3 py-2 hover:bg-blue-50 border-b border-gray-100 last:border-0"
-                      >
-                        <div className="text-xs font-bold text-gray-800">{client.name}</div>
-                        <div className="text-[10px] text-gray-500 flex gap-2">
-                          {client.tel && <span>📞 {client.tel}</span>}
-                          {client.nic && <span>📋 {client.nic}</span>}
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                )}
-              </div>
               <input
                 ref={nexpInputRef}
                 id="senderNic"
