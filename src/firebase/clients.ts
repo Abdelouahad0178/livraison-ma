@@ -84,8 +84,9 @@ export async function createClient(data: DynamicData) {
 }
 
 /**
- * Trouve un client existant ou en crée un nouveau automatiquement
+ * Trouve un client existant SANS en créer automatiquement
  * Recherche par téléphone OU par (nom + ville)
+ * RETOURNE NULL si client non trouvé (AUCUNE CRÉATION AUTOMATIQUE)
  */
 export async function findOrCreateClientForReceiver(
   receiverData: {
@@ -96,8 +97,8 @@ export async function findOrCreateClientForReceiver(
   },
   createdBy: string,
   createdByName: string
-): Promise<string> {
-  console.log('🔍 Recherche/création client pour:', receiverData)
+): Promise<string | null> {
+  console.log('🔍 Recherche client pour:', receiverData)
 
   // Normaliser les données
   const normalizedTel = receiverData.tel?.trim() || ''
@@ -105,7 +106,8 @@ export async function findOrCreateClientForReceiver(
   const normalizedCity = receiverData.city?.trim() || ''
 
   if (!normalizedName || !normalizedCity) {
-    throw new Error('Le nom et la ville du destinataire sont requis')
+    console.warn('⚠️ Nom ou ville manquant pour la recherche de client')
+    return null
   }
 
   // 1. Chercher par téléphone si disponible
@@ -156,26 +158,10 @@ export async function findOrCreateClientForReceiver(
     return existingClient.id
   }
 
-  // 3. Créer un nouveau client
-  console.log('➕ Création d\'un nouveau client destinataire')
-  const newClientId = await createClient({
-    name: normalizedName,
-    tel: normalizedTel,
-    city: normalizedCity,
-    address: receiverData.address || '',
-    accountType: 'compte', // Par défaut en compte pour les ports
-    remise: 0,
-    createdBy,
-    createdByName,
-    createdByRole: 'livreur',
-    isDestinataire: true,
-    isExpediteur: false,
-    manuallyAdded: false, // Client créé automatiquement
-    notes: 'Client créé automatiquement lors d\'une livraison en compte destinataire'
-  })
-
-  console.log('✅ Nouveau client créé:', newClientId)
-  return newClientId
+  // ❌ AUCUNE CRÉATION AUTOMATIQUE - Retourner null
+  console.warn('⚠️ Client non trouvé - AUCUNE création automatique')
+  console.warn('📝 Le client doit être ajouté manuellement dans "Mes Clients"')
+  return null
 }
 
 export async function updateClient(clientId: string, data: DynamicData) {

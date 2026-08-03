@@ -268,7 +268,7 @@ export async function addPortDuToClientAccount(
     throw new Error('Le nom et la ville du destinataire sont requis.')
   }
 
-  console.log('🔍 Recherche/création du client pour le destinataire...')
+  console.log('🔍 Recherche du client pour le destinataire...')
   const receiverClientId = await findOrCreateClientForReceiver(
     {
       name: receiverName,
@@ -279,6 +279,20 @@ export async function addPortDuToClientAccount(
     driverId,
     driverName
   )
+
+  // ⚠️ Si client non trouvé, afficher un message clair
+  if (!receiverClientId) {
+    throw new Error(
+      `❌ Client "${receiverName}" non trouvé dans "Mes Clients".\n\n` +
+      `📝 Le chef d'agence doit d'abord ajouter ce client manuellement:\n` +
+      `   1. Aller dans "Mes Clients"\n` +
+      `   2. Cliquer "+ Ajouter un client"\n` +
+      `   3. Remplir les informations du client\n` +
+      `   4. Enregistrer\n\n` +
+      `Tél: ${receiverTel || 'Non fourni'}\n` +
+      `Ville: ${receiverCity}`
+    )
+  }
 
   console.log('✅ Client ID obtenu:', receiverClientId)
 
