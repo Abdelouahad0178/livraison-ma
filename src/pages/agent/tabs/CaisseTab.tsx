@@ -653,7 +653,10 @@ export default function CaisseTab() {
                                 cashierName: name,
                               })
                               // Mettre à jour le statut du colis
-                              await updateParcelStatus(parcel.id, 'Livré', { note: 'Retrait en agence — port dû encaissé' })
+                              await updateParcelStatus(parcel.id, 'Livré', {
+                                deliveredAt: new Date().toISOString(),
+                                note: 'Retrait en agence — port dû encaissé'
+                              })
 
                               // Retirer du Set immédiatement après succès
                               setSelectedPortDu(prev => {

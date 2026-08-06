@@ -613,7 +613,8 @@ export default function CentralCollectorPage() {
   })
 
   const filteredParcelsForSuppliers = useMemo(() => depositedParcels.filter(p => {
-    if (cityFilter !== 'all' && p.centralDepositCity !== cityFilter) return false
+    // Filtrer par ville d'ORIGINE (ville d'envoi), pas ville de réception
+    if (cityFilter !== 'all' && p.originCity !== cityFilter) return false
     if (!inDateRange(p.centralDepositAt || p.createdAt, datePreset, dateFrom, dateTo, operationalDay)) return false
     if (!amountOk(p.codAmount)) return false
     const paid = isParcelPaid(p)

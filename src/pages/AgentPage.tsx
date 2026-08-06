@@ -291,6 +291,7 @@ export default function AgentPage() {
   const [datePreset, setDatePreset]     = useState('all')
   const [dateFrom, setDateFrom]         = useState('')
   const [dateTo, setDateTo]             = useState('')
+  const [dateFilterType, setDateFilterType] = useState<'creation' | 'livraison'>('creation')
 
   // 🗓️ Journée opérationnelle
   const {
@@ -306,6 +307,7 @@ export default function AgentPage() {
   const [driverFilter, setDriverFilter] = useState('all')  // ⭐ Filtre par livreur/chauffeur
   const [portTypeFilter, setPortTypeFilter] = useState('all')  // ⭐ Filtre par type de port
   const [encaissementFilter, setEncaissementFilter] = useState('all')  // ⭐ Filtre par type d'encaissement
+  const [codDocumentStatusFilter, setCodDocumentStatusFilter] = useState<string[]>([])  // ⭐ Filtre par statut document COD (sélection multiple)
   const [driverFilteredParcels, setDriverFilteredParcels] = useState<any[]>([]) // Colis du livreur filtré
   const [loadingDriverParcels, setLoadingDriverParcels] = useState(false)
   const [extraParcels, setExtraParcels]             = useState<any[]>([])
@@ -1277,8 +1279,16 @@ export default function AgentPage() {
       ? serverSearchResults
       : allDisplayParcels
 
+    // 📅 Extracteur de date selon le type de filtre (création/livraison)
+    const dateExtractor = dateFilterType === 'livraison'
+      ? (p: any) => {
+          if (!p.deliveredAt) return new Date(0) // Pas de date de livraison
+          return new Date(p.deliveredAt)
+        }
+      : parcelDate
+
     // ✅ Toujours appliquer le filtre par date (même si un livreur est sélectionné)
-    const dateFilteredData = filterByDate(sourceData, datePreset, dateFrom, dateTo, parcelDate, operationalDay)
+    const dateFilteredData = filterByDate(sourceData, datePreset, dateFrom, dateTo, dateExtractor, operationalDay)
 
     return dateFilteredData.filter((p: any) => {
     // 🔒 FILTRE VILLE OBLIGATOIRE (sauf en mode "Toutes les villes")
@@ -1341,6 +1351,16 @@ export default function AgentPage() {
       if (encaissementFilter === 'cheque' && p.serviceType !== 'cheque') return false
       if (encaissementFilter === 'traite' && p.serviceType !== 'traite') return false
     }
+    // ⭐ Filtre par statut document COD (sélection multiple)
+    if (codDocumentStatusFilter.length > 0) {
+      // "simple" = chèque ou traite sans statut défini
+      const hasStatus = p.codDocumentStatus || (
+        (p.serviceType === 'cheque' || p.serviceType === 'traite') ? 'simple' : null
+      )
+      if (!hasStatus || !codDocumentStatusFilter.includes(hasStatus)) {
+        return false
+      }
+    }
     if (debouncedSearch) {
       // Si on utilise serverSearchResults, pas besoin de refiltrer par recherche
       // (déjà fait par searchParcels côté serveur)
@@ -1371,8 +1391,8 @@ export default function AgentPage() {
     }
     return true
     })
-  }, [allDisplayParcels, datePreset, dateFrom, dateTo, operationalDay, profileCity, profileRole, subTab, uid, serviceFilter,
-       parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, debouncedSearch, serverSearchResults, showAllCities])
+  }, [allDisplayParcels, datePreset, dateFrom, dateTo, dateFilterType, operationalDay, profileCity, profileRole, subTab, uid, serviceFilter,
+       parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, codDocumentStatusFilter, debouncedSearch, serverSearchResults, showAllCities])
 
   // ── Phase 3: memoized stats — only recompute when Firestore sends new data ──
 
@@ -1850,6 +1870,7 @@ export default function AgentPage() {
     datePreset, setDatePreset,
     dateFrom, setDateFrom,
     dateTo, setDateTo,
+    dateFilterType, setDateFilterType,  // 📅 Type de date (création/livraison)
     operationalDay, setOperationalDay,  // 🗓️ Journée opérationnelle
     parcelDirection, setParcelDirection,
     serviceFilter, setServiceFilter,
@@ -1859,6 +1880,7 @@ export default function AgentPage() {
     driverFilter, setDriverFilter,  // ⭐ Filtre par livreur/chauffeur
     portTypeFilter, setPortTypeFilter,  // ⭐ Filtre par type de port
     encaissementFilter, setEncaissementFilter,  // ⭐ Filtre par type d'encaissement
+    codDocumentStatusFilter, setCodDocumentStatusFilter,  // ⭐ Filtre par statut document COD
     parcelPage, setParcelPage,
     scanOpen, setScanOpen,
     scanQuery, setScanQuery,
@@ -2173,7 +2195,7 @@ export default function AgentPage() {
         newCodCount={newCodCount}          // ⭐ Badge COD
       />
 
-      <main className="w-full max-w-2xl lg:max-w-5xl xl:max-w-7xl mx-auto px-3 sm:px-4 md:px-5 pb-16">
+      <main className="w-[95%] mx-auto px-3 sm:px-4 md:px-5 pb-16">
 
         {/* Message notification */}
         {msg && (

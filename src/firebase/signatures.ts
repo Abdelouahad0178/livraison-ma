@@ -116,6 +116,7 @@ export async function confirmDeliveryAfterSignature(parcelId: any, driverName: a
 
     const updates: any = {
       status: 'Livré',
+      deliveredAt: now,
       signatureToken: null,
       signatureConfirmedAt: now,
       history: arrayUnion({
@@ -193,6 +194,7 @@ export async function confirmDeliveryWithPaperReceipt(
 
     const updates: any = {
       status: 'Livré',
+      deliveredAt: now,
       signatureToken: null,
       signatureConfirmedAt: now,
       signatureMethod: 'paper_receipt', // Nouveau champ pour identifier le type de signature

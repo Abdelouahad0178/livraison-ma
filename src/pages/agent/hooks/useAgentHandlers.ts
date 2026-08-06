@@ -314,7 +314,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
           setPortCollectModal({ open: true, parcel, paymentType: '', loading: false })
           return
         }
-        await updateParcelStatus(parcel.id, 'Livré', { note: 'Retrait en agence par le client' })
+        await updateParcelStatus(parcel.id, 'Livré', {
+          deliveredAt: new Date().toISOString(),
+          note: 'Retrait en agence par le client'
+        })
       }
       setCodCollectModal({ open: false, parcel: null, paymentType: '', loading: false, withDelivery: false })
     } catch {
@@ -341,7 +344,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         city: profile?.city || parcel.receiver?.city || '',
         cashierId: uid || '', cashierName: name,
       })
-      await updateParcelStatus(parcel.id, 'Livré', { note: 'Retrait en agence — port dû encaissé' })
+      await updateParcelStatus(parcel.id, 'Livré', {
+        deliveredAt: new Date().toISOString(),
+        note: 'Retrait en agence — port dû encaissé'
+      })
       setPortCollectModal({ open: false, parcel: null, paymentType: '', loading: false })
     } catch {
       setPortCollectModal((m: any) => ({ ...m, loading: false }))

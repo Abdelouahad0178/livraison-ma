@@ -330,6 +330,9 @@ export async function updateParcelStatus(parcelId: string, status: string, extra
       patch.visibleInDestinationAgency = true
       patch.destinationArrivedAt = extra.destinationArrivedAt || new Date().toISOString()
     }
+    if (status === 'Livré') {
+      patch.deliveredAt = extra.deliveredAt || new Date().toISOString()
+    }
 
     // Écriture Firestore immédiate — pas d'attente GPS
     tx.update(parcelRef, patch)
