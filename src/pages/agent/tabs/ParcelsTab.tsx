@@ -2496,7 +2496,7 @@ export default function ParcelsTab() {
                           {visibleColumns.service && (
                             <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
                               {parcel.serviceType === 'simple' || !parcel.serviceType ? (
-                                <span className="text-sm text-gray-500">—</span>
+                                <span className="text-sm text-gray-600 font-medium">Simple</span>
                               ) : (
                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-100 text-purple-700 rounded-lg font-semibold">
                                   {serviceType?.emoji} {serviceType?.label}
@@ -2550,7 +2550,9 @@ export default function ParcelsTab() {
                           )}
                           {visibleColumns.cod && (
                             <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-100 bg-green-50/30">
-                              {parcel.codAmount && parcel.codAmount > 0 && parcel.serviceType !== 'simple' ? (
+                              {parcel.serviceType === 'simple' ? (
+                                <span></span>
+                              ) : parcel.codAmount && parcel.codAmount > 0 ? (
                                 <div className="flex flex-col items-end gap-1">
                                   {(parcel.serviceType === 'cheque' || parcel.serviceType === 'traite') && parcel.codDocumentStatus && (
                                     <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
