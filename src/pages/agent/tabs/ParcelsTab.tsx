@@ -1965,11 +1965,11 @@ export default function ParcelsTab() {
                       </span>
                     )}
                   </div>
-                  <div className="flex items-center gap-6">
-                    <div className="flex items-center gap-2">
-                      <Banknote className="w-5 h-5 text-green-600" />
-                      <span className="text-xs text-gray-600">Total RETOUR FOND :</span>
-                      <span className="text-base font-black text-green-700">{totalCod.toLocaleString('fr-MA')} DH</span>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Banknote className="w-4 h-4 text-green-600 shrink-0" />
+                      <span className="text-xs text-gray-600 whitespace-nowrap">Total RETOUR FOND :</span>
+                      <span className="text-sm font-black text-green-700">{totalCod.toLocaleString('fr-MA')} DH</span>
                     </div>
                     <button
                       onClick={() => {
@@ -1984,11 +1984,11 @@ export default function ParcelsTab() {
                           parcels: portPayeParcels
                         })
                       }}
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-blue-50 transition cursor-pointer"
+                      className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-blue-50 transition cursor-pointer shrink-0"
                     >
-                      <span className="text-xl">✅</span>
-                      <span className="text-xs text-gray-600">Total Port payé :</span>
-                      <span className="text-base font-black text-blue-700">{totalPortPaye.toLocaleString('fr-MA')} DH</span>
+                      <span className="text-lg shrink-0">✅</span>
+                      <span className="text-xs text-gray-600 whitespace-nowrap">Total Port payé :</span>
+                      <span className="text-sm font-black text-blue-700">{totalPortPaye.toLocaleString('fr-MA')} DH</span>
                     </button>
                     <button
                       onClick={() => {
@@ -2003,21 +2003,21 @@ export default function ParcelsTab() {
                           parcels: portDuParcels
                         })
                       }}
-                      className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-orange-50 transition cursor-pointer"
+                      className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-orange-50 transition cursor-pointer shrink-0"
                     >
-                      <span className="text-xl">📮</span>
-                      <span className="text-xs text-gray-600">Total Port dû :</span>
-                      <span className="text-base font-black text-orange-700">{totalPortDu.toLocaleString('fr-MA')} DH</span>
+                      <span className="text-lg shrink-0">📮</span>
+                      <span className="text-xs text-gray-600 whitespace-nowrap">Total Port dû :</span>
+                      <span className="text-sm font-black text-orange-700">{totalPortDu.toLocaleString('fr-MA')} DH</span>
                     </button>
-                    <div className="flex items-center gap-2 opacity-60">
-                      <span className="text-xl">💼</span>
-                      <span className="text-xs text-gray-500">Port en compte Exp. (service compta) :</span>
-                      <span className="text-base font-bold text-gray-600">{totalPortEnCompteExp.toLocaleString('fr-MA')} DH</span>
+                    <div className="flex items-center gap-1.5 opacity-60 shrink-0">
+                      <span className="text-lg shrink-0">💼</span>
+                      <span className="text-xs text-gray-500 whitespace-nowrap">Port en compte Exp. :</span>
+                      <span className="text-sm font-bold text-gray-600">{totalPortEnCompteExp.toLocaleString('fr-MA')} DH</span>
                     </div>
-                    <div className="flex items-center gap-2 opacity-60">
-                      <span className="text-xl">🎯</span>
-                      <span className="text-xs text-gray-500">Port en compte Dest. (client paie) :</span>
-                      <span className="text-base font-bold text-gray-600">{totalPortEnCompteDest.toLocaleString('fr-MA')} DH</span>
+                    <div className="flex items-center gap-1.5 opacity-60 shrink-0">
+                      <span className="text-lg shrink-0">🎯</span>
+                      <span className="text-xs text-gray-500 whitespace-nowrap">Port en compte Dest. :</span>
+                      <span className="text-sm font-bold text-gray-600">{totalPortEnCompteDest.toLocaleString('fr-MA')} DH</span>
                     </div>
                   </div>
                 </div>
@@ -2711,11 +2711,11 @@ export default function ParcelsTab() {
                     {filteredParcels.length} expédition{filteredParcels.length > 1 ? 's' : ''}
                   </span>
                 </div>
-                <div className="flex items-center gap-6">
-                  <div className="flex items-center gap-2">
-                    <Banknote className="w-5 h-5 text-green-600" />
-                    <span className="text-xs text-gray-600">Total RETOUR FOND :</span>
-                    <span className="text-base font-black text-green-700">{totalCod.toLocaleString('fr-MA')} DH</span>
+                <div className="flex items-center gap-3 flex-wrap">
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <Banknote className="w-4 h-4 text-green-600 shrink-0" />
+                    <span className="text-xs text-gray-600 whitespace-nowrap">Total RETOUR FOND :</span>
+                    <span className="text-sm font-black text-green-700">{totalCod.toLocaleString('fr-MA')} DH</span>
                   </div>
                   <button
                     onClick={() => {
@@ -2730,11 +2730,11 @@ export default function ParcelsTab() {
                         parcels: portPayeParcels
                       })
                     }}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-blue-50 transition cursor-pointer"
+                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-blue-50 transition cursor-pointer shrink-0"
                   >
-                    <span className="text-xl">✅</span>
-                    <span className="text-xs text-gray-600">Total Port payé :</span>
-                    <span className="text-base font-black text-blue-700">{totalPortPaye.toLocaleString('fr-MA')} DH</span>
+                    <span className="text-lg shrink-0">✅</span>
+                    <span className="text-xs text-gray-600 whitespace-nowrap">Total Port payé :</span>
+                    <span className="text-sm font-black text-blue-700">{totalPortPaye.toLocaleString('fr-MA')} DH</span>
                   </button>
                   <button
                     onClick={() => {
@@ -2749,21 +2749,21 @@ export default function ParcelsTab() {
                         parcels: portDuParcels
                       })
                     }}
-                    className="flex items-center gap-2 px-3 py-2 rounded-lg hover:bg-orange-50 transition cursor-pointer"
+                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-orange-50 transition cursor-pointer shrink-0"
                   >
-                    <span className="text-xl">📮</span>
-                    <span className="text-xs text-gray-600">Total Port dû :</span>
-                    <span className="text-base font-black text-orange-700">{totalPortDu.toLocaleString('fr-MA')} DH</span>
+                    <span className="text-lg shrink-0">📮</span>
+                    <span className="text-xs text-gray-600 whitespace-nowrap">Total Port dû :</span>
+                    <span className="text-sm font-black text-orange-700">{totalPortDu.toLocaleString('fr-MA')} DH</span>
                   </button>
-                  <div className="flex items-center gap-2 opacity-60">
-                    <span className="text-xl">💼</span>
-                    <span className="text-xs text-gray-500">Port en compte Exp. (service compta) :</span>
-                    <span className="text-base font-bold text-gray-600">{totalPortEnCompteExp.toLocaleString('fr-MA')} DH</span>
+                  <div className="flex items-center gap-1.5 opacity-60 shrink-0">
+                    <span className="text-lg shrink-0">💼</span>
+                    <span className="text-xs text-gray-500 whitespace-nowrap">Port en compte Exp. :</span>
+                    <span className="text-sm font-bold text-gray-600">{totalPortEnCompteExp.toLocaleString('fr-MA')} DH</span>
                   </div>
-                  <div className="flex items-center gap-2 opacity-60">
-                    <span className="text-xl">🎯</span>
-                    <span className="text-xs text-gray-500">Port en compte Dest. (client paie) :</span>
-                    <span className="text-base font-bold text-gray-600">{totalPortEnCompteDest.toLocaleString('fr-MA')} DH</span>
+                  <div className="flex items-center gap-1.5 opacity-60 shrink-0">
+                    <span className="text-lg shrink-0">🎯</span>
+                    <span className="text-xs text-gray-500 whitespace-nowrap">Port en compte Dest. :</span>
+                    <span className="text-sm font-bold text-gray-600">{totalPortEnCompteDest.toLocaleString('fr-MA')} DH</span>
                   </div>
                 </div>
               </div>
