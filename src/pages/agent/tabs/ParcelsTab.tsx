@@ -2550,7 +2550,7 @@ export default function ParcelsTab() {
                           )}
                           {visibleColumns.cod && (
                             <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-100 bg-green-50/30">
-                              {parcel.serviceType === 'simple' ? (
+                              {parcel.serviceType === 'simple' || parcel.serviceType === 'retour_bl' ? (
                                 <span></span>
                               ) : parcel.codAmount && parcel.codAmount > 0 ? (
                                 <div className="flex flex-col items-end gap-1">
@@ -4768,7 +4768,7 @@ export default function ParcelsTab() {
                     setQuickEditModal(m => ({
                       ...m,
                       serviceType: newServiceType,
-                      codAmount: newServiceType === 'simple' || newServiceType === '' ? '0' : m.codAmount,
+                      codAmount: newServiceType === 'simple' || newServiceType === '' || newServiceType === 'retour_bl' ? '0' : m.codAmount,
                       error: ''
                     }))
                   }}
@@ -4780,13 +4780,15 @@ export default function ParcelsTab() {
                   <option value="cheque">📝 Chèque</option>
                   <option value="traite">📄 Traite</option>
                   <option value="virement">🏦 Virement</option>
+                  <option value="retour_bl">🧾 Retour BL</option>
                 </select>
               </div>
 
               {/* Montant COD - Affiché uniquement pour especes, cheque, traite, virement */}
               {quickEditModal.serviceType &&
                quickEditModal.serviceType !== '' &&
-               quickEditModal.serviceType !== 'simple' && (
+               quickEditModal.serviceType !== 'simple' &&
+               quickEditModal.serviceType !== 'retour_bl' && (
                 <div>
                   <label className="block text-xs font-bold text-gray-700 mb-2">💵 Montant COD (DH)</label>
                   <input
@@ -4885,8 +4887,8 @@ export default function ParcelsTab() {
                     if (portType && portType !== parcel.portType) updates.portType = portType
                     if (status && status !== parcel.status) updates.status = status
 
-                    // Si le service est "simple", forcer le montant COD à 0
-                    const finalCodAmount = serviceType === 'simple' ? '0' : codAmount
+                    // Si le service est "simple" ou "retour_bl", forcer le montant COD à 0
+                    const finalCodAmount = serviceType === 'simple' || serviceType === 'retour_bl' ? '0' : codAmount
                     if (finalCodAmount !== parcel.codAmount?.toString()) {
                       updates.codAmount = finalCodAmount ? Number.parseFloat(finalCodAmount) : 0
                     }
