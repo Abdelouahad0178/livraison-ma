@@ -344,6 +344,9 @@ export default function CentralCollectorPage() {
   ), [parcels])
 
   // ── Onglet Contrôle & Pointage : contre-espèces de toutes les agences ────
+  // Ville d'ORIGINE (ville d'envoi) pour filtrage
+  const parcelOriginCity = (p: any) => p.originCity || p.sender?.city || 'Ville inconnue'
+  // Ville de DESTINATION (ville de réception) - conservé pour compatibilité
   const parcelCity = (p: any) => p.destinationCity || p.receiver?.city || 'Ville inconnue'
   const isControlled = (p: any) => !!p.controlled
 
@@ -414,11 +417,11 @@ export default function CentralCollectorPage() {
     })
   }, [parcels, ctlDebounced, ctlPayType, ctlCodStatus, ctlControl, ctlParcelStatus, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay, ctlMinAmount, ctlMaxAmount])
 
-  // Compteurs par ville (pointage ville par ville)
+  // Compteurs par ville (pointage ville par ville) - par ville d'ORIGINE
   const ctlCityStats = useMemo(() => {
     const map = new Map()
     ctlFilteredAllCities.forEach((p: any) => {
-      const city = parcelCity(p)
+      const city = parcelOriginCity(p)  // Ville d'ENVOI, pas de réception
       if (!map.has(city)) map.set(city, { city, count: 0, controlled: 0, amount: 0, controlledAmount: 0 })
       const s = map.get(city)
       const amt = parseFloat(p.codAmount) || 0
@@ -433,7 +436,7 @@ export default function CentralCollectorPage() {
   const ctlFiltered = useMemo(() => {
     let rows = ctlCity === 'all'
       ? ctlFilteredAllCities
-      : ctlFilteredAllCities.filter((p: any) => parcelCity(p) === ctlCity)
+      : ctlFilteredAllCities.filter((p: any) => parcelOriginCity(p) === ctlCity)  // Filtre par ville d'ENVOI
     const term = ctlDebounced.trim().toUpperCase()
     if (term && /^[0-9]+$/.test(term)) {
       const score = (p: any) => {
