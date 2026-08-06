@@ -19,10 +19,38 @@ export function printParcelTicket(parcel: any) {
 
   // Formater la date
   const formatDate = (date: any) => {
-    if (!date) return new Date().toLocaleDateString('fr-MA')
-    if (date.toDate) return date.toDate().toLocaleDateString('fr-MA')
-    if (date instanceof Date) return date.toLocaleDateString('fr-MA')
-    return new Date(date).toLocaleDateString('fr-MA')
+    try {
+      if (!date) return new Date().toLocaleDateString('fr-MA')
+
+      // Si c'est un timestamp Firestore avec toDate()
+      if (date && typeof date.toDate === 'function') {
+        return date.toDate().toLocaleDateString('fr-MA')
+      }
+
+      // Si c'est déjà un objet Date
+      if (date instanceof Date && !Number.isNaN(date.getTime())) {
+        return date.toLocaleDateString('fr-MA')
+      }
+
+      // Si c'est une string ou un timestamp
+      if (typeof date === 'string' || typeof date === 'number') {
+        const d = new Date(date)
+        if (!Number.isNaN(d.getTime())) {
+          return d.toLocaleDateString('fr-MA')
+        }
+      }
+
+      // Si c'est un objet avec seconds (Firestore Timestamp)
+      if (date && typeof date === 'object' && 'seconds' in date) {
+        return new Date(date.seconds * 1000).toLocaleDateString('fr-MA')
+      }
+
+      // Fallback : date actuelle
+      return new Date().toLocaleDateString('fr-MA')
+    } catch (error) {
+      console.error('Erreur formatage date:', error, date)
+      return new Date().toLocaleDateString('fr-MA')
+    }
   }
 
   // Générer le HTML du bon
