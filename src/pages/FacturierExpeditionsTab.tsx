@@ -1,10 +1,11 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { subscribeAllParcels, getParcelsPage } from '../firebase/parcels'
-import { Search, Filter, Calendar, MapPin, Printer, FileSpreadsheet, Edit2, Check, X } from 'lucide-react'
+import { Search, Filter, Calendar, MapPin, Printer, FileSpreadsheet, Edit2, Check, X, FileText } from 'lucide-react'
 import { CITIES } from '../firebase/constants'
 import * as XLSX from 'xlsx'
 import { doc, updateDoc } from 'firebase/firestore'
 import { db } from '../firebase/config'
+import { printParcelTicket } from '../utils/printParcelTicket'
 
 export default function FacturierExpeditionsTab({ profileCity }: { profileCity?: string }) {
   const PAGE_SIZE = 1000 // Chargement initial
@@ -586,18 +587,19 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Montant Port</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Date</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-gray-600 uppercase">Statut</th>
+                <th className="px-4 py-3 text-center text-xs font-semibold text-gray-600 uppercase">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-200">
               {loading ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan={12} className="px-4 py-8 text-center text-gray-500">
                     Chargement...
                   </td>
                 </tr>
               ) : filteredParcels.length === 0 ? (
                 <tr>
-                  <td colSpan={11} className="px-4 py-8 text-center text-gray-500">
+                  <td colSpan={12} className="px-4 py-8 text-center text-gray-500">
                     Aucune expédition trouvée
                   </td>
                 </tr>
@@ -713,6 +715,16 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
                         : parcel.createdAt?.toDate?.().toLocaleDateString('fr-MA')}
                     </td>
                     <td className="px-4 py-3 text-sm text-gray-600">{parcel.status}</td>
+                    <td className="px-4 py-3 text-center">
+                      <button
+                        onClick={() => printParcelTicket(parcel)}
+                        className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-xs font-semibold transition"
+                        title="Afficher le bon d'expédition"
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        <span>Bon</span>
+                      </button>
+                    </td>
                   </tr>
                 ))
               )}
