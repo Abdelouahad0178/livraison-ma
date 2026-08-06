@@ -53,6 +53,9 @@ export function printParcelTicket(parcel: any) {
     }
   }
 
+  // Obtenir l'URL du logo (chemin absolu pour éviter les problèmes de chargement)
+  const logoUrl = `${window.location.origin}/LOGO.jpg`
+
   // Générer le HTML du bon
   const ticketHTML = `
 <!DOCTYPE html>
@@ -105,6 +108,15 @@ export function printParcelTicket(parcel: any) {
     .header img {
       height: 36px;
       object-fit: contain;
+    }
+
+    .header .logo-placeholder {
+      height: 36px;
+      display: flex;
+      align-items: center;
+      font-weight: bold;
+      color: #1d4ed8;
+      font-size: 16px;
     }
 
     .header-right {
@@ -355,7 +367,8 @@ export function printParcelTicket(parcel: any) {
   <div id="ticket-print">
     <!-- Header -->
     <div class="header">
-      <img src="/LOGO.jpg" alt="BG Express">
+      <img src="${logoUrl}" alt="BG Express" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+      <div class="logo-placeholder" style="display:none;">BG EXPRESS</div>
       <div class="header-right">
         <div class="header-title">Bon de Ramassage</div>
         ${parcel.sender?.nic || parcel.senderNic ? `<div class="nic">N EXP : ${parcel.sender?.nic || parcel.senderNic}</div>` : ''}
