@@ -1,6 +1,6 @@
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { subscribeAllParcels, getParcelsPage } from '../firebase/parcels'
-import { Search, Filter, Calendar, MapPin, Printer, FileSpreadsheet, Edit2, Check, X, FileText } from 'lucide-react'
+import { Search, Filter, Calendar, MapPin, Printer, FileSpreadsheet, Edit2, Check, X, FileText, Database, Download } from 'lucide-react'
 import { CITIES } from '../firebase/constants'
 import * as XLSX from 'xlsx'
 import { doc, updateDoc } from 'firebase/firestore'
@@ -8,11 +8,13 @@ import { db } from '../firebase/config'
 import { printParcelTicket } from '../utils/printParcelTicket'
 
 export default function FacturierExpeditionsTab({ profileCity }: { profileCity?: string }) {
-  const PAGE_SIZE = 1000 // Chargement initial
+  const PAGE_SIZE = 800 // Chargement initial (aligné avec Encaisseur Central)
   const [liveParcels, setLiveParcels] = useState<any[]>([])
   const [moreParcels, setMoreParcels] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   const [loadingAll, setLoadingAll] = useState(false)
+  const [loadingMore, setLoadingMore] = useState(false)
+  const [loadAllProgress, setLoadAllProgress] = useState(0)
   const [hasMore, setHasMore] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [search, setSearch] = useState('')
@@ -58,44 +60,77 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
     return unsubscribe
   }, [])
 
+  // Charger 800 colis de plus manuellement
+  const loadMoreParcels = async () => {
+    if (!hasMore || loadingMore || loadingAll || !lastPageDocRef.current) return
+    setLoadingMore(true)
+    try {
+      const page = await getParcelsPage(lastPageDocRef.current, PAGE_SIZE)
+      const pageDocs = page.docs
+
+      setMoreParcels(prev => {
+        const map = new Map()
+        prev.forEach((p: any) => map.set(p.id, p))
+        pageDocs.forEach((p: any) => map.set(p.id, p))
+        return [...map.values()]
+      })
+
+      if (page.lastDocSnap) lastPageDocRef.current = page.lastDocSnap
+      if (!page.hasMore) setHasMore(false)
+      console.log(`✅ Facturier: ${pageDocs.length} expéditions supplémentaires chargées`)
+    } catch (err) {
+      console.error('Erreur chargement +800:', err)
+    } finally {
+      setLoadingMore(false)
+    }
+  }
+
   // Charger automatiquement TOUTE la base en arrière-plan
+  const loadAllParcels = async () => {
+    if (!hasMore || loadingAll || loadingMore || !lastPageDocRef.current) return
+    setLoadingAll(true)
+    setLoadAllProgress(0)
+    try {
+      let cursor = lastPageDocRef.current
+      let more = true
+      let loaded = 0
+      let safety = 0
+
+      while (more && cursor && safety < 500) {
+        const page = await getParcelsPage(cursor, PAGE_SIZE)
+        const pageDocs = page.docs
+        loaded += pageDocs.length
+        setLoadAllProgress(loaded)
+
+        setMoreParcels(prev => {
+          const map = new Map()
+          prev.forEach((p: any) => map.set(p.id, p))
+          pageDocs.forEach((p: any) => map.set(p.id, p))
+          return [...map.values()]
+        })
+
+        cursor = page.lastDocSnap
+        more = page.hasMore && !!page.lastDocSnap
+        safety += 1
+      }
+
+      if (cursor) lastPageDocRef.current = cursor
+      setHasMore(false)
+      console.log(`✅ Facturier: ${loaded} expéditions supplémentaires chargées au total`)
+    } catch (err) {
+      console.error('Erreur chargement complet:', err)
+    } finally {
+      setLoadingAll(false)
+    }
+  }
+
   useEffect(() => {
-    if (!hasMore || loadingAll || !lastPageDocRef.current || liveParcels.length === 0) return
+    if (!hasMore || loadingAll || loadingMore || !lastPageDocRef.current || liveParcels.length === 0) return
 
-    const timer = setTimeout(async () => {
-      if (!hasMore || loadingAll || !lastPageDocRef.current) return
-
-      setLoadingAll(true)
-      try {
-        let cursor = lastPageDocRef.current
-        let more = true
-        let loaded = 0
-        let safety = 0
-
-        while (more && cursor && safety < 500) {
-          const page = await getParcelsPage(cursor, 1000)
-          const pageDocs = page.docs
-          loaded += pageDocs.length
-
-          setMoreParcels(prev => {
-            const map = new Map()
-            prev.forEach((p: any) => map.set(p.id, p))
-            pageDocs.forEach((p: any) => map.set(p.id, p))
-            return [...map.values()]
-          })
-
-          cursor = page.lastDocSnap
-          more = page.hasMore && !!page.lastDocSnap
-          safety += 1
-        }
-
-        if (cursor) lastPageDocRef.current = cursor
-        setHasMore(false)
-        console.log(`✅ Facturier: ${loaded} expéditions supplémentaires chargées`)
-      } catch (err) {
-        console.error('Erreur chargement complet:', err)
-      } finally {
-        setLoadingAll(false)
+    // Lancer le chargement complet automatiquement après 2 secondes
+    const timer = setTimeout(() => {
+      if (hasMore && !loadingAll && !loadingMore && lastPageDocRef.current) {
+        loadAllParcels()
       }
     }, 2000)
 
@@ -432,6 +467,55 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
           </div>
         </div>
       )}
+
+      {/* Bandeau d'information chargement */}
+      <section className="bg-gradient-to-br from-blue-600 to-indigo-700 rounded-2xl shadow-2xl border-2 border-indigo-400 overflow-hidden">
+        <div className="p-5 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-4">
+            <div className="p-3 rounded-xl bg-white/20 backdrop-blur-sm flex-shrink-0">
+              <Database className="w-6 h-6 text-white" />
+            </div>
+            <div className="text-white">
+              <p className="font-black text-lg mb-0.5">
+                📊 {parcels.length.toLocaleString('fr-MA')} expéditions chargées
+              </p>
+              <p className="text-xs text-blue-100">
+                {loadingAll
+                  ? `⏳ Chargement complet en cours... +${loadAllProgress.toLocaleString('fr-MA')} colis récupérés`
+                  : hasMore
+                    ? 'Historique plus ancien disponible — chargez par tranches de 800 ou toute la base.'
+                    : '✓ Toute la base est chargée'}
+              </p>
+            </div>
+          </div>
+          {hasMore && (
+            <div className="flex gap-2">
+              <button
+                onClick={loadMoreParcels}
+                disabled={loadingMore || loadingAll}
+                className="px-4 py-2.5 rounded-xl text-xs font-black text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 transition shadow-lg flex items-center gap-2"
+              >
+                {loadingMore ? (
+                  <><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Chargement...</>
+                ) : (
+                  <>↓ Charger 800 de plus</>
+                )}
+              </button>
+              <button
+                onClick={loadAllParcels}
+                disabled={loadingMore || loadingAll}
+                className="px-4 py-2.5 rounded-xl text-xs font-black text-indigo-700 bg-indigo-50 border-2 border-indigo-200 hover:bg-indigo-100 disabled:opacity-50 transition flex items-center gap-2"
+              >
+                {loadingAll ? (
+                  <><span className="w-3.5 h-3.5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" /> {loadAllProgress.toLocaleString('fr-MA')}...</>
+                ) : (
+                  <>⚡ Tout charger</>
+                )}
+              </button>
+            </div>
+          )}
+        </div>
+      </section>
 
       {/* Filtres */}
       <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-4">
