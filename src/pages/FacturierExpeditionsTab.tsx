@@ -30,6 +30,7 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
   const [editingPrice, setEditingPrice] = useState<string>('')
   const [savingPrice, setSavingPrice] = useState(false)
   const [successMessage, setSuccessMessage] = useState<string | null>(null)
+  const [displayLimit, setDisplayLimit] = useState(500) // Limite d'affichage progressive
 
   // Fusion des expéditions temps réel + chargées progressivement
   const parcels = useMemo(() => {
@@ -124,15 +125,21 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
     }
   }
 
+  // Réinitialiser la limite d'affichage quand les filtres changent
+  useEffect(() => {
+    setDisplayLimit(500)
+  }, [search, cityFilter, portTypeFilter, clientRoleFilter, statusFilter, dateFilter, dateFrom, dateTo])
+
   useEffect(() => {
     if (!hasMore || loadingAll || loadingMore || !lastPageDocRef.current || liveParcels.length === 0) return
 
-    // Lancer le chargement complet automatiquement après 2 secondes
+    // Lancer le chargement complet automatiquement après 15 secondes (au lieu de 2)
+    // Cela laisse le temps à l'utilisateur de filtrer avant de tout charger
     const timer = setTimeout(() => {
       if (hasMore && !loadingAll && !loadingMore && lastPageDocRef.current) {
         loadAllParcels()
       }
-    }, 2000)
+    }, 15000)
 
     return () => clearTimeout(timer)
   }, [liveParcels.length, hasMore])
@@ -483,7 +490,7 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
                 {loadingAll
                   ? `⏳ Chargement complet en cours... +${loadAllProgress.toLocaleString('fr-MA')} colis récupérés`
                   : hasMore
-                    ? 'Historique plus ancien disponible — chargez par tranches de 800 ou toute la base.'
+                    ? 'Chargement automatique dans 15s — ou chargez manuellement par tranches de 800.'
                     : '✓ Toute la base est chargée'}
               </p>
             </div>
@@ -688,11 +695,8 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
                   </td>
                 </tr>
               ) : (
-                // Afficher tous les résultats si recherche active, sinon limiter à 500
-                (search || dateFilter !== 'all' || cityFilter !== 'Toutes' || portTypeFilter !== 'all'
-                  ? filteredParcels
-                  : filteredParcels.slice(0, 500)
-                ).map(parcel => (
+                // Limiter l'affichage pour optimiser le rendu (éviter de surcharger le DOM)
+                filteredParcels.slice(0, displayLimit).map(parcel => (
                   <tr key={parcel.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 text-sm font-semibold text-indigo-600">
                       {parcel.sender?.nic || parcel.trackingId || '-'}
@@ -815,16 +819,23 @@ export default function FacturierExpeditionsTab({ profileCity }: { profileCity?:
             </tbody>
           </table>
         </div>
-        {!search && dateFilter === 'all' && cityFilter === 'Toutes' && portTypeFilter === 'all' && clientRoleFilter === 'all' && filteredParcels.length > 500 && (
-          <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 text-sm text-gray-600">
-            Affichage de 500 sur {filteredParcels.length} expéditions. Utilisez les filtres pour afficher tous les résultats.
+        {/* Indicateur de pagination et bouton "Afficher plus" */}
+        <div className="px-4 py-3 bg-gradient-to-r from-gray-50 to-slate-50 border-t border-gray-200">
+          <div className="flex items-center justify-between gap-4">
+            <div className="text-sm text-gray-600">
+              Affichage de <span className="font-bold text-gray-800">{Math.min(displayLimit, filteredParcels.length)}</span> sur <span className="font-bold text-gray-800">{filteredParcels.length}</span> expédition(s)
+            </div>
+            {filteredParcels.length > displayLimit && (
+              <button
+                onClick={() => setDisplayLimit(prev => prev + 500)}
+                className="px-4 py-2 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-700 hover:to-blue-700 text-white rounded-lg text-xs font-bold transition shadow-sm flex items-center gap-2"
+              >
+                <Download className="w-4 h-4" />
+                Afficher 500 de plus
+              </button>
+            )}
           </div>
-        )}
-        {(search || dateFilter !== 'all' || cityFilter !== 'Toutes' || portTypeFilter !== 'all' || clientRoleFilter !== 'all') && (
-          <div className="px-4 py-3 bg-gray-50 border-t border-gray-200 text-sm text-cyan-700 font-medium">
-            {filteredParcels.length} expédition(s) trouvée(s) - Tous les résultats affichés
-          </div>
-        )}
+        </div>
       </div>
     </div>
   )
