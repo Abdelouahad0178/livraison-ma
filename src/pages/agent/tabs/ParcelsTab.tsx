@@ -2495,9 +2495,13 @@ export default function ParcelsTab() {
                           )}
                           {visibleColumns.service && (
                             <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
-                              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-100 text-purple-700 rounded-lg font-semibold">
-                                {serviceType?.emoji} {serviceType?.label || 'Simple'}
-                              </span>
+                              {parcel.serviceType === 'simple' || !parcel.serviceType ? (
+                                <span className="text-sm text-gray-500">—</span>
+                              ) : (
+                                <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-100 text-purple-700 rounded-lg font-semibold">
+                                  {serviceType?.emoji} {serviceType?.label}
+                                </span>
+                              )}
                             </td>
                           )}
                           {visibleColumns.nbColis && (
@@ -2546,9 +2550,9 @@ export default function ParcelsTab() {
                           )}
                           {visibleColumns.cod && (
                             <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-100 bg-green-50/30">
-                              {parcel.codAmount && parcel.codAmount > 0 ? (
+                              {parcel.codAmount && parcel.codAmount > 0 && parcel.serviceType !== 'simple' ? (
                                 <div className="flex flex-col items-end gap-1">
-                                  {(parcel.serviceType === 'cheque' || parcel.serviceType === 'traite') && (
+                                  {(parcel.serviceType === 'cheque' || parcel.serviceType === 'traite') && parcel.codDocumentStatus && (
                                     <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
                                       parcel.codDocumentStatus === 'cheque_recu' || parcel.codDocumentStatus === 'traite_recu'
                                         ? 'bg-green-100 text-green-700'
@@ -2560,7 +2564,6 @@ export default function ParcelsTab() {
                                       {parcel.codDocumentStatus === 'cheque_encours' && '⏳ Chèque encours'}
                                       {parcel.codDocumentStatus === 'traite_recu' && '✅ Traite reçue'}
                                       {parcel.codDocumentStatus === 'traite_encours' && '⏳ Traite encours'}
-                                      {!parcel.codDocumentStatus && '📦 Simple'}
                                     </span>
                                   )}
                                   <div className="inline-flex items-center gap-2">
@@ -2968,10 +2971,13 @@ export default function ParcelsTab() {
                         </span>
                       )}
                       {(() => {
+                        // Ne pas afficher de badge pour les services "simple"
+                        if (parcel.serviceType === 'simple' || !parcel.serviceType) return null
+
                         const stDef = SERVICE_TYPES.find(t => t.key === parcel.serviceType)
                         if (!stDef) return null
+
                         const colors: Record<string, string> = {
-                          simple:    'bg-gray-100 text-gray-600',
                           especes:   'bg-green-100 text-green-700',
                           cheque:    'bg-blue-100 text-blue-700',
                           traite:    'bg-indigo-100 text-indigo-700',
@@ -4750,24 +4756,20 @@ export default function ParcelsTab() {
                 </select>
               </div>
 
-              {/* Montant COD */}
+              {/* Type de service */}
               <div>
-                <label className="block text-xs font-bold text-gray-700 mb-2">💵 Montant COD (DH)</label>
-                <input
-                  type="number"
-                  value={quickEditModal.codAmount}
-                  onChange={e => setQuickEditModal(m => ({ ...m, codAmount: e.target.value, error: '' }))}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-green-500"
-                  placeholder="Ex: 150"
-                />
-              </div>
-
-              {/* Type COD */}
-              <div>
-                <label className="block text-xs font-bold text-gray-700 mb-2">🏷️ Type COD</label>
+                <label className="block text-xs font-bold text-gray-700 mb-2">🏷️ Type de service</label>
                 <select
-                  value={quickEditModal.serviceType}
-                  onChange={e => setQuickEditModal(m => ({ ...m, serviceType: e.target.value, error: '' }))}
+                  value={quickEditModal.serviceType || ''}
+                  onChange={e => {
+                    const newServiceType = e.target.value
+                    setQuickEditModal(m => ({
+                      ...m,
+                      serviceType: newServiceType,
+                      codAmount: newServiceType === 'simple' || newServiceType === '' ? '0' : m.codAmount,
+                      error: ''
+                    }))
+                  }}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-orange-500"
                 >
                   <option value="">-- Sélectionner --</option>
@@ -4778,6 +4780,22 @@ export default function ParcelsTab() {
                   <option value="virement">🏦 Virement</option>
                 </select>
               </div>
+
+              {/* Montant COD - Affiché uniquement pour especes, cheque, traite, virement */}
+              {quickEditModal.serviceType &&
+               quickEditModal.serviceType !== '' &&
+               quickEditModal.serviceType !== 'simple' && (
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-2">💵 Montant COD (DH)</label>
+                  <input
+                    type="number"
+                    value={quickEditModal.codAmount || ''}
+                    onChange={e => setQuickEditModal(m => ({ ...m, codAmount: e.target.value, error: '' }))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-green-500"
+                    placeholder="Ex: 150"
+                  />
+                </div>
+              )}
 
               {/* Nombre de colis */}
               <div>
@@ -4864,7 +4882,13 @@ export default function ParcelsTab() {
                     if (price !== parcel.price?.toString()) updates.price = price ? Number.parseFloat(price) : null
                     if (portType && portType !== parcel.portType) updates.portType = portType
                     if (status && status !== parcel.status) updates.status = status
-                    if (codAmount !== parcel.codAmount?.toString()) updates.codAmount = codAmount ? Number.parseFloat(codAmount) : null
+
+                    // Si le service est "simple", forcer le montant COD à 0
+                    const finalCodAmount = serviceType === 'simple' ? '0' : codAmount
+                    if (finalCodAmount !== parcel.codAmount?.toString()) {
+                      updates.codAmount = finalCodAmount ? Number.parseFloat(finalCodAmount) : 0
+                    }
+
                     if (serviceType && serviceType !== parcel.serviceType) updates.serviceType = serviceType
                     if (nbColis !== parcel.nbColis?.toString()) updates.nbColis = nbColis ? Number.parseInt(nbColis) : null
                     if (poids !== parcel.poids?.toString()) updates.poids = poids ? Number.parseFloat(poids) : null
