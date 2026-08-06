@@ -64,6 +64,7 @@ export default function ParcelsTab() {
     datePreset, setDatePreset,
     dateFrom, setDateFrom,
     dateTo, setDateTo,
+    dateFilterType, setDateFilterType,  // 📅 Type de date (création/livraison)
     operationalDay, setOperationalDay,  // 🗓️ Journée opérationnelle
     parcelDirection, setParcelDirection,
     serviceFilter, setServiceFilter,
@@ -73,6 +74,7 @@ export default function ParcelsTab() {
     driverFilter, setDriverFilter,  // ⭐ Filtre par livreur
     portTypeFilter, setPortTypeFilter,  // ⭐ Filtre par type de port
     encaissementFilter, setEncaissementFilter,  // ⭐ Filtre par type d'encaissement
+    codDocumentStatusFilter, setCodDocumentStatusFilter,  // ⭐ Filtre par statut document COD
     showFilters, setShowFilters,
     subTab, setSubTab,
     parcelPage, setParcelPage,
@@ -188,10 +190,11 @@ export default function ParcelsTab() {
 
   // État pour gérer les colonnes visibles
   const [visibleColumns, setVisibleColumns] = useState({
-    nexp: true, date: true, statut: true, expediteur: true, telExp: true, villeExp: true,
+    nexp: true, date: true, dateLivraison: true, statut: true, expediteur: true, telExp: true, villeExp: true,
     destinataire: true, telDest: true, villeDest: true, adresse: true, service: true,
     nbColis: true, poids: true, port: true, typePort: true, cod: true, livreur: true
   })
+
   const [showColumnSelector, setShowColumnSelector] = useState(false)
   const [printOrientation, setPrintOrientation] = useState<'portrait' | 'landscape'>('portrait')
 
@@ -199,8 +202,16 @@ export default function ParcelsTab() {
   const [editingDateId, setEditingDateId] = useState<string | null>(null)
   const [editingDateValue, setEditingDateValue] = useState<string>('')
 
+  // État pour le modal de statut document COD
+  const [codDocumentModal, setCodDocumentModal] = useState<{ open: boolean; parcelId: string | null; currentStatus: string | null; serviceType: string | null }>({
+    open: false,
+    parcelId: null,
+    currentStatus: null,
+    serviceType: null
+  })
+
   // Sécurité : s'assurer que les tableaux ne sont jamais undefined
-  const safeParcels = (() => {
+  const safeParcels = useMemo(() => {
     if (showDeliveredByOthers) {
       // Afficher les colis expédiés par cette agence et livrés par d'autres
       return (allDisplayParcels || []).filter((p: any) => {
@@ -211,7 +222,7 @@ export default function ParcelsTab() {
       })
     }
     return filteredParcels || []
-  })()
+  }, [allDisplayParcels, filteredParcels, showDeliveredByOthers, profile?.city])
 
   // ⭐ Filtrer les livreurs de l'agence uniquement (même ville)
   const agencyDrivers = useMemo(() => {
@@ -254,7 +265,7 @@ export default function ParcelsTab() {
   })()
 
   // État pour basculer entre vue cartes et vue tableau
-  const [viewMode, setViewMode] = useState<'cards' | 'table'>('cards')
+  const [viewMode, setViewMode] = useState<'cards' | 'table'>('table')
 
   // ⭐ État pour recherche spécifique dans le tableau
   const [tableSearch, setTableSearch] = useState('')
@@ -500,7 +511,7 @@ export default function ParcelsTab() {
     portType: string
     status: string
     codAmount: string
-    codType: string
+    serviceType: string
     nbColis: string
     poids: string
     contenu: string
@@ -514,7 +525,7 @@ export default function ParcelsTab() {
     portType: '',
     status: '',
     codAmount: '',
-    codType: '',
+    serviceType: '',
     nbColis: '',
     poids: '',
     contenu: '',
@@ -858,6 +869,53 @@ export default function ParcelsTab() {
                     ))}
                   </div>
 
+                  {/* Statut document COD (sélection multiple) */}
+                  <div className="px-4 py-3 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] text-gray-400 font-bold uppercase">Doc COD</span>
+                      {codDocumentStatusFilter.length > 0 && (
+                        <button
+                          onClick={() => setCodDocumentStatusFilter([])}
+                          className="text-[9px] text-red-600 hover:text-red-700 font-semibold"
+                        >
+                          ✕ Tout effacer
+                        </button>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-1.5 flex-wrap">
+                      {[
+                        { key: 'simple', label: 'Simple', emoji: '📦', color: 'gray' },
+                        { key: 'cheque_recu', label: 'Chèque reçu', emoji: '✅', color: 'green' },
+                        { key: 'cheque_encours', label: 'Chèque encours', emoji: '⏳', color: 'orange' },
+                        { key: 'traite_recu', label: 'Traite reçue', emoji: '✅', color: 'green' },
+                        { key: 'traite_encours', label: 'Traite encours', emoji: '⏳', color: 'orange' },
+                      ].map(({ key, label, emoji, color }) => {
+                        const isSelected = codDocumentStatusFilter.includes(key)
+                        return (
+                          <button
+                            key={key}
+                            onClick={() => {
+                              if (isSelected) {
+                                setCodDocumentStatusFilter(codDocumentStatusFilter.filter(k => k !== key))
+                              } else {
+                                setCodDocumentStatusFilter([...codDocumentStatusFilter, key])
+                              }
+                            }}
+                            className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
+                              isSelected
+                                ? color === 'green' ? 'bg-green-600 text-white'
+                                : color === 'orange' ? 'bg-orange-600 text-white'
+                                : 'bg-blue-600 text-white'
+                                : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                            }`}
+                          >
+                            {emoji} {label}
+                          </button>
+                        )
+                      })}
+                    </div>
+                  </div>
+
                   {/* Créateur */}
                   {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
                     <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
@@ -900,8 +958,28 @@ export default function ParcelsTab() {
 
                   {/* Date */}
                   <div className="px-4 py-3 space-y-2">
+                    {/* Type de date */}
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] text-gray-400 font-bold uppercase shrink-0">Type:</span>
+                      <button
+                        onClick={() => setDateFilterType('creation')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+                          dateFilterType === 'creation' ? 'bg-purple-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >
+                        📅 Création
+                      </button>
+                      <button
+                        onClick={() => setDateFilterType('livraison')}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold transition ${
+                          dateFilterType === 'livraison' ? 'bg-green-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                        }`}
+                      >
+                        ✅ Livraison
+                      </button>
+                    </div>
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Date</span>
+                      <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Période</span>
                       {[
                         { key: 'all',    label: 'Tout' },
                         { key: 'operational', label: '🗓️ J.Opé' },
@@ -979,11 +1057,11 @@ export default function ParcelsTab() {
           const allAideSelected = aideValidationParcels.length > 0 && selectedAideCount === aideValidationParcels.length
           return (
             <div className="space-y-3">
-              <div className="flex items-center justify-between px-1">
+              <div className="flex items-center justify-between px-1 flex-wrap gap-2">
                 <p className="text-xs text-gray-400">{filteredParcels.length} expédition(s)</p>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   {/* Toggle vue cartes / tableau */}
-                  <div className="flex items-center bg-gray-100 rounded-lg p-0.5">
+                  <div className="flex items-center bg-gray-100 rounded-lg p-0.5 shrink-0">
                     <button
                       onClick={() => setViewMode('cards')}
                       className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-semibold transition ${
@@ -2008,7 +2086,15 @@ export default function ParcelsTab() {
                         <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">
                           <div className="flex items-center gap-2">
                             <Calendar className="w-4 h-4" />
-                            Date
+                            Date Création
+                          </div>
+                        </th>
+                      )}
+                      {visibleColumns.dateLivraison && (
+                        <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-blue-400/30">
+                          <div className="flex items-center gap-2">
+                            <Calendar className="w-4 h-4" />
+                            Date Livraison
                           </div>
                         </th>
                       )}
@@ -2284,6 +2370,15 @@ export default function ParcelsTab() {
                               })()}
                             </td>
                           )}
+                          {visibleColumns.dateLivraison && (
+                            <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
+                              <span className="text-gray-600 font-medium text-sm">
+                                {parcel.deliveredAt
+                                  ? new Date(parcel.deliveredAt).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+                                  : '—'}
+                              </span>
+                            </td>
+                          )}
                           <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
                             <div className="flex items-center gap-2">
                               {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') ? (
@@ -2450,9 +2545,42 @@ export default function ParcelsTab() {
                           {visibleColumns.cod && (
                             <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-100 bg-green-50/30">
                               {parcel.codAmount && parcel.codAmount > 0 ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 rounded-lg text-sm font-black">
-                                  💰 {parcel.codAmount} DH
-                                </span>
+                                <div className="flex flex-col items-end gap-1">
+                                  {(parcel.serviceType === 'cheque' || parcel.serviceType === 'traite') && (
+                                    <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full ${
+                                      parcel.codDocumentStatus === 'cheque_recu' || parcel.codDocumentStatus === 'traite_recu'
+                                        ? 'bg-green-100 text-green-700'
+                                        : parcel.codDocumentStatus === 'cheque_encours' || parcel.codDocumentStatus === 'traite_encours'
+                                        ? 'bg-orange-100 text-orange-700'
+                                        : 'bg-gray-100 text-gray-600'
+                                    }`}>
+                                      {parcel.codDocumentStatus === 'cheque_recu' && '✅ Chèque reçu'}
+                                      {parcel.codDocumentStatus === 'cheque_encours' && '⏳ Chèque encours'}
+                                      {parcel.codDocumentStatus === 'traite_recu' && '✅ Traite reçue'}
+                                      {parcel.codDocumentStatus === 'traite_encours' && '⏳ Traite encours'}
+                                      {!parcel.codDocumentStatus && '📦 Simple'}
+                                    </span>
+                                  )}
+                                  <div className="inline-flex items-center gap-2">
+                                    <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 rounded-lg text-sm font-black">
+                                      💰 {parcel.codAmount} DH
+                                    </span>
+                                    {(parcel.serviceType === 'cheque' || parcel.serviceType === 'traite') && (
+                                      <button
+                                        onClick={() => setCodDocumentModal({
+                                          open: true,
+                                          parcelId: parcel.id,
+                                          currentStatus: parcel.codDocumentStatus || null,
+                                          serviceType: parcel.serviceType
+                                        })}
+                                        className="hover:scale-125 transition-transform cursor-pointer text-lg"
+                                        title="Gérer le statut du document"
+                                      >
+                                        ✋
+                                      </button>
+                                    )}
+                                  </div>
+                                </div>
                               ) : (
                                 <span className="text-gray-400">—</span>
                               )}
@@ -2491,7 +2619,7 @@ export default function ParcelsTab() {
                                     portType: parcel.portType || '',
                                     status: parcel.status || '',
                                     codAmount: parcel.codAmount?.toString() || '',
-                                    codType: parcel.codType || '',
+                                    serviceType: parcel.serviceType || '',
                                     nbColis: parcel.nbColis?.toString() || '',
                                     poids: parcel.poids?.toString() || '',
                                     contenu: parcel.contenu || '',
@@ -2667,7 +2795,7 @@ export default function ParcelsTab() {
                   <div key={parcel.id}
                     onClick={handleParcelRowClick}
                     tabIndex={-1}
-                    className={`bg-white rounded-xl p-4 shadow-sm border-l-4 cursor-pointer ${isOwn ? 'border-l-blue-500 border border-blue-100' : 'border-l-orange-400 border border-orange-100'}`}
+                    className={`bg-white rounded-xl p-2 sm:p-4 shadow-sm border-l-4 cursor-pointer ${isOwn ? 'border-l-blue-500 border border-blue-100' : 'border-l-orange-400 border border-orange-100'}`}
                   >
                   {/* NOUVELLE POLITIQUE : Plus de sélection validation nécessaire */}
                   {canLoadTransport && (
@@ -2774,209 +2902,229 @@ export default function ParcelsTab() {
                     )
                   })()}
 
-                  {/* Agent badge */}
-                  <div className="flex items-center gap-2 mb-2 flex-wrap">
-                    <div className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${isOwn ? 'bg-blue-50 text-blue-600' : 'bg-orange-50 text-orange-600'}`}>
-                      <User className="w-3 h-3" />
-                      {isAideManagedByChef
-                        ? `${parcel.agentRole === 'client_portal' ? 'Portail client' : 'Aide agent'} (${parcel.agentName || 'saisie agence'})`
-                        : isOwn ? `Moi (${profile?.name || 'vous'})` : (parcel.agentName || 'Autre agent')}
-                      {!isOwn && <Lock className="w-3 h-3 ml-0.5 opacity-60" />}
+                  <div className="space-y-2">
+                    {/* Ligne 1: Agent + N EXP */}
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <div className={`inline-flex items-center gap-1 text-[10px] sm:text-xs px-2 py-0.5 rounded-full font-medium ${isOwn ? 'bg-blue-50 text-blue-600' : 'bg-orange-50 text-orange-600'}`}>
+                        <User className="w-2.5 h-2.5 shrink-0" />
+                        <span className="truncate max-w-[120px] sm:max-w-none">
+                          {isAideManagedByChef
+                            ? `${parcel.agentRole === 'client_portal' ? 'Portail' : 'Aide'} (${parcel.agentName || 'agence'})`
+                            : isOwn ? `Moi (${profile?.name || 'vous'})` : (parcel.agentName || 'Autre')}
+                        </span>
+                        {!isOwn && <Lock className="w-2.5 h-2.5 opacity-60 shrink-0" />}
+                      </div>
+                      {parcel.sender?.nic && (
+                        <span className="font-mono text-xs sm:text-sm font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-200 shrink-0">
+                          N EXP {parcel.sender.nic}
+                        </span>
+                      )}
+                      {profile?.role === 'aide_agent' && isAideParcelLockedForEdit(parcel) && (
+                        <div className="inline-flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full font-bold bg-red-100 text-red-700 border border-red-200 shrink-0">
+                          <Lock className="w-2.5 h-2.5" />
+                          Verrouillé
+                        </div>
+                      )}
                     </div>
-                    {/* NOUVEAU : Indicateur verrouillage pour aide-agent */}
-                    {profile?.role === 'aide_agent' && isAideParcelLockedForEdit(parcel) && (
-                      <div className="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-bold bg-red-100 text-red-700 border border-red-200">
-                        <Lock className="w-3 h-3" />
-                        Verrouillé (chargé)
+
+                    {/* Ligne 2: Tracking ID */}
+                    <div>
+                      <span className="font-mono text-sm sm:text-base font-bold text-gray-800">{parcel.trackingId}</span>
+                    </div>
+
+                    {/* Ligne 3: Badges statut */}
+                    <div className="flex items-center gap-1 flex-wrap">
+                      {(() => {
+                        const isOriginAgency = parcel.originCity === profile?.city || parcel.sender?.city === profile?.city
+                        const isDestinationAgency = parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city
+
+                        if (parcel.portType === 'port_en_compte_destinataire' && isDestinationAgency) {
+                          return (
+                            <span className="inline-flex items-center px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded text-xs font-bold border border-teal-300 shrink-0">
+                              🖐️ Compte Dest
+                            </span>
+                          )
+                        }
+
+                        if ((parcel.portType === 'port_en_compte' || parcel.portType === 'port_en_compte_expediteur') && isOriginAgency) {
+                          return (
+                            <span className="inline-flex items-center px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-bold border border-purple-300 shrink-0">
+                              💼 Compte Exp
+                            </span>
+                          )
+                        }
+                        return null
+                      })()}
+                      {isInReturnCircuit(parcel) && (
+                        <span className="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-bold bg-orange-100 text-orange-700 border border-orange-300 shrink-0">
+                          🔄 RETOURNÉ
+                        </span>
+                      )}
+                      {parcel.hasRetourBL && (
+                        <span className="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-bold bg-blue-100 text-blue-700 border border-blue-300 shrink-0">
+                          🧾 Retour BL
+                        </span>
+                      )}
+                      {(() => {
+                        const stDef = SERVICE_TYPES.find(t => t.key === parcel.serviceType)
+                        if (!stDef) return null
+                        const colors: Record<string, string> = {
+                          simple:    'bg-gray-100 text-gray-600',
+                          especes:   'bg-green-100 text-green-700',
+                          cheque:    'bg-blue-100 text-blue-700',
+                          traite:    'bg-indigo-100 text-indigo-700',
+                          retour_bl: 'bg-amber-100 text-amber-700',
+                        }
+                        return (
+                          <span className={`inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-semibold ${colors[parcel.serviceType] || 'bg-gray-100 text-gray-600'} shrink-0`}>
+                            {stDef.emoji} {stDef.label}
+                          </span>
+                        )
+                      })()}
+                      {parcel.portType === 'port_paye' && (
+                        <span className="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-bold bg-blue-100 text-blue-700 border border-blue-300 shrink-0">
+                          ✅ Port payé
+                        </span>
+                      )}
+                      {parcel.portType === 'port_du' && (
+                        <span className="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-bold bg-orange-100 text-orange-700 border border-orange-300 shrink-0">
+                          📮 Port dû
+                        </span>
+                      )}
+                      {parcel.returnedAt && parcel.status === 'Livré' && (
+                        <span className="inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-medium bg-orange-100 text-orange-700 shrink-0">
+                          ↩️ Retourné à exp.
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Ligne 4: Villes + Infos essentielles */}
+                    <div className="text-xs sm:text-sm">
+                      <div className="flex items-center gap-1 font-bold text-gray-700 flex-wrap">
+                        <span>{parcel.sender?.city || '—'}</span>
+                        <span className="text-gray-400">→</span>
+                        <span>{parcel.receiver?.city || '—'}</span>
+                        <span className="text-gray-400">•</span>
+                        <span>{parcel.weight || 0} kg</span>
+                        <span className="text-gray-400">•</span>
+                        <span className="text-green-700">{parcel.price || 0} DH</span>
+                        {parcel.codAmount > 0 && (
+                          <>
+                            <span className="text-gray-400">•</span>
+                            <span className="text-orange-600 font-bold">RF {parcel.codAmount} DH</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Ligne 5: Destinataire */}
+                    <div className="text-xs text-gray-500 flex items-center gap-1">
+                      <span className="truncate">{parcel.receiver?.name || '—'}</span>
+                      {parcel.portType === 'port_en_compte_destinataire' && (
+                        <span className="text-sm shrink-0">🖐️</span>
+                      )}
+                    </div>
+                    {/* Ligne 6: Nature/Colis */}
+                    {(parcel.natureOfGoods || (parcel.arrivedNbColis ?? parcel.nbColis) > 1) && (
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {parcel.natureOfGoods && (
+                          <span className="inline-flex items-center gap-0.5 text-xs bg-blue-50 text-blue-700 border border-blue-200 px-1.5 py-0.5 rounded-full font-medium">
+                            📦 {parcel.natureOfGoods}
+                          </span>
+                        )}
+                        {(parcel.arrivedNbColis ?? parcel.nbColis) > 1 && (
+                          <span className="inline-flex items-center gap-0.5 text-xs bg-gray-100 text-gray-600 border border-gray-200 px-1.5 py-0.5 rounded-full font-medium shrink-0">
+                            × {parcel.arrivedNbColis ?? parcel.nbColis} colis
+                            {parcel.arrivedNbColis != null && parcel.arrivedNbColis < parcel.nbColis && (
+                              <span className="text-orange-500 font-bold">/{parcel.nbColis}</span>
+                            )}
+                          </span>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Ligne 7: Téléphones */}
+                    {(parcel.sender?.tel || parcel.receiver?.tel) && (
+                      <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-500">
+                        {parcel.sender?.tel && <span className="shrink-0">📤 {parcel.sender.tel}</span>}
+                        {parcel.receiver?.tel && <span className="shrink-0">📥 {parcel.receiver.tel}</span>}
+                      </div>
+                    )}
+                    {/* Ligne 8: Adresses */}
+                    {(parcel.sender?.address || parcel.receiver?.address || parcel.enGare) && (
+                      <div className="space-y-1 text-xs text-gray-500">
+                        {parcel.sender?.address && (
+                          <div className="flex items-start gap-1">
+                            <span className="shrink-0">📤</span>
+                            <span className="line-clamp-1">{parcel.sender.address}</span>
+                          </div>
+                        )}
+                        {parcel.enGare ? (
+                          <div className="flex items-center gap-1 bg-amber-50 border border-amber-300 rounded px-2 py-1">
+                            <span className="text-base shrink-0">🚉</span>
+                            <span className="font-bold text-orange-700">Livraison en gare</span>
+                          </div>
+                        ) : parcel.receiver?.address && (
+                          <div className="flex items-start gap-1">
+                            <span className="shrink-0">📥</span>
+                            <span className="line-clamp-1">{parcel.receiver.address}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                    {/* Infos retour */}
+                    {parcel.returnedAt && (
+                      <div className="bg-orange-50 border border-orange-200 rounded px-2 py-1.5 space-y-0.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="text-xs font-bold text-orange-700">↩️ Retour</span>
+                          <span className="text-[10px] text-orange-500">{new Date(parcel.returnedAt).toLocaleDateString('fr-MA')}</span>
+                        </div>
+                        {parcel.returnReason && (
+                          <p className="text-[10px] text-orange-600 line-clamp-1">{parcel.returnReason}</p>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Transport */}
+                    {(parcel.chauffeurName || parcel.deliveryDriverName || parcel.deliverySectorCode || parcel.deliveryVehicleLabel) && (
+                      <div className="flex flex-wrap gap-1.5">
+                        {parcel.chauffeurName && (
+                          <span className="inline-flex items-center gap-0.5 text-xs bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded-full border border-indigo-200">
+                            <Truck className="w-2.5 h-2.5 shrink-0" /> {parcel.chauffeurName}
+                          </span>
+                        )}
+                        {parcel.deliveryDriverName && (
+                          <>
+                            <span className="inline-flex items-center gap-0.5 text-xs bg-orange-50 text-orange-600 px-1.5 py-0.5 rounded-full border border-orange-200">
+                              <User className="w-2.5 h-2.5 shrink-0" /> {parcel.deliveryDriverName}
+                            </span>
+                            {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                              <button
+                                onClick={() => setChangeDriverModal({ open: true, parcel, newDriverId: '', loading: false, error: '' })}
+                                className="p-0.5 hover:bg-orange-100 rounded-full transition"
+                                title="Changer le livreur"
+                              >
+                                <Hand className="w-3 h-3 text-orange-600" />
+                              </button>
+                            )}
+                          </>
+                        )}
+                        {parcel.deliverySectorCode && (
+                          <span className="inline-flex items-center gap-0.5 text-xs bg-purple-50 text-purple-700 px-1.5 py-0.5 rounded-full border border-purple-200 shrink-0">
+                            <LayoutGrid className="w-2.5 h-2.5" /> Secteur {parcel.deliverySectorCode}
+                          </span>
+                        )}
+                        {parcel.deliveryVehicleLabel && (
+                          <span className="inline-flex items-center gap-0.5 text-xs bg-slate-50 text-slate-700 px-1.5 py-0.5 rounded-full border border-slate-200">
+                            <Car className="w-2.5 h-2.5 shrink-0" /> {parcel.deliveryVehicleLabel}
+                          </span>
+                        )}
                       </div>
                     )}
                   </div>
 
-                  <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        {parcel.sender?.nic && (
-                          <span className="font-mono text-xs font-bold text-purple-700 bg-purple-50 px-2 py-0.5 rounded border border-purple-200">
-                            N EXP {parcel.sender.nic}
-                          </span>
-                        )}
-                        {(() => {
-                          const isOriginAgency = parcel.originCity === profile?.city || parcel.sender?.city === profile?.city
-                          const isDestinationAgency = parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city
-
-                          // Afficher 🖐️ seulement dans l'agence DESTINATAIRE
-                          if (parcel.portType === 'port_en_compte_destinataire' && isDestinationAgency) {
-                            return (
-                              <span className="inline-flex items-center px-1.5 py-0.5 bg-teal-100 text-teal-700 rounded text-xs font-bold border border-teal-300" title="Port en compte destinataire">
-                                🖐️ Compte Dest
-                              </span>
-                            )
-                          }
-
-                          // Afficher 💼 seulement dans l'agence EXPÉDITEUR
-                          if ((parcel.portType === 'port_en_compte' || parcel.portType === 'port_en_compte_expediteur') && isOriginAgency) {
-                            return (
-                              <span className="inline-flex items-center px-1.5 py-0.5 bg-purple-100 text-purple-700 rounded text-xs font-bold border border-purple-300" title="Port en compte expéditeur">
-                                💼 Compte Exp
-                              </span>
-                            )
-                          }
-
-                          return null
-                        })()}
-                        <span className="font-mono text-xs font-bold text-gray-700">{parcel.trackingId}</span>
-                        <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${sc.bg} ${sc.text}`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
-                          {parcel.status}
-                        </span>
-                        {isInReturnCircuit(parcel) && (
-                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold bg-orange-100 text-orange-700 border border-orange-300">
-                            🔄 RETOURNÉ
-                          </span>
-                        )}
-                        {parcel.hasRetourBL && (
-                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold bg-blue-100 text-blue-700 border border-blue-300">
-                            🧾 Retour BL
-                          </span>
-                        )}
-                        {(() => {
-                          const stDef = SERVICE_TYPES.find(t => t.key === parcel.serviceType)
-                          if (!stDef) return null
-                          const colors: Record<string, string> = {
-                            simple:    'bg-gray-100 text-gray-600',
-                            especes:   'bg-green-100 text-green-700',
-                            cheque:    'bg-blue-100 text-blue-700',
-                            traite:    'bg-indigo-100 text-indigo-700',
-                            retour_bl: 'bg-amber-100 text-amber-700',
-                          }
-                          return (
-                            <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-semibold ${colors[parcel.serviceType] || 'bg-gray-100 text-gray-600'}`}>
-                              {stDef.emoji} {stDef.label}
-                            </span>
-                          )
-                        })()}
-                        {parcel.portType === 'port_paye' && (
-                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold bg-blue-100 text-blue-700 border border-blue-300">
-                            ✅ Port payé
-                          </span>
-                        )}
-                        {parcel.portType === 'port_du' && (
-                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-bold bg-orange-100 text-orange-700 border border-orange-300">
-                            📮 Port dû
-                          </span>
-                        )}
-                        {parcel.returnedAt && parcel.status === 'Livré' && (
-                          <span className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium bg-orange-100 text-orange-700">
-                            ↩️ Retourné à l'expéditeur
-                          </span>
-                        )}
-                      </div>
-                      <div className="mt-1.5 flex items-center gap-1 text-sm font-medium text-gray-700">
-                        <span className="truncate">{parcel.sender?.city}</span>
-                        <span className="text-gray-400 shrink-0">→</span>
-                        <span className="truncate">{parcel.receiver?.city}</span>
-                      </div>
-                      <div className="mt-0.5 text-xs text-gray-400 flex items-center gap-1 flex-wrap">
-                        <span>{parcel.receiver?.name}</span>
-                        {parcel.portType === 'port_en_compte_destinataire' && (
-                          <span className="text-base" title="Port en compte destinataire">🖐️</span>
-                        )}
-                        <span>· {parcel.weight} kg · <span className="font-semibold text-gray-500">{parcel.price} DH</span></span>
-                        {parcel.codAmount > 0 && <span className="text-orange-500 font-medium"> · RETOUR FOND {parcel.codAmount} DH</span>}
-                      </div>
-                      {(parcel.natureOfGoods || (parcel.arrivedNbColis ?? parcel.nbColis) > 1 || parcel.hasRetourBL) && (
-                        <div className="mt-1 flex items-center gap-2">
-                          {parcel.natureOfGoods && (
-                            <span className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full font-medium">
-                              📦 {parcel.natureOfGoods}
-                            </span>
-                          )}
-                          {(parcel.arrivedNbColis ?? parcel.nbColis) > 1 && (
-                            <span className="inline-flex items-center gap-1 text-xs bg-gray-100 text-gray-600 border border-gray-200 px-2 py-0.5 rounded-full font-medium">
-                              × {parcel.arrivedNbColis ?? parcel.nbColis} colis
-                              {parcel.arrivedNbColis != null && parcel.arrivedNbColis < parcel.nbColis && (
-                                <span className="text-orange-500 font-bold">/{parcel.nbColis}</span>
-                              )}
-                            </span>
-                          )}
-                          {parcel.hasRetourBL && (
-                            <span className="inline-flex items-center gap-1 text-xs bg-green-50 text-green-700 border border-green-200 px-2 py-0.5 rounded-full font-medium">
-                              🧾 Retour BL
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-400">
-                        {parcel.sender?.tel && <span>📤 {parcel.sender.tel}</span>}
-                        {parcel.receiver?.tel && <span>📥 {parcel.receiver.tel}</span>}
-                      </div>
-                      {(parcel.sender?.address || parcel.receiver?.address) && (
-                        <div className="mt-1.5 space-y-0.5">
-                          {parcel.sender?.address && (
-                            <div className="text-xs text-gray-500 flex items-start gap-1">
-                              <span className="shrink-0 text-blue-400">📤</span>
-                              <span>{parcel.sender.address}{parcel.sender.city ? `, ${parcel.sender.city}` : ''}</span>
-                            </div>
-                          )}
-                          {parcel.enGare ? (
-                            <div className="text-xs flex items-center gap-1.5 bg-gradient-to-r from-amber-100 to-orange-100 border border-amber-300 rounded-lg px-2 py-1.5">
-                              <span className="text-lg">🚉</span>
-                              <span className="font-bold text-orange-700">Livraison en gare</span>
-                            </div>
-                          ) : parcel.receiver?.address && (
-                            <div className="text-xs text-gray-500 flex items-start gap-1">
-                              <span className="shrink-0 text-orange-400">📥</span>
-                              <span>{parcel.receiver.address}{parcel.receiver.city ? `, ${parcel.receiver.city}` : ''}</span>
-                            </div>
-                          )}
-                        </div>
-                      )}
-                      {parcel.returnedAt && (
-                        <div className="mt-1.5 bg-orange-50 border border-orange-200 rounded-lg px-2.5 py-1.5 space-y-0.5">
-                          <div className="flex items-center gap-1.5">
-                            <span className="text-xs font-bold text-orange-700">↩️ Historique retour</span>
-                            <span className="text-[10px] text-orange-500">{new Date(parcel.returnedAt).toLocaleDateString('fr-MA')}</span>
-                          </div>
-                          {parcel.returnReason && (
-                            <p className="text-[11px] text-orange-600 leading-snug">Raison : {parcel.returnReason}</p>
-                          )}
-                        </div>
-                      )}
-                      {parcel.chauffeurName && (
-                        <div className="mt-1 inline-flex items-center gap-1 text-xs bg-indigo-50 text-indigo-600 px-2 py-0.5 rounded-full border border-indigo-200">
-                          <Truck className="w-3 h-3" /> {parcel.chauffeurName}{parcel.chauffeurPhone ? ` · ${parcel.chauffeurPhone}` : ''}
-                        </div>
-                      )}
-                      {parcel.deliveryDriverName && (
-                        <div className="mt-1 inline-flex items-center gap-1.5">
-                          <div className="inline-flex items-center gap-1 text-xs bg-orange-50 text-orange-600 px-2 py-0.5 rounded-full border border-orange-200">
-                            <User className="w-3 h-3" /> Livraison : {parcel.deliveryDriverName}
-                          </div>
-                          {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
-                            <button
-                              onClick={() => setChangeDriverModal({ open: true, parcel, newDriverId: '', loading: false, error: '' })}
-                              className="p-1 hover:bg-orange-100 rounded-full transition"
-                              title="Changer le livreur"
-                            >
-                              <Hand className="w-3.5 h-3.5 text-orange-600" />
-                            </button>
-                          )}
-                        </div>
-                      )}
-                      {(parcel.deliverySectorCode || parcel.deliveryVehicleLabel) && (
-                        <div className="mt-1 flex flex-wrap gap-1.5">
-                          {parcel.deliverySectorCode && (
-                            <span className="inline-flex items-center gap-1 text-xs bg-purple-50 text-purple-700 px-2 py-0.5 rounded-full border border-purple-200">
-                              <LayoutGrid className="w-3 h-3" /> Secteur {parcel.deliverySectorCode}
-                            </span>
-                          )}
-                          {parcel.deliveryVehicleLabel && (
-                            <span className="inline-flex items-center gap-1 text-xs bg-slate-50 text-slate-700 px-2 py-0.5 rounded-full border border-slate-200">
-                              <Car className="w-3 h-3" /> {parcel.deliveryVehicleLabel}
-                            </span>
-                          )}
-                        </div>
-                      )}
                       {parcel.codAmount > 0 && (() => {
                         const cs  = parcel.codSenderPaid
                           ? { label: 'Réglé ✓', bg: 'bg-green-100', text: 'text-green-700' }
@@ -3005,23 +3153,25 @@ export default function ParcelsTab() {
                     </div>
 
                     {/* Actions */}
-                    <div className="flex gap-1.5 shrink-0">
+                    <div className="flex gap-1.5 flex-wrap shrink-0">
                       <button
                         onClick={() => handlePrintTicket(parcel)}
                         tabIndex={-1}
-                        className="flex items-center gap-1 text-xs bg-gray-50 hover:bg-gray-100 text-gray-500 px-2.5 py-2 rounded-lg transition"
-                        title="Imprimer le bon de ramassage"
+                        className="flex items-center gap-1 text-xs bg-gray-50 hover:bg-gray-100 text-gray-500 px-2.5 py-1.5 rounded-lg transition shrink-0"
+                        title="Imprimer"
                       >
                         <Printer className="w-3.5 h-3.5" />
+                        <span className="hidden xs:inline">Imprimer</span>
                       </button>
                       {parcel.signatureConfirmedAt && (
                         <button
                           onClick={() => setViewSignature(parcel)}
                           tabIndex={-1}
-                          className="flex items-center gap-1 text-xs bg-violet-50 hover:bg-violet-100 text-violet-600 px-2.5 py-2 rounded-lg transition"
-                          title="Voir la signature électronique"
+                          className="flex items-center gap-1 text-xs bg-violet-50 hover:bg-violet-100 text-violet-600 px-2.5 py-1.5 rounded-lg transition shrink-0"
+                          title="Signature"
                         >
                           ✍️
+                          <span className="hidden xs:inline">Signature</span>
                         </button>
                       )}
                       {/* Bouton Modifier - Toujours affiché pour chef d'agence, agentpro et aide agent */}
@@ -3029,33 +3179,11 @@ export default function ParcelsTab() {
                         <button
                           onClick={() => handleEditClick(parcel)}
                           tabIndex={-1}
-                          className="flex items-center gap-1 text-xs px-2.5 py-2 rounded-lg transition bg-blue-50 hover:bg-blue-100 text-blue-600"
+                          className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg transition bg-blue-50 hover:bg-blue-100 text-blue-600 shrink-0"
                         >
                           <Edit2 className="w-3.5 h-3.5" />
-                          Modifier
+                          <span className="hidden xs:inline">Modifier</span>
                         </button>
-                      )}
-                      {/* Select Changer statut - Chef d'agence uniquement */}
-                      {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
-                        <select
-                          onChange={(e) => {
-                            if (e.target.value && e.target.value !== parcel.status) {
-                              handleChangeParcelStatus(parcel.id, e.target.value)
-                              e.target.value = parcel.status // Reset to current status
-                            }
-                          }}
-                          value={parcel.status}
-                          tabIndex={-1}
-                          className="flex items-center gap-1 text-xs px-2 py-2 rounded-lg transition bg-amber-50 hover:bg-amber-100 text-amber-700 font-semibold cursor-pointer border border-amber-200"
-                          title="Changer le statut"
-                        >
-                          <option value={parcel.status} disabled>📋 Statut: {parcel.status}</option>
-                          {STATUSES.map((status) => (
-                            <option key={status} value={status} className="bg-white text-gray-900">
-                              {status}
-                            </option>
-                          ))}
-                        </select>
                       )}
                       {/* Bouton Supprimer - Seulement si peut vraiment éditer */}
                       {canEditParcelDetails(parcel) && (
@@ -4570,7 +4698,7 @@ export default function ParcelsTab() {
                   portType: '',
                   status: '',
                   codAmount: '',
-                  codType: '',
+                  serviceType: '',
                   nbColis: '',
                   poids: '',
                   contenu: '',
@@ -4620,26 +4748,6 @@ export default function ParcelsTab() {
                 </select>
               </div>
 
-              {/* Statut */}
-              <div>
-                <label className="block text-xs font-bold text-gray-700 mb-2">🔄 Statut</label>
-                <select
-                  value={quickEditModal.status}
-                  onChange={e => setQuickEditModal(m => ({ ...m, status: e.target.value, error: '' }))}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-purple-500"
-                >
-                  <option value="">-- Sélectionner --</option>
-                  <option value="Initialisé">Initialisé</option>
-                  <option value="Collecté">Collecté</option>
-                  <option value="En transit">En transit</option>
-                  <option value="Arrivé à destination">Arrivé à destination</option>
-                  <option value="En cours de livraison">En cours de livraison</option>
-                  <option value="Livré">Livré</option>
-                  <option value="Retourné">Retourné</option>
-                  <option value="Annulé">Annulé</option>
-                </select>
-              </div>
-
               {/* Montant COD */}
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-2">💵 Montant COD (DH)</label>
@@ -4656,14 +4764,16 @@ export default function ParcelsTab() {
               <div>
                 <label className="block text-xs font-bold text-gray-700 mb-2">🏷️ Type COD</label>
                 <select
-                  value={quickEditModal.codType}
-                  onChange={e => setQuickEditModal(m => ({ ...m, codType: e.target.value, error: '' }))}
+                  value={quickEditModal.serviceType}
+                  onChange={e => setQuickEditModal(m => ({ ...m, serviceType: e.target.value, error: '' }))}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-orange-500"
                 >
                   <option value="">-- Sélectionner --</option>
-                  <option value="cash">💵 Cash</option>
+                  <option value="especes">💵 Espèces</option>
                   <option value="cheque">📝 Chèque</option>
+                  <option value="traite">📄 Traite</option>
                   <option value="virement">🏦 Virement</option>
+                  <option value="autre">📋 Autre</option>
                 </select>
               </div>
 
@@ -4726,7 +4836,7 @@ export default function ParcelsTab() {
                   portType: '',
                   status: '',
                   codAmount: '',
-                  codType: '',
+                  serviceType: '',
                   nbColis: '',
                   poids: '',
                   contenu: '',
@@ -4740,7 +4850,7 @@ export default function ParcelsTab() {
               </button>
               <button
                 onClick={async () => {
-                  const { parcel, price, portType, status, codAmount, codType, nbColis, poids, contenu, remarque } = quickEditModal
+                  const { parcel, price, portType, status, codAmount, serviceType, nbColis, poids, contenu, remarque } = quickEditModal
 
                   setQuickEditModal(m => ({ ...m, loading: true, error: '' }))
                   try {
@@ -4753,7 +4863,7 @@ export default function ParcelsTab() {
                     if (portType && portType !== parcel.portType) updates.portType = portType
                     if (status && status !== parcel.status) updates.status = status
                     if (codAmount !== parcel.codAmount?.toString()) updates.codAmount = codAmount ? Number.parseFloat(codAmount) : null
-                    if (codType && codType !== parcel.codType) updates.codType = codType
+                    if (serviceType && serviceType !== parcel.serviceType) updates.serviceType = serviceType
                     if (nbColis !== parcel.nbColis?.toString()) updates.nbColis = nbColis ? Number.parseInt(nbColis) : null
                     if (poids !== parcel.poids?.toString()) updates.poids = poids ? Number.parseFloat(poids) : null
                     if (contenu !== parcel.contenu) updates.contenu = contenu || null
@@ -4776,7 +4886,7 @@ export default function ParcelsTab() {
                       portType: '',
                       status: '',
                       codAmount: '',
-                      codType: '',
+                      serviceType: '',
                       nbColis: '',
                       poids: '',
                       contenu: '',
@@ -4804,6 +4914,75 @@ export default function ParcelsTab() {
                     Enregistrer
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal Statut Document COD */}
+      {codDocumentModal.open && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-lg text-gray-800">✋ Statut Document COD</h3>
+              <button
+                onClick={() => setCodDocumentModal({ open: false, parcelId: null, currentStatus: null, serviceType: null })}
+                className="text-gray-400 hover:text-gray-600"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <p className="text-sm text-gray-600 mb-4">
+              Sélectionnez le statut du document {codDocumentModal.serviceType === 'cheque' ? '(chèque)' : '(traite)'} :
+            </p>
+
+            <div className="space-y-2">
+              {[
+                { key: 'cheque_recu', label: 'Chèque reçu', emoji: '✅', color: 'green', type: 'cheque' },
+                { key: 'cheque_encours', label: 'Chèque en cours', emoji: '⏳', color: 'orange', type: 'cheque' },
+                { key: 'traite_recu', label: 'Traite reçue', emoji: '✅', color: 'green', type: 'traite' },
+                { key: 'traite_encours', label: 'Traite en cours', emoji: '⏳', color: 'orange', type: 'traite' },
+              ]
+              .filter(option => option.type === codDocumentModal.serviceType)
+              .map(({ key, label, emoji, color }) => (
+                <button
+                  key={key}
+                  onClick={async () => {
+                    try {
+                      await updateParcel(codDocumentModal.parcelId!, { codDocumentStatus: key })
+                      setCodDocumentModal({ open: false, parcelId: null, currentStatus: null, serviceType: null })
+                    } catch (err) {
+                      console.error('Erreur mise à jour statut document:', err)
+                      alert('Erreur lors de la mise à jour du statut')
+                    }
+                  }}
+                  className={`w-full px-4 py-3 rounded-xl font-semibold text-left flex items-center justify-between transition ${
+                    codDocumentModal.currentStatus === key
+                      ? `bg-${color}-100 text-${color}-800 border-2 border-${color}-500`
+                      : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                  }`}
+                >
+                  <span>{emoji} {label}</span>
+                  {codDocumentModal.currentStatus === key && <Check className="w-5 h-5" />}
+                </button>
+              ))}
+            </div>
+
+            <div className="mt-4 pt-4 border-t">
+              <button
+                onClick={async () => {
+                  try {
+                    await updateParcel(codDocumentModal.parcelId!, { codDocumentStatus: deleteField() })
+                    setCodDocumentModal({ open: false, parcelId: null, currentStatus: null, serviceType: null })
+                  } catch (err) {
+                    console.error('Erreur suppression statut:', err)
+                  }
+                }}
+                className="w-full px-4 py-2 rounded-xl bg-red-100 text-red-700 hover:bg-red-200 font-semibold transition"
+              >
+                🗑️ Effacer le statut
               </button>
             </div>
           </div>
