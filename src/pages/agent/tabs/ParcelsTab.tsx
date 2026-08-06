@@ -4771,11 +4771,11 @@ export default function ParcelsTab() {
                   className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-orange-500"
                 >
                   <option value="">-- Sélectionner --</option>
+                  <option value="simple">📦 Simple</option>
                   <option value="especes">💵 Espèces</option>
                   <option value="cheque">📝 Chèque</option>
                   <option value="traite">📄 Traite</option>
                   <option value="virement">🏦 Virement</option>
-                  <option value="autre">📋 Autre</option>
                 </select>
               </div>
 
