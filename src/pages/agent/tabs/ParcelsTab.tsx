@@ -1565,11 +1565,11 @@ export default function ParcelsTab() {
                   </div>
 
                   {/* Zone de recherche */}
-                  <div className="bg-white border border-blue-200 rounded-xl px-4 py-3 space-y-3">
+                  <div className="bg-white border border-blue-200 rounded-xl px-3 sm:px-4 py-3 space-y-3">
                     <label className="text-xs font-bold text-blue-700 uppercase tracking-wider block">
-                      🔍 Rechercher une expédition
+                      🔍 <span className="hidden sm:inline">RECHERCHER UNE</span> EXPÉDITION
                     </label>
-                    <div className="flex gap-2">
+                    <div className="flex gap-2 flex-wrap sm:flex-nowrap">
                       <input
                         type="text"
                         value={customSheetSearch}
@@ -1578,7 +1578,7 @@ export default function ParcelsTab() {
                           setCustomSheetSearchResult(null)
                         }}
                         placeholder="N° EXP, nom, téléphone..."
-                        className="flex-1 text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
+                        className="flex-1 min-w-0 text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
                       />
                       <button
                         type="button"
@@ -1600,9 +1600,9 @@ export default function ParcelsTab() {
 
                           setCustomSheetSearchResult(found || null)
                         }}
-                        className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold transition flex items-center gap-2"
+                        className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold transition flex items-center gap-2 shrink-0 whitespace-nowrap"
                       >
-                        <Search className="w-4 h-4" />
+                        <Search className="w-4 h-4 shrink-0" />
                         Chercher
                       </button>
                     </div>
@@ -1821,11 +1821,13 @@ export default function ParcelsTab() {
 
                 if ((profile?.role === 'chef_agence' || profile?.role === 'agentpro') && portDuParcels.length > 0) {
                   return (
-                    <div className="mb-4 bg-gradient-to-br from-teal-50 to-cyan-50 border border-teal-200 rounded-2xl p-4 space-y-3">
-                      <div className="flex items-center justify-between gap-3">
-                        <div className="flex items-center gap-2">
-                          <span className="text-2xl">🖐️</span>
-                          <h3 className="font-bold text-teal-800">Transformation Port Dû → Compte Destinataire</h3>
+                    <div className="mb-4 bg-gradient-to-br from-teal-50 to-cyan-50 border border-teal-200 rounded-2xl p-3 sm:p-4 space-y-3">
+                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xl sm:text-2xl shrink-0">🖐️</span>
+                          <h3 className="font-bold text-teal-800 text-sm sm:text-base">
+                            <span className="hidden sm:inline">Transformation </span>Port Dû → <span className="hidden sm:inline">Compte </span>Destinataire
+                          </h3>
                         </div>
                         <button
                           type="button"
@@ -1837,7 +1839,7 @@ export default function ParcelsTab() {
                               setBulkPortDuSelectedIds(portDuParcels.map((p: any) => p.id))
                             }
                           }}
-                          className={`px-3 py-2 rounded-xl text-xs font-bold border transition ${
+                          className={`px-3 py-2 rounded-xl text-xs font-bold border transition shrink-0 whitespace-nowrap ${
                             allPortDuSelected
                               ? 'bg-teal-600 text-white border-teal-600 hover:bg-teal-700'
                               : 'bg-white text-teal-700 border-teal-300 hover:bg-teal-50'
