@@ -1523,9 +1523,16 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   const handleSubmit = async (e: any) => {
     const {
       form, setError, setLoading, setCreatedParcel, profile,
-      allSectors, drivers, clients, price,
+      allSectors, drivers, clients, price, loading,
     } = s.current
     e.preventDefault()
+
+    // Protection contre les doubles soumissions
+    if (loading) {
+      console.warn('⚠️ Soumission déjà en cours, ignorée')
+      return
+    }
+
     setError('')
 
     // ⚠️ VALIDATION OBLIGATOIRE - Expéditeur et Destinataire
