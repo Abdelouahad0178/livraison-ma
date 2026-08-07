@@ -801,10 +801,23 @@ export default function NewTab() {
                   onKeyDown={handleKeyNav}
                   className={inputCls}
                 />
-                <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-gray-200 bg-gray-100 text-xs font-semibold text-gray-700">
-                  <MapPin className="w-3 h-3 text-gray-400 shrink-0" />
-                  <span className="truncate">{form.senderCity || '—'}</span>
-                </div>
+                {profile?.role === 'agentpro' ? (
+                  <select
+                    id="senderCity"
+                    value={form.senderCity}
+                    onChange={e => setForm((p: any) => ({ ...p, senderCity: e.target.value }))}
+                    onKeyDown={handleKeyNav}
+                    className={selectCls}
+                  >
+                    <option value="">Ville d'expédition</option>
+                    {CITIES.map(c => <option key={c}>{c}</option>)}
+                  </select>
+                ) : (
+                  <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-gray-200 bg-gray-100 text-xs font-semibold text-gray-700">
+                    <MapPin className="w-3 h-3 text-gray-400 shrink-0" />
+                    <span className="truncate">{form.senderCity || '—'}</span>
+                  </div>
+                )}
               </div>
               <input
                 id="senderAddress"
