@@ -59,6 +59,7 @@ export default function AdminPermissionsTab(_props: AdminPermissionsTabProps) {
 
   // Permissions par rôle - Champs éditables
   const [chefAgencePermissions, setChefAgencePermissions] = useState<string[]>([])
+  const [agentProPermissions, setAgentProPermissions] = useState<string[]>([])
   const [aideAgentPermissions, setAideAgentPermissions] = useState<string[]>([])
 
   // Permissions par rôle - Actions
@@ -78,6 +79,7 @@ export default function AdminPermissionsTab(_props: AdminPermissionsTabProps) {
       if (snapshot.exists()) {
         const data = snapshot.data()
         setChefAgencePermissions(data.chef_agence || [])
+        setAgentProPermissions(data.agentpro || [])
         setAideAgentPermissions(data.aide_agent || [])
         setChefAgenceActions(data.chef_agence_actions || [])
       } else {
@@ -86,6 +88,9 @@ export default function AdminPermissionsTab(_props: AdminPermissionsTabProps) {
           .filter(f => f.category !== 'status')
           .map(f => f.field)
         setChefAgencePermissions(defaultChef)
+
+        // Agent Pro : mêmes permissions que chef d'agence par défaut
+        setAgentProPermissions(defaultChef)
 
         // Aide agent peut modifier seulement certains champs
         setAideAgentPermissions([
@@ -110,6 +115,7 @@ export default function AdminPermissionsTab(_props: AdminPermissionsTabProps) {
       const docRef = doc(db, 'settings', 'editPermissions')
       await setDoc(docRef, {
         chef_agence: chefAgencePermissions,
+        agentpro: agentProPermissions,
         aide_agent: aideAgentPermissions,
         chef_agence_actions: chefAgenceActions,
         updatedAt: new Date().toISOString(),
@@ -125,9 +131,15 @@ export default function AdminPermissionsTab(_props: AdminPermissionsTabProps) {
     }
   }
 
-  const togglePermission = (role: 'chef' | 'aide', field: string) => {
+  const togglePermission = (role: 'chef' | 'agentpro' | 'aide', field: string) => {
     if (role === 'chef') {
       setChefAgencePermissions(prev =>
+        prev.includes(field)
+          ? prev.filter(f => f !== field)
+          : [...prev, field]
+      )
+    } else if (role === 'agentpro') {
+      setAgentProPermissions(prev =>
         prev.includes(field)
           ? prev.filter(f => f !== field)
           : [...prev, field]
@@ -141,25 +153,29 @@ export default function AdminPermissionsTab(_props: AdminPermissionsTabProps) {
     }
   }
 
-  const selectAll = (role: 'chef' | 'aide', category?: string) => {
+  const selectAll = (role: 'chef' | 'agentpro' | 'aide', category?: string) => {
     const fields = category
       ? EDITABLE_FIELDS.filter(f => f.category === category).map(f => f.field)
       : EDITABLE_FIELDS.map(f => f.field)
 
     if (role === 'chef') {
       setChefAgencePermissions(prev => [...new Set([...prev, ...fields])])
+    } else if (role === 'agentpro') {
+      setAgentProPermissions(prev => [...new Set([...prev, ...fields])])
     } else {
       setAideAgentPermissions(prev => [...new Set([...prev, ...fields])])
     }
   }
 
-  const deselectAll = (role: 'chef' | 'aide', category?: string) => {
+  const deselectAll = (role: 'chef' | 'agentpro' | 'aide', category?: string) => {
     const fields = category
       ? EDITABLE_FIELDS.filter(f => f.category === category).map(f => f.field)
       : EDITABLE_FIELDS.map(f => f.field)
 
     if (role === 'chef') {
       setChefAgencePermissions(prev => prev.filter(f => !fields.includes(f)))
+    } else if (role === 'agentpro') {
+      setAgentProPermissions(prev => prev.filter(f => !fields.includes(f)))
     } else {
       setAideAgentPermissions(prev => prev.filter(f => !fields.includes(f)))
     }
@@ -229,7 +245,7 @@ export default function AdminPermissionsTab(_props: AdminPermissionsTabProps) {
       </div>
 
       {/* Grille des permissions */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Chef d'agence */}
         <div className="bg-white rounded-2xl border-2 border-blue-200 shadow-lg">
           <div className="bg-gradient-to-r from-blue-500 to-indigo-600 p-4 rounded-t-2xl">
@@ -297,6 +313,84 @@ export default function AdminPermissionsTab(_props: AdminPermissionsTabProps) {
                           checked={chefAgencePermissions.includes(field.field)}
                           onChange={() => togglePermission('chef', field.field)}
                           className="w-5 h-5 text-blue-600 rounded border-gray-300 focus:ring-2 focus:ring-blue-500"
+                        />
+                        <span className="text-sm text-gray-700">{field.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+
+        {/* Agent PRO */}
+        <div className="bg-white rounded-2xl border-2 border-purple-200 shadow-lg">
+          <div className="bg-gradient-to-r from-purple-500 to-violet-600 p-4 rounded-t-2xl">
+            <div className="flex items-center gap-3">
+              <UserCog className="w-6 h-6 text-white" />
+              <h2 className="text-xl font-black text-white">Agent PRO</h2>
+            </div>
+            <p className="text-purple-100 text-sm mt-1">
+              {agentProPermissions.length} / {EDITABLE_FIELDS.length} champs autorisés
+            </p>
+          </div>
+
+          <div className="p-4 space-y-4">
+            {/* Boutons rapides */}
+            <div className="flex gap-2 flex-wrap">
+              <button
+                onClick={() => selectAll('agentpro')}
+                className="text-xs px-3 py-1.5 bg-green-50 text-green-700 rounded-lg hover:bg-green-100 transition font-medium"
+              >
+                ✓ Tout sélectionner
+              </button>
+              <button
+                onClick={() => deselectAll('agentpro')}
+                className="text-xs px-3 py-1.5 bg-gray-50 text-gray-700 rounded-lg hover:bg-gray-100 transition font-medium"
+              >
+                ✗ Tout désélectionner
+              </button>
+            </div>
+
+            {/* Champs par catégorie */}
+            {categories.map(cat => {
+              const categoryFields = EDITABLE_FIELDS.filter(f => f.category === cat.key)
+              const selectedCount = categoryFields.filter(f => agentProPermissions.includes(f.field)).length
+
+              return (
+                <div key={cat.key} className="border border-gray-200 rounded-xl overflow-hidden">
+                  <div className={`bg-${cat.color}-50 p-3 flex items-center justify-between`}>
+                    <span className="font-bold text-gray-800">{cat.label}</span>
+                    <div className="flex gap-2">
+                      <span className="text-xs text-gray-600">
+                        {selectedCount}/{categoryFields.length}
+                      </span>
+                      <button
+                        onClick={() => selectAll('agentpro', cat.key)}
+                        className="text-xs text-green-600 hover:underline"
+                      >
+                        Tous
+                      </button>
+                      <button
+                        onClick={() => deselectAll('agentpro', cat.key)}
+                        className="text-xs text-gray-600 hover:underline"
+                      >
+                        Aucun
+                      </button>
+                    </div>
+                  </div>
+                  <div className="p-3 space-y-2">
+                    {categoryFields.map(field => (
+                      <label
+                        key={field.field}
+                        className="flex items-center gap-3 p-2 hover:bg-gray-50 rounded-lg cursor-pointer transition"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={agentProPermissions.includes(field.field)}
+                          onChange={() => togglePermission('agentpro', field.field)}
+                          className="w-5 h-5 text-purple-600 rounded border-gray-300 focus:ring-2 focus:ring-purple-500"
                         />
                         <span className="text-sm text-gray-700">{field.label}</span>
                       </label>
