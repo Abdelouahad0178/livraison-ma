@@ -69,6 +69,7 @@ const AdminReglementsTab = lazy(() => import('./admin/tabs/AdminReglementsTab'))
 const AdminUsersTab = lazy(() => import('./admin/tabs/AdminUsersTab'))
 const AdminActivityTab = lazy(() => import('./admin/tabs/AdminActivityTab'))
 const AdminExpeditionsTab = lazy(() => import('./admin/tabs/AdminExpeditionsTab'))
+const AdminDuplicatesTab = lazy(() => import('./admin/tabs/AdminDuplicatesTab'))
 const AdminEmployeesTab = lazy(() => import('./admin/tabs/AdminEmployeesTab'))
 const AdminNotesTab = lazy(() => import('./admin/tabs/AdminNotesTab'))
 const AdminReturnsTab = lazy(() => import('./admin/tabs/AdminReturnsTab'))
@@ -1395,7 +1396,7 @@ export default function AdminPage() {
               </button>
               <span className="text-gray-200 font-light">/</span>
               <span className="text-sm font-bold text-blue-600">
-                {{ expeditions:'Expéditions', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', clients:'Clients', exports:'Exports', caisse:'Caisse', versements:'Versements Admin', invoices:'Facturation', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires' }[mainTab] || mainTab}
+                {{ expeditions:'Expéditions', doublons:'Doublons', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', clients:'Clients', exports:'Exports', caisse:'Caisse', versements:'Versements Admin', invoices:'Facturation', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires' }[mainTab] || mainTab}
               </span>
             </div>
           )}
@@ -1409,6 +1410,7 @@ export default function AdminPage() {
               </button>
               {[
                 { key: 'expeditions', label: 'Expéditions',         icon: Package   },
+                { key: 'doublons',    label: '⚠️ Doublons',         icon: AlertTriangle },
                 { key: 'cod',         label: 'RETOUR FOND / Remboursement', icon: Wallet    },
                 { key: 'port_agencies', label: '📮 Port par agence', icon: Building2 },
                 { key: 'archivage',   label: '🗄️ Archives',          icon: Archive   },
@@ -1602,6 +1604,13 @@ export default function AdminPage() {
               deleteConfirm={deleteConfirm}
               deleting={deleting}
             />
+          </Suspense>
+        )}
+
+        {/* TAB: DOUBLONS */}
+        {mainTab === 'doublons' && (
+          <Suspense fallback={<div className="py-10 text-center text-sm text-gray-400">Chargement...</div>}>
+            <AdminDuplicatesTab />
           </Suspense>
         )}
 
