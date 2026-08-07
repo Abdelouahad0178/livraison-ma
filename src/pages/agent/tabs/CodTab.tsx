@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Search, X, Check, MessageCircle } from 'lucide-react'
-import { COD_PAYMENT_TYPES, COD_STATUS } from '../../../firebase/constants'
+import { COD_PAYMENT_TYPES, COD_STATUS, ALL_ALL_SERVICE_TYPES } from '../../../firebase/constants'
 import DateFilter from '../DateFilter'
 import { useAgentCtx } from '../AgentCtx'
 import { parcelDate, filterByDate } from '../../../utils/dateFilter'
@@ -8,13 +8,7 @@ import { fmt, fmtFixed as fmtAmt } from '../../../utils/formatNumber'
 
 // ── Module-level helpers ────────────────────────────────────────────────────
 
-const SERVICE_TYPES = [
-  { key: 'simple',    label: 'Simple',    emoji: '📦' },
-  { key: 'especes',   label: 'C/Espèces', emoji: '💵' },
-  { key: 'cheque',    label: 'C/Chèque',  emoji: '📋' },
-  { key: 'traite',    label: 'C/Traite',  emoji: '📝' },
-  { key: 'retour_bl', label: 'Retour BL', emoji: '🧾' },
-]
+// ALL_SERVICE_TYPES importé depuis constants.ts
 
 const normalizeSearch = (value: any) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
 const matchesSearch = (values: any, query: any) => {
@@ -103,7 +97,7 @@ export default function CodTab() {
   const [showHistoryDst, setShowHistoryDst] = useState(20)  // Nombre à afficher pour l'historique destination
 
   const fmtDate = (iso: any) => iso ? new Date(iso).toLocaleDateString('fr-MA', { day:'2-digit', month:'short', year:'2-digit' }) : '—'
-  const stMap   = Object.fromEntries(SERVICE_TYPES.map(s => [s.key, s]))
+  const stMap   = Object.fromEntries(ALL_SERVICE_TYPES.map(s => [s.key, s]))
   const cptMap  = Object.fromEntries(COD_PAYMENT_TYPES.map(c => [c.key, c]))
 
   const handlePrintCodDocumentList = (documents: any[], title = 'Liste cheques / traites COD') => {
@@ -950,7 +944,7 @@ export default function CodTab() {
               </div>
               <div className="max-h-96 overflow-y-auto">
               {dst_clientPaye.slice(0, showHistoryDst).map(p => {
-                const st = SERVICE_TYPES.find(s => s.key === p.serviceType)
+                const st = ALL_SERVICE_TYPES.find(s => s.key === p.serviceType)
                 return (
                   <div key={p.id} className="flex items-center gap-3 px-4 py-3 hover:bg-gray-50/60 transition-colors">
                     <div className="flex-1 min-w-0">

@@ -32,14 +32,9 @@ import {
 import { createBankDeposit } from '../../../firebase/bankDeposits'
 import { createParticularPortalAccount } from '../../../firebase/portalAccounts'
 import { printCharge, printTable, printBonRamassage } from '../../../utils/agentPrintUtils'
+import { ALL_ALL_SERVICE_TYPES } from '../../../firebase/constants'
 
-const SERVICE_TYPES = [
-  { key: 'simple',    label: 'Simple',    emoji: '📦' },
-  { key: 'especes',   label: 'C/Espèces', emoji: '💵' },
-  { key: 'cheque',    label: 'C/Chèque',  emoji: '📋' },
-  { key: 'traite',    label: 'C/Traite',  emoji: '📝' },
-  { key: 'retour_bl', label: 'Retour BL', emoji: '🧾' },
-]
+// ALL_SERVICE_TYPES importé depuis constants.ts
 
 // ── Module-level helpers (no state needed) ────────────────────────────────────
 
@@ -1292,7 +1287,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const qrSvgStr = qrContainer.innerHTML
     qrRoot.unmount()
 
-    const checks = SERVICE_TYPES.map((st: any) => {
+    const checks = ALL_SERVICE_TYPES.map((st: any) => {
       // Cas spécial: Retour BL se base sur hasRetourBL au lieu de serviceType
       const isChecked = st.key === 'retour_bl'
         ? (parcel.hasRetourBL === true)

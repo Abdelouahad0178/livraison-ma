@@ -157,14 +157,6 @@ const matchesSearch = (values: any, query: any) => {
   })
 }
 
-const SERVICE_TYPES = [
-  { key: 'simple',    label: 'Simple',    emoji: '📦' },
-  { key: 'especes',   label: 'C/Espèces', emoji: '💵' },
-  { key: 'cheque',    label: 'C/Chèque',  emoji: '📋' },
-  { key: 'traite',    label: 'C/Traite',  emoji: '📝' },
-  { key: 'retour_bl', label: 'Retour BL', emoji: '🧾' },
-]
-
 // Mappe le type de service convenu à la création → clé COD_PAYMENT_TYPES
 const serviceToPaymentType = (st: any) =>
   st === 'retour_bl' ? 'bon_livraison' : (st === 'simple' ? 'especes' : (st || 'especes'))

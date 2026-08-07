@@ -4,19 +4,13 @@ import {
   CheckSquare, Square, Truck, Minus, Plus, CheckCircle2, Package,
   Save, RotateCcw, Edit2, Clock, Eye, Printer, Trash2,
 } from 'lucide-react'
-import { CITIES } from '../../../firebase/constants'
+import { CITIES, ALL_ALL_SERVICE_TYPES } from '../../../firebase/constants'
 import DateFilter from '../DateFilter'
 import { useAgentCtx } from '../AgentCtx'
 import { db } from '../../../firebase/db'
 import { collection, deleteDoc, doc, getDocs } from 'firebase/firestore'
 
-const SERVICE_TYPES = [
-  { key: 'simple',    label: 'Simple',    emoji: '📦' },
-  { key: 'especes',   label: 'C/Espèces', emoji: '💵' },
-  { key: 'cheque',    label: 'C/Chèque',  emoji: '📋' },
-  { key: 'traite',    label: 'C/Traite',  emoji: '📝' },
-  { key: 'retour_bl', label: 'Retour BL', emoji: '🧾' },
-]
+// ALL_SERVICE_TYPES importé depuis constants.ts
 
 export default function ArrivageTab() {
   const {
@@ -922,7 +916,7 @@ export default function ArrivageTab() {
                             const saving = histSaving[arr.id]
                             const pErr   = histPointErr[arr.id]
                             if (!edit) return null
-                            const stMap = Object.fromEntries(SERVICE_TYPES.map(s => [s.key, s]))
+                            const stMap = Object.fromEntries(ALL_SERVICE_TYPES.map(s => [s.key, s]))
                             return (
                               <div className="p-4 space-y-4 bg-gradient-to-b from-gray-50 to-white border-t border-gray-100">
                                 {/* Actions rapides */}

@@ -1,7 +1,7 @@
 import { lazy, Suspense, useState, useEffect, useRef } from 'react'
 import { Calendar, Search, X, Plus, MapPin, ChevronDown, Check, MessageCircle, Printer } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
-import { CITIES } from '../../../firebase/constants'
+import { CITIES, ALL_SERVICE_TYPES } from '../../../firebase/constants'
 import type { Client } from '../../../firebase/clients'
 // Autocomplétion et reconnaissance vocale désactivées pour optimiser performances
 // import ClientAutocomplete from '../../../components/ClientAutocomplete'
@@ -36,17 +36,8 @@ const getEmptyForm = () => ({
   operationDate: todayStr(), // Date de travail ACTUELLE à chaque appel
 })
 
-// Tous les types pour affichage (compatibilité anciens colis)
-const ALL_SERVICE_TYPES = [
-  { key: 'simple',    label: 'Simple',    emoji: '📦' },
-  { key: 'especes',   label: 'C/Espèces', emoji: '💵' },
-  { key: 'cheque',    label: 'C/Chèque',  emoji: '📋' },
-  { key: 'traite',    label: 'C/Traite',  emoji: '📝' },
-  { key: 'retour_bl', label: 'Retour BL', emoji: '🧾' },
-]
-
-// Types disponibles pour création (sans retour_bl)
-const SERVICE_TYPES = ALL_SERVICE_TYPES.filter(t => t.key !== 'retour_bl')
+// Types disponibles pour création (sans retour_bl et retourne - ces types sont pour marquage uniquement)
+const SERVICE_TYPES = ALL_SERVICE_TYPES.filter(t => t.key !== 'retour_bl' && t.key !== 'retourne')
 
 export default function NewTab() {
   const {

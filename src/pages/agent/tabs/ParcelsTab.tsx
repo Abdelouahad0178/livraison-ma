@@ -12,7 +12,7 @@ import {
 import { isInReturnCircuit, updateParcel } from '../../../firebase/parcels'
 import {
   STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS, codCollectedLabel,
-  CITIES,
+  CITIES, ALL_ALL_SERVICE_TYPES,
 } from '../../../firebase/constants'
 import { useAgentCtx } from '../AgentCtx'
 import { OperationalDaySelector } from '../../../components/OperationalDaySelector'
@@ -30,13 +30,7 @@ const matchesSearch = (values: any, query: any) => {
   })
 }
 
-const SERVICE_TYPES = [
-  { key: 'simple',    label: 'Simple',    emoji: '📦' },
-  { key: 'especes',   label: 'C/Espèces', emoji: '💵' },
-  { key: 'cheque',    label: 'C/Chèque',  emoji: '📋' },
-  { key: 'traite',    label: 'C/Traite',  emoji: '📝' },
-  { key: 'retour_bl', label: 'Retour BL', emoji: '🧾' },
-]
+// ALL_SERVICE_TYPES importé depuis constants.ts
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -825,7 +819,7 @@ export default function ParcelsTab() {
                   {/* Encaissement */}
                   <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
                     <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Encaiss.</span>
-                    {[{ key: 'all', label: 'Tous', emoji: '' }, ...SERVICE_TYPES].map(({ key, label, emoji }) => (
+                    {[{ key: 'all', label: 'Tous', emoji: '' }, ...ALL_SERVICE_TYPES].map(({ key, label, emoji }) => (
                       <button key={key} onClick={() => setServiceFilter(key)}
                         className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
                           serviceFilter === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
@@ -2173,7 +2167,7 @@ export default function ParcelsTab() {
                     }).map((parcel: any, idx: number) => {
                       const isOwn = canActAsParcelOwner(parcel)
                       const sc = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
-                      const serviceType = SERVICE_TYPES.find(st => st.key === parcel.serviceType)
+                      const serviceType = ALL_SERVICE_TYPES.find(st => st.key === parcel.serviceType)
                       const driver = drivers?.find((d: any) => d.id === parcel.deliveryDriverId || d.id === parcel.chauffeurId)
 
                       // Vérifier si ce colis peut être sélectionné (reçus ET envoyés)
@@ -2976,7 +2970,7 @@ export default function ParcelsTab() {
                         // Ne pas afficher de badge pour les services "simple"
                         if (parcel.serviceType === 'simple' || !parcel.serviceType) return null
 
-                        const stDef = SERVICE_TYPES.find(t => t.key === parcel.serviceType)
+                        const stDef = ALL_SERVICE_TYPES.find(t => t.key === parcel.serviceType)
                         if (!stDef) return null
 
                         const colors: Record<string, string> = {
@@ -3144,7 +3138,7 @@ export default function ParcelsTab() {
                           ? { label: 'En transit source', bg: 'bg-blue-100', text: 'text-blue-700' }
                           : COD_STATUS[parcel.codStatus || 'pending']
                         const cpt = COD_PAYMENT_TYPES.find(t => t.key === (parcel.codPaymentType || parcel.serviceType))
-                        const st  = SERVICE_TYPES.find(t => t.key === parcel.serviceType)
+                        const st  = ALL_SERVICE_TYPES.find(t => t.key === parcel.serviceType)
                         const emoji = cpt?.emoji || st?.emoji || '💵'
                         // Ne pas afficher "Livré" si c'est un retour
                         const isReturn = parcel.wasReturned || parcel.status?.includes('Retourné')
@@ -4073,7 +4067,7 @@ export default function ParcelsTab() {
                   {!canEditField('serviceType') && <Lock className="w-3.5 h-3.5 text-gray-400" />}
                 </h4>
                 <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
-                  {SERVICE_TYPES.map(st => (
+                  {ALL_SERVICE_TYPES.map(st => (
                     <button
                       type="button"
                       key={st.key}

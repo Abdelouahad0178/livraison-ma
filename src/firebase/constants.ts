@@ -150,6 +150,16 @@ export const COD_TYPE_OPTIONS = [
   { key: 'traite',    label: 'Contre traite' },
 ]
 
+// Types de service disponibles pour les expéditions
+export const ALL_SERVICE_TYPES = [
+  { key: 'simple',    label: 'Simple',    emoji: '📦' },
+  { key: 'especes',   label: 'C/Espèces', emoji: '💵' },
+  { key: 'cheque',    label: 'C/Chèque',  emoji: '📋' },
+  { key: 'traite',    label: 'C/Traite',  emoji: '📝' },
+  { key: 'retour_bl', label: 'Retour BL', emoji: '🧾' },
+  { key: 'retourne',  label: 'Retourné',  emoji: '↩️' },
+]
+
 export const DIRECTOR_PERMISSIONS = [
   { key: 'expeditions', label: 'Expéditions', emoji: '📦', desc: 'Voir et modifier tous les colis' },
   { key: 'cod', label: 'RETOUR FOND / Remboursements', emoji: '💰', desc: 'Gérer les remboursements RETOUR FOND' },
