@@ -164,9 +164,14 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
   const receiver = data.receiver as Record<string, unknown>
   const isLocalDelivery = sameText(sender?.city, receiver?.city)
   const hasLocalDeliveryDriver = !!data.deliveryDriverId && isLocalDelivery && !data.chauffeurId
+
+  // Agent PRO : expédition arrive directement en agence de destination
+  const isAgentProDirectShipment = data.agentRole === 'agentpro' && !isLocalDelivery && !data.chauffeurId
+
   const initialStatus = data.chauffeurId
     ? 'En transit'
-    : (hasLocalDeliveryDriver ? 'En cours de livraison' : 'Initialisé')
+    : (hasLocalDeliveryDriver ? 'En cours de livraison'
+      : (isAgentProDirectShipment ? 'Arrivé en agence' : 'Initialisé'))
   const hasCod        = parseFloat(data.codAmount as string) > 0
   const loadedAt      = data.chauffeurId ? new Date().toISOString() : null
   const opDate        = data.operationDate
@@ -196,7 +201,9 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
         ? `Colis enregistré et remis à ${data.chauffeurName || 'chauffeur de transport'}`
         : hasLocalDeliveryDriver
           ? `Colis enregistré et assigné au livreur ${data.deliveryDriverName || 'de livraison locale'}`
-        : 'Colis enregistré en agence'
+          : isAgentProDirectShipment
+            ? `Colis arrivé directement à l'agence de ${receiver.city}`
+            : 'Colis enregistré en agence'
     }],
     photoUrl:             '',
     createdAt:            opDate,
@@ -216,8 +223,8 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     originCity:           sender.city        || null,
     createdByCity:        sender.city        || null,  // Ne change JAMAIS (même après retour)
     shipmentLoadedAt:     loadedAt,
-    destinationArrivedAt: null,
-    visibleInDestinationAgency: !!data.chauffeurId || hasLocalDeliveryDriver,
+    destinationArrivedAt: isAgentProDirectShipment ? historyTs : null,
+    visibleInDestinationAgency: !!data.chauffeurId || hasLocalDeliveryDriver || isAgentProDirectShipment,
     destinationAgentId:   hasLocalDeliveryDriver ? (data.agentId || null) : null,
     destinationAgentName: hasLocalDeliveryDriver ? (data.agentName || null) : null,
     deliveryAssignedAt:   hasLocalDeliveryDriver ? historyTs : null,
