@@ -2,13 +2,21 @@
  * Utilitaire pour imprimer/afficher le bon d'expédition (Bon de Ramassage)
  */
 
-import { ALL_SERVICE_TYPES } from '../firebase/constants'
-
 export function printParcelTicket(parcel: any) {
   if (!parcel) {
     console.error('Pas de colis fourni pour l\'impression')
     return
   }
+
+  // Types de service (défini localement car utilisé dans HTML généré)
+  const ALL_SERVICE_TYPES = [
+    { key: 'simple', label: 'Simple', emoji: '📦' },
+    { key: 'especes', label: 'Espèces', emoji: '💵' },
+    { key: 'cheque', label: 'Chèque', emoji: '📝' },
+    { key: 'traite', label: 'Traite', emoji: '📄' },
+    { key: 'retour_bl', label: 'Retour BL', emoji: '🧾' },
+    { key: 'retourne', label: 'Retourné', emoji: '↩️' },
+  ]
 
   // Formater la date
   const formatDate = (date: any) => {
