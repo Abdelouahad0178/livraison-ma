@@ -32,7 +32,7 @@ import {
 import { createBankDeposit } from '../../../firebase/bankDeposits'
 import { createParticularPortalAccount } from '../../../firebase/portalAccounts'
 import { printCharge, printTable, printBonRamassage } from '../../../utils/agentPrintUtils'
-import { ALL_ALL_SERVICE_TYPES } from '../../../firebase/constants'
+import { ALL_SERVICE_TYPES } from '../../../firebase/constants'
 
 // ALL_SERVICE_TYPES importé depuis constants.ts
 

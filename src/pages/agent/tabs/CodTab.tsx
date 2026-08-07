@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Search, X, Check, MessageCircle } from 'lucide-react'
-import { COD_PAYMENT_TYPES, COD_STATUS, ALL_ALL_SERVICE_TYPES } from '../../../firebase/constants'
+import { COD_PAYMENT_TYPES, COD_STATUS, ALL_SERVICE_TYPES } from '../../../firebase/constants'
 import DateFilter from '../DateFilter'
 import { useAgentCtx } from '../AgentCtx'
 import { parcelDate, filterByDate } from '../../../utils/dateFilter'

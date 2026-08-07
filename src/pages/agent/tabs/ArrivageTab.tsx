@@ -4,7 +4,7 @@ import {
   CheckSquare, Square, Truck, Minus, Plus, CheckCircle2, Package,
   Save, RotateCcw, Edit2, Clock, Eye, Printer, Trash2,
 } from 'lucide-react'
-import { CITIES, ALL_ALL_SERVICE_TYPES } from '../../../firebase/constants'
+import { CITIES, ALL_SERVICE_TYPES } from '../../../firebase/constants'
 import DateFilter from '../DateFilter'
 import { useAgentCtx } from '../AgentCtx'
 import { db } from '../../../firebase/db'
