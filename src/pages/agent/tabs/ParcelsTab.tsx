@@ -12,7 +12,7 @@ import {
 import { isInReturnCircuit, updateParcel } from '../../../firebase/parcels'
 import {
   STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS, codCollectedLabel,
-  CITIES, ALL_ALL_SERVICE_TYPES,
+  CITIES, ALL_SERVICE_TYPES,
 } from '../../../firebase/constants'
 import { useAgentCtx } from '../AgentCtx'
 import { OperationalDaySelector } from '../../../components/OperationalDaySelector'
