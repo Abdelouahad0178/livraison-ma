@@ -1867,7 +1867,18 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         if (Number(editingParcel.weight || 0)   !== nextWeight)    detailsPatch.weight = nextWeight
         if (Number(editingParcel.nbColis || 1)  !== nextNbColis)   detailsPatch.nbColis = nextNbColis
         if (changedText(editingParcel.natureOfGoods, nextNature))   detailsPatch.natureOfGoods = nextNature
-        if (changedText(editingParcel.serviceType || 'oc', nextServiceType)) detailsPatch.serviceType = nextServiceType
+        if (changedText(editingParcel.serviceType || 'oc', nextServiceType)) {
+          detailsPatch.serviceType = nextServiceType
+          // Si passage vers Simple depuis un type COD ou Retour BL → enregistrer le modificateur
+          const oldType = editingParcel.serviceType || 'oc'
+          const wasCOD = ['especes', 'cheque', 'traite', 'retour_bl'].includes(oldType)
+          const nowSimple = nextServiceType === 'simple'
+          if (wasCOD && nowSimple) {
+            detailsPatch.lastModifiedBy = uid
+            detailsPatch.lastModifiedByName = profile?.name || 'Utilisateur'
+            detailsPatch.lastModifiedAt = new Date().toISOString()
+          }
+        }
         if (Number(editingParcel.price || 0)     !== nextPrice)     detailsPatch.price = nextPrice
         if (changedText(editingParcel.destinationCity, nextDestinationCity)) detailsPatch.destinationCity = nextDestinationCity
 

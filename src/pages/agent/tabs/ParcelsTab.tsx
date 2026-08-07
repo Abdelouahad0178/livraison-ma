@@ -2490,7 +2490,14 @@ export default function ParcelsTab() {
                           {visibleColumns.service && (
                             <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
                               {parcel.serviceType === 'simple' || !parcel.serviceType ? (
-                                <span className="text-sm text-gray-600 font-medium">Simple</span>
+                                <div className="flex flex-col gap-0.5">
+                                  <span className="text-sm text-gray-600 font-medium">Simple</span>
+                                  {parcel.lastModifiedByName && (
+                                    <span className="text-xs text-orange-600 font-semibold">
+                                      Modifié par {parcel.lastModifiedByName}
+                                    </span>
+                                  )}
+                                </div>
                               ) : (
                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-100 text-purple-700 rounded-lg font-semibold">
                                   {serviceType?.emoji} {serviceType?.label}
@@ -4085,6 +4092,13 @@ export default function ParcelsTab() {
                     </button>
                   ))}
                 </div>
+                {editingParcel?.lastModifiedByName && (editForm?.serviceType === 'simple' || editingParcel?.serviceType === 'simple') && (
+                  <div className="mt-2 px-3 py-2 bg-orange-50 border border-orange-200 rounded-lg">
+                    <p className="text-xs text-orange-700 font-semibold">
+                      ⚠️ Modifié par : {editingParcel.lastModifiedByName}
+                    </p>
+                  </div>
+                )}
               </section>
 
               <div className="border-t border-dashed border-gray-200" />
