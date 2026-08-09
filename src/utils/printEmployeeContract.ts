@@ -21,7 +21,8 @@ export function printEmployeeContract(employee: any, form: any) {
     .page { width: 100%; height: 273mm; display: flex; flex-direction: column; page-break-after: always; overflow: hidden; }
     .page:last-child { page-break-after: auto; }
     .body { flex: 1; overflow: hidden; }
-    .footer { border-top: 1px solid #d1d5db; padding-top: 4px; font-size: 7pt; color: #9ca3af; text-align: center; margin-top: auto; }
+    .footer { border-top: 1px solid #ddd; padding: 10px; font-size: 8pt; color: #666; text-align: center; margin-top: auto; }
+    .footer-info { display: flex; justify-content: center; gap: 40px; font-size: 8pt; }
     .hdr { display:flex; align-items:center; border:2px solid #1e3a8a; padding:6px 12px; gap:12px; margin-bottom:7px; background:#eff6ff; }
     .hdr-info { font-size:8pt; color:#374151; line-height:1.45; }
     .hdr-info b { color:#1e3a8a; font-size:10.5pt; display:block; }
@@ -48,7 +49,7 @@ export function printEmployeeContract(employee: any, form: any) {
   <div class="body">
     <div class="hdr">
       <img src="${logoUrl}" style="height:80px;object-fit:contain" onerror="this.style.display='none'">
-      <div class="hdr-info">Bloc H Rue 2 N°982 Agdal - Ait Melloul &nbsp;|&nbsp; 0522 62 92 89 | 0661 97 86 12 &nbsp;|&nbsp; bgexpress2019@gmail.com</div>
+      <div class="hdr-info">Bloc H Rue 2 N°982 Agdal - Ait Melloul &nbsp;|&nbsp; 0661 97 86 12 &nbsp;|&nbsp; bgexpress2019@gmail.com</div>
       <div style="margin-left:auto;text-align:right;font-size:8pt;color:#374151;white-space:nowrap">Fait a Ait Melloul<br><strong>Le : ${contractDate}</strong></div>
     </div>
     <h1>Contrat de Travail a Duree ${typeLabel}</h1>
@@ -88,6 +89,15 @@ export function printEmployeeContract(employee: any, form: any) {
     <h2>Article 5 - Remuneration</h2>
     <div class="art"><p>En contrepartie de ses services, le(la) salarie(e) percevra un <strong>salaire brut mensuel de ${fmtSalaire(form.salaireBrut)}</strong>, soumis aux retenues legales obligatoires, verse au plus tard le dernier jour ouvrable de chaque mois.${form.avantages ? ` <strong>Avantages :</strong> ${form.avantages}.` : ''}</p></div>
   </div>
+  <div class="footer">
+    <div class="footer-info">
+      <span>R.C : 17447</span>
+      <span>T.P : 49803403</span>
+      <span>I.F : 31837263</span>
+      <span>CNSS : 1143595</span>
+      <span>ICE : 002158803000007</span>
+    </div>
+  </div>
 </div>
 <div class="page">
   <div class="body">
@@ -125,6 +135,15 @@ export function printEmployeeContract(employee: any, form: any) {
     <div class="sig-block">
       <div class="sig-col"><div><strong>L'Employeur</strong></div><div style="color:#374151;margin-top:2px;font-size:8.5pt">BGEXPRESS</div><div class="sig-line">Cachet et Signature</div></div>
       <div class="sig-col"><div><strong>Le(la) Salarie(e)</strong></div><div style="color:#374151;margin-top:2px;font-size:8.5pt">${employee.name || ''}</div><div class="sig-line">Lu et approuve - Signature</div></div>
+    </div>
+  </div>
+  <div class="footer">
+    <div class="footer-info">
+      <span>R.C : 17447</span>
+      <span>T.P : 49803403</span>
+      <span>I.F : 31837263</span>
+      <span>CNSS : 1143595</span>
+      <span>ICE : 002158803000007</span>
     </div>
   </div>
 </div>
