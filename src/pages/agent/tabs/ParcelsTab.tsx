@@ -293,6 +293,7 @@ export default function ParcelsTab() {
   const [bulkPortDuBusy, setBulkPortDuBusy] = useState(false)
   const [bulkPortDuError, setBulkPortDuError] = useState('')
   const [isPortDuSectionOpen, setIsPortDuSectionOpen] = useState(false) // ⭐ Section fermée par défaut
+  const [isCustomSheetOpen, setIsCustomSheetOpen] = useState(false) // ⭐ Feuille de charge fermée par défaut
 
   // ⭐ États pour la feuille de charge personnalisée
   const [customSheetSearch, setCustomSheetSearch] = useState('')
@@ -1519,31 +1520,56 @@ export default function ParcelsTab() {
 
               {/* ⭐ FEUILLE DE CHARGE PERSONNALISÉE */}
               {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
-                <div className="mb-4 bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-300 rounded-2xl p-5 space-y-4">
-                  <div className="flex items-center justify-between gap-3 flex-wrap">
-                    <div>
-                      <h3 className="text-base font-bold text-blue-800 flex items-center gap-2">
-                        📋 Feuille de charge personnalisée
-                      </h3>
-                      <p className="text-xs text-blue-600 mt-0.5">
-                        Recherchez et ajoutez des expéditions manuellement
-                      </p>
+                <div className="mb-4 bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-300 rounded-2xl overflow-hidden">
+                  {/* Header avec flèche toggle */}
+                  <button
+                    type="button"
+                    onClick={() => setIsCustomSheetOpen(!isCustomSheetOpen)}
+                    className="w-full p-4 sm:p-5 flex items-center justify-between gap-3 hover:bg-blue-100/50 transition cursor-pointer"
+                  >
+                    <div className="flex items-center gap-2 min-w-0">
+                      <span className="text-xl shrink-0">📋</span>
+                      <div className="text-left">
+                        <h3 className="text-base font-bold text-blue-800">
+                          Feuille de charge personnalisée
+                        </h3>
+                        <p className="text-xs text-blue-600 mt-0.5">
+                          Recherchez et ajoutez des expéditions manuellement
+                        </p>
+                      </div>
                     </div>
-                    {customSheetParcels.length > 0 && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setCustomSheetParcels([])
-                          setCustomSheetPointage({})
-                          setCustomSheetDriver('')
-                        }}
-                        className="px-3 py-2 rounded-xl text-xs font-bold bg-red-100 hover:bg-red-200 text-red-700 border border-red-300 transition flex items-center gap-1"
-                      >
-                        <Trash2 className="w-3 h-3" />
-                        Vider la feuille ({customSheetParcels.length})
-                      </button>
-                    )}
-                  </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      {customSheetParcels.length > 0 && (
+                        <span className="px-2 py-1 bg-blue-600 text-white rounded-lg text-xs font-bold">
+                          {customSheetParcels.length}
+                        </span>
+                      )}
+                      <ChevronDown
+                        className={`w-5 h-5 text-blue-700 transition-transform ${isCustomSheetOpen ? 'rotate-180' : ''}`}
+                      />
+                    </div>
+                  </button>
+
+                  {/* Contenu collapsible */}
+                  {isCustomSheetOpen && (
+                    <div className="px-4 sm:px-5 pb-4 sm:pb-5 space-y-4 border-t-2 border-blue-300">
+                      {/* Bouton vider en haut si des colis sont ajoutés */}
+                      {customSheetParcels.length > 0 && (
+                        <div className="flex justify-end pt-4">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setCustomSheetParcels([])
+                              setCustomSheetPointage({})
+                              setCustomSheetDriver('')
+                            }}
+                            className="px-3 py-2 rounded-xl text-xs font-bold bg-red-100 hover:bg-red-200 text-red-700 border border-red-300 transition flex items-center gap-1"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                            Vider la feuille ({customSheetParcels.length})
+                          </button>
+                        </div>
+                      )}
 
                   {/* Sélection du livreur */}
                   <div className="bg-white border border-blue-200 rounded-xl px-4 py-3 space-y-3">
@@ -1821,6 +1847,8 @@ export default function ParcelsTab() {
                           Imprimer feuille finale
                         </button>
                       </div>
+                    </div>
+                  )}
                     </div>
                   )}
                 </div>
