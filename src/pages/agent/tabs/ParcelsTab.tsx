@@ -204,6 +204,22 @@ export default function ParcelsTab() {
     serviceType: null
   })
 
+  // Rafraîchissement automatique en arrière-plan quand des données sont modifiées
+  useEffect(() => {
+    const handleDataUpdate = () => {
+      // Rafraîchir la page en silence
+      window.location.reload()
+    }
+
+    // Écouter les modifications de données
+    window.addEventListener('parcelDataUpdated', handleDataUpdate)
+
+    // Nettoyer l'écouteur
+    return () => {
+      window.removeEventListener('parcelDataUpdated', handleDataUpdate)
+    }
+  }, [])
+
   // Sécurité : s'assurer que les tableaux ne sont jamais undefined
   const safeParcels = useMemo(() => {
     if (showDeliveredByOthers) {
@@ -276,6 +292,7 @@ export default function ParcelsTab() {
   const [bulkPortDuSelectedIds, setBulkPortDuSelectedIds] = useState<string[]>([])
   const [bulkPortDuBusy, setBulkPortDuBusy] = useState(false)
   const [bulkPortDuError, setBulkPortDuError] = useState('')
+  const [isPortDuSectionOpen, setIsPortDuSectionOpen] = useState(false) // ⭐ Section fermée par défaut
 
   // ⭐ États pour la feuille de charge personnalisée
   const [customSheetSearch, setCustomSheetSearch] = useState('')
@@ -526,6 +543,15 @@ export default function ParcelsTab() {
     remarque: '',
     loading: false,
     error: ''
+  })
+
+  // ⭐ Modal historique des modifications de type de service
+  const [historyModal, setHistoryModal] = useState<{
+    open: boolean
+    parcel: any
+  }>({
+    open: false,
+    parcel: null
   })
 
   // ⭐ Navigation au clavier - Focus uniquement sur les checkboxes d'assignation
@@ -1815,70 +1841,88 @@ export default function ParcelsTab() {
 
                 if ((profile?.role === 'chef_agence' || profile?.role === 'agentpro') && portDuParcels.length > 0) {
                   return (
-                    <div className="mb-4 bg-gradient-to-br from-teal-50 to-cyan-50 border border-teal-200 rounded-2xl p-3 sm:p-4 space-y-3">
-                      <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="mb-4 bg-gradient-to-br from-teal-50 to-cyan-50 border border-teal-200 rounded-2xl overflow-hidden">
+                      {/* Header avec flèche toggle */}
+                      <button
+                        type="button"
+                        onClick={() => setIsPortDuSectionOpen(!isPortDuSectionOpen)}
+                        className="w-full p-3 sm:p-4 flex items-center justify-between gap-3 hover:bg-teal-100/50 transition cursor-pointer"
+                      >
                         <div className="flex items-center gap-2 min-w-0">
                           <span className="text-xl sm:text-2xl shrink-0">🖐️</span>
                           <h3 className="font-bold text-teal-800 text-sm sm:text-base">
                             <span className="hidden sm:inline">Transformation </span>Port Dû → <span className="hidden sm:inline">Compte </span>Destinataire
                           </h3>
+                          <span className="text-xs text-teal-600 font-semibold">
+                            ({portDuParcels.length})
+                          </span>
                         </div>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setBulkPortDuError('')
-                            if (allPortDuSelected) {
-                              setBulkPortDuSelectedIds([])
-                            } else {
-                              setBulkPortDuSelectedIds(portDuParcels.map((p: any) => p.id))
-                            }
-                          }}
-                          className={`px-3 py-2 rounded-xl text-xs font-bold border transition shrink-0 whitespace-nowrap ${
-                            allPortDuSelected
-                              ? 'bg-teal-600 text-white border-teal-600 hover:bg-teal-700'
-                              : 'bg-white text-teal-700 border-teal-300 hover:bg-teal-50'
-                          }`}
-                        >
-                          {allPortDuSelected ? 'Désélectionner tout' : 'Sélectionner tout'}
-                        </button>
-                      </div>
+                        <ChevronDown
+                          className={`w-5 h-5 text-teal-700 transition-transform shrink-0 ${isPortDuSectionOpen ? 'rotate-180' : ''}`}
+                        />
+                      </button>
 
-                      <p className="text-xs text-teal-700">
-                        {portDuParcels.length} expédition(s) Port Dû disponible(s) · Sélectionnez celles à mettre en compte destinataire
-                      </p>
-
-                      <div className="flex items-center justify-between gap-3 flex-wrap">
-                        <p className="text-sm font-semibold text-teal-800">
-                          {selectedPortDuCount} expédition(s) sélectionnée(s)
-                        </p>
-                        {bulkPortDuError && <p className="text-xs font-semibold text-red-600">{bulkPortDuError}</p>}
-                        <div className="ml-auto flex items-center gap-2">
-                          {selectedPortDuCount > 0 && (
+                      {/* Contenu collapsible */}
+                      {isPortDuSectionOpen && (
+                        <div className="px-3 sm:px-4 pb-3 sm:pb-4 space-y-3 border-t border-teal-200">
+                          <div className="flex items-center justify-between gap-3 flex-wrap pt-3">
+                            <p className="text-xs text-teal-700">
+                              {portDuParcels.length} expédition(s) Port Dû disponible(s) · Sélectionnez celles à mettre en compte destinataire
+                            </p>
                             <button
                               type="button"
                               onClick={() => {
                                 setBulkPortDuError('')
-                                setBulkPortDuSelectedIds([])
+                                if (allPortDuSelected) {
+                                  setBulkPortDuSelectedIds([])
+                                } else {
+                                  setBulkPortDuSelectedIds(portDuParcels.map((p: any) => p.id))
+                                }
                               }}
-                              className="px-3 py-2 rounded-xl text-xs font-bold border border-red-300 bg-white text-red-700 hover:bg-red-50 transition flex items-center gap-1"
+                              className={`px-3 py-2 rounded-xl text-xs font-bold border transition shrink-0 whitespace-nowrap ${
+                                allPortDuSelected
+                                  ? 'bg-teal-600 text-white border-teal-600 hover:bg-teal-700'
+                                  : 'bg-white text-teal-700 border-teal-300 hover:bg-teal-50'
+                              }`}
                             >
-                              <X className="w-3 h-3" />
-                              Annuler ({selectedPortDuCount})
+                              {allPortDuSelected ? 'Désélectionner tout' : 'Sélectionner tout'}
                             </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={handleBulkPortDuToCompte}
-                            disabled={bulkPortDuBusy || selectedPortDuCount === 0}
-                            className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-40 text-white text-sm font-bold transition"
-                          >
-                            {bulkPortDuBusy
-                              ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Transformation...</>
-                              : <>🖐️ Transformer en Compte Dest</>
-                            }
-                          </button>
+                          </div>
+
+                          <div className="flex items-center justify-between gap-3 flex-wrap">
+                            <p className="text-sm font-semibold text-teal-800">
+                              {selectedPortDuCount} expédition(s) sélectionnée(s)
+                            </p>
+                            {bulkPortDuError && <p className="text-xs font-semibold text-red-600">{bulkPortDuError}</p>}
+                            <div className="ml-auto flex items-center gap-2">
+                              {selectedPortDuCount > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setBulkPortDuError('')
+                                    setBulkPortDuSelectedIds([])
+                                  }}
+                                  className="px-3 py-2 rounded-xl text-xs font-bold border border-red-300 bg-white text-red-700 hover:bg-red-50 transition flex items-center gap-1"
+                                >
+                                  <X className="w-3 h-3" />
+                                  Annuler ({selectedPortDuCount})
+                                </button>
+                              )}
+                              <button
+                                type="button"
+                                onClick={handleBulkPortDuToCompte}
+                                disabled={bulkPortDuBusy || selectedPortDuCount === 0}
+                                className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-teal-600 hover:bg-teal-700 disabled:opacity-40 text-white text-sm font-bold transition"
+                              >
+                                {bulkPortDuBusy
+                                  ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Transformation...</>
+                                  : <>🖐️ Transformer en Compte Dest</>
+                                }
+                              </button>
+                            </div>
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </div>
                   )
                 }
@@ -2490,14 +2534,18 @@ export default function ParcelsTab() {
                           {visibleColumns.service && (
                             <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
                               {parcel.serviceType === 'simple' || !parcel.serviceType ? (
-                                <div className="flex flex-col gap-0.5">
+                                <button
+                                  onClick={() => setHistoryModal({ open: true, parcel })}
+                                  className="flex flex-col gap-0.5 text-left hover:bg-gray-50 px-2 py-1 rounded-lg transition-colors"
+                                  title="Cliquez pour voir l'historique des modifications"
+                                >
                                   <span className="text-sm text-gray-600 font-medium">Simple</span>
                                   {parcel.lastModifiedByName && (
                                     <span className="text-xs text-orange-600 font-semibold">
                                       Modifié par {parcel.lastModifiedByName}
                                     </span>
                                   )}
-                                </div>
+                                </button>
                               ) : (
                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-100 text-purple-700 rounded-lg font-semibold">
                                   {serviceType?.emoji} {serviceType?.label}
@@ -3743,6 +3791,15 @@ export default function ParcelsTab() {
               <div>
                 <h3 className="font-bold text-gray-800">Modifier l'expédition</h3>
                 <p className="text-xs font-mono text-blue-600 mt-0.5">{editingParcel.trackingId}</p>
+                {editingParcel.status && (() => {
+                  const sc = STATUS_COLORS[editingParcel.status] || STATUS_COLORS['Initialisé']
+                  return (
+                    <div className={`mt-2 inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold ${sc.bg} ${sc.text}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
+                      {editingParcel.status}
+                    </div>
+                  )
+                })()}
               </div>
               <button onClick={() => setEditingParcel(null)} className="p-2 hover:bg-gray-100 rounded-xl transition">
                 <X className="w-5 h-5 text-gray-500" />
@@ -4792,6 +4849,21 @@ export default function ParcelsTab() {
                 </select>
               </div>
 
+              {/* Statut */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-2">🚦 Statut</label>
+                <select
+                  value={quickEditModal.status || ''}
+                  onChange={e => setQuickEditModal(m => ({ ...m, status: e.target.value, error: '' }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500"
+                >
+                  <option value="">-- Statut actuel --</option>
+                  {STATUSES.map(s => (
+                    <option key={s} value={s}>{s}</option>
+                  ))}
+                </select>
+              </div>
+
               {/* Montant COD - Affiché uniquement pour especes, cheque, traite, virement */}
               {quickEditModal.serviceType &&
                quickEditModal.serviceType !== '' &&
@@ -4901,7 +4973,30 @@ export default function ParcelsTab() {
                       updates.codAmount = finalCodAmount ? Number.parseFloat(finalCodAmount) : 0
                     }
 
-                    if (serviceType && serviceType !== parcel.serviceType) updates.serviceType = serviceType
+                    // Détecter changement de type de service
+                    if (serviceType && serviceType !== parcel.serviceType) {
+                      updates.serviceType = serviceType
+
+                      // Créer ou mettre à jour l'historique des modifications
+                      const historyEntry = {
+                        timestamp: new Date().toISOString(),
+                        userName: profile?.name || 'Utilisateur inconnu',
+                        userUid: uid,
+                        oldServiceType: parcel.serviceType,
+                        newServiceType: serviceType
+                      }
+
+                      // Ajouter l'entrée à l'historique (max 50 entrées)
+                      const currentHistory = parcel.serviceTypeHistory || []
+                      updates.serviceTypeHistory = [...currentHistory, historyEntry].slice(-50)
+
+                      // Si changement vers "simple" depuis un autre type (avec COD)
+                      const serviceTypesAvecCOD = ['especes', 'cheque', 'traite', 'virement']
+                      if (serviceType === 'simple' && serviceTypesAvecCOD.includes(parcel.serviceType)) {
+                        updates.lastModifiedByName = profile?.name || 'Utilisateur inconnu'
+                        updates.lastModifiedByUid = uid
+                      }
+                    }
                     if (nbColis !== parcel.nbColis?.toString()) updates.nbColis = nbColis ? Number.parseInt(nbColis) : null
                     if (poids !== parcel.poids?.toString()) updates.poids = poids ? Number.parseFloat(poids) : null
                     if (contenu !== parcel.contenu) updates.contenu = contenu || null
@@ -5022,6 +5117,72 @@ export default function ParcelsTab() {
               >
                 🗑️ Effacer le statut
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── MODAL HISTORIQUE DES MODIFICATIONS ── */}
+      {historyModal.open && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between p-5 border-b sticky top-0 bg-white rounded-t-2xl">
+              <div>
+                <h3 className="font-bold text-gray-800">Historique des modifications</h3>
+                <p className="text-xs font-mono text-blue-600 mt-0.5">{historyModal.parcel?.trackingId}</p>
+              </div>
+              <button
+                onClick={() => setHistoryModal({ open: false, parcel: null })}
+                className="p-2 hover:bg-gray-100 rounded-xl transition"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="p-5">
+              {historyModal.parcel?.serviceTypeHistory && historyModal.parcel.serviceTypeHistory.length > 0 ? (
+                <div className="space-y-3">
+                  {[...historyModal.parcel.serviceTypeHistory].reverse().map((entry: any, index: number) => {
+                    const oldType = ALL_SERVICE_TYPES.find(st => st.key === entry.oldServiceType)
+                    const newType = ALL_SERVICE_TYPES.find(st => st.key === entry.newServiceType)
+                    const date = new Date(entry.timestamp)
+
+                    return (
+                      <div key={index} className="flex items-start gap-3 p-4 bg-gray-50 rounded-xl border border-gray-200">
+                        <div className="w-10 h-10 bg-blue-100 text-blue-600 rounded-lg flex items-center justify-center font-bold shrink-0">
+                          {historyModal.parcel.serviceTypeHistory.length - index}
+                        </div>
+                        <div className="flex-1 space-y-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="text-sm font-semibold text-gray-700">{entry.userName}</span>
+                            <span className="text-xs text-gray-500">•</span>
+                            <span className="text-xs text-gray-500">
+                              {date.toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}
+                              {' à '}
+                              {date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-100 text-red-700 rounded text-xs font-semibold">
+                              {oldType?.emoji} {oldType?.label || entry.oldServiceType}
+                            </span>
+                            <span className="text-gray-400">→</span>
+                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-semibold">
+                              {newType?.emoji} {newType?.label || entry.newServiceType}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="text-center py-10">
+                  <div className="text-gray-400 text-4xl mb-2">📋</div>
+                  <p className="text-gray-600 font-medium">Aucun historique de modification</p>
+                  <p className="text-sm text-gray-500 mt-1">Les modifications futures seront enregistrées ici</p>
+                </div>
+              )}
             </div>
           </div>
         </div>
