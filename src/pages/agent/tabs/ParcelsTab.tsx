@@ -1,11 +1,12 @@
 import {
   AlertTriangle, Banknote, Calendar, Car, Check, CheckSquare,
-  ChevronDown, ChevronLeft, ChevronRight, Edit, Edit2, Filter, Hand,
+  ChevronDown, ChevronLeft, ChevronRight, Download, Edit, Edit2, Filter, Hand,
   LayoutGrid, Lock, Package, Pencil, PenTool, Printer, Search, Table2, Trash2, Truck,
   Unlock, User, X,
 } from 'lucide-react'
 import { useState, useRef, useEffect, useMemo } from 'react'
 import { deleteField } from 'firebase/firestore'
+import * as XLSX from 'xlsx'
 import {
   loadReturnedParcelOnTruck, validateReturnArrival, getMoreAgentParcels,
 } from '../../../firebase/firestore'
@@ -1762,29 +1763,102 @@ export default function ParcelsTab() {
                         ))}
                       </div>
 
-                      {/* Bouton d'impression */}
-                      <div className="pt-3 border-t border-blue-200 flex items-center justify-between gap-3">
+                      {/* Boutons d'impression et export */}
+                      <div className="pt-3 border-t border-blue-200 flex items-center justify-between gap-3 flex-wrap">
                         <p className="text-xs text-blue-700">
                           <strong>{Object.values(customSheetPointage).filter(v => v === 'livre').length}</strong> livrée(s) ·
                           <strong className="ml-1">{Object.values(customSheetPointage).filter(v => v === 'non_livre').length}</strong> non livrée(s) ·
                           <strong className="ml-1">{Object.values(customSheetPointage).filter(v => v === 'souffrance').length}</strong> en souffrance
                         </p>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            // Filtrer uniquement les expéditions livrées (sans les en compte expéditeur)
-                            const livrees = customSheetParcels.filter((p: any) =>
-                              customSheetPointage[p.id] === 'livre' &&
-                              p.portType !== 'en_compte_expediteur'
-                            )
+                        <div className="flex items-center gap-2">
+                          {/* Bouton Export Excel */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (customSheetParcels.length === 0) {
+                                alert('Aucune expédition à exporter')
+                                return
+                              }
 
-                            if (livrees.length === 0) {
-                              alert('Aucune expédition livrée à imprimer')
-                              return
-                            }
+                              const driverName = drivers?.find((d: any) => d.id === customSheetDriver)?.name || 'Non assigné'
+                              const today = new Date().toLocaleDateString('fr-FR')
 
-                            // Créer la feuille d'impression
-                            const driverName = drivers?.find((d: any) => d.id === customSheetDriver)?.name || 'Non assigné'
+                              // Créer les données pour Excel
+                              const data: any[] = []
+
+                              // Ligne 1 : RAPPORT (fusionnée sur plusieurs colonnes)
+                              data.push(['RAPPORT - FEUILLE DE CHARGE', '', '', '', '', ''])
+
+                              // Ligne 2 : Livreur et Date
+                              data.push([`Livreur: ${driverName}`, '', '', `Date: ${today}`, '', ''])
+
+                              // Ligne 3 : Total
+                              data.push([`Total: ${customSheetParcels.length} expédition(s)`, '', '', '', '', ''])
+
+                              // Ligne 4 : Vide
+                              data.push(['', '', '', '', '', ''])
+
+                              // Ligne 5 : Headers
+                              data.push(['N° EXP', 'Destinataire', 'Téléphone', 'Ville', 'Statut', 'Pointage'])
+
+                              // Lignes 6+ : Données
+                              customSheetParcels.forEach((p: any) => {
+                                data.push([
+                                  p.parcelNumber || p.trackingId || '',
+                                  p.receiver?.name || '',
+                                  p.receiver?.phone || '',
+                                  p.destinationCity || p.receiver?.city || '',
+                                  p.status || '',
+                                  customSheetPointage[p.id] === 'livre' ? 'Livré' :
+                                  customSheetPointage[p.id] === 'non_livre' ? 'Non livré' :
+                                  customSheetPointage[p.id] === 'souffrance' ? 'Souffrance' : ''
+                                ])
+                              })
+
+                              // Créer le workbook et la worksheet
+                              const wb = XLSX.utils.book_new()
+                              const ws = XLSX.utils.aoa_to_sheet(data)
+
+                              // Largeurs des colonnes
+                              ws['!cols'] = [
+                                { wch: 15 }, // N° EXP
+                                { wch: 25 }, // Destinataire
+                                { wch: 15 }, // Téléphone
+                                { wch: 20 }, // Ville
+                                { wch: 20 }, // Statut
+                                { wch: 15 }  // Pointage
+                              ]
+
+                              // Ajouter la feuille au workbook
+                              XLSX.utils.book_append_sheet(wb, ws, 'Feuille de charge')
+
+                              // Télécharger le fichier
+                              XLSX.writeFile(wb, `Feuille_charge_${driverName}_${today.replace(/\//g, '-')}.xlsx`)
+                            }}
+                            disabled={customSheetParcels.length === 0}
+                            className="px-4 py-2 rounded-xl bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold transition flex items-center gap-2"
+                          >
+                            <Download className="w-4 h-4" />
+                            Exporter Excel
+                          </button>
+
+                          {/* Bouton Imprimer */}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              // Filtrer uniquement les expéditions livrées (sans les en compte expéditeur)
+                              const livrees = customSheetParcels.filter((p: any) =>
+                                customSheetPointage[p.id] === 'livre' &&
+                                p.portType !== 'en_compte_expediteur'
+                              )
+
+                              if (livrees.length === 0) {
+                                alert('Aucune expédition livrée à imprimer')
+                                return
+                              }
+
+                              // Créer la feuille d'impression
+                              const driverName = drivers?.find((d: any) => d.id === customSheetDriver)?.name || 'Non assigné'
                             const html = `
                               <!DOCTYPE html>
                               <html>
@@ -1840,12 +1914,13 @@ export default function ParcelsTab() {
                               win.print()
                             }
                           }}
-                          disabled={!customSheetDriver || Object.values(customSheetPointage).filter(v => v === 'livre').length === 0}
-                          className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold transition flex items-center gap-2"
-                        >
-                          <Printer className="w-4 h-4" />
-                          Imprimer feuille finale
-                        </button>
+                            disabled={!customSheetDriver || Object.values(customSheetPointage).filter(v => v === 'livre').length === 0}
+                            className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold transition flex items-center gap-2"
+                          >
+                            <Printer className="w-4 h-4" />
+                            Imprimer feuille finale
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}
