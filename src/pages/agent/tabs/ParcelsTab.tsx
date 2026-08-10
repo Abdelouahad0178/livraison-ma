@@ -1400,25 +1400,22 @@ export default function ParcelsTab() {
                           // Créer les données pour Excel
                           const data: any[] = []
 
-                          // Ligne 1 : RAPPORT
-                          data.push(['RAPPORT - EXPÉDITIONS SÉLECTIONNÉES', '', '', '', '', '', ''])
+                          // Ligne 1 : Date
+                          data.push([`Date: ${today} ${timeNow}`, '', '', '', '', '', ''])
 
-                          // Ligne 2 : Période et Date
-                          data.push([`Agent: ${profile?.name || ''}`, '', '', `Date: ${today} ${timeNow}`, '', '', ''])
-
-                          // Ligne 3 : Total
+                          // Ligne 2 : Total
                           data.push([`Total: ${selectedParcels.length} expédition(s)`, '', '', '', '', '', ''])
 
-                          // Ligne 4 : Vide
+                          // Ligne 3 : Vide
                           data.push(['', '', '', '', '', '', ''])
 
-                          // Ligne 5 : Headers
-                          data.push(['N° EXP', 'Expéditeur', 'Destinataire', 'Téléphone', 'Ville', 'Statut', 'Type Port'])
+                          // Ligne 4 : Headers
+                          data.push(['N° EXP (NIC)', 'Expéditeur', 'Destinataire', 'Téléphone', 'Ville', 'Statut', 'Type Port'])
 
-                          // Lignes 6+ : Données
+                          // Lignes 5+ : Données
                           selectedParcels.forEach((p: any) => {
                             data.push([
-                              p.parcelNumber || p.trackingId || '',
+                              p.sender?.nic || '',
                               p.sender?.name || '',
                               p.receiver?.name || '',
                               p.receiver?.phone || '',
@@ -1589,25 +1586,22 @@ export default function ParcelsTab() {
                             // Créer les données pour Excel
                             const data: any[] = []
 
-                            // Ligne 1 : RAPPORT
-                            data.push(['RAPPORT - EXPÉDITIONS À ASSIGNER', '', '', '', '', '', ''])
+                            // Ligne 1 : Date
+                            data.push([`Date: ${today} ${timeNow}`, '', '', '', '', '', ''])
 
-                            // Ligne 2 : Agent et Date
-                            data.push([`Agent: ${profile?.name || ''}`, '', '', `Date: ${today} ${timeNow}`, '', '', ''])
-
-                            // Ligne 3 : Total
+                            // Ligne 2 : Total
                             data.push([`Total: ${selectedParcels.length} expédition(s)`, '', '', '', '', '', ''])
 
-                            // Ligne 4 : Vide
+                            // Ligne 3 : Vide
                             data.push(['', '', '', '', '', '', ''])
 
-                            // Ligne 5 : Headers
-                            data.push(['N° EXP', 'Expéditeur', 'Destinataire', 'Téléphone', 'Ville', 'Statut', 'Type Port'])
+                            // Ligne 4 : Headers
+                            data.push(['N° EXP (NIC)', 'Expéditeur', 'Destinataire', 'Téléphone', 'Ville', 'Statut', 'Type Port'])
 
-                            // Lignes 6+ : Données
+                            // Lignes 5+ : Données
                             selectedParcels.forEach((p: any) => {
                               data.push([
-                                p.parcelNumber || p.trackingId || '',
+                                p.sender?.nic || '',
                                 p.sender?.name || '',
                                 p.receiver?.name || '',
                                 p.receiver?.phone || '',
@@ -1940,29 +1934,27 @@ export default function ParcelsTab() {
 
                               const driverName = drivers?.find((d: any) => d.id === customSheetDriver)?.name || 'Non assigné'
                               const today = new Date().toLocaleDateString('fr-FR')
+                              const timeNow = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
 
                               // Créer les données pour Excel
                               const data: any[] = []
 
-                              // Ligne 1 : RAPPORT (fusionnée sur plusieurs colonnes)
-                              data.push(['RAPPORT - FEUILLE DE CHARGE', '', '', '', '', ''])
+                              // Ligne 1 : Date
+                              data.push([`Date: ${today} ${timeNow}`, '', '', '', '', ''])
 
-                              // Ligne 2 : Livreur et Date
-                              data.push([`Livreur: ${driverName}`, '', '', `Date: ${today}`, '', ''])
-
-                              // Ligne 3 : Total
+                              // Ligne 2 : Total
                               data.push([`Total: ${customSheetParcels.length} expédition(s)`, '', '', '', '', ''])
 
-                              // Ligne 4 : Vide
+                              // Ligne 3 : Vide
                               data.push(['', '', '', '', '', ''])
 
-                              // Ligne 5 : Headers
-                              data.push(['N° EXP', 'Destinataire', 'Téléphone', 'Ville', 'Statut', 'Pointage'])
+                              // Ligne 4 : Headers
+                              data.push(['N° EXP (NIC)', 'Destinataire', 'Téléphone', 'Ville', 'Statut', 'Pointage'])
 
-                              // Lignes 6+ : Données
+                              // Lignes 5+ : Données
                               customSheetParcels.forEach((p: any) => {
                                 data.push([
-                                  p.parcelNumber || p.trackingId || '',
+                                  p.sender?.nic || '',
                                   p.receiver?.name || '',
                                   p.receiver?.phone || '',
                                   p.destinationCity || p.receiver?.city || '',
