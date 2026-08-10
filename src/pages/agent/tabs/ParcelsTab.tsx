@@ -1571,6 +1571,84 @@ export default function ParcelsTab() {
                       </p>
                       {bulkAssignError && <p className="text-xs font-semibold text-red-600">{bulkAssignError}</p>}
                       <div className="ml-auto flex items-center gap-2">
+                        {/* Bouton Exporter Excel */}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            // Récupérer les expéditions sélectionnées
+                            const selectedParcels = assignableParcels.filter((p: any) => bulkAssignSelectedIds.includes(p.id))
+
+                            if (selectedParcels.length === 0) {
+                              alert('Aucune expédition sélectionnée à exporter')
+                              return
+                            }
+
+                            const today = new Date().toLocaleDateString('fr-FR')
+                            const timeNow = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+
+                            // Créer les données pour Excel
+                            const data: any[] = []
+
+                            // Ligne 1 : RAPPORT
+                            data.push(['RAPPORT - EXPÉDITIONS À ASSIGNER', '', '', '', '', '', ''])
+
+                            // Ligne 2 : Agent et Date
+                            data.push([`Agent: ${profile?.name || ''}`, '', '', `Date: ${today} ${timeNow}`, '', '', ''])
+
+                            // Ligne 3 : Total
+                            data.push([`Total: ${selectedParcels.length} expédition(s)`, '', '', '', '', '', ''])
+
+                            // Ligne 4 : Vide
+                            data.push(['', '', '', '', '', '', ''])
+
+                            // Ligne 5 : Headers
+                            data.push(['N° EXP', 'Expéditeur', 'Destinataire', 'Téléphone', 'Ville', 'Statut', 'Type Port'])
+
+                            // Lignes 6+ : Données
+                            selectedParcels.forEach((p: any) => {
+                              data.push([
+                                p.parcelNumber || p.trackingId || '',
+                                p.sender?.name || '',
+                                p.receiver?.name || '',
+                                p.receiver?.phone || '',
+                                p.destinationCity || p.receiver?.city || '',
+                                p.status || '',
+                                p.portType === 'port_paye' ? 'Port payé' :
+                                p.portType === 'port_du' ? 'Port dû' :
+                                p.portType === 'en_compte_expediteur' ? 'Compte expéditeur' :
+                                p.portType === 'en_compte_destinataire' ? 'Compte destinataire' : ''
+                              ])
+                            })
+
+                            // Créer le workbook et la worksheet
+                            const wb = XLSX.utils.book_new()
+                            const ws = XLSX.utils.aoa_to_sheet(data)
+
+                            // Largeurs des colonnes
+                            ws['!cols'] = [
+                              { wch: 15 }, // N° EXP
+                              { wch: 20 }, // Expéditeur
+                              { wch: 20 }, // Destinataire
+                              { wch: 15 }, // Téléphone
+                              { wch: 20 }, // Ville
+                              { wch: 20 }, // Statut
+                              { wch: 20 }  // Type Port
+                            ]
+
+                            // Ajouter la feuille au workbook
+                            XLSX.utils.book_append_sheet(wb, ws, 'Expéditions')
+
+                            // Télécharger le fichier
+                            XLSX.writeFile(wb, `Expeditions_a_assigner_${today.replace(/\//g, '-')}_${timeNow.replace(/:/g, 'h')}.xlsx`)
+                          }}
+                          disabled={selectedCount === 0}
+                          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-sm font-bold transition"
+                        >
+                          <Download className="w-4 h-4" />
+                          Exporter Excel
+                        </button>
+
+                        {/* Bouton Assigner au livreur */}
                         <button
                           type="button"
                           onClick={() => handleBulkAssignDriverWithColor(assignableParcels)}
