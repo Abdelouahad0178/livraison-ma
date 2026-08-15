@@ -11,6 +11,7 @@ import {
   Plus,
   Printer,
   RotateCcw,
+  Search,
   X,
 } from 'lucide-react'
 import { useState } from 'react'
@@ -209,35 +210,22 @@ export default function AdminExpeditionsTab({
         ))}
       </div>
 
-      {/* Bouton Charger plus en HAUT - charge par tranches de 800 */}
-      {hasMore && (
-        <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl border border-blue-200 shadow-sm p-4 mb-4">
-          <div className="flex items-center justify-between">
+      {/* 🔍 MESSAGE INFORMATIF: Encourager l'utilisation de la recherche */}
+      {totalFiltered > 50 && (
+        <div className="bg-gradient-to-r from-green-50 to-emerald-50 rounded-2xl border border-green-200 shadow-sm p-4 mb-4">
+          <div className="flex items-center gap-4">
+            <div className="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center flex-shrink-0">
+              <Search className="w-6 h-6 text-green-600" />
+            </div>
             <div className="flex-1">
               <div className="flex items-center gap-2 mb-1">
-                <Archive className="w-5 h-5 text-blue-600" />
-                <h3 className="font-bold text-gray-800">Historique complet disponible</h3>
+                <h3 className="font-bold text-gray-800">💡 Base de données: {totalFiltered.toLocaleString()} expéditions</h3>
               </div>
-              <p className="text-xs text-gray-600">
-                {allParcels.length} colis chargés · Charger les 800 expéditions suivantes pour accéder à tout l'historique
+              <p className="text-sm text-gray-700">
+                Utilisez la <strong>recherche (Ctrl+K)</strong> ou les <strong>filtres</strong> pour trouver rapidement ce que vous cherchez.
+                Les 50 dernières expéditions sont affichées ci-dessous.
               </p>
             </div>
-            <button
-              onClick={loadMoreParcels}
-              disabled={loadingMore}
-              className="ml-4 px-6 py-3 rounded-xl text-sm font-bold text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition shadow-lg flex items-center gap-2"
-            >
-              {loadingMore ? (
-                <>
-                  <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                  Chargement...
-                </>
-              ) : (
-                <>
-                  ↓ Charger 800 de plus
-                </>
-              )}
-            </button>
           </div>
         </div>
       )}
@@ -261,13 +249,19 @@ export default function AdminExpeditionsTab({
           >
             <Plus className="w-4 h-4" /> Nouvelle expédition
           </button>
+          <div className="relative flex-1 min-w-64">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+            <input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="🔍 Recherche rapide: N° EXP, Tracking ID, nom, téléphone..."
+              className="w-full border-2 border-gray-300 rounded-xl pl-10 pr-16 py-2.5 text-sm bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none transition"
+            />
+            <kbd className="absolute right-3 top-1/2 -translate-y-1/2 px-2 py-0.5 text-xs font-semibold text-gray-500 bg-gray-100 border border-gray-300 rounded shadow-sm">
+              Ctrl+K
+            </kbd>
+          </div>
           <Filter className="w-4 h-4 text-gray-400 shrink-0" />
-          <input
-            value={search}
-            onChange={e => setSearch(e.target.value)}
-            placeholder="Rechercher (ID, N EXP, nom, tel...)"
-            className="border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:border-blue-500 focus:outline-none flex-1 min-w-36"
-          />
           <select value={cityFilter} onChange={e => setCityFilter(e.target.value)} className={selectCls}>
             <option value="Toutes">Toutes les villes</option>
             {CITIES.map(c => <option key={c}>{c}</option>)}

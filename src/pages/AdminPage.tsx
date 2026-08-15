@@ -9,7 +9,7 @@ import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
 import {
-  subscribeAllParcels, subscribeAllUsers,
+  subscribeAllParcels, subscribeAllParcelsWithDateFilter, subscribeAllUsers,
   updateParcel, updateParcelStatus, markParcelAsReturned, remitCod, settleCodToSender, batchSettleCods, updateUser, deleteUserDoc,
   subscribeAllCaisse, subscribeAllCaisseClotures,
   subscribeAllCaissierRemarks,
@@ -237,12 +237,12 @@ const advancedSearch = (parcel: any, query: string): boolean => {
 
   const q = query.trim().toUpperCase()
 
-  // 🔢 Si recherche numérique pure (N° EXP) → MATCH EXACT uniquement
-  if (/^[0-9]+$/.test(q)) {
+  // 🔢 Si recherche N° EXP (NIC) ou tracking ID (chiffres ou alphanumérique) → MATCH EXACT uniquement
+  if (/^[0-9A-Z]+$/.test(q) && q.length >= 5) {
     return (
-      parcel.senderNic === q ||
-      parcel.sender?.nic === q ||
-      parcel.trackingId === q
+      parcel.senderNic?.toUpperCase() === q ||
+      parcel.sender?.nic?.toUpperCase() === q ||
+      parcel.trackingId?.toUpperCase() === q
     )
   }
 
@@ -312,8 +312,9 @@ const ROLES = [
   { key: 'agent',       label: 'Agent',           emoji: '👤', badge: 'bg-blue-100 text-blue-700'      },
   { key: 'aide_agent',           label: 'Aide Agent',         emoji: '🙋',   badge: 'bg-violet-100 text-violet-700'  },
   { key: 'agentpro',             label: 'Agent Pro',          emoji: '⭐',   badge: 'bg-purple-100 text-purple-700'  },
-  { key: 'pointeur_encaisseur', label: 'Pointeur-Encaisseur', emoji: '💰',   badge: 'bg-indigo-100 text-indigo-700'  },
   { key: 'encaisseur_central',   label: 'Encaisseur central',  emoji: '🏦',   badge: 'bg-emerald-100 text-emerald-700' },
+  { key: 'analyseur_cheque',     label: 'Analyseur Chèque',    emoji: '📋',   badge: 'bg-blue-100 text-blue-700'      },
+  { key: 'analyseur_espece',     label: 'Analyseur Espèce',    emoji: '💵',   badge: 'bg-green-100 text-green-700'    },
   { key: 'distributeur_especes', label: 'Distributeur Espèces', emoji: '💵',   badge: 'bg-green-100 text-green-700'    },
   { key: 'distributeur_cheques', label: 'Distributeur Chèques', emoji: '📋',   badge: 'bg-blue-100 text-blue-700'      },
   { key: 'facturier',            label: 'Facturier',           emoji: '🧾',   badge: 'bg-cyan-100 text-cyan-700'      },
@@ -347,8 +348,9 @@ export default function AdminPage() {
   const [codDateFrom,   setCodDateFrom]   = useState('')
   const [codDateTo,     setCodDateTo]     = useState('')
 
-  // Parcels - Système de chargement progressif comme CentralCollectorPage
-  const PAGE_SIZE = 800 // Chargement par tranches de 800
+  // Parcels - Système de chargement progressif optimisé ⚡
+  const PAGE_SIZE = 50 // ⚡ OPTIMISÉ: Chargement initial réduit (800 → 50) pour performance
+  const LOAD_MORE_SIZE = 500 // ⚡ Taille pour "Charger plus" (compromis entre vitesse et quantité)
   const [parcels,      setParcels]      = useState<any[]>([]) // Pour compatibilité - alias de liveParcels
   const [liveParcels,  setLiveParcels]  = useState<any[]>([]) // Temps réel (premiers 800)
   const [moreParcels,  setMoreParcels]  = useState<any[]>([]) // Chargés progressivement
@@ -369,6 +371,9 @@ export default function AdminPage() {
   // ✅ NOUVEAU: Recherche gérée par hook professionnel useFuseSearch (défini plus bas après periodParcels)
   const [isSearchActive, setIsSearchActive] = useState(false) // Pour recharger plus de colis quand recherche active
   const [serverSearchResults, setServerSearchResults] = useState<any[] | null>(null) // Résultats recherche serveur
+
+  // ⚡ CONTRÔLE DU RECHARGEMENT AUTOMATIQUE
+  const [autoReloadEnabled, setAutoReloadEnabled] = useState(true) // true = temps réel actif, false = mode manuel
 
   // Limite d'affichage des expéditions filtrées
   const DISPLAY_LIMIT = 150
@@ -552,42 +557,108 @@ export default function AdminPage() {
     return () => { unsubParcels(); unsubUsers(); unsubLocks(); unsubTariffs(); unsubClientMessages(); unsubSectors(); unsubCentralCash(); unsubAgencyCashes(); unsubReglements(); unsubRapports() }
   }, [])
 
-  // ⚡ Abonnement temps réel : 800 premiers colis (rapide)
+  // ⚡ Abonnement temps réel : 50 premiers colis (optimisé avec filtre de date prioritaire)
   useEffect(() => {
     if (isSearchActive) {
       // Mode recherche : on utilise searchParcels - GARDER liveParcels/moreParcels pour éviter l'affichage à 0
-      console.log(`🔍 Mode recherche: searchParcels cherche dans TOUTE la base`)
+      console.warn(`🔍 Mode recherche: searchParcels cherche dans TOUTE la base`)
+      setLoading(false)
+      return () => {}
+    }
+
+    // ⚡ Si rechargement automatique désactivé → ne rien charger
+    if (!autoReloadEnabled) {
+      console.warn(`⏸️ Rechargement automatique DÉSACTIVÉ - Mode manuel actif`)
       setLoading(false)
       return () => {}
     }
 
     setLoading(true)
-    console.log(`📦 Chargement ${PAGE_SIZE} colis récents en temps réel`)
 
-    const unsubParcels = subscribeAllParcels(
-      (data: any, lastSnap: any) => {
-        console.log(`✅ ${data.length} colis chargés en temps réel`)
-        setLiveParcels(data)
-        setLoading(false)
-        if (!pagedRef.current) lastPageDocRef.current = lastSnap
-        if (data.length < PAGE_SIZE) setHasMore(false)
-      },
-      (err: any) => {
-        console.error('❌ Erreur chargement:', err)
-        setLoading(false)
-      },
-      0,
-      PAGE_SIZE
-    )
+    // ⚡ PRIORITÉ AU FILTRE DE DATE: si actif, filtrer directement dans Firestore
+    const hasDateFilter = datePreset !== 'all'
+    let dateFromObj: Date | null = null
+    let dateToObj: Date | null = null
 
-    return () => unsubParcels()
-  }, [isSearchActive])
+    if (hasDateFilter) {
+      const now = new Date()
+      if (datePreset === 'today') {
+        dateFromObj = new Date()
+        dateFromObj.setHours(0, 0, 0, 0)
+        dateToObj = now
+      } else if (datePreset === 'week') {
+        dateFromObj = new Date()
+        dateFromObj.setDate(now.getDate() - 6)
+        dateFromObj.setHours(0, 0, 0, 0)
+        dateToObj = now
+      } else if (datePreset === 'month') {
+        dateFromObj = new Date(now.getFullYear(), now.getMonth(), 1)
+        dateToObj = now
+      } else if (datePreset === 'custom') {
+        if (dateFrom) dateFromObj = new Date(dateFrom + 'T00:00:00')
+        if (dateTo) dateToObj = new Date(dateTo + 'T23:59:59')
+      } else if (datePreset === 'operational' && operationalDay) {
+        const range = getOperationalDayRange(operationalDay)
+        dateFromObj = range.start
+        dateToObj = range.end
+      }
+    }
+
+    if (hasDateFilter && (dateFromObj || dateToObj)) {
+      console.warn(`⚡ Chargement ${PAGE_SIZE} colis avec FILTRE DE DATE Firestore`, {
+        from: dateFromObj?.toLocaleDateString('fr-MA'),
+        to: dateToObj?.toLocaleDateString('fr-MA'),
+      })
+
+      const unsubParcels = subscribeAllParcelsWithDateFilter(
+        (data: any, lastSnap: any) => {
+          console.warn(`✅ ${data.length} colis chargés avec filtre de date`)
+          setLiveParcels(data)
+          setLoading(false)
+          if (!pagedRef.current) lastPageDocRef.current = lastSnap
+          if (data.length < PAGE_SIZE) setHasMore(false)
+        },
+        (err: any) => {
+          console.error('❌ Erreur chargement:', err)
+          setLoading(false)
+        },
+        {
+          pageSize: PAGE_SIZE,
+          dateFrom: dateFromObj,
+          dateTo: dateToObj,
+        }
+      )
+
+      return () => unsubParcels()
+    } else {
+      // Pas de filtre de date → chargement normal
+      console.warn(`📦 Chargement ${PAGE_SIZE} colis récents (sans filtre de date)`)
+
+      const unsubParcels = subscribeAllParcels(
+        (data: any, lastSnap: any) => {
+          console.warn(`✅ ${data.length} colis chargés en temps réel`)
+          setLiveParcels(data)
+          setLoading(false)
+          if (!pagedRef.current) lastPageDocRef.current = lastSnap
+          if (data.length < PAGE_SIZE) setHasMore(false)
+        },
+        (err: any) => {
+          console.error('❌ Erreur chargement:', err)
+          setLoading(false)
+        },
+        0,
+        PAGE_SIZE
+      )
+
+      return () => unsubParcels()
+    }
+  }, [isSearchActive, autoReloadEnabled, datePreset, dateFrom, dateTo, operationalDayFormatted])
 
   // 🔄 Écouter les mises à jour de prix depuis d'autres pages (ex: Facturier)
   useEffect(() => {
     const handlePriceUpdate = (event: CustomEvent) => {
       const { parcelId, newPrice } = event.detail
-      console.log(`💰 Prix mis à jour depuis une autre page: ${parcelId} = ${newPrice} DH`)
+      console.warn(`💰 Prix mis à jour depuis une autre page: ${parcelId} = ${newPrice} DH`)
 
       // Mettre à jour dans liveParcels
       setLiveParcels(prev => prev.map(p =>
@@ -608,7 +679,7 @@ export default function AdminPage() {
   useEffect(() => {
     const handleParcelUpdate = (event: CustomEvent) => {
       const { parcelId, data } = event.detail
-      console.log(`📦 Parcel mis à jour: ${parcelId}`, data)
+      console.warn(`📦 Parcel mis à jour: ${parcelId}`, data)
 
       // Mettre à jour dans liveParcels
       setLiveParcels(prev => prev.map(p =>
@@ -625,28 +696,25 @@ export default function AdminPage() {
     return () => window.removeEventListener('parcelUpdated', handleParcelUpdate as EventListener)
   }, [])
 
-  // 🚀 Chargement automatique de toute la base en arrière-plan (après premiers 800)
-  useEffect(() => {
-    if (!hasMore || loadingAll || loadingMore || !lastPageDocRef.current || isSearchActive) return
-    if (liveParcels.length === 0) return // attendre le chargement initial
+  // ❌ OPTION 3: Chargement automatique désactivé pour performance maximale
+  // Les utilisateurs doivent utiliser la recherche/filtres au lieu de charger tous les colis
+  // useEffect(() => {
+  //   if (!hasMore || loadingAll || loadingMore || !lastPageDocRef.current || isSearchActive) return
+  //   if (liveParcels.length === 0) return
+  //   const timer = setTimeout(() => {
+  //     if (hasMore && !loadingAll && !loadingMore && lastPageDocRef.current) {
+  //       loadAllParcels()
+  //     }
+  //   }, 2000)
+  //   return () => clearTimeout(timer)
+  // }, [liveParcels.length, hasMore, isSearchActive])
 
-    // Lancer le chargement complet automatiquement après 2 secondes
-    const timer = setTimeout(() => {
-      if (hasMore && !loadingAll && !loadingMore && lastPageDocRef.current) {
-        console.log(`🚀 Démarrage du chargement automatique de toute la base...`)
-        loadAllParcels()
-      }
-    }, 2000)
-
-    return () => clearTimeout(timer)
-  }, [liveParcels.length, hasMore, isSearchActive])
-
-  // Charger 800 colis de plus
+  // Charger 500 colis de plus (optimisé)
   const loadMoreParcels = async () => {
     if (!hasMore || loadingMore || loadingAll || !lastPageDocRef.current) return
     setLoadingMore(true)
     try {
-      const { docs, lastDocSnap, hasMore: moreAvailable } = await getParcelsPage(lastPageDocRef.current, PAGE_SIZE)
+      const { docs, lastDocSnap, hasMore: moreAvailable } = await getParcelsPage(lastPageDocRef.current, LOAD_MORE_SIZE)
       pagedRef.current = true
       setMoreParcels(prev => {
         const map = new Map()
@@ -656,7 +724,7 @@ export default function AdminPage() {
       })
       if (lastDocSnap) lastPageDocRef.current = lastDocSnap
       if (!moreAvailable) setHasMore(false)
-      console.log(`✅ ${docs.length} colis supplémentaires chargés (total moreParcels: ${docs.length})`)
+      console.warn(`✅ ${docs.length} colis supplémentaires chargés (total moreParcels: ${docs.length})`)
     } catch (err) {
       console.error('AdminPage loadMore:', err)
     } finally {
@@ -664,40 +732,56 @@ export default function AdminPage() {
     }
   }
 
-  // Tout charger : boucle par tranches de 800 jusqu'à la fin
-  const loadAllParcels = async () => {
-    if (loadingAll || loadingMore || !hasMore || !lastPageDocRef.current) return
-    setLoadingAll(true)
-    setLoadAllProgress(0)
+  // ❌ OPTION 3: Fonction désactivée - ne charge plus automatiquement tous les colis
+  // const loadAllParcels = async () => {
+  //   if (loadingAll || loadingMore || !hasMore || !lastPageDocRef.current) return
+  //   setLoadingAll(true)
+  //   setLoadAllProgress(0)
+  //   try {
+  //     let cursor = lastPageDocRef.current
+  //     let more = true
+  //     let loaded = 0
+  //     let safety = 0
+  //     while (more && cursor && safety < 500) {
+  //       const page = await getParcelsPage(cursor, LOAD_MORE_SIZE)
+  //       pagedRef.current = true
+  //       const pageDocs = page.docs
+  //       loaded += pageDocs.length
+  //       setLoadAllProgress(loaded)
+  //       setMoreParcels(prev => {
+  //         const map = new Map()
+  //         prev.forEach((p: any) => map.set(p.id, p))
+  //         pageDocs.forEach((p: any) => map.set(p.id, p))
+  //         return [...map.values()]
+  //       })
+  //       cursor = page.lastDocSnap
+  //       more = page.hasMore && !!page.lastDocSnap
+  //       safety += 1
+  //     }
+  //     if (cursor) lastPageDocRef.current = cursor
+  //     setHasMore(false)
+  //   } catch (err) {
+  //     console.error('AdminPage loadAll:', err)
+  //   } finally {
+  //     setLoadingAll(false)
+  //   }
+  // }
+
+  // ⚡ Rechargement manuel (quand auto-reload désactivé)
+  const manualReload = async () => {
+    if (loading) return // Éviter double chargement
+    setLoading(true)
+    console.warn(`🔄 Rechargement manuel: ${PAGE_SIZE} colis`)
     try {
-      let cursor = lastPageDocRef.current
-      let more = true
-      let loaded = 0
-      let safety = 0
-      while (more && cursor && safety < 500) {
-        const page = await getParcelsPage(cursor, PAGE_SIZE)
-        pagedRef.current = true
-        const pageDocs = page.docs
-        loaded += pageDocs.length
-        setLoadAllProgress(loaded)
-        console.log(`📦 Chargement automatique: +${pageDocs.length} colis (total: ${loaded})`)
-        setMoreParcels(prev => {
-          const map = new Map()
-          prev.forEach((p: any) => map.set(p.id, p))
-          pageDocs.forEach((p: any) => map.set(p.id, p))
-          return [...map.values()]
-        })
-        cursor = page.lastDocSnap
-        more = page.hasMore && !!page.lastDocSnap
-        safety += 1
-      }
-      if (cursor) lastPageDocRef.current = cursor
-      setHasMore(false)
-      console.log(`✅ Chargement automatique terminé: ${loaded} colis chargés`)
+      const { docs, lastDocSnap, hasMore: moreAvailable } = await getParcelsPage(null, PAGE_SIZE)
+      setLiveParcels(docs)
+      lastPageDocRef.current = lastDocSnap
+      setHasMore(moreAvailable)
+      console.warn(`✅ ${docs.length} colis rechargés`)
     } catch (err) {
-      console.error('AdminPage loadAll:', err)
+      console.error('❌ Erreur rechargement manuel:', err)
     } finally {
-      setLoadingAll(false)
+      setLoading(false)
     }
   }
 
@@ -842,7 +926,7 @@ export default function AdminPage() {
     liveParcels.forEach((p: any) => map.set(p.id, p))
 
     const arr = [...map.values()]
-    console.log(`📊 allParcels: ${arr.length} colis (liveParcels: ${liveParcels.length}, moreParcels: ${moreParcels.length}, serverSearch: ${serverSearchResults?.length || 0})`)
+    console.warn(`📊 allParcels: ${arr.length} colis (liveParcels: ${liveParcels.length}, moreParcels: ${moreParcels.length}, serverSearch: ${serverSearchResults?.length || 0})`)
 
     // Trier par date de création (plus récent en premier)
     return arr.sort((a: any, b: any) => {
@@ -1135,17 +1219,27 @@ export default function AdminPage() {
     let results = periodParcels
 
     if (debouncedSearch.trim()) {
-      // 🔍 STRATÉGIE OPTIMISÉE:
-      // 1️⃣ Recherche serveur si disponible (toute la base)
-      // 2️⃣ Sinon résultats Fuse.js optimisés (scoring intelligent)
-      if (serverSearchResults !== null) {
-        results = serverSearchResults
-        console.log(`✅ Serveur: ${results.length} résultats (toute la base)`)
+      const searchQuery = debouncedSearch.trim().toUpperCase()
+
+      // 🎯 RECHERCHE EXACTE pour identifiants (NIC/Tracking alphanumériques 5+ caractères)
+      if (/^[0-9A-Z]+$/.test(searchQuery) && searchQuery.length >= 5) {
+        // Match exact uniquement - pas de Fuse.js pour les identifiants
+        results = periodParcels.filter((p: any) =>
+          p.trackingId?.toUpperCase() === searchQuery ||
+          p.sender?.nic?.toUpperCase() === searchQuery
+        )
+        console.warn(`🎯 Match exact: ${results.length} résultats pour "${searchQuery}"`)
       } else {
-        // ⚡ NOUVEAU: Utiliser résultats du hook professionnel
-        // Scoring automatique (préfixe exact prioritaire pour numéros)
-        results = fuseResults
-        console.log(`🔍 Fuse.js PRO: ${fuseTotalResults} résultats sur ${periodParcels.length} colis (${fuseIsSearching ? 'recherche...' : 'terminé'})`)
+        // 🔍 RECHERCHE FLOUE pour noms, téléphones, etc.
+        if (serverSearchResults !== null) {
+          results = serverSearchResults
+          console.warn(`✅ Serveur: ${results.length} résultats (toute la base)`)
+        } else {
+          // ⚡ NOUVEAU: Utiliser résultats du hook professionnel
+          // Scoring automatique (préfixe exact prioritaire pour numéros)
+          results = fuseResults
+          console.warn(`🔍 Fuse.js PRO: ${fuseTotalResults} résultats sur ${periodParcels.length} colis (${fuseIsSearching ? 'recherche...' : 'terminé'})`)
+        }
       }
     }
 
@@ -1207,6 +1301,8 @@ export default function AdminPage() {
         return scoreB - scoreA
       })
     }
+
+    // ✅ Filtrage exact maintenant géré AVANT Fuse.js (voir ligne ~1140)
 
     return results
   }, [periodParcels, cityFilter, driverFilter, statusFilter, serviceTypeFilter, portTypeFilter, debouncedSearch, fuseResults, fuseTotalResults, fuseIsSearching, serverSearchResults])
@@ -1373,9 +1469,44 @@ export default function AdminPage() {
             <div className="flex items-center gap-2">
               <LiveClock className="text-gray-400 hidden sm:inline" />
               <WorkingDateIndicator />
-              <span className="hidden sm:flex items-center gap-1.5 text-xs text-green-600 font-medium">
-                <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" /> Temps réel
-              </span>
+
+              {/* ⚡ Bouton Toggle Rechargement Automatique */}
+              <button
+                onClick={() => setAutoReloadEnabled(prev => !prev)}
+                className={`hidden sm:flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition ${
+                  autoReloadEnabled
+                    ? 'bg-green-50 text-green-700 hover:bg-green-100 border border-green-200'
+                    : 'bg-gray-100 text-gray-500 hover:bg-gray-200 border border-gray-300'
+                }`}
+                title={autoReloadEnabled ? 'Cliquer pour DÉSACTIVER le rechargement automatique' : 'Cliquer pour ACTIVER le rechargement automatique'}
+              >
+                {autoReloadEnabled ? (
+                  <>
+                    <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
+                    <Power className="w-3.5 h-3.5" />
+                    Temps réel
+                  </>
+                ) : (
+                  <>
+                    <Power className="w-3.5 h-3.5" />
+                    Mode manuel
+                  </>
+                )}
+              </button>
+
+              {/* 🔄 Bouton Rechargement Manuel (affiché uniquement en mode manuel) */}
+              {!autoReloadEnabled && (
+                <button
+                  onClick={manualReload}
+                  disabled={loading}
+                  className="hidden sm:flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  title="Recharger manuellement les données"
+                >
+                  <RotateCcw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+                  {loading ? 'Chargement...' : 'Actualiser'}
+                </button>
+              )}
+
               <button onClick={() => signOut(auth).then(() => navigate('/login'))}
                 className="hidden md:flex items-center gap-1.5 text-sm text-red-500 hover:text-red-600 transition">
                 <LogOut className="w-4 h-4" /> Déconnexion
@@ -1396,7 +1527,7 @@ export default function AdminPage() {
               </button>
               <span className="text-gray-200 font-light">/</span>
               <span className="text-sm font-bold text-blue-600">
-                {{ expeditions:'Expéditions', doublons:'Doublons', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', clients:'Clients', exports:'Exports', caisse:'Caisse', versements:'Versements Admin', invoices:'Facturation', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires' }[mainTab] || mainTab}
+                {{ expeditions:'Expéditions', doublons:'Doublons', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', exports:'Exports', caisse:'Caisse', versements:'Versements Admin', invoices:'Facturation', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires' }[mainTab] || mainTab}
               </span>
             </div>
           )}
@@ -1724,7 +1855,7 @@ export default function AdminPage() {
           </Suspense>
         )}
 
-        {/* TAB: CLIENTS */}
+        {/* TAB: CLIENTS - TEMPORAIREMENT DÉSACTIVÉ */}
         {mainTab === 'clients' && (
           <Suspense fallback={<div className="mt-4 h-72 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
             <AdminClientsTab />
