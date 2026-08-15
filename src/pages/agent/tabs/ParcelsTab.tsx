@@ -176,6 +176,10 @@ export default function ParcelsTab() {
     returnReasonModal, setReturnReasonModal,
     submitReturnWithReason,
     handleChangeParcelStatus,
+
+    // 💰 État et handler pour édition COD
+    codEditModal, setCodEditModal,
+    handleSaveCodAmount,
   } = useAgentCtx()
 
   const PAGE_SIZE = 25
@@ -372,9 +376,16 @@ export default function ParcelsTab() {
 
   // ⭐ Fonction helper pour calculer les résultats filtrés par la recherche tableau
   const getTableFilteredParcels = (allParcels: any[]) => {
-    if (!tableSearch) return allParcels
+    // Filtrer par statut d'abord
+    let filtered = allParcels
+    if (parcelStatusFilter && parcelStatusFilter !== 'all') {
+      filtered = filtered.filter((p: any) => p.status === parcelStatusFilter)
+    }
+
+    // Puis filtrer par recherche texte
+    if (!tableSearch) return filtered
     const searchLower = tableSearch.toLowerCase()
-    return allParcels.filter((p: any) => (
+    return filtered.filter((p: any) => (
       p.sender?.nic?.toLowerCase().includes(searchLower) ||
       p.trackingId?.toLowerCase().includes(searchLower) ||
       p.sender?.name?.toLowerCase().includes(searchLower) ||
@@ -701,73 +712,7 @@ export default function ParcelsTab() {
                 </div>
               </button>
 
-              {/* 🌍 Mode Toutes villes (Agent Pro uniquement) */}
-              {profile?.role === 'agentpro' && (
-                <button
-                  onClick={() => setShowAllCities((v: any) => !v)}
-                  className={`w-full flex items-center justify-between px-4 py-2.5 border rounded-xl shadow-sm transition ${
-                    showAllCities
-                      ? 'bg-blue-50 border-blue-300 hover:bg-blue-100'
-                      : 'bg-white border-gray-200 hover:border-blue-400 hover:bg-blue-50'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <span className={`text-lg transition ${showAllCities ? '' : 'grayscale opacity-50'}`}>🌍</span>
-                    <div className="text-left">
-                      <span className={`text-xs font-semibold transition block ${showAllCities ? 'text-blue-700' : 'text-gray-600'}`}>
-                        Toutes les villes (base complète)
-                      </span>
-                      {showAllCities && (
-                        <span className="text-[10px] text-orange-600 font-medium">
-                          ⚠️ Filtres de date et ville désactivés
-                        </span>
-                      )}
-                    </div>
-                  </div>
-                  <div className={`w-4 h-4 rounded border transition flex items-center justify-center ${
-                    showAllCities ? 'bg-blue-600 border-blue-600' : 'border-gray-300'
-                  }`}>
-                    {showAllCities && <Check className="w-3 h-3 text-white" />}
-                  </div>
-                </button>
-              )}
-
-              {/* 📦 Charger plus + Indicateur de progression */}
-              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && hasMoreAgency && (
-                <button
-                  onClick={() => {
-                    // En mode "Toutes villes", utiliser loadMoreAllCitiesParcels
-                    if (showAllCities && loadMoreAllCitiesParcels) {
-                      loadMoreAllCitiesParcels()
-                    } else if (loadMoreAgencyParcels) {
-                      loadMoreAgencyParcels()
-                    }
-                  }}
-                  disabled={loadingMoreAgency}
-                  className="w-full flex flex-col items-center justify-center gap-1 px-4 py-2.5 rounded-xl border-2 border-green-300 bg-green-50 text-green-700 text-sm font-bold hover:bg-green-100 disabled:opacity-50 transition shadow-sm"
-                >
-                  {loadingMoreAgency ? (
-                    <>
-                      <div className="flex items-center gap-2">
-                        <span className="w-4 h-4 border-2 border-green-600 border-t-transparent rounded-full animate-spin" />
-                        <span>Chargement en cours...</span>
-                      </div>
-                    </>
-                  ) : (
-                    <>
-                      <div className="flex items-center gap-2">
-                        <Package className="w-4 h-4" />
-                        {showAllCities ? "🌍 Charger plus (toutes villes)" : "📦 Charger plus d'expéditions"}
-                      </div>
-                      {showAllCities && allCitiesTotalLoaded > 0 && (
-                        <span className="text-[10px] text-green-600 font-normal">
-                          📊 {allCitiesTotalLoaded.toLocaleString()} expéditions chargées
-                        </span>
-                      )}
-                    </>
-                  )}
-                </button>
-              )}
+              {/* ✅ SUPPRIMÉ: Bouton "Toutes les villes" et "Charger plus" - Utilise maintenant système Option 3 */}
 
               <button
                 onClick={() => setShowFilters((v: any) => !v)}
@@ -863,6 +808,8 @@ export default function ParcelsTab() {
                       { key: 'all', label: 'Tous', emoji: '' },
                       { key: 'port_paye', label: 'Port payé', emoji: '✅' },
                       { key: 'port_du', label: 'Port dû', emoji: '📮' },
+                      { key: 'port_en_compte_expediteur', label: 'En compte Exp', emoji: '📤' },
+                      { key: 'port_en_compte_destinataire', label: 'En compte Dest', emoji: '📥' },
                       { key: 'port_en_compte', label: 'En compte', emoji: '💼' },
                     ].map(({ key, label, emoji }) => (
                       <button key={key} onClick={() => setPortTypeFilter(key)}
@@ -1397,34 +1344,61 @@ export default function ParcelsTab() {
                           const today = new Date().toLocaleDateString('fr-FR')
                           const timeNow = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
 
+                          // Déterminer le type de paiement prédominant
+                          const paymentTypes = selectedParcels
+                            .filter((p: any) => p.codAmount && p.codAmount > 0)
+                            .map((p: any) => p.codPaymentType)
+                          const paymentCounts: any = {}
+                          paymentTypes.forEach((t: string) => {
+                            paymentCounts[t] = (paymentCounts[t] || 0) + 1
+                          })
+                          const mainPaymentType = Object.keys(paymentCounts).length > 0
+                            ? Object.keys(paymentCounts).reduce((a, b) => paymentCounts[a] > paymentCounts[b] ? a : b)
+                            : null
+                          const paymentLabel = mainPaymentType === 'cheque' ? 'Contre Chèque' :
+                                              mainPaymentType === 'especes' ? 'Contre Espèces' :
+                                              mainPaymentType === 'traite' ? 'Contre Traite' : ''
+
                           // Créer les données pour Excel
                           const data: any[] = []
 
-                          // Ligne 1 : Date
-                          data.push([`Date: ${today} ${timeNow}`, '', '', '', '', '', ''])
-
-                          // Ligne 2 : Total
-                          data.push([`Total: ${selectedParcels.length} expédition(s)`, '', '', '', '', '', ''])
-
-                          // Ligne 3 : Vide
+                          // Lignes vides au début (pour que le tableau commence à la ligne 4)
+                          data.push(['', '', '', '', '', '', ''])
+                          data.push(['', '', '', '', '', '', ''])
                           data.push(['', '', '', '', '', '', ''])
 
-                          // Ligne 4 : Headers
-                          data.push(['N° EXP (NIC)', 'Expéditeur', 'Destinataire', 'Téléphone', 'Ville', 'Statut', 'Type Port'])
+                          // Ligne 4 : Date et type de paiement
+                          data.push([`Date: ${today} ${timeNow}${paymentLabel ? ' - ' + paymentLabel : ''}`, '', '', '', '', '', ''])
+
+                          // Ligne 5 : Total
+                          data.push([`Total: ${selectedParcels.length} expédition(s)`, '', '', '', '', '', ''])
+
+                          // Ligne 6 : Vide
+                          data.push(['', '', '', '', '', '', ''])
+
+                          // Ligne 7 : Headers
+                          data.push(['N° EXP (NIC)', 'Expéditeur', 'Destinataire', 'Ville Exp.', 'Ville Dest.', 'Date Exp.', 'Prix'])
 
                           // Lignes 5+ : Données
                           selectedParcels.forEach((p: any) => {
+                            // Formater le COD - seulement le montant avec virgule
+                            let codText = ''
+                            const amount = parseFloat(p.codAmount)
+                            if (!isNaN(amount) && amount > 0) {
+                              codText = String(amount).replace('.', ',')
+                            }
+
+                            // Date d'expédition
+                            const expeditionDate = p.expeditionDate || (p.createdAt?.toDate ? p.createdAt.toDate().toLocaleDateString('fr-FR') : '')
+
                             data.push([
                               p.sender?.nic || '',
                               p.sender?.name || '',
                               p.receiver?.name || '',
-                              p.receiver?.phone || '',
+                              p.sender?.city || p.originCity || '',
                               p.destinationCity || p.receiver?.city || '',
-                              p.status || '',
-                              p.portType === 'port_paye' ? 'Port payé' :
-                              p.portType === 'port_du' ? 'Port dû' :
-                              p.portType === 'en_compte_expediteur' ? 'Compte expéditeur' :
-                              p.portType === 'en_compte_destinataire' ? 'Compte destinataire' : ''
+                              expeditionDate,
+                              codText
                             ])
                           })
 
@@ -1437,10 +1411,10 @@ export default function ParcelsTab() {
                             { wch: 15 }, // N° EXP
                             { wch: 20 }, // Expéditeur
                             { wch: 20 }, // Destinataire
-                            { wch: 15 }, // Téléphone
-                            { wch: 20 }, // Ville
-                            { wch: 20 }, // Statut
-                            { wch: 20 }  // Type Port
+                            { wch: 18 }, // Ville Exp.
+                            { wch: 18 }, // Ville Dest.
+                            { wch: 12 }, // Date Exp.
+                            { wch: 12 }  // Prix
                           ]
 
                           // Ajouter la feuille au workbook
@@ -1572,8 +1546,8 @@ export default function ParcelsTab() {
                         <button
                           type="button"
                           onClick={() => {
-                            // Récupérer les expéditions sélectionnées
-                            const selectedParcels = assignableParcels.filter((p: any) => bulkAssignSelectedIds.includes(p.id))
+                            // Récupérer les expéditions sélectionnées (tous les colis, pas seulement assignables)
+                            const selectedParcels = filteredParcels.filter((p: any) => bulkAssignSelectedIds.includes(p.id))
 
                             if (selectedParcels.length === 0) {
                               alert('Aucune expédition sélectionnée à exporter')
@@ -1583,34 +1557,61 @@ export default function ParcelsTab() {
                             const today = new Date().toLocaleDateString('fr-FR')
                             const timeNow = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
 
+                            // Déterminer le type de paiement prédominant
+                            const paymentTypes = selectedParcels
+                              .filter((p: any) => p.codAmount && p.codAmount > 0)
+                              .map((p: any) => p.codPaymentType)
+                            const paymentCounts: any = {}
+                            paymentTypes.forEach((t: string) => {
+                              paymentCounts[t] = (paymentCounts[t] || 0) + 1
+                            })
+                            const mainPaymentType = Object.keys(paymentCounts).length > 0
+                              ? Object.keys(paymentCounts).reduce((a, b) => paymentCounts[a] > paymentCounts[b] ? a : b)
+                              : null
+                            const paymentLabel = mainPaymentType === 'cheque' ? 'Contre Chèque' :
+                                                mainPaymentType === 'especes' ? 'Contre Espèces' :
+                                                mainPaymentType === 'traite' ? 'Contre Traite' : ''
+
                             // Créer les données pour Excel
                             const data: any[] = []
 
-                            // Ligne 1 : Date
-                            data.push([`Date: ${today} ${timeNow}`, '', '', '', '', '', ''])
-
-                            // Ligne 2 : Total
-                            data.push([`Total: ${selectedParcels.length} expédition(s)`, '', '', '', '', '', ''])
-
-                            // Ligne 3 : Vide
+                            // Lignes vides au début (pour que le tableau commence à la ligne 4)
+                            data.push(['', '', '', '', '', '', ''])
+                            data.push(['', '', '', '', '', '', ''])
                             data.push(['', '', '', '', '', '', ''])
 
-                            // Ligne 4 : Headers
-                            data.push(['N° EXP (NIC)', 'Expéditeur', 'Destinataire', 'Téléphone', 'Ville', 'Statut', 'Type Port'])
+                            // Ligne 4 : Date et type de paiement
+                            data.push([`Date: ${today} ${timeNow}${paymentLabel ? ' - ' + paymentLabel : ''}`, '', '', '', '', '', ''])
+
+                            // Ligne 5 : Total
+                            data.push([`Total: ${selectedParcels.length} expédition(s)`, '', '', '', '', '', ''])
+
+                            // Ligne 6 : Vide
+                            data.push(['', '', '', '', '', '', ''])
+
+                            // Ligne 7 : Headers
+                            data.push(['N° EXP (NIC)', 'Expéditeur', 'Destinataire', 'Ville Exp.', 'Ville Dest.', 'Date Exp.', 'Prix'])
 
                             // Lignes 5+ : Données
                             selectedParcels.forEach((p: any) => {
+                              // Formater le COD - seulement le montant avec virgule
+                              let codText = ''
+                              const amount = parseFloat(p.codAmount)
+                              if (!isNaN(amount) && amount > 0) {
+                                codText = String(amount).replace('.', ',')
+                              }
+
+                              // Date d'expédition
+                              const expeditionDate = p.expeditionDate || (p.createdAt?.toDate ? p.createdAt.toDate().toLocaleDateString('fr-FR') : '')
+
                               data.push([
                                 p.sender?.nic || '',
                                 p.sender?.name || '',
                                 p.receiver?.name || '',
-                                p.receiver?.phone || '',
+                                p.sender?.city || p.originCity || '',
                                 p.destinationCity || p.receiver?.city || '',
-                                p.status || '',
-                                p.portType === 'port_paye' ? 'Port payé' :
-                                p.portType === 'port_du' ? 'Port dû' :
-                                p.portType === 'en_compte_expediteur' ? 'Compte expéditeur' :
-                                p.portType === 'en_compte_destinataire' ? 'Compte destinataire' : ''
+                                expeditionDate,
+                                codText
                               ])
                             })
 
@@ -1623,10 +1624,10 @@ export default function ParcelsTab() {
                               { wch: 15 }, // N° EXP
                               { wch: 20 }, // Expéditeur
                               { wch: 20 }, // Destinataire
-                              { wch: 15 }, // Téléphone
-                              { wch: 20 }, // Ville
-                              { wch: 20 }, // Statut
-                              { wch: 20 }  // Type Port
+                              { wch: 18 }, // Ville Exp.
+                              { wch: 18 }, // Ville Dest.
+                              { wch: 12 }, // Date Exp.
+                              { wch: 12 }  // Prix
                             ]
 
                             // Ajouter la feuille au workbook
@@ -1939,29 +1940,51 @@ export default function ParcelsTab() {
                               // Créer les données pour Excel
                               const data: any[] = []
 
-                              // Ligne 1 : Date
-                              data.push([`Date: ${today} ${timeNow}`, '', '', '', '', ''])
+                              // Lignes vides au début (pour que le tableau commence à la ligne 4)
+                              data.push(['', '', '', '', '', '', '', '', ''])
+                              data.push(['', '', '', '', '', '', '', '', ''])
+                              data.push(['', '', '', '', '', '', '', '', ''])
 
-                              // Ligne 2 : Total
-                              data.push([`Total: ${customSheetParcels.length} expédition(s)`, '', '', '', '', ''])
+                              // Ligne 4 : Date
+                              data.push([`Date: ${today} ${timeNow}`, '', '', '', '', '', '', '', ''])
 
-                              // Ligne 3 : Vide
-                              data.push(['', '', '', '', '', ''])
+                              // Ligne 5 : Total
+                              data.push([`Total: ${customSheetParcels.length} expédition(s)`, '', '', '', '', '', '', '', ''])
 
-                              // Ligne 4 : Headers
-                              data.push(['N° EXP (NIC)', 'Destinataire', 'Téléphone', 'Ville', 'Statut', 'Pointage'])
+                              // Ligne 6 : Vide
+                              data.push(['', '', '', '', '', '', '', '', ''])
+
+                              // Ligne 7 : Headers
+                              data.push(['N° EXP (NIC)', 'Destinataire', 'Téléphone', 'Ville Exp.', 'Ville Dest.', 'Statut', 'Pointage', 'COD', 'Service'])
 
                               // Lignes 5+ : Données
                               customSheetParcels.forEach((p: any) => {
+                                // Formater le COD
+                                let codText = ''
+                                if (p.codAmount && p.codAmount > 0) {
+                                  const paymentType = p.codPaymentType === 'cheque' ? 'C/Chèque' :
+                                                      p.codPaymentType === 'especes' ? 'C/Espèces' :
+                                                      p.codPaymentType === 'traite' ? 'C/Traite' : 'COD'
+                                  codText = `${p.codAmount} DH (${paymentType})`
+                                }
+
+                                // Formater le service
+                                const serviceText = p.serviceType === 'domicile' ? 'Domicile' :
+                                                   p.serviceType === 'echange' ? 'Echange' :
+                                                   p.serviceType === 'simple' ? 'Simple' : ''
+
                                 data.push([
                                   p.sender?.nic || '',
                                   p.receiver?.name || '',
                                   p.receiver?.phone || '',
+                                  p.sender?.city || p.originCity || '',
                                   p.destinationCity || p.receiver?.city || '',
                                   p.status || '',
                                   customSheetPointage[p.id] === 'livre' ? 'Livré' :
                                   customSheetPointage[p.id] === 'non_livre' ? 'Non livré' :
-                                  customSheetPointage[p.id] === 'souffrance' ? 'Souffrance' : ''
+                                  customSheetPointage[p.id] === 'souffrance' ? 'Souffrance' : '',
+                                  codText,
+                                  serviceText
                                 ])
                               })
 
@@ -1974,9 +1997,12 @@ export default function ParcelsTab() {
                                 { wch: 15 }, // N° EXP
                                 { wch: 25 }, // Destinataire
                                 { wch: 15 }, // Téléphone
-                                { wch: 20 }, // Ville
+                                { wch: 18 }, // Ville Exp.
+                                { wch: 18 }, // Ville Dest.
                                 { wch: 20 }, // Statut
-                                { wch: 15 }  // Pointage
+                                { wch: 15 }, // Pointage
+                                { wch: 25 }, // COD
+                                { wch: 15 }  // Service
                               ]
 
                               // Ajouter la feuille au workbook
@@ -2335,6 +2361,22 @@ export default function ParcelsTab() {
                 </div>
               )}
 
+              {/* ⭐ Filtre de statut actif */}
+              {parcelStatusFilter && parcelStatusFilter !== 'all' && (
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="text-sm text-gray-600 font-semibold">Filtre actif:</span>
+                  <span className={`inline-flex items-center gap-2 text-xs font-semibold px-3 py-1.5 rounded-full ${STATUS_COLORS[parcelStatusFilter]?.bg || 'bg-gray-100'} ${STATUS_COLORS[parcelStatusFilter]?.text || 'text-gray-700'}`}>
+                    {parcelStatusFilter}
+                  </span>
+                  <button
+                    onClick={() => setParcelStatusFilter && setParcelStatusFilter('all')}
+                    className="text-xs text-blue-600 hover:text-blue-800 font-semibold underline"
+                  >
+                    Voir tous les colis
+                  </button>
+                </div>
+              )}
+
               {/* ⭐ Barre de recherche spécifique au tableau */}
               <div className="relative">
                 <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-purple-500" />
@@ -2467,11 +2509,10 @@ export default function ParcelsTab() {
                       const serviceType = ALL_SERVICE_TYPES.find(st => st.key === parcel.serviceType)
                       const driver = drivers?.find((d: any) => d.id === parcel.deliveryDriverId || d.id === parcel.chauffeurId)
 
-                      // Vérifier si ce colis peut être sélectionné (reçus ET envoyés)
+                      // Checkbox toujours affiché quelque soit le statut ou l'agence
                       const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
                       const isFromMyCity = (parcel.originCity === profile?.city || parcel.sender?.city === profile?.city)
-                      const canAssign = !parcel.deliveredAt && !parcel.returnedAt && parcel.status !== 'Livré'
-                      const isAssignable = (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (isInMyCity || isFromMyCity) && canAssign
+                      const isAssignable = (profile?.role === 'chef_agence' || profile?.role === 'agentpro')
                       const assignSelected = bulkAssignSelectedIds.includes(parcel.id)
 
                       return (
@@ -2874,6 +2915,16 @@ export default function ParcelsTab() {
                                     <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 rounded-lg text-sm font-black">
                                       💰 {parcel.codAmount} DH
                                     </span>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation()
+                                        setCodEditModal({ parcel, value: parcel.codAmount || 0, loading: false, error: '' })
+                                      }}
+                                      className="hover:scale-125 transition-transform cursor-pointer text-lg"
+                                      title={`Modifier COD (role: ${profile?.role})`}
+                                    >
+                                      ✏️
+                                    </button>
                                     {(parcel.serviceType === 'cheque' || parcel.serviceType === 'traite') && (
                                       <button
                                         onClick={() => setCodDocumentModal({
@@ -3324,9 +3375,39 @@ export default function ParcelsTab() {
                           <>
                             <span className="text-gray-400">•</span>
                             <span className="text-orange-600 font-bold">RF {parcel.codAmount} DH</span>
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setCodEditModal({ parcel, value: parcel.codAmount || 0, loading: false, error: '' })
+                              }}
+                              className="p-0.5 rounded hover:bg-orange-50 text-gray-400 hover:text-orange-500 transition shrink-0"
+                              title={`Modifier COD (role: ${profile?.role})`}
+                            >
+                              ✏️
+                            </button>
                           </>
                         )}
                       </div>
+                      {/* 🔄 HISTORIQUE MONTANT COD */}
+                      {parcel.codAmountHistory && parcel.codAmountHistory.length > 0 && (
+                        <div className="text-[10px] text-gray-500 space-y-0.5 mt-1 border-t border-gray-100 pt-1">
+                          {parcel.codAmountHistory.slice(-3).map((h: any, i: number) => {
+                            const date = new Date(h.changedAt)
+                            const dateStr = date.toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: '2-digit' })
+                            const timeStr = date.toLocaleTimeString('fr-MA', { hour: '2-digit', minute: '2-digit' })
+                            const userName = h.changedBy?.split('@')[0] || 'Admin'
+                            return (
+                              <div key={i} className="flex items-center gap-1">
+                                <span className="text-gray-400">{dateStr} {timeStr}</span>
+                                <span className="text-gray-600 font-medium">{userName}:</span>
+                                <span className="text-red-500">{h.oldAmount} DH</span>
+                                <span className="text-gray-400">→</span>
+                                <span className="text-green-600">{h.newAmount} DH</span>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
                     </div>
 
                     {/* Ligne 5: Destinataire */}
@@ -4290,9 +4371,11 @@ export default function ParcelsTab() {
                     </label>
                     <div className="grid grid-cols-3 gap-2">
                       {[
-                        { key: 'port_paye', label: 'Port Payé', emoji: '💵' },
+                        { key: 'port_paye', label: 'Port Payé', emoji: '✅' },
                         { key: 'port_du', label: 'Port Dû', emoji: '📮' },
-                        { key: 'port_en_compte', label: 'En Compte', emoji: '📋' },
+                        { key: 'port_en_compte_expediteur', label: 'En compte Exp', emoji: '📤' },
+                        { key: 'port_en_compte_destinataire', label: 'En compte Dest', emoji: '📥' },
+                        { key: 'port_en_compte', label: 'En compte', emoji: '💼' },
                       ].map(({ key, label, emoji }) => (
                         <button
                           key={key}
@@ -5436,6 +5519,59 @@ export default function ParcelsTab() {
                   <p className="text-sm text-gray-500 mt-1">Les modifications futures seront enregistrées ici</p>
                 </div>
               )}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 💰 MODALE: Édition rapide montant COD */}
+      {codEditModal && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+            <div className="flex items-center justify-between p-5 border-b">
+              <h3 className="font-bold text-gray-800">Modifier le montant COD</h3>
+              <button
+                onClick={() => setCodEditModal(null)}
+                className="p-2 hover:bg-gray-100 rounded-xl transition"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              {codEditModal.error && (
+                <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">
+                  {codEditModal.error}
+                </div>
+              )}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Montant COD (DH)
+                </label>
+                <input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={codEditModal.value}
+                  onChange={(e) => setCodEditModal({ ...codEditModal, value: e.target.value })}
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                  autoFocus
+                />
+              </div>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => setCodEditModal(null)}
+                  className="flex-1 px-4 py-2 border border-gray-300 rounded-lg hover:bg-gray-50 transition"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={handleSaveCodAmount}
+                  disabled={codEditModal.loading}
+                  className="flex-1 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition disabled:opacity-50"
+                >
+                  {codEditModal.loading ? 'Enregistrement...' : 'Enregistrer'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
