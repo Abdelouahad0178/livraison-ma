@@ -20,6 +20,12 @@ export default function AdminArchivageTab() {
   const [deleting, setDeleting] = useState(false)
   const [deleteResult, setDeleteResult] = useState<any>(null)
 
+  // Nouveaux filtres pour archivage précis
+  const [selectedServiceType, setSelectedServiceType] = useState<string>('Tous')
+  const [selectedPortType, setSelectedPortType] = useState<string>('Tous')
+  const [archiveDateFrom, setArchiveDateFrom] = useState('')
+  const [archiveDateTo, setArchiveDateTo] = useState('')
+
   // Filtres pour le tableau
   const [statusFilter, setStatusFilter] = useState('all')
   const [cityFilter, setCityFilter] = useState('all')
@@ -29,6 +35,8 @@ export default function AdminArchivageTab() {
   const functions = getFunctions()
   const CITIES = ['Toutes', 'Casablanca', 'Rabat', 'Marrakech', 'Fès', 'Tanger', 'Agadir', 'Meknès', 'Oujda', 'Kénitra', 'Tétouan']
   const ARCHIVABLE_STATUSES = ['Livré', 'Retourné', 'Retour finalisé']
+  const SERVICE_TYPES = ['Tous', 'Standard', 'Express', 'Économique', 'Premium']
+  const PORT_TYPES = ['Tous', 'Port simple', 'Port contre-remboursement', 'Franco']
 
   useEffect(() => {
     loadStats()
@@ -112,7 +120,15 @@ export default function AdminArchivageTab() {
 
     const statusText = selectedStatuses.join(', ')
     const cityText = selectedCity === 'Toutes' ? 'toutes les villes' : selectedCity
-    if (!confirm(`Archiver les colis:\n• Status: ${statusText}\n• Ville: ${cityText}\n• Plus de ${daysInput} jours\n\nContinuer?`)) return
+    const serviceTypeText = selectedServiceType === 'Tous' ? 'tous' : selectedServiceType
+    const portTypeText = selectedPortType === 'Tous' ? 'tous' : selectedPortType
+    const dateRangeText = archiveDateFrom || archiveDateTo
+      ? `Du ${archiveDateFrom || 'début'} au ${archiveDateTo || 'aujourd\'hui'}`
+      : 'Toutes dates'
+
+    const confirmMessage = `Archiver les colis:\n• Statuts: ${statusText}\n• Ville: ${cityText}\n• Plus de ${daysInput} jours\n• Type de service: ${serviceTypeText}\n• Type de port: ${portTypeText}\n• ${dateRangeText}\n\nContinuer?`
+
+    if (!confirm(confirmMessage)) return
 
     setArchiving(true)
     setArchiveResult(null)
@@ -122,7 +138,11 @@ export default function AdminArchivageTab() {
       const result = await manualArchive({
         olderThanDays: parseInt(daysInput),
         statuses: selectedStatuses,
-        city: selectedCity === 'Toutes' ? null : selectedCity
+        city: selectedCity === 'Toutes' ? null : selectedCity,
+        serviceType: selectedServiceType === 'Tous' ? null : selectedServiceType,
+        portType: selectedPortType === 'Tous' ? null : selectedPortType,
+        dateFrom: archiveDateFrom || null,
+        dateTo: archiveDateTo || null
       })
 
       setArchiveResult({ success: true, ...(result.data as Record<string, any>) })
@@ -363,6 +383,64 @@ export default function AdminArchivageTab() {
                   <option key={city} value={city}>{city}</option>
                 ))}
               </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Type de service (optionnel):
+              </label>
+              <select
+                value={selectedServiceType}
+                onChange={e => setSelectedServiceType(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+              >
+                {SERVICE_TYPES.map(type => (
+                  <option key={type} value={type}>{type}</option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Type de port (optionnel):
+              </label>
+              <select
+                value={selectedPortType}
+                onChange={e => setSelectedPortType(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+              >
+                {PORT_TYPES.map(type => (
+                  <option key={type} value={type}>{type}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Date de création du (optionnel):
+              </label>
+              <input
+                type="date"
+                value={archiveDateFrom}
+                onChange={e => setArchiveDateFrom(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+              />
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                Date de création au (optionnel):
+              </label>
+              <input
+                type="date"
+                value={archiveDateTo}
+                onChange={e => setArchiveDateTo(e.target.value)}
+                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
+              />
             </div>
           </div>
 
