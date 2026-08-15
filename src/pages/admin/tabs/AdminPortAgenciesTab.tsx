@@ -165,19 +165,18 @@ export default function AdminPortAgenciesTab({
     })
   }, [liveParcels, datePreset, dateFrom, dateTo])
 
-  // Calculer les statistiques par agence
+  // ✅ Calculer les statistiques par agence - 4 TYPES DE PORT SÉPARÉS
   const portStats = useMemo(() => {
     if (!Array.isArray(filteredByDate)) return []
 
     const stats: Record<string, {
       city: string
-      portPaye: number
-      portDu: number
-      enCompte: number
+      portPaye: number              // ✅ Port Payé (expéditeur)
+      portDu: number                 // 💰 Port Dû (destinataire)
+      enCompteExp: number            // 📤 En Compte Expéditeur
+      enCompteDest: number           // 📥 En Compte Destinataire
       totalPort: number
-      nbExpeditions: number
-      nbColisEnvoyes: number
-      nbColisRecus: number
+      nbExpeditions: number          // Seulement les expéditions (pas colis)
     }> = {}
 
     // Initialiser toutes les villes
@@ -186,11 +185,10 @@ export default function AdminPortAgenciesTab({
         city,
         portPaye: 0,
         portDu: 0,
-        enCompte: 0,
+        enCompteExp: 0,
+        enCompteDest: 0,
         totalPort: 0,
         nbExpeditions: 0,
-        nbColisEnvoyes: 0,
-        nbColisRecus: 0,
       }
     })
 
@@ -198,43 +196,35 @@ export default function AdminPortAgenciesTab({
     filteredByDate.forEach((p: any) => {
       const originCity = p.originCity || p.sender?.city
       const destCity = p.destinationCity || p.receiver?.city
-      const nbColis = safeParseInt(p.nbColis, 1)
 
       // ✅ NOUVEAUX PORTS : expéditeur et destinataire séparés
       const senderPort = safeParseFloat(p.sender?.port || p.senderPort || 0)
+      const senderPortType = p.sender?.portType || p.senderPortType || 'port_paye'
+
       const receiverPort = safeParseFloat(p.receiver?.port || p.receiverPort || 0)
+      const receiverPortType = p.receiver?.portType || p.receiverPortType || 'port_du'
 
       // 📤 PORT EXPÉDITEUR : collecté à l'agence d'ORIGINE
       if (senderPort > 0 && originCity && stats[originCity]) {
-        // Déterminer le type de port expéditeur
-        const senderPortType = p.sender?.portType || p.senderPortType || 'port_paye'
-
         if (senderPortType === 'port_paye') {
           stats[originCity].portPaye += senderPort
-        } else if (senderPortType === 'port_en_compte_expediteur') {
-          stats[originCity].enCompte += senderPort
+        } else if (senderPortType === 'port_en_compte_expediteur' || senderPortType === 'port_en_compte') {
+          stats[originCity].enCompteExp += senderPort
         }
       }
 
       // 📥 PORT DESTINATAIRE : collecté à l'agence de DESTINATION
       if (receiverPort > 0 && destCity && stats[destCity]) {
-        // Le port destinataire est toujours "Port Dû" (payé à destination)
-        stats[destCity].portDu += receiverPort
+        if (receiverPortType === 'port_du') {
+          stats[destCity].portDu += receiverPort
+        } else if (receiverPortType === 'port_en_compte_destinataire' || receiverPortType === 'port_en_compte') {
+          stats[destCity].enCompteDest += receiverPort
+        }
       }
 
-      // EXPÉDITIONS : comptées à l'agence d'ORIGINE
+      // ✅ EXPÉDITIONS : comptées à l'agence d'ORIGINE (PAS les colis !)
       if (originCity && stats[originCity]) {
         stats[originCity].nbExpeditions += 1
-      }
-
-      // COLIS ENVOYÉS : comptés à l'agence d'ORIGINE
-      if (originCity && stats[originCity]) {
-        stats[originCity].nbColisEnvoyes += nbColis
-      }
-
-      // COLIS REÇUS : comptés à l'agence de DESTINATION
-      if (destCity && stats[destCity]) {
-        stats[destCity].nbColisRecus += nbColis
       }
     })
 
@@ -243,8 +233,9 @@ export default function AdminPortAgenciesTab({
       ...stat,
       portPaye: Math.round(stat.portPaye * 100) / 100,
       portDu: Math.round(stat.portDu * 100) / 100,
-      enCompte: Math.round(stat.enCompte * 100) / 100,
-      totalPort: Math.round((stat.portPaye + stat.portDu + stat.enCompte) * 100) / 100,
+      enCompteExp: Math.round(stat.enCompteExp * 100) / 100,
+      enCompteDest: Math.round(stat.enCompteDest * 100) / 100,
+      totalPort: Math.round((stat.portPaye + stat.portDu + stat.enCompteExp + stat.enCompteDest) * 100) / 100,
     }))
   }, [filteredByDate])
 
@@ -258,13 +249,13 @@ export default function AdminPortAgenciesTab({
       filtered = filtered.filter(stat => stat.city.toLowerCase().includes(query))
     }
 
-    // Filtre par type de port
+    // Filtre par type de port - 4 TYPES SÉPARÉS
     if (portTypeFilter !== 'all') {
       filtered = filtered.filter(stat => {
         if (portTypeFilter === 'port_paye') return stat.portPaye > 0
         if (portTypeFilter === 'port_du') return stat.portDu > 0
-        if (portTypeFilter === 'port_en_compte_expediteur') return stat.enCompte > 0
-        if (portTypeFilter === 'port_en_compte_destinataire') return stat.enCompte > 0
+        if (portTypeFilter === 'port_en_compte_expediteur') return stat.enCompteExp > 0
+        if (portTypeFilter === 'port_en_compte_destinataire') return stat.enCompteDest > 0
         return true
       })
     }
@@ -272,26 +263,24 @@ export default function AdminPortAgenciesTab({
     return filtered
   }, [portStats, searchCity, portTypeFilter])
 
-  // Calculer les totaux sur les stats FILTRÉES
+  // ✅ Calculer les totaux sur les stats FILTRÉES - 4 TYPES + EXPÉDITIONS SEULEMENT
   const totauxFiltres = useMemo(() => {
     const totaux = filteredStats.reduce((acc, stat) => ({
       portPaye: acc.portPaye + stat.portPaye,
       portDu: acc.portDu + stat.portDu,
-      enCompte: acc.enCompte + stat.enCompte,
+      enCompteExp: acc.enCompteExp + stat.enCompteExp,
+      enCompteDest: acc.enCompteDest + stat.enCompteDest,
       totalPort: acc.totalPort + stat.totalPort,
       nbExpeditions: acc.nbExpeditions + stat.nbExpeditions,
-      nbColisEnvoyes: acc.nbColisEnvoyes + stat.nbColisEnvoyes,
-      nbColisRecus: acc.nbColisRecus + stat.nbColisRecus,
-    }), { portPaye: 0, portDu: 0, enCompte: 0, totalPort: 0, nbExpeditions: 0, nbColisEnvoyes: 0, nbColisRecus: 0 })
+    }), { portPaye: 0, portDu: 0, enCompteExp: 0, enCompteDest: 0, totalPort: 0, nbExpeditions: 0 })
 
     return {
       portPaye: Math.round(totaux.portPaye * 100) / 100,
       portDu: Math.round(totaux.portDu * 100) / 100,
-      enCompte: Math.round(totaux.enCompte * 100) / 100,
+      enCompteExp: Math.round(totaux.enCompteExp * 100) / 100,
+      enCompteDest: Math.round(totaux.enCompteDest * 100) / 100,
       totalPort: Math.round(totaux.totalPort * 100) / 100,
       nbExpeditions: totaux.nbExpeditions,
-      nbColisEnvoyes: totaux.nbColisEnvoyes,
-      nbColisRecus: totaux.nbColisRecus,
     }
   }, [filteredStats])
 
@@ -539,57 +528,46 @@ export default function AdminPortAgenciesTab({
             {filteredStats.length} agence(s) affichée(s)
           </span>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-7 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
           <div className="flex items-center gap-3">
             <Package className="w-8 h-8 text-indigo-600" />
             <div>
-              <div className="text-xs text-gray-600 font-medium">Expéditions</div>
+              <div className="text-xs text-gray-600 font-medium uppercase tracking-wide">Expéditions</div>
               <div className="text-2xl font-black text-indigo-700">{totauxFiltres.nbExpeditions}</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-green-100 rounded-full flex items-center justify-center">
-              <span className="text-lg">📤</span>
-            </div>
-            <div>
-              <div className="text-xs text-gray-600 font-medium">Colis Envoyés</div>
-              <div className="text-2xl font-black text-green-700">{totauxFiltres.nbColisEnvoyes}</div>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="w-8 h-8 bg-purple-100 rounded-full flex items-center justify-center">
-              <span className="text-lg">📥</span>
-            </div>
-            <div>
-              <div className="text-xs text-gray-600 font-medium">Colis Reçus</div>
-              <div className="text-2xl font-black text-purple-700">{totauxFiltres.nbColisRecus}</div>
             </div>
           </div>
           <div className="flex items-center gap-3">
             <div className="w-3 h-3 rounded-full bg-blue-500"></div>
             <div>
-              <div className="text-xs text-gray-600 font-medium">Port Payé</div>
-              <div className="text-2xl font-black text-blue-700">{totauxFiltres.portPaye.toLocaleString('fr-MA')} DH</div>
+              <div className="text-xs text-gray-600 font-medium">✅ Port Payé</div>
+              <div className="text-xl font-black text-blue-700">{totauxFiltres.portPaye.toLocaleString('fr-MA')} DH</div>
             </div>
           </div>
           <div className="flex items-center gap-3">
             <div className="w-3 h-3 rounded-full bg-orange-500"></div>
             <div>
-              <div className="text-xs text-gray-600 font-medium">Port Dû</div>
-              <div className="text-2xl font-black text-orange-700">{totauxFiltres.portDu.toLocaleString('fr-MA')} DH</div>
+              <div className="text-xs text-gray-600 font-medium">💰 Port Dû</div>
+              <div className="text-xl font-black text-orange-700">{totauxFiltres.portDu.toLocaleString('fr-MA')} DH</div>
             </div>
           </div>
           <div className="flex items-center gap-3">
             <div className="w-3 h-3 rounded-full bg-purple-500"></div>
             <div>
-              <div className="text-xs text-gray-600 font-medium">En Compte</div>
-              <div className="text-2xl font-black text-purple-700">{totauxFiltres.enCompte.toLocaleString('fr-MA')} DH</div>
+              <div className="text-xs text-gray-600 font-medium">📤 En Compte Exp</div>
+              <div className="text-xl font-black text-purple-700">{totauxFiltres.enCompteExp.toLocaleString('fr-MA')} DH</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="w-3 h-3 rounded-full bg-pink-500"></div>
+            <div>
+              <div className="text-xs text-gray-600 font-medium">📥 En Compte Dest</div>
+              <div className="text-xl font-black text-pink-700">{totauxFiltres.enCompteDest.toLocaleString('fr-MA')} DH</div>
             </div>
           </div>
           <div className="flex items-center gap-3">
             <TrendingUp className="w-8 h-8 text-green-600" />
             <div>
-              <div className="text-xs text-gray-600 font-medium">Total Port</div>
+              <div className="text-xs text-gray-600 font-medium uppercase">💵 Total Port</div>
               <div className="text-2xl font-black text-green-700">{totauxFiltres.totalPort.toLocaleString('fr-MA')} DH</div>
             </div>
           </div>
@@ -611,23 +589,20 @@ export default function AdminPortAgenciesTab({
                 <th className="px-6 py-4 text-center font-bold whitespace-nowrap">
                   📋 Expéditions
                 </th>
-                <th className="px-6 py-4 text-center font-bold whitespace-nowrap bg-green-600/20">
-                  📤 Colis Envoyés
-                </th>
-                <th className="px-6 py-4 text-center font-bold whitespace-nowrap bg-purple-600/20">
-                  📥 Colis Reçus
-                </th>
                 <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-blue-600/30">
                   ✅ Port Payé
                 </th>
                 <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-orange-600/30">
-                  📮 Port Dû
+                  💰 Port Dû
                 </th>
                 <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-purple-600/30">
-                  💼 En Compte
+                  📤 En Compte Exp
+                </th>
+                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-pink-600/30">
+                  📥 En Compte Dest
                 </th>
                 <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-green-600/30">
-                  💰 Total Port
+                  💵 Total Port
                 </th>
               </tr>
             </thead>
@@ -645,18 +620,8 @@ export default function AdminPortAgenciesTab({
                     </div>
                   </td>
                   <td className="px-6 py-4 text-center">
-                    <span className="inline-flex items-center justify-center px-3 py-1 bg-indigo-100 text-indigo-700 rounded-lg font-bold">
+                    <span className="inline-flex items-center justify-center px-3 py-1 bg-indigo-100 text-indigo-700 rounded-lg font-bold text-base">
                       {stat.nbExpeditions}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-center bg-green-50/50">
-                    <span className="inline-flex items-center justify-center px-3 py-1 bg-green-100 text-green-700 rounded-lg font-bold">
-                      {stat.nbColisEnvoyes}
-                    </span>
-                  </td>
-                  <td className="px-6 py-4 text-center bg-purple-50/50">
-                    <span className="inline-flex items-center justify-center px-3 py-1 bg-purple-100 text-purple-700 rounded-lg font-bold">
-                      {stat.nbColisRecus}
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right font-bold bg-blue-50/50">
@@ -671,7 +636,12 @@ export default function AdminPortAgenciesTab({
                   </td>
                   <td className="px-6 py-4 text-right font-bold bg-purple-50/50">
                     <span className="text-purple-700 text-lg">
-                      {stat.enCompte.toLocaleString('fr-MA')} DH
+                      {stat.enCompteExp.toLocaleString('fr-MA')} DH
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-right font-bold bg-pink-50/50">
+                    <span className="text-pink-700 text-lg">
+                      {stat.enCompteDest.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right font-bold bg-green-50/50">
@@ -695,33 +665,28 @@ export default function AdminPortAgenciesTab({
                       {totauxFiltres.nbExpeditions}
                     </span>
                   </td>
-                  <td className="px-6 py-5 text-center bg-green-100">
-                    <span className="inline-flex items-center justify-center px-4 py-2 bg-green-200 text-green-900 rounded-lg font-black text-lg">
-                      {totauxFiltres.nbColisEnvoyes}
-                    </span>
-                  </td>
-                  <td className="px-6 py-5 text-center bg-purple-100">
-                    <span className="inline-flex items-center justify-center px-4 py-2 bg-purple-200 text-purple-900 rounded-lg font-black text-lg">
-                      {totauxFiltres.nbColisRecus}
-                    </span>
-                  </td>
                   <td className="px-6 py-5 text-right bg-blue-100">
-                    <span className="text-blue-900 text-xl">
+                    <span className="text-blue-900 text-xl font-black">
                       {totauxFiltres.portPaye.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
                   <td className="px-6 py-5 text-right bg-orange-100">
-                    <span className="text-orange-900 text-xl">
+                    <span className="text-orange-900 text-xl font-black">
                       {totauxFiltres.portDu.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
                   <td className="px-6 py-5 text-right bg-purple-100">
-                    <span className="text-purple-900 text-xl">
-                      {totauxFiltres.enCompte.toLocaleString('fr-MA')} DH
+                    <span className="text-purple-900 text-xl font-black">
+                      {totauxFiltres.enCompteExp.toLocaleString('fr-MA')} DH
+                    </span>
+                  </td>
+                  <td className="px-6 py-5 text-right bg-pink-100">
+                    <span className="text-pink-900 text-xl font-black">
+                      {totauxFiltres.enCompteDest.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
                   <td className="px-6 py-5 text-right bg-green-100">
-                    <span className="text-green-900 text-2xl">
+                    <span className="text-green-900 text-2xl font-black">
                       {totauxFiltres.totalPort.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
