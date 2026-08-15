@@ -1340,9 +1340,15 @@ export default function AdminPage() {
   }, [periodParcels, cityFilter, driverFilter, statusFilter, serviceTypeFilter, portTypeFilter, debouncedSearch, fuseResults, fuseTotalResults, fuseIsSearching, serverSearchResults])
 
   // Expéditions affichées avec limite (200 premiers)
+  // ⚠️ EXCEPTION: Si filtres actifs (ville/statut) → afficher TOUS les résultats
   const displayedFiltered = useMemo(() => {
+    const hasActiveFilters = cityFilter !== 'Toutes' || statusFilter.length > 0
+    if (hasActiveFilters) {
+      console.warn(`🔍 FILTRES ACTIFS → Affichage de TOUS les ${filtered.length} résultats`)
+      return filtered // TOUS les résultats
+    }
     return filtered.slice(0, displayLimit)
-  }, [filtered, displayLimit])
+  }, [filtered, displayLimit, cityFilter, statusFilter])
 
   // Fonction pour charger plus d'expéditions
   const loadMoreDisplayed = () => {
