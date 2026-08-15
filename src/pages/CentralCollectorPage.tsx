@@ -195,22 +195,22 @@ export default function CentralCollectorPage() {
   }, [])
 
   // ⚡ Chargement optimisé avec détection de filtres (Option 3)
+  // NOTE: query n'est PAS dans les dépendances - la recherche est gérée par searchParcels
   useEffect(() => {
     const onError = (err: any) => console.error('CentralCollectorPage:', err)
 
-    // 🔍 Détecter si des filtres sont actifs
+    // 🔍 Détecter si des filtres sont actifs (SANS query - géré par recherche serveur)
     const hasDateFilter = datePreset !== 'all'
     const hasCityFilter = cityFilter !== 'all'
     const hasPaymentFilter = paymentFilter !== 'all' && paymentFilter !== 'unpaid'
-    const hasSearchFilter = query.trim() !== ''
-    const hasFilters = hasDateFilter || hasCityFilter || hasPaymentFilter || hasSearchFilter
+    const hasFilters = hasDateFilter || hasCityFilter || hasPaymentFilter
 
     const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
 
     console.warn(`📊 CHARGEMENT CentralCollector:`, {
       hasFilters,
       effectivePageSize,
-      filters: { datePreset, cityFilter, paymentFilter, query: query.trim() }
+      filters: { datePreset, cityFilter, paymentFilter }
     })
 
     const unsubParcels = subscribeAllParcels((docs: any[], lastSnap: any) => {
@@ -221,7 +221,7 @@ export default function CentralCollectorPage() {
     }, onError, 0, effectivePageSize)
 
     return () => { unsubParcels() }
-  }, [datePreset, cityFilter, paymentFilter, query])
+  }, [datePreset, cityFilter, paymentFilter])
 
   // ❌ DÉSACTIVÉ: Chargement automatique (Option 3 - charge seulement ce dont on a besoin)
   // useEffect(() => {
