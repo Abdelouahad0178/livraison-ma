@@ -560,30 +560,57 @@ export default function AdminPage() {
 
   // ⚡ Abonnement temps réel : 50 premiers colis (optimisé avec filtre de date prioritaire)
   useEffect(() => {
+    console.warn(`🔍 DIAGNOSTIC CHARGEMENT:`, {
+      isSearchActive,
+      autoReloadEnabled,
+      cityFilter,
+      statusFilter,
+      serviceTypeFilter,
+      portTypeFilter,
+      driverFilter,
+      fuseDebouncedSearch: fuseDebouncedSearch.trim()
+    })
+
     if (isSearchActive) {
       // Mode recherche : on utilise searchParcels - GARDER liveParcels/moreParcels pour éviter l'affichage à 0
-      console.warn(`🔍 Mode recherche: searchParcels cherche dans TOUTE la base`)
+      console.warn(`❌ BLOQUÉ: Mode recherche actif - pas de rechargement`)
       setLoading(false)
       return () => {}
     }
 
     // ⚡ Si rechargement automatique désactivé → ne rien charger
     if (!autoReloadEnabled) {
-      console.warn(`⏸️ Rechargement automatique DÉSACTIVÉ - Mode manuel actif`)
+      console.warn(`❌ BLOQUÉ: Rechargement automatique DÉSACTIVÉ`)
       setLoading(false)
       return () => {}
     }
 
     setLoading(true)
 
-    // 🔍 Détecter si des filtres sont actifs (ville, statut)
-    const hasFilters = cityFilter !== 'Toutes' || statusFilter.length > 0
+    // 🔍 Détecter si des filtres sont actifs (ville, statut, service, port, driver)
+    const hasFilters =
+      cityFilter !== 'Toutes' ||
+      statusFilter.length > 0 ||
+      serviceTypeFilter.length > 0 ||
+      portTypeFilter.length > 0 ||
+      driverFilter !== 'Tous'
+
     const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
 
+    console.warn(`📊 CHARGEMENT:`, {
+      hasFilters,
+      effectivePageSize,
+      PAGE_SIZE,
+      FILTERED_PAGE_SIZE
+    })
+
     if (hasFilters) {
-      console.warn(`🔍 FILTRES ACTIFS → Chargement de ${effectivePageSize} colis pour couvrir les résultats`, {
+      console.warn(`✅ FILTRES ACTIFS → Chargement de ${effectivePageSize} colis`, {
         ville: cityFilter,
-        statuts: statusFilter
+        statuts: statusFilter,
+        services: serviceTypeFilter,
+        ports: portTypeFilter,
+        driver: driverFilter
       })
     }
 
@@ -664,7 +691,7 @@ export default function AdminPage() {
 
       return () => unsubParcels()
     }
-  }, [isSearchActive, autoReloadEnabled, datePreset, dateFrom, dateTo, operationalDayFormatted, cityFilter, statusFilter])
+  }, [isSearchActive, autoReloadEnabled, datePreset, dateFrom, dateTo, operationalDayFormatted, cityFilter, statusFilter, serviceTypeFilter, portTypeFilter, driverFilter])
 
   // 🔄 Écouter les mises à jour de prix depuis d'autres pages (ex: Facturier)
   useEffect(() => {
@@ -1340,15 +1367,21 @@ export default function AdminPage() {
   }, [periodParcels, cityFilter, driverFilter, statusFilter, serviceTypeFilter, portTypeFilter, debouncedSearch, fuseResults, fuseTotalResults, fuseIsSearching, serverSearchResults])
 
   // Expéditions affichées avec limite (200 premiers)
-  // ⚠️ EXCEPTION: Si filtres actifs (ville/statut) → afficher TOUS les résultats
+  // ⚠️ EXCEPTION: Si filtres actifs → afficher TOUS les résultats
   const displayedFiltered = useMemo(() => {
-    const hasActiveFilters = cityFilter !== 'Toutes' || statusFilter.length > 0
+    const hasActiveFilters =
+      cityFilter !== 'Toutes' ||
+      statusFilter.length > 0 ||
+      serviceTypeFilter.length > 0 ||
+      portTypeFilter.length > 0 ||
+      driverFilter !== 'Tous'
+
     if (hasActiveFilters) {
       console.warn(`🔍 FILTRES ACTIFS → Affichage de TOUS les ${filtered.length} résultats`)
       return filtered // TOUS les résultats
     }
     return filtered.slice(0, displayLimit)
-  }, [filtered, displayLimit, cityFilter, statusFilter])
+  }, [filtered, displayLimit, cityFilter, statusFilter, serviceTypeFilter, portTypeFilter, driverFilter])
 
   // Fonction pour charger plus d'expéditions
   const loadMoreDisplayed = () => {
