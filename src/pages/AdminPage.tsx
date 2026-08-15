@@ -1200,13 +1200,29 @@ export default function AdminPage() {
     setIsSearchActive(hasSearch)
   }, [fuseDebouncedSearch])
 
-  // 🔍 RECHERCHE SERVEUR: DÉSACTIVÉE
-  // ✅ POLITIQUE: Recherche uniquement dans les données DÉJÀ filtrées (date, ville, etc.)
-  // La recherche Fuse.js sur periodParcels (déjà filtré) est suffisante et plus rapide
-  // Exemple: 1000 colis filtrés au lieu de 50000 dans toute la base
+  // 🔍 RECHERCHE SERVEUR: ACTIVÉE (Option 3)
+  // Recherche dans TOUTE la base Firestore, pas seulement les 50 colis chargés
   useEffect(() => {
-    // Toujours retourner null pour forcer l'utilisation de Fuse.js uniquement
-    setServerSearchResults(null)
+    const query = fuseDebouncedSearch.trim()
+    if (!query || query.length < 2) {
+      setServerSearchResults(null)
+      return
+    }
+
+    // ⚡ Recherche serveur dans TOUTE la base
+    const performServerSearch = async () => {
+      try {
+        console.warn(`🔍 Recherche serveur: "${query}" dans TOUTE la base...`)
+        const results = await searchParcels(query, { limit: 200 })
+        setServerSearchResults(results)
+        console.warn(`✅ Recherche serveur: ${results.length} résultats trouvés`)
+      } catch (error) {
+        console.error('❌ Erreur recherche serveur:', error)
+        setServerSearchResults(null)
+      }
+    }
+
+    performServerSearch()
   }, [fuseDebouncedSearch])
 
   const filtered = useMemo(() => {
@@ -1221,14 +1237,18 @@ export default function AdminPage() {
     if (debouncedSearch.trim()) {
       const searchQuery = debouncedSearch.trim().toUpperCase()
 
-      // 🎯 RECHERCHE EXACTE pour identifiants (NIC/Tracking alphanumériques 5+ caractères)
-      if (/^[0-9A-Z]+$/.test(searchQuery) && searchQuery.length >= 5) {
-        // Match exact uniquement - pas de Fuse.js pour les identifiants
-        results = periodParcels.filter((p: any) =>
+      // 🎯 RECHERCHE: Utiliser les résultats serveur si disponibles
+      if (serverSearchResults !== null && serverSearchResults.length > 0) {
+        results = serverSearchResults
+        console.warn(`✅ Serveur: ${results.length} résultats pour "${searchQuery}"`)
+      } else if (/^[0-9A-Z]+$/.test(searchQuery) && searchQuery.length >= 5) {
+        // Match exact dans les résultats serveur ou periodParcels en fallback
+        results = serverSearchResults || periodParcels.filter((p: any) =>
           p.trackingId?.toUpperCase() === searchQuery ||
-          p.sender?.nic?.toUpperCase() === searchQuery
+          p.sender?.nic?.toUpperCase() === searchQuery ||
+          (p.senderNic || p.nic)?.toUpperCase() === searchQuery
         )
-        console.warn(`🎯 Match exact: ${results.length} résultats pour "${searchQuery}"`)
+        console.warn(`🎯 Recherche exacte: ${results.length} résultats pour "${searchQuery}"`)
       } else {
         // 🔍 RECHERCHE FLOUE pour noms, téléphones, etc.
         if (serverSearchResults !== null) {
