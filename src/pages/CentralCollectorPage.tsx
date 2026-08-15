@@ -194,31 +194,49 @@ export default function CentralCollectorPage() {
     )
   }, [])
 
-  // Abonnement temps réel : 800 derniers colis seulement (rapide)
+  // ⚡ Chargement optimisé avec détection de filtres (Option 3)
   useEffect(() => {
     const onError = (err: any) => console.error('CentralCollectorPage:', err)
+
+    // 🔍 Détecter si des filtres sont actifs
+    const hasDateFilter = datePreset !== 'all'
+    const hasCityFilter = cityFilter !== 'all'
+    const hasPaymentFilter = paymentFilter !== 'all' && paymentFilter !== 'unpaid'
+    const hasSearchFilter = query.trim() !== ''
+    const hasFilters = hasDateFilter || hasCityFilter || hasPaymentFilter || hasSearchFilter
+
+    const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
+
+    console.warn(`📊 CHARGEMENT CentralCollector:`, {
+      hasFilters,
+      effectivePageSize,
+      filters: { datePreset, cityFilter, paymentFilter, query: query.trim() }
+    })
+
     const unsubParcels = subscribeAllParcels((docs: any[], lastSnap: any) => {
       setLiveParcels(docs)
       if (!pagedRef.current) lastDocRef.current = lastSnap
-      if (docs.length < PAGE_SIZE) setHasMore(false)
-    }, onError, 0, PAGE_SIZE)
+      if (docs.length < effectivePageSize) setHasMore(false)
+      console.warn(`✅ CentralCollector: ${docs.length} colis chargés`)
+    }, onError, 0, effectivePageSize)
+
     return () => { unsubParcels() }
-  }, [])
+  }, [datePreset, cityFilter, paymentFilter, query])
 
-  // 🚀 Chargement automatique de toute la base en arrière-plan (après premiers 800)
-  useEffect(() => {
-    if (!hasMore || loadingAll || loadingMore || !lastDocRef.current) return
-    if (liveParcels.length === 0) return // attendre le chargement initial
-
-    // Lancer le chargement complet automatiquement après 2 secondes
-    const timer = setTimeout(() => {
-      if (hasMore && !loadingAll && !loadingMore && lastDocRef.current) {
-        loadAllParcels()
-      }
-    }, 2000)
-
-    return () => clearTimeout(timer)
-  }, [liveParcels.length, hasMore])
+  // ❌ DÉSACTIVÉ: Chargement automatique (Option 3 - charge seulement ce dont on a besoin)
+  // useEffect(() => {
+  //   if (!hasMore || loadingAll || loadingMore || !lastDocRef.current) return
+  //   if (liveParcels.length === 0) return // attendre le chargement initial
+  //
+  //   // Lancer le chargement complet automatiquement après 2 secondes
+  //   const timer = setTimeout(() => {
+  //     if (hasMore && !loadingAll && !loadingMore && lastDocRef.current) {
+  //       loadAllParcels()
+  //     }
+  //   }, 2000)
+  //
+  //   return () => clearTimeout(timer)
+  // }, [liveParcels.length, hasMore])
 
   // 📦 Charger les archives quand l'onglet est sélectionné
   useEffect(() => {
