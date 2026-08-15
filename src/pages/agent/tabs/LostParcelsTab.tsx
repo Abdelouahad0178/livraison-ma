@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { AlertTriangle, Search, CheckCircle, XCircle, Trash2, Plus, X, MessageSquare } from 'lucide-react'
 import { getAllLostParcels, respondToLostParcel, deleteLostParcel, declareLostParcel, LostParcelDeclaration, getLostParcelMessages } from '../../../firebase/lostParcels'
-import { searchParcelByTrackingId } from '../../../firebase/parcels'
+import { searchParcelByNicOptimized } from '../../../firebase/parcels'
 import { CITIES } from '../../../firebase/constants'
 import LostParcelConversationModal from '../../../components/LostParcelConversationModal'
 
@@ -19,7 +19,7 @@ export default function LostParcelsTab({ agencyCity, profile, setMsg }: LostParc
   const [deleting, setDeleting] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [showDeclareModal, setShowDeclareModal] = useState(false)
-  const [declareTrackingId, setDeclareTrackingId] = useState('')
+  const [declareNic, setDeclareNic] = useState('')
   const [declareLocation, setDeclareLocation] = useState(agencyCity)
   const [declareDetails, setDeclareDetails] = useState('')
   const [declaring, setDeclaring] = useState(false)
@@ -100,8 +100,8 @@ export default function LostParcelsTab({ agencyCity, profile, setMsg }: LostParc
   }
 
   const handleDeclare = async () => {
-    if (!declareTrackingId.trim()) {
-      setMsg({ type: 'error', text: '❌ Entrez un tracking ID' })
+    if (!declareNic.trim()) {
+      setMsg({ type: 'error', text: '❌ Entrez un N° EXP (NIC)' })
       return
     }
     if (!declareDetails.trim()) {
@@ -111,16 +111,17 @@ export default function LostParcelsTab({ agencyCity, profile, setMsg }: LostParc
 
     setDeclaring(true)
     try {
-      const parcel = await searchParcelByTrackingId(declareTrackingId)
-      if (!parcel) {
-        setMsg({ type: 'error', text: '❌ Colis introuvable' })
+      const results = await searchParcelByNicOptimized(declareNic)
+      if (!results || results.length === 0) {
+        setMsg({ type: 'error', text: '❌ Colis introuvable avec ce N° EXP' })
         setDeclaring(false)
         return
       }
 
+      const parcel = results[0]
       await declareLostParcel(
         parcel.id,
-        declareTrackingId,
+        parcel.trackingId,
         {
           uid: profile.uid || profile.id || profile.email || 'chef-' + agencyCity,
           name: profile.name || 'Chef ' + agencyCity,
@@ -129,12 +130,13 @@ export default function LostParcelsTab({ agencyCity, profile, setMsg }: LostParc
         },
         declareLocation,
         declareDetails,
-        CITIES
+        CITIES,
+        parcel.sender?.nic
       )
 
       setMsg({ type: 'success', text: '✅ Colis déclaré perdu. Toutes les agences alertées !' })
       setShowDeclareModal(false)
-      setDeclareTrackingId('')
+      setDeclareNic('')
       setDeclareDetails('')
       setDeclareLocation(agencyCity)
       await loadLostParcels()
@@ -217,8 +219,8 @@ export default function LostParcelsTab({ agencyCity, profile, setMsg }: LostParc
             </div>
             <div className="space-y-4">
               <div>
-                <label className="block text-sm font-semibold mb-2">Tracking ID</label>
-                <input value={declareTrackingId} onChange={(e) => setDeclareTrackingId(e.target.value)} placeholder="LMA-XXXXXXXX-XXXX" className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none" />
+                <label className="block text-sm font-semibold mb-2">N° EXP (NIC)</label>
+                <input value={declareNic} onChange={(e) => setDeclareNic(e.target.value)} placeholder="Ex: ABC123" className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none" />
               </div>
               <div>
                 <label className="block text-sm font-semibold mb-2">Dernière localisation</label>

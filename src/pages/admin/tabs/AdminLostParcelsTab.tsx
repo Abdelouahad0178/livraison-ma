@@ -47,7 +47,9 @@ export default function AdminLostParcelsTab() {
   }
 
   const filtered = lostParcels.filter(lp => {
-    const matchSearch = !searchTerm || lp.trackingId.toLowerCase().includes(searchTerm.toLowerCase())
+    const matchSearch = !searchTerm ||
+      (lp as any).senderNic?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      lp.trackingId.toLowerCase().includes(searchTerm.toLowerCase())
     const matchStatus = statusFilter === 'all' || lp.status === statusFilter
     return matchSearch && matchStatus
   })
@@ -108,7 +110,9 @@ export default function AdminLostParcelsTab() {
             <div key={lp.id} className="bg-white border-2 border-gray-200 rounded-xl p-4">
               <div className="flex justify-between mb-3">
                 <div>
-                  <p className="font-mono font-bold text-lg text-red-700">{lp.trackingId}</p>
+                  <p className="font-mono font-bold text-lg text-red-700">
+                    {(lp as any).senderNic || lp.trackingId}
+                  </p>
                   <p className="text-sm text-gray-600">{lp.declaredAt.toDate().toLocaleDateString('fr-FR')}</p>
                 </div>
                 <span className={`px-3 py-1 rounded-full text-xs font-bold ${lp.status === 'found' ? 'bg-green-100 text-green-700' : lp.status === 'confirmed_lost' ? 'bg-gray-200 text-gray-700' : 'bg-amber-100 text-amber-700'}`}>

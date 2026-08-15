@@ -177,6 +177,28 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       track('Statut',       parcel.status,       form.status,       'status',       form.status)
       track('Type service', parcel.serviceType,   form.serviceType,  'serviceType',  form.serviceType)
 
+      // 🔄 HISTORIQUE COD: Tracer les changements de type de paiement COD
+      if (form.serviceType !== parcel.serviceType && parcel.codAmount > 0) {
+        const serviceToPaymentType = (st: string) =>
+          st === 'retour_bl' ? 'bon_livraison' : (st === 'simple' ? 'especes' : (st || 'especes'))
+
+        const oldCodType = serviceToPaymentType(parcel.serviceType)
+        const newCodType = serviceToPaymentType(form.serviceType)
+
+        if (oldCodType !== newCodType) {
+          // Ajouter à l'historique COD
+          const codHistory = parcel.codPaymentHistory || []
+          codHistory.push({
+            oldType: oldCodType,
+            newType: newCodType,
+            changedAt: now,
+            changedBy: adminEmail
+          })
+          updates.codPaymentHistory = codHistory
+          updates.codPaymentType = newCodType
+        }
+      }
+
       // Expéditeur
       const oldSender = parcel.sender || {}
       if (form.senderName !== (oldSender.name||'') || form.senderTel !== (oldSender.tel||'') || form.senderCity !== (oldSender.city||'')) {
@@ -206,6 +228,20 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       track('Prix (DH)',          String(parcel.price    ?? ''), form.price,         'price',         parsePositiveNumber(form.price))
       track('Type de port',       parcel.portType        || '',  form.portType,      'portType',      form.portType)
       track('RETOUR FOND (DH)',   String(parcel.codAmount ?? ''), form.codAmount,     'codAmount',     parsePositiveNumber(form.codAmount))
+
+      // 🔄 HISTORIQUE MONTANT COD: Tracer les changements de montant
+      const oldCodAmount = parcel.codAmount || 0
+      const newCodAmount = parsePositiveNumber(form.codAmount)
+      if (oldCodAmount !== newCodAmount) {
+        const codHistory = parcel.codAmountHistory || []
+        codHistory.push({
+          oldAmount: oldCodAmount,
+          newAmount: newCodAmount,
+          changedAt: now,
+          changedBy: adminEmail
+        })
+        updates.codAmountHistory = codHistory
+      }
 
       // Pipeline RETOUR FOND
       track('Statut COD',           parcel.codStatus       || 'pending', form.codStatus,           'codStatus',           form.codStatus)
@@ -260,7 +296,25 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
     if (isNaN(amount) || amount < 0) { setCodEditModal((m: any) => ({ ...m, error: 'Montant invalide.' })); return }
     setCodEditModal((m: any) => ({ ...m, loading: true, error: '' }))
     try {
-      await updateParcel(codEditModal.parcel.id, { codAmount: amount })
+      const parcel = codEditModal.parcel
+      const oldAmount = parcel.codAmount || 0
+      const userName = auth.currentUser?.displayName || auth.currentUser?.email || 'Admin'
+
+      // 🔄 HISTORIQUE COD: Enregistrer le changement de montant
+      const updates: any = { codAmount: amount }
+
+      if (oldAmount !== amount) {
+        const codHistory = parcel.codAmountHistory || []
+        codHistory.push({
+          oldAmount,
+          newAmount: amount,
+          changedAt: new Date().toISOString(),
+          changedBy: userName
+        })
+        updates.codAmountHistory = codHistory
+      }
+
+      await updateParcel(parcel.id, updates)
       setCodEditModal(null)
     } catch {
       setCodEditModal((m: any) => ({ ...m, loading: false, error: 'Erreur lors de la mise à jour.' }))

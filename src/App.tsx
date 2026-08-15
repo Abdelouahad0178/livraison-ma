@@ -41,9 +41,10 @@ const ClientPortalPage = lazy(() => import('./pages/ClientPortalPage'))
 const FacturierPage    = lazy(() => import('./pages/FacturierPage'))
 const SignaturePage    = lazy(() => import('./pages/SignaturePage'))
 const ArrivagePage     = lazy(() => import('./pages/ArrivagePage'))
-const PointeurPage     = lazy(() => import('./pages/PointeurPage'))
 const PointeurPageNew  = lazy(() => import('./pages/PointeurPageNew'))
 const CentralCollectorPage = lazy(() => import('./pages/CentralCollectorPage'))
+const AnalyseurChequePage = lazy(() => import('./pages/AnalyseurChequePage'))
+const AnalyseurEspecePage = lazy(() => import('./pages/AnalyseurEspecePage'))
 const SeedPage         = lazy(() => import('./pages/SeedPage'))
 const ArchivePage      = lazy(() => import('./pages/ArchivePage'))
 const DRFEPage         = lazy(() => import('./pages/DRFEPage'))
@@ -315,15 +316,21 @@ function AppContent() {
             </PrivateRoute>
           } />
 
-          <Route path="/pointeur" element={
-            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="pointeur_encaisseur">
-              <PointeurPageNew />
-            </PrivateRoute>
-          } />
-
           <Route path="/central" element={
             <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="encaisseur_central">
               <CentralCollectorPage />
+            </PrivateRoute>
+          } />
+
+          <Route path="/analyseur-cheque" element={
+            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="analyseur_cheque">
+              <AnalyseurChequePage />
+            </PrivateRoute>
+          } />
+
+          <Route path="/analyseur-espece" element={
+            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="analyseur_espece">
+              <AnalyseurEspecePage />
             </PrivateRoute>
           } />
 

@@ -196,6 +196,8 @@ export default function AdminEditParcelModal({
                   >
                     <option value="port_paye">✅ Port payé</option>
                     <option value="port_du">📮 Port dû</option>
+                    <option value="port_en_compte_expediteur">📤 En compte Exp</option>
+                    <option value="port_en_compte_destinataire">📥 En compte Dest</option>
                     <option value="port_en_compte">💼 En compte</option>
                   </select>
                   <ChevronDown className="w-4 h-4 text-gray-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />

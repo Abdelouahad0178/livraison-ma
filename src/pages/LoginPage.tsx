@@ -13,8 +13,9 @@ const AUTH_ROLES = [
   { key: 'agent',                label: 'Agent',                emoji: '🧑‍💼' },
   { key: 'aide_agent',           label: 'Aide Agent',           emoji: '✏️' },
   { key: 'agentpro',             label: 'Agent Pro',            emoji: '⭐' },
-  { key: 'pointeur_encaisseur',  label: 'Pointeur-Encaisseur',  emoji: '💼' },
   { key: 'encaisseur_central',   label: 'Encaisseur central',   emoji: '🏦' },
+  { key: 'analyseur_cheque',     label: 'Analyseur Chèque',     emoji: '📋' },
+  { key: 'analyseur_espece',     label: 'Analyseur Espèce',     emoji: '💵' },
   { key: 'distributeur_especes', label: 'Distributeur Espèces', emoji: '💵' },
   { key: 'distributeur_cheques', label: 'Distributeur Chèques', emoji: '📋' },
   { key: 'facturier',            label: 'Facturier',            emoji: '🧾' },
@@ -152,8 +153,9 @@ export default function LoginPage() {
       else if (r === 'agent')                navigate('/agent')
       else if (r === 'aide_agent')           navigate('/agent')
       else if (r === 'agentpro')             navigate('/agent')
-      else if (r === 'pointeur_encaisseur')  navigate('/pointeur')
       else if (r === 'encaisseur_central')   navigate('/central')
+      else if (r === 'analyseur_cheque')     navigate('/analyseur-cheque')
+      else if (r === 'analyseur_espece')     navigate('/analyseur-espece')
       else if (r === 'distributeur_especes') navigate('/drfe')
       else if (r === 'distributeur_cheques') navigate('/drfc')
       else if (r === 'facturier')            navigate('/facturier')

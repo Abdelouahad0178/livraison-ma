@@ -1,5 +1,14 @@
-import { useMemo, useState, useEffect } from 'react'
+import { useMemo, useState, useEffect, useRef } from 'react'
 import Fuse, { type FuseResult } from 'fuse.js'
+
+// ⚡ Cache de recherche (30 secondes)
+interface SearchCache<T> {
+  query: string
+  timestamp: number
+  results: FuseResult<T>[]
+}
+
+const CACHE_TTL = 30000 // 30 secondes en millisecondes
 
 /**
  * 🔍 Hook de recherche professionnel avec Fuse.js
@@ -80,6 +89,9 @@ export function useFuseSearch<T>({
   const [debouncedSearch, setDebouncedSearch] = useState(initialSearch)
   const [isSearching, setIsSearching] = useState(false)
 
+  // ⚡ Cache de recherche pour éviter recalculs inutiles
+  const searchCacheRef = useRef<SearchCache<T> | null>(null)
+
   // 🔄 Debounce automatique
   useEffect(() => {
     setIsSearching(true)
@@ -103,6 +115,7 @@ export function useFuseSearch<T>({
           : key
       ),
       threshold,
+      isCaseSensitive: false, // ⚡ INSENSIBLE À LA CASSE (majuscules/minuscules acceptées)
       ignoreLocation: true, // Cherche partout dans le champ
       useExtendedSearch,
       includeScore: true,
@@ -113,10 +126,11 @@ export function useFuseSearch<T>({
     })
   }, [items, keys, threshold, useExtendedSearch])
 
-  // 🎯 Recherche intelligente avec scoring
+  // 🎯 Recherche intelligente avec scoring + cache
   const { detailedResults, results } = useMemo(() => {
     // Pas de recherche = tous les résultats
     if (!debouncedSearch.trim()) {
+      searchCacheRef.current = null // Reset cache
       return {
         detailedResults: [],
         results: items,
@@ -131,18 +145,31 @@ export function useFuseSearch<T>({
       }
     }
 
-    // 🔍 Détection du type de recherche
     const query = debouncedSearch.trim()
-    const isNumeric = /^\d+$/.test(query)
+    const now = Date.now()
 
+    // ⚡ VÉRIFIER CACHE: si même query et < 30s → retourner cache
+    if (
+      searchCacheRef.current &&
+      searchCacheRef.current.query === query &&
+      now - searchCacheRef.current.timestamp < CACHE_TTL
+    ) {
+      console.log(`⚡ Cache hit pour "${query}" (${Math.round((now - searchCacheRef.current.timestamp) / 1000)}s)`)
+      const cachedResults = searchCacheRef.current.results
+      const limitedCached = limit ? cachedResults.slice(0, limit) : cachedResults
+      return {
+        detailedResults: limitedCached,
+        results: limitedCached.map(r => r.item),
+      }
+    }
+
+    // 🔍 RECHERCHE NORMALE (cache expiré ou nouvelle query)
+    const isNumeric = /^\d+$/.test(query)
     let searchResults: FuseResult<T>[]
 
     if (isNumeric) {
       // 🔢 Recherche numérique: préfixe exact d'abord
-      // Ex: "123" trouve "NEXP123456" avant "NEXP456123"
       searchResults = fuseIndex.search(`^${query}`)
-
-      // Si pas de résultat avec préfixe, chercher contenu
       if (searchResults.length === 0) {
         searchResults = fuseIndex.search(query)
       }
@@ -150,6 +177,15 @@ export function useFuseSearch<T>({
       // 📝 Recherche textuelle standard
       searchResults = fuseIndex.search(query)
     }
+
+    // 💾 SAUVEGARDER DANS CACHE
+    searchCacheRef.current = {
+      query,
+      timestamp: now,
+      results: searchResults,
+    }
+
+    console.log(`🔍 Nouvelle recherche "${query}": ${searchResults.length} résultats (cached pour 30s)`)
 
     // 📏 Limite optionnelle
     const limitedResults = limit

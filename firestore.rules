@@ -19,7 +19,8 @@ service cloud.firestore {
           || role() == 'chef_agence' || role() == 'agentpro' || role() == 'caissier'
           || role() == 'aide_agent' || role() == 'pointeur_encaisseur'
           || role() == 'encaisseur_central' || role() == 'distributeur_especes'
-          || role() == 'distributeur_cheques' || role() == 'facturier';
+          || role() == 'distributeur_cheques' || role() == 'facturier'
+          || role() == 'analyseur_cheque' || role() == 'analyseur_espece';
     }
 
     function isFacturier() {

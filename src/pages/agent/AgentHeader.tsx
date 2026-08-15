@@ -26,6 +26,7 @@ interface AgentHeaderProps {
   transitParcels?: any[]     // ⭐ Pour badge arrivages
   arrivedBoxes?: any         // ⭐ Pour badge arrivages
   newCodCount?: number       // ⭐ Pour badge COD
+  lostParcelsCount?: number  // ⭐ Pour badge Colis perdus
 }
 
 export default function AgentHeader({
@@ -46,6 +47,7 @@ export default function AgentHeader({
   transitParcels = [],   // ⭐ Badge arrivages
   arrivedBoxes = {},     // ⭐ Badge arrivages
   newCodCount = 0,       // ⭐ Badge COD
+  lostParcelsCount = 0,  // ⭐ Badge Colis perdus
 }: AgentHeaderProps) {
   // ⭐ Compter les colis en transit non encore tous traités
   const newArrivagesCount = transitParcels.filter((p: any) => {
@@ -169,6 +171,12 @@ export default function AgentHeader({
               {t.key === 'cod' && newCodCount > 0 && (
                 <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
                   {newCodCount}
+                </span>
+              )}
+              {/* ⭐ Badge Colis perdus */}
+              {t.key === 'lostparcels' && lostParcelsCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                  {lostParcelsCount}
                 </span>
               )}
             </button>
@@ -302,6 +310,9 @@ export default function AgentHeader({
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'lostparcels' ? 'bg-red-50 text-red-700' : 'text-gray-600 hover:bg-gray-50'}`}
               >
                 🚨 Colis perdus
+                {lostParcelsCount > 0 && (
+                  <span className="ml-auto text-xs bg-red-500 text-white px-2 py-0.5 rounded-full font-bold">{lostParcelsCount}</span>
+                )}
               </button>
             )}
             {profile?.role === 'chef_agence' && (

@@ -297,8 +297,11 @@ export default function VoiceInputAI({ onResult, onBulkFill, onClientFound }: Vo
                         className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg text-base font-semibold text-gray-900 focus:border-purple-500 focus:outline-none"
                       >
                         <option value="">-- Choisir --</option>
-                        <option value="port_paye">Port Payé</option>
-                        <option value="port_du">Port Dû</option>
+                        <option value="port_paye">✅ Port Payé</option>
+                        <option value="port_du">📮 Port Dû</option>
+                        <option value="port_en_compte_expediteur">📤 En compte Exp</option>
+                        <option value="port_en_compte_destinataire">📥 En compte Dest</option>
+                        <option value="port_en_compte">💼 En compte</option>
                       </select>
                     ) : field === 'weight' || field === 'portPrice' || field === 'codAmount' || field === 'nbColis' ? (
                       <input

@@ -29,7 +29,7 @@ export const ADMIN_SEARCH_CONFIG = {
     { name: 'originCity', weight: 0.5 },
     { name: 'destinationCity', weight: 0.5 },
   ],
-  threshold: 0.3, // Balance entre précision et flexibilité
+  threshold: 0.25, // Balance entre précision et flexibilité (0.0 = exact, 1.0 = tout)
   debounceMs: 300,
   limit: 1000, // Limite à 1000 résultats pour performance
 }

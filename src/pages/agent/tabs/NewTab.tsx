@@ -26,13 +26,13 @@ const todayStr = () => getWorkingDateStr()
 const getEmptyForm = () => ({
   senderName: '', senderNic: '', senderAddress: '', senderTel: '', senderCity: '',
   receiverName: '', receiverAddress: '', receiverTel: '', receiverCity: '', receiverClientId: '',
-  weight: '', nbColis: '0', natureOfGoods: '', natureOfGoodsCustomPrice: '', codAmount: '',
+  weight: '', nbColis: '0', natureOfGoods: 'Colis', natureOfGoodsCustomPrice: '', codAmount: '',
   serviceType: 'simple', hasRetourBL: false, shipmentMode: 'personal',
-  portType: 'port_paye', portPayeMethod: '', portPayeMontant: '',
+  portType: 'port_du', portPayeMethod: '', portPayeMontant: '',
   portPrice: '',
   clientId: '', clientName: '', autoDebit: false,
   deliverySectorId: '', deliveryDriverId: '',
-  enGare: false,
+  enGare: true,
   operationDate: todayStr(), // Date de travail ACTUELLE à chaque appel
 })
 
@@ -66,6 +66,21 @@ export default function NewTab() {
   const nexpInputRef = useRef<HTMLInputElement>(null)
   const ticketContainerRef = useRef<HTMLDivElement>(null)
   const validateButtonRef = useRef<HTMLButtonElement>(null)
+  const colisButtonRef = useRef<HTMLButtonElement>(null)
+  const portDuButtonRef = useRef<HTMLButtonElement>(null)
+  const receiverCityRef = useRef<HTMLSelectElement>(null)
+  const receiverNameRef = useRef<HTMLInputElement>(null)
+  const nbColisRef = useRef<HTMLInputElement>(null)
+
+  // State pour tracker si l'autocomplétion vient de se produire
+  const [autoCompleted, setAutoCompleted] = useState(false)
+  const [receiverAutoCompleted, setReceiverAutoCompleted] = useState(false)
+
+  // States pour les popups de clients
+  const [showSenderPopup, setShowSenderPopup] = useState(false)
+  const [showReceiverPopup, setShowReceiverPopup] = useState(false)
+  const [senderSearch, setSenderSearch] = useState('')
+  const [receiverSearch, setReceiverSearch] = useState('')
 
   // Fonction pour créer un nouveau colis
   const handleNewParcel = () => {
@@ -104,6 +119,13 @@ export default function NewTab() {
         return // Laisser le formulaire se soumettre normalement
       }
 
+      // Logique spéciale : si on est sur le bouton Colis, aller directement à Port Dû
+      if (target === colisButtonRef.current && portDuButtonRef.current) {
+        e.preventDefault()
+        portDuButtonRef.current.focus()
+        return
+      }
+
       e.preventDefault()
       if (currentIndex >= 0 && currentIndex < focusables.length - 1) {
         const next = focusables[currentIndex + 1] as HTMLElement
@@ -135,11 +157,10 @@ export default function NewTab() {
     }
   }
 
-  // Focus automatique sur N EXP à l'ouverture
+  // Focus automatique sur bouton Colis à l'ouverture
   useEffect(() => {
     const timer = setTimeout(() => {
-      const senderNicField = document.getElementById('senderNic')
-      if (senderNicField) senderNicField.focus()
+      colisButtonRef.current?.focus()
     }, 100)
     return () => clearTimeout(timer)
   }, [])
@@ -178,6 +199,204 @@ export default function NewTab() {
     } catch (error) {
       console.error('Erreur vérification NIC:', error)
       return false
+    }
+  }
+
+  // Raccourcis clavier pour les popups de clients
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // F1 : Afficher le popup approprié selon la position du curseur
+      if (e.key === 'F1') {
+        e.preventDefault()
+
+        // Déterminer si le focus est dans la section expéditeur ou destinataire
+        const activeElement = document.activeElement as HTMLElement
+        const senderSection = activeElement?.closest('[data-section="expediteur"]')
+        const receiverSection = activeElement?.closest('[data-section="destinataire"]')
+
+        if (senderSection) {
+          // Curseur dans la section expéditeur
+          setShowSenderPopup(true)
+          setSenderSearch('')
+        } else if (receiverSection) {
+          // Curseur dans la section destinataire
+          setShowReceiverPopup(true)
+          setReceiverSearch('')
+        } else {
+          // Cas par défaut : afficher les deux
+          setShowSenderPopup(true)
+          setShowReceiverPopup(true)
+          setSenderSearch('')
+          setReceiverSearch('')
+        }
+      }
+      // Esc : Fermer les popups
+      if (e.key === 'Escape') {
+        setShowSenderPopup(false)
+        setShowReceiverPopup(false)
+      }
+    }
+
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [])
+
+  // Autocomplétion par code client pour expéditeur
+  const handleSenderNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value
+    const upperValue = value.toUpperCase().trim()
+
+    // Chercher si un client correspond au code
+    const matchingClient = clients.find((c: Client) =>
+      c.code && c.code.toUpperCase() === upperValue
+    )
+
+    // Une seule mise à jour du formulaire
+    if (matchingClient) {
+      setForm((prev: any) => ({
+        ...prev,
+        senderName: matchingClient.name,
+        senderTel: matchingClient.tel || '',
+        senderAddress: matchingClient.address || '',
+        // Ne pas toucher au N EXP qui est déjà saisi
+      }))
+      // Marquer que l'autocomplétion a eu lieu
+      setAutoCompleted(true)
+    } else {
+      setForm((prev: any) => ({ ...prev, senderName: value }))
+      setAutoCompleted(false)
+    }
+  }
+
+  // Gestionnaire de touche pour le champ expéditeur
+  const handleSenderNameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && autoCompleted) {
+      e.preventDefault()
+      // Passer directement au champ nom du destinataire
+      receiverNameRef.current?.focus()
+      setAutoCompleted(false)
+    } else {
+      // Comportement normal de navigation
+      handleKeyNav(e)
+    }
+  }
+
+  // Autocomplétion par code client pour destinataire
+  const handleReceiverNameChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value
+    const upperValue = value.toUpperCase().trim()
+
+    // DEBUG: Vérifier les clients disponibles
+    console.log('🔍 DEBUG - Recherche code:', upperValue)
+    console.log('📊 Total clients disponibles:', clients.length)
+    console.log('📝 Codes clients:', clients.filter(c => c.code).map(c => `${c.code} (${c.city})`))
+
+    // Chercher si un client correspond au code
+    const matchingClient = clients.find((c: Client) =>
+      c.code && c.code.toUpperCase() === upperValue
+    )
+
+    console.log('✅ Client trouvé:', matchingClient ? `${matchingClient.name} (${matchingClient.city})` : 'AUCUN')
+
+    // Une seule mise à jour du formulaire
+    if (matchingClient) {
+      setForm((prev: any) => ({
+        ...prev,
+        receiverName: matchingClient.name,
+        receiverTel: matchingClient.tel || '',
+        receiverAddress: matchingClient.address || '',
+        receiverCity: matchingClient.city || '',
+      }))
+      // Marquer que l'autocomplétion a eu lieu
+      setReceiverAutoCompleted(true)
+    } else {
+      setForm((prev: any) => ({ ...prev, receiverName: value }))
+      setReceiverAutoCompleted(false)
+    }
+  }
+
+  // Gestionnaire de touche pour le champ destinataire
+  const handleReceiverNameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    console.log('🔍 Enter pressé - receiverAutoCompleted:', receiverAutoCompleted)
+    if (e.key === 'Enter' && receiverAutoCompleted) {
+      e.preventDefault()
+      console.log('✅ Navigation vers ville de destination')
+      // Passer directement au champ ville de destination
+      receiverCityRef.current?.focus()
+      setReceiverAutoCompleted(false)
+    } else if (e.key === 'Enter') {
+      console.log('❌ receiverAutoCompleted est false - navigation normale')
+      // Comportement normal de navigation
+      handleKeyNav(e)
+    } else {
+      // Comportement normal de navigation
+      handleKeyNav(e)
+    }
+  }
+
+  // Filtrer les clients pour les popups
+  const filteredSenderClients = clients.filter((c: Client) => {
+    const searchLower = senderSearch.toLowerCase()
+    return (
+      c.isExpediteur &&
+      (c.name.toLowerCase().includes(searchLower) ||
+       (c.code && c.code.toLowerCase().includes(searchLower)))
+    )
+  })
+
+  const filteredReceiverClients = clients.filter((c: Client) => {
+    const searchLower = receiverSearch.toLowerCase()
+    return (
+      c.isDestinataire &&
+      (c.name.toLowerCase().includes(searchLower) ||
+       (c.code && c.code.toLowerCase().includes(searchLower)))
+    )
+  })
+
+  // Sélectionner un client expéditeur depuis la popup
+  const selectSenderClient = (client: Client) => {
+    setForm((prev: any) => ({
+      ...prev,
+      senderName: client.name,
+      senderTel: client.tel || '',
+      senderAddress: client.address || '',
+    }))
+    setShowSenderPopup(false)
+    // Mettre le focus sur le nom du destinataire après sélection
+    setTimeout(() => {
+      receiverNameRef.current?.focus()
+    }, 100)
+  }
+
+  // Sélectionner un client destinataire depuis la popup
+  const selectReceiverClient = (client: Client) => {
+    setForm((prev: any) => ({
+      ...prev,
+      receiverName: client.name,
+      receiverTel: client.tel || '',
+      receiverAddress: client.address || '',
+      receiverCity: client.city || '',
+    }))
+    setShowReceiverPopup(false)
+    // Mettre le focus sur Nb colis après sélection
+    setTimeout(() => {
+      colisButtonRef.current?.focus()
+    }, 100)
+  }
+
+  // Gestionnaire Entrée pour sélection rapide dans popup expéditeurs
+  const handleSenderSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && filteredSenderClients.length === 1) {
+      e.preventDefault()
+      selectSenderClient(filteredSenderClients[0])
+    }
+  }
+
+  // Gestionnaire Entrée pour sélection rapide dans popup destinataires
+  const handleReceiverSearchKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' && filteredReceiverClients.length === 1) {
+      e.preventDefault()
+      selectReceiverClient(filteredReceiverClients[0])
     }
   }
 
@@ -769,7 +988,7 @@ export default function NewTab() {
         {/* GRID 2 COLONNES : Expéditeur + Destinataire */}
         <div className="grid grid-cols-2 gap-3">
           {/* COLONNE 1 : EXPÉDITEUR */}
-          <section className="bg-pink-50 border border-pink-200 rounded-lg p-3">
+          <section className="bg-pink-50 border border-pink-200 rounded-lg p-3" data-section="expediteur">
             <h3 className="text-xs font-bold text-pink-700 mb-2 flex items-center gap-1.5">
               <span className="text-base">📤</span> Expéditeur
             </h3>
@@ -786,10 +1005,10 @@ export default function NewTab() {
               />
               <input
                 id="senderName"
-                placeholder="Nom complet…"
+                placeholder="Nom complet (ou code client)…"
                 value={form.senderName}
-                onChange={f('senderName')}
-                onKeyDown={handleKeyNav}
+                onChange={handleSenderNameChange}
+                onKeyDown={handleSenderNameKeyDown}
                 className={inputCls}
               />
               <div className="grid grid-cols-2 gap-2">
@@ -831,13 +1050,14 @@ export default function NewTab() {
           </section>
 
           {/* COLONNE 2 : DESTINATAIRE */}
-          <section className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+          <section className="bg-blue-50 border border-blue-200 rounded-lg p-3" data-section="destinataire">
             <h3 className="text-xs font-bold text-blue-700 mb-2 flex items-center gap-1.5">
               <span className="text-base">📥</span> Destinataire
             </h3>
             <div className="space-y-2">
               <div className="relative">
                 <select
+                  ref={receiverCityRef}
                   id="receiverCity"
                   required
                   value={form.receiverCity}
@@ -860,11 +1080,12 @@ export default function NewTab() {
                 <ChevronDown className="absolute right-2 top-2.5 w-3 h-3 text-gray-400 pointer-events-none" />
               </div>
               <input
+                ref={receiverNameRef}
                 id="receiverName"
-                placeholder="Nom complet…"
+                placeholder="Nom complet (ou code client)…"
                 value={form.receiverName}
-                onChange={f('receiverName')}
-                onKeyDown={handleKeyNav}
+                onChange={handleReceiverNameChange}
+                onKeyDown={handleReceiverNameKeyDown}
                 className={inputCls}
               />
               <div className="grid grid-cols-2 gap-2">
@@ -890,7 +1111,7 @@ export default function NewTab() {
               <label className="flex items-center gap-2 px-2 py-1.5 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer text-xs">
                 <input
                   type="checkbox"
-                  checked={form.enGare || false}
+                  checked={form.enGare ?? true}
                   onChange={e => setForm((p: any) => ({
                     ...p,
                     enGare: e.target.checked,
@@ -902,42 +1123,8 @@ export default function NewTab() {
                 />
                 <span className="text-base">🚉</span>
                 <span className="font-bold text-amber-900 flex-1">En gare</span>
-                {form.enGare && <span className="px-2 py-0.5 bg-orange-500 text-white rounded text-xs font-bold">✓</span>}
+                {(form.enGare ?? true) && <span className="px-2 py-0.5 bg-orange-500 text-white rounded text-xs font-bold">✓</span>}
               </label>
-
-              {/* Secteur/Livreur - Version compacte */}
-              {form.receiverCity && !form.enGare && (destinationSectors || []).length > 0 && (
-                <div className="space-y-1.5">
-                  <div className="relative">
-                    <select
-                      value={form.deliverySectorId}
-                      onChange={e => setForm((p: any) => ({ ...p, deliverySectorId: e.target.value, deliveryDriverId: '' }))}
-                      onKeyDown={handleKeyNav}
-                      className={selectCls}
-                    >
-                      <option value="">Secteur</option>
-                      {(destinationSectors || []).map((s: any) => (
-                        <option key={s.id} value={s.id}>{s.code}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-2 top-2.5 w-3 h-3 text-gray-400 pointer-events-none" />
-                  </div>
-                  <div className="relative">
-                    <select
-                      value={form.deliveryDriverId}
-                      onChange={f('deliveryDriverId')}
-                      onKeyDown={handleKeyNav}
-                      className={selectCls}
-                    >
-                      <option value="">Livreur</option>
-                      {(destinationDrivers || []).map((d: any) => (
-                        <option key={d.id} value={d.id}>{d.name}</option>
-                      ))}
-                    </select>
-                    <ChevronDown className="absolute right-2 top-2.5 w-3 h-3 text-gray-400 pointer-events-none" />
-                  </div>
-                </div>
-              )}
             </div>
           </section>
         </div>
@@ -1018,6 +1205,7 @@ export default function NewTab() {
               className={inputCls}
             />
             <input
+              ref={nbColisRef}
               id="nbColis"
               required
               type="text"
@@ -1035,13 +1223,14 @@ export default function NewTab() {
           </div>
           <div className="grid grid-cols-4 gap-2">
             {[
-              { key: 'Palette', emoji: '📦', label: 'Palette' },
               { key: 'Colis',   emoji: '📮', label: 'Colis' },
+              { key: 'Palette', emoji: '📦', label: 'Palette' },
               { key: 'Bagages', emoji: '🧳', label: 'Bagages' },
               { key: 'Autres',  emoji: '✏️', label: 'Autres' },
             ].map(({ key, emoji, label }) => (
               <button
                 key={key}
+                ref={key === 'Colis' ? colisButtonRef : undefined}
                 type="button"
                 onClick={() => setForm((p: any) => ({ ...p, natureOfGoods: key === p.natureOfGoods ? '' : key }))}
                 onKeyDown={handleKeyNav}
@@ -1064,6 +1253,92 @@ export default function NewTab() {
               onKeyDown={handleKeyNav}
               className={`${inputCls} mt-2`}
             />
+          )}
+        </div>
+
+        {/* Frais de port */}
+        <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
+          <h3 className="text-xs font-bold text-orange-700 mb-2 flex items-center gap-1.5">
+            <span className="text-base">💰</span> Frais de port
+          </h3>
+          <div className="grid grid-cols-4 gap-2 mb-2">
+            {[
+              { key: 'port_du',   emoji: '🧾', label: 'Port Dû', active: 'bg-orange-500 text-white' },
+              { key: 'port_paye', emoji: '💵', label: 'Port Payé', active: 'bg-blue-600 text-white' },
+              { key: 'port_en_compte_expediteur', emoji: '💼', label: 'Compte Exp', active: 'bg-purple-600 text-white' },
+              { key: 'port_en_compte_destinataire', emoji: '📥', label: 'Compte Dest', active: 'bg-teal-600 text-white' },
+            ].map(pt => (
+              <button type="button" key={pt.key}
+                ref={pt.key === 'port_du' ? portDuButtonRef : undefined}
+                onClick={() => {
+                  setForm((p: any) => {
+                    const isCompteType = pt.key === 'port_en_compte_expediteur' || pt.key === 'port_en_compte_destinataire'
+                    const updates: any = {
+                      portType: pt.key,
+                      shipmentMode: isCompteType ? 'client' : (pt.key === 'port_du' && (p.portType === 'port_en_compte' || p.portType === 'port_en_compte_expediteur' || p.portType === 'port_en_compte_destinataire') ? 'personal' : p.shipmentMode),
+                      portPayeMethod: pt.key === 'port_paye' ? 'espece' : p.portPayeMethod,
+                    }
+
+                    // Si "En Compte Expéditeur" est sélectionné et qu'il y a un expéditeur
+                    if (pt.key === 'port_en_compte_expediteur' && p.senderName && p.senderName.trim() !== '') {
+                      // Automatiquement définir l'expéditeur comme client en compte
+                      updates.clientName = p.senderName
+                      updates.clientId = p.clientId || '' // Garder l'ID si déjà présent
+                    }
+
+                    // Si "En Compte Destinataire" est sélectionné et qu'il y a un destinataire
+                    if (pt.key === 'port_en_compte_destinataire' && p.receiverName && p.receiverName.trim() !== '') {
+                      // Automatiquement définir le destinataire comme client en compte
+                      updates.clientName = p.receiverName
+                      updates.clientId = p.receiverClientId || '' // Garder l'ID si déjà présent
+                    }
+
+                    return { ...p, ...updates }
+                  })
+                }}
+                onKeyDown={handleKeyNav}
+                className={`flex flex-col items-center justify-center py-2 rounded-lg border text-xs font-bold transition ${form.portType === pt.key ? pt.active : 'bg-white border-gray-200 text-gray-600'}`}>
+                <span className="text-lg">{pt.emoji}</span>
+                <span className="mt-0.5">{pt.label}</span>
+              </button>
+            ))}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <input
+              required
+              type="text"
+              inputMode="decimal"
+              placeholder="Montant (DH)"
+              value={form.portPrice}
+              onChange={e => {
+                const normalized = normalizeDecimal(e.target.value)
+                setForm((p: any) => ({ ...p, portPrice: normalized, portPayeMontant: p.portType === 'port_paye' ? normalized : p.portPayeMontant }))
+              }}
+              onKeyDown={handleKeyNav}
+              className={inputCls}
+            />
+            {form.portType === 'port_paye' && (
+              <select
+                value={form.portPayeMethod || 'espece'}
+                onChange={e => setForm((p: any) => ({ ...p, portPayeMethod: e.target.value }))}
+                onKeyDown={handleKeyNav}
+                className={selectCls}
+              >
+                <option value="espece">💵 Espèce</option>
+                <option value="cheque">📋 Chèque</option>
+              </select>
+            )}
+          </div>
+          {form.clientId && form.portType === 'port_paye' && price > 0 && (
+            <label className={`flex items-center gap-1.5 cursor-pointer px-2 py-1.5 border rounded-lg text-xs mt-2 ${form.autoDebit ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-white'}`}>
+              <input
+                type="checkbox"
+                checked={form.autoDebit}
+                onChange={e => setForm((p: any) => ({ ...p, autoDebit: e.target.checked }))}
+                className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded"
+              />
+              <span className="text-gray-600 font-medium">Débiter {form.clientName} ({price} DH)</span>
+            </label>
           )}
         </div>
 
@@ -1157,83 +1432,6 @@ export default function NewTab() {
           </div>
         </div>
 
-        {/* Frais de port */}
-        <div className="bg-orange-50 border border-orange-200 rounded-lg p-3">
-          <h3 className="text-xs font-bold text-orange-700 mb-2 flex items-center gap-1.5">
-            <span className="text-base">💰</span> Frais de port
-          </h3>
-          <div className="grid grid-cols-3 gap-2 mb-2">
-            {[
-              { key: 'port_paye', emoji: '💵', label: 'Port Payé', active: 'bg-blue-600 text-white' },
-              { key: 'port_du',   emoji: '🧾', label: 'Port Dû', active: 'bg-orange-500 text-white' },
-              { key: 'port_en_compte_expediteur', emoji: '💼', label: 'Compte Exp', active: 'bg-purple-600 text-white' },
-            ].map(pt => (
-              <button type="button" key={pt.key}
-                onClick={() => {
-                  setForm((p: any) => {
-                    const isCompteType = pt.key === 'port_en_compte_expediteur'
-                    const updates: any = {
-                      portType: pt.key,
-                      shipmentMode: isCompteType ? 'client' : (pt.key === 'port_du' && (p.portType === 'port_en_compte' || p.portType === 'port_en_compte_expediteur') ? 'personal' : p.shipmentMode),
-                      portPayeMethod: pt.key === 'port_paye' ? 'espece' : p.portPayeMethod,
-                    }
-
-                    // Si "En Compte Expéditeur" est sélectionné et qu'il y a un expéditeur
-                    if (pt.key === 'port_en_compte_expediteur' && p.senderName && p.senderName.trim() !== '') {
-                      // Automatiquement définir l'expéditeur comme client en compte
-                      updates.clientName = p.senderName
-                      updates.clientId = p.clientId || '' // Garder l'ID si déjà présent
-                    }
-
-                    return { ...p, ...updates }
-                  })
-                }}
-                onKeyDown={handleKeyNav}
-                className={`flex flex-col items-center justify-center py-2 rounded-lg border text-xs font-bold transition ${form.portType === pt.key ? pt.active : 'bg-white border-gray-200 text-gray-600'}`}>
-                <span className="text-lg">{pt.emoji}</span>
-                <span className="mt-0.5">{pt.label}</span>
-              </button>
-            ))}
-          </div>
-          <div className="grid grid-cols-2 gap-2">
-            <input
-              required
-              type="text"
-              inputMode="decimal"
-              placeholder="Montant (DH)"
-              value={form.portPrice}
-              onChange={e => {
-                const normalized = normalizeDecimal(e.target.value)
-                setForm((p: any) => ({ ...p, portPrice: normalized, portPayeMontant: p.portType === 'port_paye' ? normalized : p.portPayeMontant }))
-              }}
-              onKeyDown={handleKeyNav}
-              className={inputCls}
-            />
-            {form.portType === 'port_paye' && (
-              <select
-                value={form.portPayeMethod || 'espece'}
-                onChange={e => setForm((p: any) => ({ ...p, portPayeMethod: e.target.value }))}
-                onKeyDown={handleKeyNav}
-                className={selectCls}
-              >
-                <option value="espece">💵 Espèce</option>
-                <option value="cheque">📋 Chèque</option>
-              </select>
-            )}
-          </div>
-          {form.clientId && form.portType === 'port_paye' && price > 0 && (
-            <label className={`flex items-center gap-1.5 cursor-pointer px-2 py-1.5 border rounded-lg text-xs mt-2 ${form.autoDebit ? 'border-blue-200 bg-blue-50' : 'border-gray-200 bg-white'}`}>
-              <input
-                type="checkbox"
-                checked={form.autoDebit}
-                onChange={e => setForm((p: any) => ({ ...p, autoDebit: e.target.checked }))}
-                className="w-3.5 h-3.5 text-blue-600 border-gray-300 rounded"
-              />
-              <span className="text-gray-600 font-medium">Débiter {form.clientName} ({price} DH)</span>
-            </label>
-          )}
-        </div>
-
         <button type="submit" disabled={loading}
           onKeyDown={handleKeyNav}
           className="w-full bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 hover:from-pink-600 hover:via-purple-600 hover:to-indigo-600 disabled:opacity-60 text-white py-5 rounded-2xl font-bold text-lg transition-all transform hover:scale-[1.02] hover:shadow-2xl flex items-center justify-center gap-3 relative overflow-hidden group"
@@ -1247,6 +1445,98 @@ export default function NewTab() {
           </span>
         </button>
       </form>
+
+      {/* Popup clients expéditeurs (F1) */}
+      {showSenderPopup && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-end z-50" onClick={() => setShowSenderPopup(false)}>
+          <div className="bg-white rounded-l-2xl shadow-2xl w-[500px] h-full p-6 overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-gray-800">📤 Clients Expéditeurs</h2>
+              <button onClick={() => setShowSenderPopup(false)} className="text-gray-500 hover:text-gray-700">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <input
+              type="text"
+              placeholder="Rechercher par nom ou code..."
+              value={senderSearch}
+              onChange={(e) => setSenderSearch(e.target.value)}
+              onKeyDown={handleSenderSearchKeyDown}
+              className="w-full p-3 border-2 border-gray-300 rounded-lg mb-4 focus:border-blue-500 focus:outline-none"
+              autoFocus
+            />
+            <div className="flex-1 overflow-y-auto space-y-2">
+              {filteredSenderClients.map((client: Client) => (
+                <button
+                  key={client.id}
+                  onClick={() => selectSenderClient(client)}
+                  className="w-full text-left p-4 bg-blue-50 hover:bg-blue-100 border-2 border-blue-200 rounded-lg transition"
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-bold text-gray-800">{client.name}</span>
+                    {client.code && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs font-bold rounded">#{client.code}</span>}
+                  </div>
+                  <div className="text-sm text-gray-600">
+                    📞 {client.tel} • 🏠 {client.address}
+                  </div>
+                </button>
+              ))}
+              {filteredSenderClients.length === 0 && (
+                <div className="text-center text-gray-500 py-8">Aucun client trouvé</div>
+              )}
+            </div>
+            <div className="mt-4 text-sm text-gray-500 text-center">
+              Appuyez sur <kbd className="px-2 py-1 bg-gray-200 rounded">Esc</kbd> pour fermer
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Popup clients destinataires (F1) */}
+      {showReceiverPopup && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-start z-50" onClick={() => setShowReceiverPopup(false)}>
+          <div className="bg-white rounded-r-2xl shadow-2xl w-[500px] h-full p-6 overflow-hidden flex flex-col" onClick={(e) => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-xl font-bold text-gray-800">📥 Clients Destinataires</h2>
+              <button onClick={() => setShowReceiverPopup(false)} className="text-gray-500 hover:text-gray-700">
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+            <input
+              type="text"
+              placeholder="Rechercher par nom ou code..."
+              value={receiverSearch}
+              onChange={(e) => setReceiverSearch(e.target.value)}
+              onKeyDown={handleReceiverSearchKeyDown}
+              className="w-full p-3 border-2 border-gray-300 rounded-lg mb-4 focus:border-blue-500 focus:outline-none"
+              autoFocus
+            />
+            <div className="flex-1 overflow-y-auto space-y-2">
+              {filteredReceiverClients.map((client: Client) => (
+                <button
+                  key={client.id}
+                  onClick={() => selectReceiverClient(client)}
+                  className="w-full text-left p-4 bg-green-50 hover:bg-green-100 border-2 border-green-200 rounded-lg transition"
+                >
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-bold text-gray-800">{client.name}</span>
+                    {client.code && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs font-bold rounded">#{client.code}</span>}
+                  </div>
+                  <div className="text-sm text-gray-600">
+                    📞 {client.tel} • 🏙️ {client.city}
+                  </div>
+                </button>
+              ))}
+              {filteredReceiverClients.length === 0 && (
+                <div className="text-center text-gray-500 py-8">Aucun client trouvé</div>
+              )}
+            </div>
+            <div className="mt-4 text-sm text-gray-500 text-center">
+              Appuyez sur <kbd className="px-2 py-1 bg-gray-200 rounded">Esc</kbd> pour fermer
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

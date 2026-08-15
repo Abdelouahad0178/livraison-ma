@@ -33,9 +33,7 @@ import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
 
-// ⚡ Système de chargement optimisé (Option 3 - comme AdminPage)
-const PAGE_SIZE = 50 // Chargement initial réduit
-const FILTERED_PAGE_SIZE = 1000 // Quand filtres actifs
+const PAGE_SIZE = 800 // Chargement progressif par tranches de 800
 
 const money = (n: any) => (parseFloat(n) || 0).toLocaleString('fr-MA')
 const asDate = (value: any) => {
@@ -92,7 +90,7 @@ const inDateRange = (value: any, preset: any, from: any, to: any, operationalDay
   return (!start || d >= start) && (!end || d <= end)
 }
 
-export default function CentralCollectorPage() {
+export default function AnalyseurEspecePage() {
   const [profile, setProfile] = useState<any>(null)
   const [deposits, setDeposits] = useState<any[]>([])
   const [payments, setPayments] = useState<any[]>([])
@@ -194,80 +192,31 @@ export default function CentralCollectorPage() {
     )
   }, [])
 
-  // ⚡ Chargement optimisé avec détection de filtres (Option 3)
-  // NOTE: query n'est PAS dans les dépendances - la recherche est gérée par searchParcels
+  // Abonnement temps réel : 800 derniers colis seulement (rapide)
   useEffect(() => {
     const onError = (err: any) => console.error('CentralCollectorPage:', err)
-
-    // 🔍 Détecter si des filtres sont actifs (SANS query - géré par recherche serveur)
-    const hasDateFilter = datePreset !== 'all'
-    const hasCityFilter = cityFilter !== 'all'
-    const hasPaymentFilter = paymentFilter !== 'all' && paymentFilter !== 'unpaid'
-    const hasFilters = hasDateFilter || hasCityFilter || hasPaymentFilter
-
-    const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
-
-    console.warn(`📊 CHARGEMENT CentralCollector:`, {
-      hasFilters,
-      effectivePageSize,
-      filters: { datePreset, cityFilter, paymentFilter }
-    })
-
     const unsubParcels = subscribeAllParcels((docs: any[], lastSnap: any) => {
       setLiveParcels(docs)
       if (!pagedRef.current) lastDocRef.current = lastSnap
-      if (docs.length < effectivePageSize) setHasMore(false)
-      console.warn(`✅ CentralCollector: ${docs.length} colis chargés`)
-    }, onError, 0, effectivePageSize)
-
+      if (docs.length < PAGE_SIZE) setHasMore(false)
+    }, onError, 0, PAGE_SIZE)
     return () => { unsubParcels() }
-  }, [datePreset, cityFilter, paymentFilter])
+  }, [])
 
-  // ❌ DÉSACTIVÉ: Chargement automatique (Option 3 - charge seulement ce dont on a besoin)
-  // useEffect(() => {
-  //   if (!hasMore || loadingAll || loadingMore || !lastDocRef.current) return
-  //   if (liveParcels.length === 0) return // attendre le chargement initial
-  //
-  //   // Lancer le chargement complet automatiquement après 2 secondes
-  //   const timer = setTimeout(() => {
-  //     if (hasMore && !loadingAll && !loadingMore && lastDocRef.current) {
-  //       loadAllParcels()
-  //     }
-  //   }, 2000)
-  //
-  //   return () => clearTimeout(timer)
-  // }, [liveParcels.length, hasMore])
-
-  // 🔍 RECHERCHE SERVEUR Option 3 (comme AdminPage)
-  // Recherche dans TOUTE la base Firestore, pas seulement les colis chargés
-  // Écoute AUSSI ctlDebounced pour l'onglet Contrôle
+  // 🚀 Chargement automatique de toute la base en arrière-plan (après premiers 800)
   useEffect(() => {
-    // Prendre la recherche active (Fournisseurs OU Contrôle)
-    const searchQuery = (query.trim() || ctlDebounced.trim())
-    if (!searchQuery || searchQuery.length < 2) {
-      setServerResults([])
-      setDeepSearching(false)
-      return
-    }
+    if (!hasMore || loadingAll || loadingMore || !lastDocRef.current) return
+    if (liveParcels.length === 0) return // attendre le chargement initial
 
-    // ⚡ Recherche serveur dans TOUTE la base
-    const performServerSearch = async () => {
-      setDeepSearching(true)
-      try {
-        console.warn(`🔍 Recherche serveur CentralCollector: "${searchQuery}" dans TOUTE la base...`)
-        const results = await searchParcels(searchQuery, { limit: 50000 })
-        setServerResults(results)
-        setDeepSearching(false)
-        console.warn(`✅ Recherche serveur CentralCollector: ${results.length} résultats trouvés`)
-      } catch (error) {
-        console.error('❌ Erreur recherche serveur CentralCollector:', error)
-        setServerResults([])
-        setDeepSearching(false)
+    // Lancer le chargement complet automatiquement après 2 secondes
+    const timer = setTimeout(() => {
+      if (hasMore && !loadingAll && !loadingMore && lastDocRef.current) {
+        loadAllParcels()
       }
-    }
+    }, 2000)
 
-    performServerSearch()
-  }, [query, ctlDebounced])
+    return () => clearTimeout(timer)
+  }, [liveParcels.length, hasMore])
 
   // 📦 Charger les archives quand l'onglet est sélectionné
   useEffect(() => {
@@ -366,20 +315,9 @@ export default function CentralCollectorPage() {
   // Fusion : temps réel + pages chargées + résultats serveur + pointage optimiste
   const parcels = useMemo(() => {
     const map = new Map()
-
-    // ✅ Si recherche active → SEULEMENT serverResults (pas les 50 de démarrage)
-    if (serverResults.length > 0) {
-      serverResults.forEach((p: any) => map.set(p.id, p))
-      // Temps réel uniquement pour les colis déjà dans serverResults
-      liveParcels.forEach((p: any) => {
-        if (map.has(p.id)) map.set(p.id, p) // Mise à jour temps réel
-      })
-    } else {
-      // Pas de recherche → fusion normale
-      moreParcels.forEach((p: any) => map.set(p.id, p))
-      liveParcels.forEach((p: any) => map.set(p.id, p))
-    }
-
+    moreParcels.forEach((p: any) => map.set(p.id, p))
+    serverResults.forEach((p: any) => map.set(p.id, p))
+    liveParcels.forEach((p: any) => map.set(p.id, p)) // le temps réel gagne
     let arr = [...map.values()]
     if (Object.keys(controlOverrides).length) {
       arr = arr.map((p: any) => controlOverrides[p.id] ? { ...p, ...controlOverrides[p.id] } : p)
@@ -401,9 +339,13 @@ export default function CentralCollectorPage() {
     }
   }, [])
 
+  // ⭐ Analyseur Espèce : TOUS les CODs (test)
   const depositedParcels = useMemo(() => parcels.filter(p =>
-    parseFloat(p.codAmount || 0) > 0 && p.centralDeposited
-  ), [parcels])
+    parseFloat(p.codAmount || 0) > 0
+    // TODO: Ajouter filtres espèces + ville après test
+    // && ['especes', 'cod_especes'].includes(p.codPaymentType || 'especes')
+    // && (p.centralDepositCity === profile?.city || p.destinationCity === profile?.city || p.receiver?.city === profile?.city)
+  ), [parcels, profile?.city])
 
   // ── Onglet Contrôle & Pointage : contre-espèces de toutes les agences ────
   // Ville d'ORIGINE (ville d'envoi) pour filtrage
@@ -455,7 +397,7 @@ export default function CentralCollectorPage() {
     const qq = ctlDebounced.trim().toLowerCase()
     const mn = ctlMinAmount === '' ? null : parseFloat(ctlMinAmount)
     const mx = ctlMaxAmount === '' ? null : parseFloat(ctlMaxAmount)
-    return parcels.filter((p: any) => {
+    return codParcels.filter((p: any) => {
       if (ctlPayType !== 'all') {
         const t = p.codPaymentType || ''
         if (ctlPayType === 'none' && t) return false
@@ -469,11 +411,6 @@ export default function CentralCollectorPage() {
       const n = parseFloat(p.codAmount) || 0
       if (mn !== null && !Number.isNaN(mn) && n < mn) return false
       if (mx !== null && !Number.isNaN(mx) && n > mx) return false
-
-      // ✅ SKIP filtrage client si recherche serveur active (résultats déjà filtrés)
-      if (serverResults.length > 0 && !qq) return true
-      if (serverResults.length > 0 && qq) return true  // Recherche serveur gère tout
-
       if (!qq) return true
       return hasSearch([
         p.trackingId, p.id, p.sender?.nic, p.senderNic, p.sender?.name, p.senderName,
@@ -482,7 +419,7 @@ export default function CentralCollectorPage() {
         p.receiver?.city, p.codAmount, p.status, p.controlledBy,
       ], qq)
     })
-  }, [parcels, ctlDebounced, ctlPayType, ctlCodStatus, ctlControl, ctlParcelStatus, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay, ctlMinAmount, ctlMaxAmount, serverResults])
+  }, [parcels, ctlDebounced, ctlPayType, ctlCodStatus, ctlControl, ctlParcelStatus, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay, ctlMinAmount, ctlMaxAmount])
 
   // Compteurs par ville (pointage ville par ville) - par ville d'ORIGINE
   const ctlCityStats = useMemo(() => {
@@ -692,17 +629,13 @@ export default function CentralCollectorPage() {
     if (paymentFilter === 'unpaid' && (paid || prepared)) return false
     if (paymentFilter === 'prepared' && !prepared) return false
     if (paymentFilter === 'paid' && !paid) return false
-
-    // ✅ SKIP filtrage client si recherche serveur active (résultats déjà filtrés)
-    if (serverResults.length > 0) return true
-
     const values = [
       p.id, p.trackingId, p.sender?.name, p.sender?.nic, p.sender?.tel, p.receiver?.name, p.receiver?.tel,
       p.originCity, p.destinationCity, p.centralDepositCity, p.codAmount,
       p.centralChequeNum, p.centralChequeBank,
     ]
     return hasSearch(values, q)
-  }), [depositedParcels, cityFilter, datePreset, dateFrom, dateTo, operationalDay, minAmount, maxAmount, paymentFilter, q, serverResults])
+  }), [depositedParcels, cityFilter, datePreset, dateFrom, dateTo, operationalDay, minAmount, maxAmount, paymentFilter, q])
 
   const supplierGroups = useMemo(() => {
     const map = new Map()
@@ -1274,12 +1207,12 @@ export default function CentralCollectorPage() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-black bg-gradient-to-r from-pink-600 via-purple-600 to-rose-600 bg-clip-text text-transparent">
-                Encaisseur Central
+                Analyseur Espèce
               </h1>
               <Sparkles className="w-5 h-5 text-pink-500 animate-pulse" />
             </div>
             <p className="text-sm text-purple-600/70 font-medium mt-0.5">
-              Versements agences • RETOUR FOND • Chèques fournisseurs
+              Contrôle des espèces
             </p>
             {profile?.name && (
               <p className="text-sm text-rose-600 font-semibold mt-1 flex items-center gap-1.5">
@@ -1334,7 +1267,74 @@ export default function CentralCollectorPage() {
 
         {activeTab === 'controle' && (
           <>
-            {/* ✅ SUPPRIMÉ: Bandeau de chargement progressif - Utilise maintenant système Option 3 */}
+            {/* Bandeau chargement progressif */}
+            <section className="bg-white/70 backdrop-blur-xl rounded-3xl border border-indigo-100/60 p-4 shadow-lg">
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="p-2.5 rounded-2xl bg-gradient-to-br from-indigo-400 to-purple-500 text-white shadow-lg">
+                  <Database className="w-5 h-5" />
+                </div>
+                <div className="flex-1 min-w-52">
+                  <p className="text-sm font-black text-slate-800">
+                    {parcels.length.toLocaleString('fr-MA')} colis chargés · {codParcels.length.toLocaleString('fr-MA')} COD détectés
+                  </p>
+                  <p className="text-xs text-slate-500">
+                    {loadingAll
+                      ? `⏳ Chargement complet en cours... +${loadAllProgress.toLocaleString('fr-MA')} colis récupérés`
+                      : hasMore
+                        ? 'Historique plus ancien disponible — chargez par tranches de 800 ou toute la base.'
+                        : '✓ Toute la base est chargée'}
+                  </p>
+                </div>
+                {hasMore && (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={loadMoreParcels}
+                      disabled={loadingMore || loadingAll}
+                      className="px-4 py-2.5 rounded-xl text-xs font-black text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 transition shadow-lg flex items-center gap-2"
+                    >
+                      {loadingMore ? (
+                        <><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Chargement...</>
+                      ) : (
+                        <>↓ Charger 800 de plus</>
+                      )}
+                    </button>
+                    <button
+                      onClick={loadAllParcels}
+                      disabled={loadingMore || loadingAll}
+                      className="px-4 py-2.5 rounded-xl text-xs font-black text-indigo-700 bg-indigo-50 border-2 border-indigo-200 hover:bg-indigo-100 disabled:opacity-50 transition flex items-center gap-2"
+                    >
+                      {loadingAll ? (
+                        <><span className="w-3.5 h-3.5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" /> {loadAllProgress.toLocaleString('fr-MA')}...</>
+                      ) : (
+                        <>⚡ Tout charger</>
+                      )}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </section>
+
+            {/* ⚠️ Avertissement filtre de date actif */}
+            {ctlDatePreset !== 'all' && hasMore && !loadingAll && (
+              <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-2xl border-2 border-amber-300 p-4 shadow-lg">
+                <div className="flex items-start gap-3">
+                  <div className="p-2 rounded-xl bg-amber-400 text-white flex-shrink-0">
+                    <Calendar className="w-5 h-5" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="font-black text-amber-900 mb-1">⚠️ Filtre de date actif - Résultats partiels</h3>
+                    <p className="text-sm text-amber-800">
+                      Vous avez activé un filtre de date, mais <strong>toute la base n'est pas encore chargée</strong>.
+                      Les résultats affichés ne concernent que les <strong>{parcels.length.toLocaleString('fr-MA')} colis chargés</strong>.
+                    </p>
+                    <p className="text-sm text-amber-800 mt-2">
+                      Le chargement complet est en cours automatiquement. Vous pouvez aussi cliquer sur <strong>"⚡ Tout charger"</strong> ci-dessus
+                      pour accélérer le processus et obtenir tous les résultats pour votre filtre de date.
+                    </p>
+                  </div>
+                </div>
+              </div>
+            )}
 
             {/* KPIs contrôle */}
             <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
@@ -1420,19 +1420,10 @@ export default function CentralCollectorPage() {
                     value={ctlQuery}
                     onChange={e => setCtlQuery(e.target.value)}
                     placeholder="🔍 Recherche dans résultats filtrés: N° EXP, nom, tél, ville..."
-                    className="w-full pl-11 pr-20 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm focus:outline-none text-sm font-medium placeholder:text-purple-300 transition-all duration-300"
+                    className="w-full pl-11 pr-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm focus:outline-none text-sm font-medium placeholder:text-purple-300 transition-all duration-300"
                   />
-                  <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2">
-                    {deepSearching ? (
-                      <div className="flex items-center gap-2 text-[10px] font-bold text-purple-600 bg-purple-50 px-2 py-1 rounded-full animate-pulse">
-                        <div className="w-3 h-3 border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
-                        Recherche...
-                      </div>
-                    ) : (
-                      <div className="text-[10px] font-bold text-purple-600 bg-purple-50 px-2 py-1 rounded-full">
-                        {ctlFiltered.length}
-                      </div>
-                    )}
+                  <div className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-purple-600 bg-purple-50 px-2 py-1 rounded-full">
+                    {ctlFiltered.length}
                   </div>
                 </div>
                 <button
@@ -1886,14 +1877,8 @@ export default function CentralCollectorPage() {
                 value={query}
                 onChange={e => setQuery(e.target.value)}
                 placeholder="Rechercher tracking, fournisseur, client, agence..."
-                className="w-full pl-11 pr-20 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm focus:outline-none text-sm font-medium placeholder:text-purple-300 transition-all duration-300"
+                className="w-full pl-11 pr-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm focus:outline-none text-sm font-medium placeholder:text-purple-300 transition-all duration-300"
               />
-              {deepSearching && (
-                <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2 text-[10px] font-bold text-purple-600 bg-purple-50 px-2 py-1 rounded-full animate-pulse">
-                  <div className="w-3 h-3 border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
-                  Recherche...
-                </div>
-              )}
             </div>
             <select
               value={cityFilter}

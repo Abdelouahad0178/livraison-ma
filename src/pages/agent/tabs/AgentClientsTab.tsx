@@ -31,6 +31,7 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
     address: '',
     city: agencyCity,
     nic: '',
+    code: '',
     accountType: 'compte',
     remise: 0,
     isExpediteur: false,
@@ -102,6 +103,7 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
       address: client.address || '',
       city: client.city || agencyCity,
       nic: client.nic || '',
+      code: client.code || '',
       accountType: client.accountType || 'cash',
       remise: client.remise || 0,
       isExpediteur: client.isExpediteur || false,
@@ -143,6 +145,39 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
     }
   }
 
+  // Gestion du code client (3 chiffres obligatoires)
+  const handleCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value
+    // Accepter uniquement les chiffres et limiter à 3 caractères
+    if (/^\d{0,3}$/.test(value)) {
+      setNewForm({ ...newForm, code: value })
+    }
+  }
+
+  const handleCodeBlur = () => {
+    // Compléter avec des zéros devant pour atteindre 3 chiffres
+    if (newForm.code && newForm.code.length > 0) {
+      const paddedCode = newForm.code.padStart(3, '0')
+      setNewForm({ ...newForm, code: paddedCode })
+    }
+  }
+
+  const handleEditCodeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const value = e.target.value
+    // Accepter uniquement les chiffres et limiter à 3 caractères
+    if (/^\d{0,3}$/.test(value)) {
+      setEditForm({ ...editForm, code: value })
+    }
+  }
+
+  const handleEditCodeBlur = () => {
+    // Compléter avec des zéros devant pour atteindre 3 chiffres
+    if (editForm.code && editForm.code.length > 0) {
+      const paddedCode = editForm.code.padStart(3, '0')
+      setEditForm({ ...editForm, code: paddedCode })
+    }
+  }
+
   const handleCreate = async () => {
     try {
       await createClient({
@@ -159,6 +194,7 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
         address: '',
         city: agencyCity,
         nic: '',
+        code: '',
         accountType: 'compte',
         remise: 0,
         isExpediteur: false,
@@ -325,7 +361,10 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
             <div key={client.id} className="bg-white border-2 border-gray-200 rounded-xl p-4">
               <div className="flex items-start justify-between mb-3">
                 <div className="flex-1">
-                  <h3 className="font-bold text-lg text-gray-800">{client.name}</h3>
+                  <div className="flex items-center gap-2">
+                    <h3 className="font-bold text-lg text-gray-800">{client.name}</h3>
+                    {client.code && <span className="px-2 py-0.5 bg-yellow-100 text-yellow-800 text-xs font-bold rounded">#{client.code}</span>}
+                  </div>
                   <div className="flex gap-3 text-sm text-gray-600 mt-1">
                     <span>📞 {client.tel}</span>
                     {client.address && <span>🏠 {client.address}</span>}
@@ -395,6 +434,17 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
                     onChange={(e) => setNewForm({ ...newForm, tel: e.target.value })}
                     placeholder="0612345678"
                     className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold mb-2">Code client (3 chiffres)</label>
+                  <input
+                    value={newForm.code}
+                    onChange={handleCodeChange}
+                    onBlur={handleCodeBlur}
+                    placeholder="001"
+                    maxLength={3}
+                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none font-mono"
                   />
                 </div>
                 <div className="col-span-2">
@@ -555,6 +605,17 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
                     onChange={(e) => setEditForm({ ...editForm, nic: e.target.value })}
                     placeholder="NIC ou CIN"
                     className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-semibold mb-2">Code client (3 chiffres)</label>
+                  <input
+                    value={editForm.code}
+                    onChange={handleEditCodeChange}
+                    onBlur={handleEditCodeBlur}
+                    placeholder="001"
+                    maxLength={3}
+                    className="w-full p-3 border-2 border-gray-200 rounded-lg focus:border-blue-500 focus:outline-none font-mono"
                   />
                 </div>
                 <div>

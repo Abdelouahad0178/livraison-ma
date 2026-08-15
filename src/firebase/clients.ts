@@ -32,6 +32,7 @@ export interface Client {
   address: string
   city: string
   nic?: string
+  code?: string // Code court pour saisie rapide
   accountType: 'cash' | 'compte'
   remise: number
   balance: number
@@ -173,7 +174,8 @@ export async function deleteClient(clientId: string) {
 }
 
 export function subscribeClients(callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
-  const q = query(collection(db, 'clients'), orderBy('createdAt', 'desc'), limit(CLIENTS_PAGE_LIMIT))
+  // Charger TOUS les clients (sans limite) pour que les codes fonctionnent dans toutes les agences
+  const q = query(collection(db, 'clients'), orderBy('createdAt', 'desc'))
   return onSnapshot(q, snap => {
     callback(snap.docs.map(rowFromDoc))
   }, onError)

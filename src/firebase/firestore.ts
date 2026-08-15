@@ -31,7 +31,7 @@ export {
   createParcel, updateParcelStatus, getAllParcels, updateParcel,
   markParcelAsReturned, loadReturnedParcelOnTruck, validateParcelEntry, validateReturnArrival,
   deleteParcel, getArchivedParcels, getAllArchivedParcels, archiveParcels, archiveParcelsByCriteria, archiveAllParcels,
-  subscribeAllParcels, getParcelsPage, subscribeAgentParcels, getMoreAgentParcels,
+  subscribeAllParcels, subscribeAllParcelsWithDateFilter, getParcelsPage, subscribeAgentParcels, getMoreAgentParcels,
   getAccurateAgencyStats, subscribeAgencyInbox, subscribeAgencyParcels, getMoreAgencyParcels,
   subscribePendingAideAgentParcels, claimParcel, searchParcelByTrackingId, createReturnParcel,
   searchParcelByTrackingGlobal, searchParcelByNicOptimized, searchParcels,

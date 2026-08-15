@@ -11,9 +11,9 @@ import { subscribeClients } from '../../../firebase/clients'
 const getEmptyForm = () => ({
   senderName: '', senderNic: '', senderAddress: '', senderTel: '', senderCity: '',
   receiverName: '', receiverAddress: '', receiverTel: '', receiverCity: '',
-  weight: '', nbColis: '', natureOfGoods: '', natureOfGoodsCustomPrice: '', codAmount: '',
+  weight: '', nbColis: '0', natureOfGoods: 'Colis', natureOfGoodsCustomPrice: '', codAmount: '',
   serviceType: 'simple', shipmentMode: 'personal',
-  portType: 'port_paye', portPayeMethod: '', portPayeMontant: '',
+  portType: 'port_du', portPayeMethod: '', portPayeMontant: '',
   portPrice: '',
   clientId: '', clientName: '', autoDebit: false,
   deliverySectorId: '', deliveryDriverId: '',
@@ -24,14 +24,16 @@ const dateFilterLabel = (preset: string) => ({
   all: 'Tout', today: "Aujourd'hui", week: '7 derniers jours', month: 'Ce mois',
 }[preset] || 'Personnalisé')
 
-export default function HomeTab() {
+export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: { setTab?: any, setParcelStatusFilter?: any } = {}) {
   const {
-    profile, setTab, setCreatedParcel, setForm,
+    profile, setTab: setTabCtx, setCreatedParcel, setForm,
     drivers, sectors, parcels, modRequests,
     agentEntries, caisseDatePreset, caisseDateFrom, caisseDateTo,
     datePreset, dateFrom, dateTo,
     accurateStats, uid,
   } = useAgentCtx()
+
+  const setTab = setTabProp || setTabCtx
 
   // État pour modal détails ports payés
   const [portPayeModal, setPortPayeModal] = useState<{ open: boolean; parcels: any[] }>({
@@ -289,7 +291,10 @@ export default function HomeTab() {
               {statusRows.map(({ status, count, colors }) => (
                 <div key={status}
                   className="group flex items-center justify-between p-4 rounded-xl hover:bg-gray-50 transition-all cursor-pointer border border-transparent hover:border-gray-200"
-                  onClick={() => setTab('parcels')}>
+                  onClick={() => {
+                    if (setParcelStatusFilter) setParcelStatusFilter(status)
+                    setTab('parcels')
+                  }}>
                   <div className="flex items-center gap-3">
                     <span className={`w-3 h-3 rounded-full ${colors.dot}`} />
                     <span className="text-sm font-semibold text-gray-700">{status}</span>
@@ -666,7 +671,10 @@ export default function HomeTab() {
               </thead>
               <tbody className="divide-y divide-gray-50">
                 {statusRows.map(({ status, count, colors }) => (
-                  <tr key={status} className="hover:bg-gray-50 transition cursor-pointer" onClick={() => setTab('parcels')}>
+                  <tr key={status} className="hover:bg-gray-50 transition cursor-pointer" onClick={() => {
+                    if (setParcelStatusFilter) setParcelStatusFilter(status)
+                    setTab('parcels')
+                  }}>
                     <td className="px-4 py-3">
                       <span className={`inline-flex items-center gap-2 text-xs font-semibold px-2.5 py-1 rounded-full ${colors.bg} ${colors.text}`}>
                         <span className={`w-2 h-2 rounded-full ${colors.dot}`} />

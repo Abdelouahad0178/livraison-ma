@@ -1931,6 +1931,44 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     }
   }
 
+  // 💰 Édition rapide du montant COD
+  const handleSaveCodAmount = async () => {
+    const { codEditModal, setCodEditModal } = s.current
+    if (!codEditModal) return
+
+    const amount = parseFloat(codEditModal.value)
+    if (isNaN(amount) || amount < 0) {
+      setCodEditModal((m: any) => ({ ...m, error: 'Montant invalide.' }))
+      return
+    }
+
+    setCodEditModal((m: any) => ({ ...m, loading: true, error: '' }))
+    try {
+      const parcel = codEditModal.parcel
+      const oldAmount = parcel.codAmount || 0
+      const userName = auth.currentUser?.displayName || auth.currentUser?.email || 'Agent'
+
+      // 🔄 HISTORIQUE COD: Enregistrer le changement de montant
+      const updates: any = { codAmount: amount }
+
+      if (oldAmount !== amount) {
+        const codHistory = parcel.codAmountHistory || []
+        codHistory.push({
+          oldAmount,
+          newAmount: amount,
+          changedAt: new Date().toISOString(),
+          changedBy: userName
+        })
+        updates.codAmountHistory = codHistory
+      }
+
+      await updateParcel(parcel.id, updates)
+      setCodEditModal(null)
+    } catch {
+      setCodEditModal((m: any) => ({ ...m, loading: false, error: 'Erreur lors de la mise à jour.' }))
+    }
+  }
+
   const handleCreateReturnParcel = async () => {
     const { returnParcelModal, setReturnParcelModal, profile } = s.current
     if (!returnParcelModal?.parcel) return
@@ -2504,6 +2542,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     confirmDelete,
     handleCodeVerify,
     handleEditSave,
+    handleSaveCodAmount,
     handleCreateReturnParcel,
     handleReturnDirect,
     submitReturnWithReason,

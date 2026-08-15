@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useCallback } from 'react'
 import {
   getCurrentOperationalDay,
   getCurrentOperationalDayString,
@@ -121,39 +121,45 @@ export function useOperationalDaySelector(initialDay?: Date | string) {
     [selectedDay]
   )
 
-  const isToday = useMemo(
-    () => selectedDayString === getOperationalDayString(today),
-    [selectedDayString, today]
+  // Convertir today en string stable pour comparaison
+  const todayString = useMemo(
+    () => getOperationalDayString(today),
+    [today]
   )
 
-  // Navigation
-  const goToPrevious = () => {
+  const isToday = useMemo(
+    () => selectedDayString === todayString,
+    [selectedDayString, todayString]
+  )
+
+  // Navigation - TOUTES les fonctions doivent être mémoïsées avec useCallback
+  const goToPrevious = useCallback(() => {
     setSelectedDay(prev => {
       const newDay = new Date(prev)
       newDay.setDate(newDay.getDate() - 1)
       return newDay
     })
-  }
+  }, [])
 
-  const goToNext = () => {
+  const goToNext = useCallback(() => {
     setSelectedDay(prev => {
       const newDay = new Date(prev)
       newDay.setDate(newDay.getDate() + 1)
       return newDay
     })
-  }
+  }, [])
 
-  const goToToday = () => {
+  const goToToday = useCallback(() => {
     setSelectedDay(today)
-  }
+  }, [today])
 
-  const goToDate = (date: Date | string) => {
+  const goToDate = useCallback((date: Date | string) => {
     if (typeof date === 'string') {
       setSelectedDay(new Date(date))
     } else {
       setSelectedDay(date)
     }
-  }
+  }, [])
 
   return {
     /** Journée opérationnelle sélectionnée */

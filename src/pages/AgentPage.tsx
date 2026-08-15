@@ -1935,6 +1935,7 @@ export default function AgentPage() {
     loadingMore, setLoadingMore,
     pendingAideParcels, setPendingAideParcels,
     search, setSearch,
+    isSearching,
     datePreset, setDatePreset,
     dateFrom, setDateFrom,
     dateTo, setDateTo,

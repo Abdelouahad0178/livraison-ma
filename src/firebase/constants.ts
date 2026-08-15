@@ -97,6 +97,8 @@ export const STATUSES = [
   'Retourné',
   // Circuit Retour (après transition)
   'Retour en transit', 'Retour arrivé', 'Retour finalisé',
+  // Annulation
+  'Annulé',
 ]
 
 // Statuts du circuit livraison uniquement
@@ -122,6 +124,14 @@ export const COD_STATUS: Record<string, { label: string; bg: string; text: strin
   remis:     { label: 'Remis agence', bg: 'bg-green-100',  text: 'text-green-700',  dot: 'bg-green-500',  darkBg: 'bg-green-900/40',  darkText: 'text-green-300'  },
 }
 
+export const PORT_TYPES = [
+  { key: 'port_paye',                      label: 'Port payé',            emoji: '✅' },
+  { key: 'port_du',                        label: 'Port dû',              emoji: '💰' },
+  { key: 'port_en_compte_expediteur',      label: 'En compte Exp',        emoji: '📤' },
+  { key: 'port_en_compte_destinataire',    label: 'En compte Dest',       emoji: '📥' },
+  { key: 'port_en_compte',                 label: 'En compte (ancien)',   emoji: '📋' },  // Pour compatibilité
+]
+
 export const STATUS_COLORS: Record<string, { bg: string; text: string; dot: string }> = {
   'Initialisé':            { bg: 'bg-gray-100',   text: 'text-gray-700',   dot: 'bg-gray-400'   },
   'En transit':            { bg: 'bg-blue-100',   text: 'text-blue-700',   dot: 'bg-blue-500'   },
@@ -133,6 +143,7 @@ export const STATUS_COLORS: Record<string, { bg: string; text: string; dot: stri
   'Retour arrivé':         { bg: 'bg-purple-100', text: 'text-purple-700', dot: 'bg-purple-500' },
   'Retour finalisé':       { bg: 'bg-green-100',  text: 'text-green-700',  dot: 'bg-green-500'  },
   'Retourné à l\'expéditeur': { bg: 'bg-teal-100', text: 'text-teal-700',  dot: 'bg-teal-500'   },
+  'Annulé':                { bg: 'bg-gray-200',   text: 'text-gray-800',   dot: 'bg-gray-600'   },
 }
 
 export const MOD_TYPES = [

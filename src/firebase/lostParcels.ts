@@ -19,6 +19,7 @@ export interface LostParcelDeclaration {
   id: string
   parcelId: string
   trackingId: string
+  senderNic?: string
   declaredBy: {
     uid: string
     name: string
@@ -67,7 +68,8 @@ export async function declareLostParcel(
   declaredBy: { uid: string; name: string; role: string; city: string },
   lastKnownLocation: string,
   details: string,
-  allAgencies: string[]
+  allAgencies: string[],
+  senderNic?: string
 ): Promise<string> {
   const lostParcelId = `lost_${parcelId}_${Date.now()}`
 
@@ -84,6 +86,7 @@ export async function declareLostParcel(
   const declaration: Omit<LostParcelDeclaration, 'id'> = {
     parcelId,
     trackingId,
+    senderNic,
     declaredBy,
     declaredAt: Timestamp.now(),
     lastKnownLocation,

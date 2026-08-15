@@ -1771,6 +1771,7 @@ export default function AdminPage() {
               kpis={kpis}
               search={search}
               setSearch={setSearch}
+              isSearching={isSearching}
               cityFilter={cityFilter}
               setCityFilter={setCityFilter}
               driverFilter={driverFilter}

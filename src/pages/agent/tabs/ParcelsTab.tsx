@@ -56,6 +56,7 @@ export default function ParcelsTab() {
 
     // Search / filters
     search, setSearch,
+    isSearching,
     datePreset, setDatePreset,
     dateFrom, setDateFrom,
     dateTo, setDateTo,
@@ -665,8 +666,14 @@ export default function ParcelsTab() {
                 if (fixed !== search) setSearch(fixed)
               }
             }}
-            className="w-full bg-gradient-to-r from-blue-50 to-purple-50 border-2 border-blue-300 pl-12 pr-4 py-3.5 rounded-xl text-sm font-medium text-gray-800 placeholder-gray-500 focus:border-blue-500 focus:bg-white focus:shadow-lg focus:outline-none transition-all"
+            className="w-full bg-gradient-to-r from-blue-50 to-purple-50 border-2 border-blue-300 pl-12 pr-32 py-3.5 rounded-xl text-sm font-medium text-gray-800 placeholder-gray-500 focus:border-blue-500 focus:bg-white focus:shadow-lg focus:outline-none transition-all"
           />
+          {isSearching && (
+            <div className="absolute right-20 top-1/2 -translate-y-1/2 flex items-center gap-1.5 px-2 py-1 text-xs font-semibold text-blue-600 bg-blue-50 border border-blue-200 rounded shadow-sm animate-pulse">
+              <div className="w-3 h-3 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+              Recherche...
+            </div>
+          )}
           {search && (
             <button
               onClick={() => setSearch('')}

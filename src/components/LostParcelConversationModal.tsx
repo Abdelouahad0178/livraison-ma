@@ -25,9 +25,31 @@ export default function LostParcelConversationModal({
   const [messageType, setMessageType] = useState<'question' | 'update' | 'response' | 'found'>('update')
   const [sending, setSending] = useState(false)
   const [error, setError] = useState('')
+  const [messages, setMessages] = useState<LostParcelMessage[]>(() => getLostParcelMessages(lostParcel))
   const messagesEndRef = useRef<HTMLDivElement>(null)
 
-  const messages = getLostParcelMessages(lostParcel)
+  // Mettre à jour les messages quand lostParcel change
+  // Mais préserver les messages optimistes (ceux avec id commençant par temp_)
+  useEffect(() => {
+    const serverMessages = getLostParcelMessages(lostParcel)
+    setMessages(prev => {
+      // Garder les messages optimistes qui n'ont pas encore été confirmés
+      const optimisticMessages = prev.filter(m => m.id.startsWith('temp_'))
+
+      // Si on a des messages optimistes, les fusionner avec les messages du serveur
+      if (optimisticMessages.length > 0) {
+        // Créer un set des textes de messages du serveur pour éviter les doublons
+        const serverTexts = new Set(serverMessages.map(m => m.text))
+
+        // Filtrer les messages optimistes qui n'existent pas encore sur le serveur
+        const pendingOptimistic = optimisticMessages.filter(m => !serverTexts.has(m.text))
+
+        return [...serverMessages, ...pendingOptimistic]
+      }
+
+      return serverMessages
+    })
+  }, [lostParcel])
 
   useEffect(() => {
     // Auto-scroll au dernier message
@@ -43,20 +65,41 @@ export default function LostParcelConversationModal({
     setSending(true)
     setError('')
 
+    // Message optimiste (affichage immédiat)
+    const optimisticMessage: LostParcelMessage = {
+      id: `temp_${Date.now()}`,
+      agencyCity,
+      sentBy: userProfile,
+      sentAt: { toMillis: () => Date.now(), toDate: () => new Date() } as any,
+      messageType,
+      found: messageType === 'found' ? true : undefined,
+      text: newMessage.trim()
+    }
+
+    // Ajouter le message optimiste immédiatement
+    setMessages(prev => [...prev, optimisticMessage])
+    const messageText = newMessage.trim()
+    const msgType = messageType
+    setNewMessage('')
+    setMessageType('update')
+
     try {
       await sendLostParcelMessage(lostParcel.id, {
         agencyCity,
         sentBy: userProfile,
-        messageType,
-        found: messageType === 'found' ? true : undefined,
-        text: newMessage.trim()
+        messageType: msgType,
+        found: msgType === 'found' ? true : undefined,
+        text: messageText
       })
 
-      setNewMessage('')
-      setMessageType('update')
-      onRefresh()
+      // Ne pas rafraîchir immédiatement pour éviter que le message disparaisse
+      // Le message optimiste restera affiché jusqu'au prochain rechargement
     } catch (err: any) {
       setError(err.message || 'Erreur lors de l\'envoi')
+      // Retirer le message optimiste en cas d'erreur
+      setMessages(prev => prev.filter(m => m.id !== optimisticMessage.id))
+      setNewMessage(messageText)
+      setMessageType(msgType)
     } finally {
       setSending(false)
     }

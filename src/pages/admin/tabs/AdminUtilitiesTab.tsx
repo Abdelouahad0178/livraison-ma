@@ -280,7 +280,7 @@ export default function AdminUtilitiesTab() {
   }
 
   const fixCodPaymentTypes = async () => {
-    if (!confirm('⚠️ Cette opération va définir "especes" comme mode de paiement par défaut pour tous les COD qui n\'ont pas de mode de paiement défini.\n\nContinuer ?')) {
+    if (!confirm('⚠️ Cette opération va corriger le type de paiement COD de TOUTES les expéditions en se basant sur leur type de service (serviceType).\n\nLes anciennes expéditions qui affichent "Espèces" mais qui sont en réalité des "Chèques" ou "Traites" seront corrigées.\n\nContinuer ?')) {
       return
     }
 
@@ -288,30 +288,50 @@ export default function AdminUtilitiesTab() {
     setResult(null)
 
     try {
-      const parcelsRef = collection(db, 'parcels')
-      const snapshot = await getDocs(parcelsRef)
+      // Fonction de conversion serviceType → codPaymentType
+      const serviceToPaymentType = (st: string | null | undefined): string => {
+        if (st === 'retour_bl') return 'bon_livraison'
+        if (st === 'simple') return 'especes'
+        return st || 'especes'
+      }
 
-      let updatedCount = 0
-      let skippedCount = 0
+      const q = query(collection(db, 'parcels'), where('codAmount', '>', 0))
+      const snapshot = await getDocs(q)
+
+      let correctedCount = 0
+      let alreadyCorrectCount = 0
+      let details: string[] = []
 
       for (const docSnapshot of snapshot.docs) {
         const parcel = docSnapshot.data()
-        const codAmount = parseFloat(parcel.codAmount) || 0
+        const currentPaymentType = parcel.codPaymentType
+        const serviceType = parcel.serviceType
+        const correctPaymentType = serviceToPaymentType(serviceType)
 
-        // Si le colis a un COD mais pas de codPaymentType
-        if (codAmount > 0 && !parcel.codPaymentType) {
-          await updateDoc(doc(db, 'parcels', docSnapshot.id), {
-            codPaymentType: 'especes'
-          })
-          updatedCount++
-        } else {
-          skippedCount++
+        // Si le codPaymentType est déjà correct, on ne fait rien
+        if (currentPaymentType === correctPaymentType) {
+          alreadyCorrectCount++
+          continue
         }
+
+        // Corriger le codPaymentType
+        await updateDoc(doc(db, 'parcels', docSnapshot.id), {
+          codPaymentType: correctPaymentType
+        })
+
+        // Ajouter aux détails (max 10)
+        if (details.length < 10) {
+          details.push(`NIC ${parcel.senderNic || 'N/A'}: ${currentPaymentType || 'vide'} → ${correctPaymentType}`)
+        }
+
+        correctedCount++
       }
+
+      const detailsText = details.length > 0 ? '\n\n📝 Exemples:\n' + details.join('\n') : ''
 
       setResult({
         type: 'success',
-        message: `✅ Correction terminée!\n\n📊 Total: ${snapshot.size} colis\n✏️ Mis à jour: ${updatedCount}\n✓ Ignorés: ${skippedCount}`
+        message: `✅ Correction terminée!\n\n📊 Total COD: ${snapshot.size} colis\n✏️ Corrigés: ${correctedCount}\n✓ Déjà corrects: ${alreadyCorrectCount}${detailsText}`
       })
 
     } catch (error: any) {
@@ -531,14 +551,14 @@ export default function AdminUtilitiesTab() {
                 💰 Corriger les modes de paiement COD
               </h3>
               <p className="text-sm text-gray-600 mb-4">
-                Définit "especes" comme mode de paiement par défaut pour tous les COD qui n'ont pas de <code className="bg-gray-100 px-2 py-0.5 rounded">codPaymentType</code> défini.
+                Corrige automatiquement le <code className="bg-gray-100 px-2 py-0.5 rounded">codPaymentType</code> de toutes les expéditions COD en se basant sur leur <code className="bg-gray-100 px-2 py-0.5 rounded">serviceType</code>.
                 <br />
                 <span className="text-xs text-gray-500 mt-2 block">
-                  • Corrige les COD existants sans mode de paiement
+                  • <strong>Bug corrigé</strong> : Les anciennes expéditions qui affichent "Espèces" alors qu'elles sont "Chèque" ou "Traite" seront corrigées
                   <br />
-                  • Permet d'afficher la répartition complète par mode de paiement
+                  • Conversion : serviceType → codPaymentType (especes, cheque, traite, bon_livraison)
                   <br />
-                  • Les nouveaux COD auront automatiquement "especes" par défaut
+                  • Affiche un résumé avec le nombre de corrections effectuées
                 </span>
               </p>
             </div>

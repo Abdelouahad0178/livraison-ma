@@ -4,7 +4,8 @@ import { subscribeClients, createClient, updateClient, Client } from '../../../f
 import { subscribeAllUsers, subscribeAllSectors } from '../../../firebase/firestore'
 import { CITIES } from '../../../firebase/constants'
 import { createClientPortalAccount } from '../../../firebase/portalAccounts'
-import { findPassageClients, deletePassageClients, type PassageClient } from '../../../utils/cleanupPassageClients'
+// ⚠️ Import désactivé temporairement - causait un conflit d'imports Firestore (boucle infinie)
+// import { findPassageClients, deletePassageClients, type PassageClient } from '../../../utils/cleanupPassageClients'
 
 export default function AdminClientsTab() {
   const [clients, setClients] = useState<Client[]>([])
@@ -35,16 +36,17 @@ export default function AdminClientsTab() {
   const [showEmailModal, setShowEmailModal] = useState(false)
   const [selectedClient, setSelectedClient] = useState<Client | null>(null)
   const [emailInput, setEmailInput] = useState('')
-  const [cleanupState, setCleanupState] = useState<{
-    loading: boolean
-    passageClients: PassageClient[]
-    showModal: boolean
-    result?: { deleted: number; errors: number }
-  }>({
-    loading: false,
-    passageClients: [],
-    showModal: false,
-  })
+  // ⚠️ État désactivé temporairement - causait un conflit d'imports Firestore
+  // const [cleanupState, setCleanupState] = useState<{
+  //   loading: boolean
+  //   passageClients: any[]
+  //   showModal: boolean
+  //   result?: { deleted: number; errors: number }
+  // }>({
+  //   loading: false,
+  //   passageClients: [],
+  //   showModal: false,
+  // })
 
   useEffect(() => {
     const unsubClients = subscribeClients((data: any[]) => {
@@ -191,34 +193,35 @@ export default function AdminClientsTab() {
     }
   }
 
-  const handleFindPassageClients = async () => {
-    setCleanupState({ loading: true, passageClients: [], showModal: false })
-    try {
-      const clients = await findPassageClients()
-      setCleanupState({ loading: false, passageClients: clients, showModal: true })
-    } catch (error: any) {
-      alert('❌ Erreur: ' + error.message)
-      setCleanupState({ loading: false, passageClients: [], showModal: false })
-    }
-  }
+  // ⚠️ Fonctions désactivées temporairement - causaient un conflit d'imports Firestore
+  // const handleFindPassageClients = async () => {
+  //   setCleanupState({ loading: true, passageClients: [], showModal: false })
+  //   try {
+  //     const clients = await findPassageClients()
+  //     setCleanupState({ loading: false, passageClients: clients, showModal: true })
+  //   } catch (error: any) {
+  //     alert('❌ Erreur: ' + error.message)
+  //     setCleanupState({ loading: false, passageClients: [], showModal: false })
+  //   }
+  // }
 
-  const handleDeletePassageClients = async () => {
-    if (cleanupState.passageClients.length === 0) return
+  // const handleDeletePassageClients = async () => {
+  //   if (cleanupState.passageClients.length === 0) return
 
-    setCleanupState({ ...cleanupState, loading: true })
-    try {
-      const result = await deletePassageClients(cleanupState.passageClients)
-      setCleanupState({
-        loading: false,
-        passageClients: [],
-        showModal: true,
-        result,
-      })
-    } catch (error: any) {
-      alert('❌ Erreur: ' + error.message)
-      setCleanupState({ ...cleanupState, loading: false })
-    }
-  }
+  //   setCleanupState({ ...cleanupState, loading: true })
+  //   try {
+  //     const result = await deletePassageClients(cleanupState.passageClients)
+  //     setCleanupState({
+  //       loading: false,
+  //       passageClients: [],
+  //       showModal: true,
+  //       result,
+  //     })
+  //   } catch (error: any) {
+  //     alert('❌ Erreur: ' + error.message)
+  //     setCleanupState({ ...cleanupState, loading: false })
+  //   }
+  // }
 
   const toggleLivreur = (livreursIds: string[], livreurId: string) => {
     if (livreursIds.includes(livreurId)) {
@@ -244,7 +247,8 @@ export default function AdminClientsTab() {
             </div>
           </div>
           <div className="flex gap-2">
-            <button
+            {/* ⚠️ Bouton désactivé temporairement - causait un conflit d'imports Firestore */}
+            {/* <button
               onClick={handleFindPassageClients}
               disabled={cleanupState.loading}
               className="flex items-center gap-2 px-4 py-2 bg-red-600 hover:bg-red-700 disabled:bg-gray-400 text-white rounded-lg font-semibold transition"
@@ -255,7 +259,7 @@ export default function AdminClientsTab() {
                 <Trash2 className="w-4 h-4" />
               )}
               Nettoyer clients de passage
-            </button>
+            </button> */}
             <button onClick={() => setShowNewModal(true)} className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold transition">
               <Plus className="w-4 h-4" /> Nouveau client
             </button>
@@ -655,8 +659,8 @@ export default function AdminClientsTab() {
         </div>
       )}
 
-      {/* Modal Nettoyage Clients de Passage */}
-      {cleanupState.showModal && (
+      {/* ⚠️ Modal désactivée temporairement - causait un conflit d'imports Firestore */}
+      {/* {cleanupState.showModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl max-w-2xl w-full p-6 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between mb-4">
@@ -672,7 +676,6 @@ export default function AdminClientsTab() {
             </div>
 
             {cleanupState.result ? (
-              // Résultat de la suppression
               <div className="space-y-4">
                 <div className="bg-green-50 border-2 border-green-200 rounded-lg p-4">
                   <p className="font-semibold text-green-800">
@@ -689,7 +692,6 @@ export default function AdminClientsTab() {
                 </p>
               </div>
             ) : cleanupState.passageClients.length === 0 ? (
-              // Aucun client trouvé
               <div className="bg-green-50 border-2 border-green-200 rounded-lg p-4">
                 <p className="font-semibold text-green-800">
                   ✅ Aucun client de passage trouvé dans Firestore
@@ -699,7 +701,6 @@ export default function AdminClientsTab() {
                 </p>
               </div>
             ) : (
-              // Liste des clients à supprimer
               <div className="space-y-4">
                 <div className="bg-yellow-50 border-2 border-yellow-200 rounded-lg p-4">
                   <p className="font-semibold text-yellow-800">
@@ -754,7 +755,7 @@ export default function AdminClientsTab() {
             )}
           </div>
         </div>
-      )}
+      )} */}
     </div>
   )
 }
