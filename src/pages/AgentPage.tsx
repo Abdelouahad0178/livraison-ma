@@ -43,6 +43,7 @@ import { subscribeAgentNotesByCity } from '../firebase/agentNotes'
 import {
   subscribeDeliveryDriverParcels,
 } from '../firebase/firestore'
+import { getAllLostParcels } from '../firebase/lostParcels'
 import {
   subscribeAgentCodRequests, markAgentCodRequestRead, addAgentCodRequestReply, resolveAgentCodRequest,
 } from '../firebase/agentCodRequests'
@@ -176,13 +177,14 @@ const parsePositiveNumber = (value: any, fallback = 0) => {
 
 const EMPTY_FORM = {
   senderName: '', senderNic: '', senderAddress: '', senderTel: '', senderCity: '',
-  receiverName: '', receiverAddress: '', receiverTel: '', receiverCity: '',
-  weight: '', nbColis: '', natureOfGoods: '', natureOfGoodsCustomPrice: '', codAmount: '',
-  serviceType: 'simple', shipmentMode: 'personal',
-  portType: 'port_paye', portPayeMethod: '', portPayeMontant: '',
+  receiverName: '', receiverAddress: '', receiverTel: '', receiverCity: '', receiverClientId: '',
+  weight: '', nbColis: '0', natureOfGoods: 'Colis', natureOfGoodsCustomPrice: '', codAmount: '',
+  serviceType: 'simple', hasRetourBL: false, shipmentMode: 'personal',
+  portType: 'port_du', portPayeMethod: '', portPayeMontant: '',
   portPrice: '',
   clientId: '', clientName: '', autoDebit: false,
   deliverySectorId: '', deliveryDriverId: '',
+  enGare: true,
   operationDate: getWorkingDateStr(),
 }
 
@@ -257,9 +259,15 @@ export default function AgentPage() {
   const [returnParcels, setReturnParcels] = useState<any[]>([])
   const [loadingParcels, setLoadingParcels] = useState(false)
   const [pendingAideParcels, setPendingAideParcels] = useState<any[]>([])
+  const [lostParcels, setLostParcels] = useState<any[]>([])  // ⭐ Pour badge Colis perdus
 
-  // Système de chargement automatique pour chef d'agence
-  const AGENCY_PAGE_SIZE = 4000
+  // 🔄 Les données se chargent automatiquement au démarrage, mais les filtres ne rechargent PAS
+  const unsubscribersRef = useRef<(() => void)[]>([])  // Stocke les unsubscribers pour cleanup
+
+  // ⚡ Système de chargement optimisé (Option 3)
+  const PAGE_SIZE = 50 // Chargement initial réduit pour performance
+  const FILTERED_PAGE_SIZE = 1000 // Quand filtres actifs
+  const AGENCY_PAGE_SIZE = PAGE_SIZE // Compatibilité (sera remplacé par effectivePageSize)
   const [liveParcels, setLiveParcels] = useState<any[]>([]) // Premiers 600 en temps réel
   const [moreParcels, setMoreParcels] = useState<any[]>([]) // Chargés progressivement
   const [hasMoreAgency, setHasMoreAgency] = useState(true)
@@ -293,7 +301,7 @@ export default function AgentPage() {
 
   const [parcelDirection, setParcelDirection] = useState('all')
   const [serviceFilter, setServiceFilter]   = useState('all')
-  const [parcelStatusFilter, setParcelStatusFilter] = useState('Initialisé')
+  const [parcelStatusFilter, setParcelStatusFilter] = useState('all')
   const [parcelEditorFilter, setParcelEditorFilter] = useState('all')
   const [destinationCityFilter, setDestinationCityFilter] = useState('all')  // ⭐ Filtre ville de destination
   const [driverFilter, setDriverFilter] = useState('all')  // ⭐ Filtre par livreur/chauffeur
@@ -330,20 +338,42 @@ export default function AgentPage() {
   const debouncedCaisseSearch = useDebounce(caisseSearch)
   const debouncedCodSearch    = useDebounce(codSearch)
 
-  // 🔍 RECHERCHE SERVEUR: DÉSACTIVÉE
-  // ✅ POLITIQUE: Recherche uniquement dans les données DÉJÀ filtrées
-  // (date, ville, livreur, statut, service, etc.)
-  // La recherche locale sur allDisplayParcels filtré est plus rapide et plus cohérente
+  // 🔍 RECHERCHE SERVEUR: ACTIVÉE (Option 3 - comme AdminPage)
+  // Recherche dans TOUTE la base Firestore, pas seulement les colis chargés
   useEffect(() => {
-    // Toujours retourner null pour forcer la recherche locale uniquement
-    setServerSearchResults(null)
-    setIsSearching(false)
+    const query = debouncedSearch.trim()
+    if (!query || query.length < 2) {
+      setServerSearchResults(null)
+      setIsSearching(false)
+      return
+    }
+
+    // ⚡ Recherche serveur dans TOUTE la base
+    const performServerSearch = async () => {
+      setIsSearching(true)
+      try {
+        console.warn(`🔍 Recherche serveur AgentPage: "${query}" dans TOUTE la base...`)
+        const results = await searchParcels(query, { limit: 50000 })
+        setServerSearchResults(results)
+        setIsSearching(false)
+        console.warn(`✅ Recherche serveur AgentPage: ${results.length} résultats trouvés`)
+      } catch (error) {
+        console.error('❌ Erreur recherche serveur AgentPage:', error)
+        setServerSearchResults(null)
+        setIsSearching(false)
+      }
+    }
+
+    performServerSearch()
   }, [debouncedSearch])
 
   const [editingParcel, setEditingParcel] = useState<any>(null)
   const [editForm, setEditForm]         = useState<any>(null)
   const [editLoading, setEditLoading]   = useState(false)
   const [editError, setEditError]       = useState('')
+
+  // 💰 Édition rapide du montant COD
+  const [codEditModal, setCodEditModal] = useState<any>(null)
 
   const [clients,         setClients]         = useState<any[]>([])
   const [clientSearch,    setClientSearch]    = useState('')
@@ -512,6 +542,29 @@ export default function AgentPage() {
   //   }
   // }, [profile?.city])
 
+  // ⭐ Charger les colis perdus pour le badge de notification
+  useEffect(() => {
+    if (!profile?.city) return
+
+    const loadLostParcels = async () => {
+      try {
+        const all = await getAllLostParcels()
+        // Filtrer les colis perdus pertinents pour cette agence (ceux qui ne sont pas encore trouvés)
+        const relevant = all.filter(lp =>
+          lp.responses[profile.city] && lp.status !== 'found'
+        )
+        setLostParcels(relevant)
+      } catch (error) {
+        console.error('Erreur chargement colis perdus:', error)
+      }
+    }
+
+    loadLostParcels()
+    // Recharger toutes les 30 secondes pour garder le badge à jour
+    const interval = setInterval(loadLostParcels, 30000)
+    return () => clearInterval(interval)
+  }, [profile?.city])
+
   // Raccourci Ctrl+Enter depuis l'accueil pour aller à Nouvelle expédition
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -554,11 +607,45 @@ export default function AgentPage() {
     }
   }, [profile?.role, authTick])
 
-  // Souscription colis — basée sur le rôle : chef_agence voit toute l'agence, agent voit ses propres colis
+  // 🔄 Chargement optimisé avec détection de filtres (Option 3)
   useEffect(() => {
     if (!profile) return
     const uid = auth.currentUser?.uid
     if (!uid) return
+
+    // 🔍 Détecter si des filtres sont actifs
+    const hasDateFilter = datePreset !== 'all'
+    const hasOtherFilters =
+      serviceFilter !== 'all' ||
+      parcelStatusFilter !== 'all' ||
+      destinationCityFilter !== 'all' ||
+      driverFilter !== 'all' ||
+      portTypeFilter !== 'all' ||
+      encaissementFilter !== 'all' ||
+      codDocumentStatusFilter.length > 0
+
+    const hasFilters = hasDateFilter || hasOtherFilters
+    const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
+
+    console.warn(`📊 CHARGEMENT AgentPage:`, {
+      hasFilters,
+      effectivePageSize,
+      filters: {
+        date: datePreset,
+        service: serviceFilter,
+        status: parcelStatusFilter,
+        city: destinationCityFilter,
+        driver: driverFilter,
+        port: portTypeFilter,
+        encaissement: encaissementFilter,
+        codDoc: codDocumentStatusFilter
+      }
+    })
+
+    // Nettoyer les anciennes souscriptions
+    unsubscribersRef.current.forEach(unsub => unsub())
+    unsubscribersRef.current = []
+
     setLoadingParcels(true)
     const onError = (err: any) => {
       console.error('AgentPage subscribeParcels:', err)
@@ -567,12 +654,13 @@ export default function AgentPage() {
         auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
       }
     }
+
     // 🌍 Mode TOUTES VILLES PROGRESSIF pour Agent Pro (charge initial: 1000, puis auto-load)
     if (profile.role === 'agentpro' && showAllCities) {
-      console.log(`🚀 [Agent Pro] Chargement progressif de TOUTES les villes + archives (initial: 1000)`)
+      console.log(`🚀 [Agent Pro] Chargement AUTO de TOUTES les villes + archives (filtres côté client)`)
       const unsubAll = subscribeAllParcelsWithArchives(
         (result: any) => {
-          console.log(`✅ [Agent Pro - Toutes villes] ${result.totalLoaded} colis chargés (parcels + archives)`)
+          console.log(`✅ [Agent Pro - Toutes villes] ${result.totalLoaded} colis chargés`)
           setLiveParcels(result.docs)
           setLoadingParcels(false)
           setAllCitiesParcelsLastSnap(result.parcelsLastSnap)
@@ -581,57 +669,38 @@ export default function AgentPage() {
           setHasMoreAgency(result.canLoadMore)
         },
         onError,
-        1000 // Chargement initial réduit pour démarrage rapide
+        effectivePageSize // ⚡ 50 ou 1000 selon filtres
       )
       setReturnParcels([])
       setPendingAideParcels([])
-      return () => unsubAll()
+      unsubscribersRef.current.push(unsubAll)
+      return () => {
+        unsubscribersRef.current.forEach(unsub => unsub())
+        unsubscribersRef.current = []
+      }
     }
 
     if ((profile.role === 'chef_agence' || profile.role === 'agentpro') && profile.city) {
-      // Calculer les dates du filtre
-      let filterDateFrom: Date | null = null
-      let filterDateTo: Date | null = null
-
-      if (datePreset === 'today') {
-        filterDateFrom = new Date(); filterDateFrom.setHours(0, 0, 0, 0)
-        filterDateTo = new Date(); filterDateTo.setHours(23, 59, 59, 999)
-      } else if (datePreset === 'yesterday') {
-        filterDateFrom = new Date(); filterDateFrom.setDate(filterDateFrom.getDate() - 1); filterDateFrom.setHours(0, 0, 0, 0)
-        filterDateTo = new Date(); filterDateTo.setDate(filterDateTo.getDate() - 1); filterDateTo.setHours(23, 59, 59, 999)
-      } else if (datePreset === 'week') {
-        filterDateFrom = new Date(); filterDateFrom.setDate(filterDateFrom.getDate() - 7); filterDateFrom.setHours(0, 0, 0, 0)
-        filterDateTo = new Date(); filterDateTo.setHours(23, 59, 59, 999)
-      } else if (datePreset === 'month') {
-        filterDateFrom = new Date(); filterDateFrom.setMonth(filterDateFrom.getMonth() - 1); filterDateFrom.setHours(0, 0, 0, 0)
-        filterDateTo = new Date(); filterDateTo.setHours(23, 59, 59, 999)
-      } else if (datePreset === 'custom' && dateFrom && dateTo) {
-        filterDateFrom = new Date(dateFrom); filterDateFrom.setHours(0, 0, 0, 0)
-        filterDateTo = new Date(dateTo); filterDateTo.setHours(23, 59, 59, 999)
-      } else if (datePreset === 'operational' && operationalDay) {
-        const opStart = new Date(operationalDay); opStart.setHours(8, 0, 0, 0)
-        const opEnd = new Date(operationalDay); opEnd.setDate(opEnd.getDate() + 1); opEnd.setHours(6, 0, 0, 0)
-        filterDateFrom = opStart
-        filterDateTo = opEnd
-      } else {
-        // Mode "Tout": charger 365 jours (1 an) au lieu de 90 jours
-        filterDateFrom = new Date(); filterDateFrom.setDate(filterDateFrom.getDate() - 365); filterDateFrom.setHours(0, 0, 0, 0)
-        filterDateTo = null
-      }
+      // 🔄 CHARGER 365 JOURS (1 an) pour permettre le filtrage côté client
+      // Les filtres de date s'appliquent ensuite via filteredParcels useMemo
+      const filterDateFrom = new Date()
+      filterDateFrom.setDate(filterDateFrom.getDate() - 365)
+      filterDateFrom.setHours(0, 0, 0, 0)
+      const filterDateTo = null // Jusqu'à maintenant
 
       agencyDateFilterRef.current = { dateFrom: filterDateFrom, dateTo: filterDateTo }
-      console.log(`📦 [Chef] Filtre: ${datePreset || 'all'}, Du: ${filterDateFrom?.toLocaleDateString()}, Au: ${filterDateTo?.toLocaleDateString() || 'maintenant'}`)
+      console.log(`📦 [Chef] Chargement AUTO 365 jours (filtres de date appliqués côté client)`)
 
       const unsubAgency = subscribeAgencyParcels(
         profile.city,
         (data: any) => {
-          console.log(`✅ [Chef d'agence] ${data.length} colis chargés`)
+          console.log(`✅ [Chef d'agence] ${data.length} colis chargés (${effectivePageSize} max)`)
           setLiveParcels(data)
           setLoadingParcels(false)
-          if (data.length < AGENCY_PAGE_SIZE) setHasMoreAgency(false)
+          if (data.length < effectivePageSize) setHasMoreAgency(false)
         },
         onError,
-        AGENCY_PAGE_SIZE,
+        effectivePageSize, // ⚡ 50 ou 1000 selon filtres
         (lastDocs: any) => {
           if (!agencyPagedRef.current) {
             agencyLastDocsRef.current = lastDocs
@@ -648,33 +717,39 @@ export default function AgentPage() {
       }, onError)
 
       setPendingAideParcels([]) // Plus de pending
-      return () => { unsubAgency(); unsubReturns() }
+      unsubscribersRef.current.push(unsubAgency, unsubReturns)
+      return () => {
+        unsubscribersRef.current.forEach(unsub => unsub())
+        unsubscribersRef.current = []
+      }
     }
+
     setPendingAideParcels([])
-    console.log(`📦 [Agent] Chargement automatique des colis (limite: 2000 des 60 derniers jours)`)
+    console.log(`📦 [Agent] Chargement AUTO des colis (filtres côté client)`)
     const unsub = subscribeAgentParcels(uid, (data: any) => {
-      console.log(`✅ [Agent] ${data.length} colis chargés automatiquement`)
+      console.log(`✅ [Agent] ${data.length} colis chargés (filtres côté client)`)
       setParcels(data)
       setLoadingParcels(false)
     }, onError)
-    return () => unsub()
-  }, [profile?.role, profile?.city, authTick, datePreset, dateFrom, dateTo, operationalDay, showAllCities])
+    unsubscribersRef.current.push(unsub)
+    return () => {
+      unsubscribersRef.current.forEach(unsub => unsub())
+      unsubscribersRef.current = []
+    }
+  }, [profile?.role, profile?.city, authTick, showAllCities, datePreset, dateFrom, dateTo, serviceFilter, parcelStatusFilter, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, codDocumentStatusFilter]) // ⚡ TOUS les filtres pour recharger 50→1000
 
-  // 🚀 Chargement automatique de tous les colis du chef d'agence en arrière-plan
-  useEffect(() => {
-    if (profile?.role !== 'chef_agence' || !hasMoreAgency || loadingAllAgency || loadingMoreAgency || !agencyLastDocsRef.current) return
-    if (liveParcels.length === 0) return // Attendre le chargement initial
-
-    // Lancer le chargement complet automatiquement après 2 secondes
-    const timer = setTimeout(() => {
-      if (hasMoreAgency && !loadingAllAgency && !loadingMoreAgency && agencyLastDocsRef.current) {
-        console.log(`🚀 [Chef d'agence] Démarrage du chargement automatique de tous les colis...`)
-        loadAllAgencyParcels()
-      }
-    }, 2000)
-
-    return () => clearTimeout(timer)
-  }, [liveParcels.length, hasMoreAgency, profile?.role])
+  // ❌ DÉSACTIVÉ: Chargement automatique de tous les colis (désormais MANUEL uniquement)
+  // useEffect(() => {
+  //   if (profile?.role !== 'chef_agence' || !hasMoreAgency || loadingAllAgency || loadingMoreAgency || !agencyLastDocsRef.current) return
+  //   if (liveParcels.length === 0) return // Attendre le chargement initial
+  //   const timer = setTimeout(() => {
+  //     if (hasMoreAgency && !loadingAllAgency && !loadingMoreAgency && agencyLastDocsRef.current) {
+  //       console.log(`🚀 [Chef d'agence] Démarrage du chargement automatique de tous les colis...`)
+  //       loadAllAgencyParcels()
+  //     }
+  //   }, 2000)
+  //   return () => clearTimeout(timer)
+  // }, [liveParcels.length, hasMoreAgency, profile?.role])
 
   // Fusionner liveParcels et moreParcels pour le chef d'agence et agentpro
   useEffect(() => {
@@ -1032,6 +1107,7 @@ export default function AgentPage() {
     // edit / delete
     editingParcel, setEditingParcel, editForm, setEditForm,
     editLoading, setEditLoading, editError, setEditError,
+    codEditModal, setCodEditModal,  // 💰 Édition rapide COD
     deleteConfirm, setDeleteConfirm,
     codeModal, setCodeModal,
     // transport / delivery
@@ -1174,7 +1250,7 @@ export default function AgentPage() {
     azertyFix, needsAzertyFix, normalizeScanText: _normScanText, normalizeScanLoose: _normScanLoose,
     findScannedParcel, doScan, openScanModal,
     handleSubmit, openEditModal, handleEditClick, handleDeleteClick, confirmDelete,
-    handleCodeVerify, handleEditSave, handleCreateReturnParcel, handleReturnDirect, submitReturnWithReason,
+    handleCodeVerify, handleEditSave, handleSaveCodAmount, handleCreateReturnParcel, handleReturnDirect, submitReturnWithReason,
     handleValidateParcelEntry, handleBulkValidateAideEntries,
     handleResolveModification, handleDeleteMod, handleToggleAideParcelAccess,
     handleCreateAideAgent, handleCreatePointeur, handleValiderRapport, handleRejeterRapport,
@@ -1896,6 +1972,7 @@ export default function AgentPage() {
     editForm, setEditForm,
     editLoading, setEditLoading,
     editError, setEditError,
+    codEditModal, setCodEditModal,  // 💰 Édition rapide COD
     ef,
     validatingEntryId, setValidatingEntryId,
     selectedAideEntryIds, setSelectedAideEntryIds,
@@ -1929,6 +2006,7 @@ export default function AgentPage() {
     handleBulkLoadTransport,
     handleBulkAssignDriver,
     handleCodeVerify, handleEditSave,
+    handleSaveCodAmount,  // 💰 Sauvegarde montant COD
     handleCreateReturnParcel,
     handleReturnDirect,
     submitReturnWithReason,
@@ -2161,6 +2239,9 @@ export default function AgentPage() {
     return dst_collected.length
   })()
 
+  // ⭐ Calculer le nombre de colis perdus non résolus (badge notification)
+  const lostParcelsCount = lostParcels.filter(lp => lp.status !== 'found').length
+
   return (
     <AgentCtx.Provider value={ctxValue}>
     <div className="min-h-screen bg-gray-50 overflow-x-hidden">
@@ -2185,6 +2266,7 @@ export default function AgentPage() {
         transitParcels={transitParcels}   // ⭐ Badge arrivages
         arrivedBoxes={arrivedBoxes}       // ⭐ Badge arrivages
         newCodCount={newCodCount}          // ⭐ Badge COD
+        lostParcelsCount={lostParcelsCount} // ⭐ Badge Colis perdus
       />
 
       <main className="w-[95%] mx-auto px-3 sm:px-4 md:px-5 pb-16">
@@ -2199,7 +2281,7 @@ export default function AgentPage() {
         {/* ── ACCUEIL ── */}
         {tab === 'home' && (
           <Suspense fallback={null}>
-            <HomeTab />
+            <HomeTab setTab={setTab} setParcelStatusFilter={setParcelStatusFilter} />
           </Suspense>
         )}
 

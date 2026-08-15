@@ -33,7 +33,9 @@ import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
 
-const PAGE_SIZE = 800 // Chargement progressif par tranches de 800
+// ⚡ Système de chargement optimisé (Option 3 - comme AdminPage)
+const PAGE_SIZE = 50 // Chargement initial réduit
+const FILTERED_PAGE_SIZE = 1000 // Quand filtres actifs
 
 const money = (n: any) => (parseFloat(n) || 0).toLocaleString('fr-MA')
 const asDate = (value: any) => {
@@ -1072,82 +1074,88 @@ export default function CentralCollectorPage() {
       return
     }
 
-    // Déterminer la période
-    let periodeText = 'Toutes les périodes'
-    if (ctlDatePreset === 'today') periodeText = "Aujourd'hui"
-    else if (ctlDatePreset === 'week') periodeText = '7 derniers jours'
-    else if (ctlDatePreset === 'month') periodeText = 'Ce mois'
-    else if (ctlDatePreset === 'custom' && ctlDateFrom && ctlDateTo) {
-      periodeText = `Du ${new Date(ctlDateFrom).toLocaleDateString('fr-MA')} au ${new Date(ctlDateTo).toLocaleDateString('fr-MA')}`
-    }
+    // Date et heure actuelles
+    const today = new Date().toLocaleDateString('fr-MA')
+    const timeNow = new Date().toLocaleTimeString('fr-MA', { hour: '2-digit', minute: '2-digit' })
 
-    const villeText = ctlCity === 'all' ? 'Toutes les villes' : ctlCity
+    // Déterminer le type de paiement prédominant
+    const paymentTypes = toExport
+      .filter((p: any) => p.codAmount && p.codAmount > 0)
+      .map((p: any) => p.codPaymentType)
+    const paymentCounts: any = {}
+    paymentTypes.forEach((t: string) => {
+      paymentCounts[t] = (paymentCounts[t] || 0) + 1
+    })
+    const mainPaymentType = Object.keys(paymentCounts).length > 0
+      ? Object.keys(paymentCounts).reduce((a, b) => paymentCounts[a] > paymentCounts[b] ? a : b)
+      : null
+    const paymentLabel = mainPaymentType === 'cheque' ? 'Contre Chèque' :
+                        mainPaymentType === 'especes' ? 'Contre Espèces' :
+                        mainPaymentType === 'traite' ? 'Contre Traite' : ''
 
-    // Préparer les données pour Excel
-    const data = toExport.map((p: any) => ({
-      'N° EXP (NIC)': p.sender?.nic || p.senderNic || '-',
-      'Expéditeur': p.sender?.name || p.senderName || '-',
-      'Destinataire': p.receiver?.name || p.receiverName || '-',
-      'Téléphone': p.receiver?.tel || p.receiverTel || '-',
-      'Ville': parcelCity(p),
-      'Type Paiement': p.codPaymentType ? (COD_PAYMENT_TYPES.find((t: any) => t.key === p.codPaymentType)?.label || p.codPaymentType) : '-',
-      'Montant (DH)': parseFloat(p.codAmount) || 0,
-      'Contrôlé': isControlled(p) ? 'Oui' : 'Non',
-      'Contrôlé par': isControlled(p) ? p.controlledBy || '-' : '-',
-      'Date contrôle': isControlled(p) && p.controlledAt ? new Date(p.controlledAt).toLocaleDateString('fr-MA') : '-',
-    }))
+    // Préparer les données
+    const data: any[] = []
 
-    // Calculer les totaux
-    const totalAmount = toExport.reduce((sum: number, p: any) => sum + (parseFloat(p.codAmount) || 0), 0)
-    const controlledCount = toExport.filter((p: any) => isControlled(p)).length
+    // Lignes vides au début (pour que le tableau commence à la ligne 4)
+    data.push(['', '', '', '', '', '', ''])
+    data.push(['', '', '', '', '', '', ''])
+    data.push(['', '', '', '', '', '', ''])
 
-    // Créer le workbook et worksheet
+    // Ligne 4 : Date et type de paiement
+    data.push([`Date: ${today} ${timeNow}${paymentLabel ? ' - ' + paymentLabel : ''}`, '', '', '', '', '', ''])
+
+    // Ligne 5 : Total
+    data.push([`Total: ${toExport.length} expédition(s)`, '', '', '', '', '', ''])
+
+    // Ligne 6 : Vide
+    data.push(['', '', '', '', '', '', ''])
+
+    // Ligne 7 : Headers
+    data.push(['N° EXP (NIC)', 'Expéditeur', 'Destinataire', 'Ville Exp.', 'Ville Dest.', 'Date Exp.', 'Prix'])
+
+    // Lignes 5+ : Données
+    toExport.forEach((p: any) => {
+      // Formater le COD - seulement le montant avec virgule
+      let codText = ''
+      const amount = parseFloat(p.codAmount)
+      if (!isNaN(amount) && amount > 0) {
+        codText = String(amount).replace('.', ',')
+      }
+
+      // Date d'expédition
+      const expeditionDate = p.expeditionDate || (p.createdAt?.toDate ? p.createdAt.toDate().toLocaleDateString('fr-FR') : '')
+
+      data.push([
+        p.sender?.nic || '',
+        p.sender?.name || '',
+        p.receiver?.name || '',
+        p.sender?.city || p.originCity || '',
+        p.destinationCity || p.receiver?.city || '',
+        expeditionDate,
+        codText
+      ])
+    })
+
+    // Créer le workbook et la worksheet
     const wb = XLSX.utils.book_new()
-    const ws = XLSX.utils.json_to_sheet(data)
+    const ws = XLSX.utils.aoa_to_sheet(data)
 
-    // Ajouter des lignes d'en-tête avant les données
-    XLSX.utils.sheet_add_aoa(ws, [
-      [`Rapport Contrôle & Pointage - ${villeText}`],
-      [`Période: ${periodeText}`],
-      [`Encaisseur: ${profile?.name || 'Encaisseur central'}`],
-      [`Date d'export: ${new Date().toLocaleDateString('fr-MA')} - ${new Date().toLocaleTimeString('fr-MA')}`],
-      [], // Ligne vide
-    ], { origin: 'A1' })
-
-    // Ajouter les totaux à la fin
-    const lastRow = data.length + 6 // 5 lignes d'en-tête + 1 ligne de titres de colonnes + données
-    XLSX.utils.sheet_add_aoa(ws, [
-      [],
-      ['TOTAUX'],
-      [`Total colis: ${toExport.length}`],
-      [`Total montant: ${money(totalAmount)} DH`],
-      [`Contrôlés: ${controlledCount} / ${toExport.length} (${Math.round((controlledCount / toExport.length) * 100)}%)`],
-      [`Non contrôlés: ${toExport.length - controlledCount}`],
-    ], { origin: `A${lastRow}` })
-
-    // Ajuster la largeur des colonnes
-    const colWidths = [
+    // Largeurs des colonnes
+    ws['!cols'] = [
       { wch: 15 }, // N° EXP
-      { wch: 25 }, // Expéditeur
-      { wch: 25 }, // Destinataire
-      { wch: 15 }, // Téléphone
-      { wch: 15 }, // Ville
-      { wch: 18 }, // Type Paiement
-      { wch: 12 }, // Montant
-      { wch: 10 }, // Contrôlé
-      { wch: 20 }, // Contrôlé par
-      { wch: 15 }, // Date contrôle
+      { wch: 20 }, // Expéditeur
+      { wch: 20 }, // Destinataire
+      { wch: 18 }, // Ville Exp.
+      { wch: 18 }, // Ville Dest.
+      { wch: 12 }, // Date Exp.
+      { wch: 12 }  // Prix
     ]
-    ws['!cols'] = colWidths
 
-    // Ajouter le worksheet au workbook
-    XLSX.utils.book_append_sheet(wb, ws, 'Contrôle & Pointage')
-
-    // Générer le nom du fichier
-    const fileName = `Controle_Pointage_${villeText.replace(/\s+/g, '_')}_${new Date().toISOString().split('T')[0]}.xlsx`
+    // Ajouter la feuille au workbook
+    XLSX.utils.book_append_sheet(wb, ws, 'Expéditions')
 
     // Télécharger le fichier
-    XLSX.writeFile(wb, fileName)
+    XLSX.writeFile(wb, `Expeditions_${today.replace(/\//g, '-')}_${timeNow.replace(/:/g, 'h')}.xlsx`)
   }
 
   const printGroup = (group: any) => {
@@ -1265,7 +1273,7 @@ export default function CentralCollectorPage() {
                 </div>
                 <div className="flex-1 min-w-52">
                   <p className="text-sm font-black text-slate-800">
-                    {parcels.length.toLocaleString('fr-MA')} colis chargés · {codParcels.length.toLocaleString('fr-MA')} contre-espèces détectées
+                    {parcels.length.toLocaleString('fr-MA')} colis chargés · {codParcels.length.toLocaleString('fr-MA')} COD détectés
                   </p>
                   <p className="text-xs text-slate-500">
                     {loadingAll
@@ -1330,7 +1338,7 @@ export default function CentralCollectorPage() {
             <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
               <div className="rounded-3xl bg-gradient-to-br from-purple-50 to-pink-50 p-5 shadow-sm">
                 <div className="flex items-center justify-between mb-2">
-                  <p className="text-xs font-bold uppercase tracking-wider text-slate-600/70">Contre-espèces (filtré)</p>
+                  <p className="text-xs font-bold uppercase tracking-wider text-slate-600/70">Contre remboursement (filtré)</p>
                   <div className="p-2 rounded-2xl bg-gradient-to-br from-purple-400 to-pink-500 text-white shadow-lg"><Package className="w-5 h-5" /></div>
                 </div>
                 <p className="text-3xl font-black bg-gradient-to-r from-purple-600 to-pink-600 bg-clip-text text-transparent">{ctlKpis.total.toLocaleString('fr-MA')}</p>
@@ -1579,11 +1587,11 @@ export default function CentralCollectorPage() {
               </section>
             )}
 
-            {/* Tableau des contre-espèces */}
+            {/* Tableau des COD (contre remboursement) */}
             <section className="bg-white rounded-3xl border border-slate-200 shadow-lg overflow-hidden">
               <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center gap-2">
                 <ClipboardCheck className="w-4 h-4 text-purple-600" />
-                <h3 className="font-black text-slate-800">Contre-espèces — toutes agences</h3>
+                <h3 className="font-black text-slate-800">Contre remboursement — toutes agences</h3>
                 <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">
                   {ctlDisplayed.length.toLocaleString('fr-MA')} affichés / {ctlFiltered.length.toLocaleString('fr-MA')} filtrés
                 </span>
@@ -1615,7 +1623,7 @@ export default function CentralCollectorPage() {
                     {ctlDisplayed.length === 0 && (
                       <tr>
                         <td colSpan={9} className="px-4 py-12 text-center text-slate-400 text-sm">
-                          Aucune contre-espèce ne correspond aux filtres.
+                          Aucun colis COD ne correspond aux filtres.
                           {hasMore && ' Essayez de charger plus de colis ou la recherche "toute la base".'}
                         </td>
                       </tr>
