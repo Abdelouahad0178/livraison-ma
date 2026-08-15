@@ -674,13 +674,17 @@ export default function CentralCollectorPage() {
     if (paymentFilter === 'unpaid' && (paid || prepared)) return false
     if (paymentFilter === 'prepared' && !prepared) return false
     if (paymentFilter === 'paid' && !paid) return false
+
+    // ✅ SKIP filtrage client si recherche serveur active (résultats déjà filtrés)
+    if (serverResults.length > 0) return true
+
     const values = [
       p.id, p.trackingId, p.sender?.name, p.sender?.nic, p.sender?.tel, p.receiver?.name, p.receiver?.tel,
       p.originCity, p.destinationCity, p.centralDepositCity, p.codAmount,
       p.centralChequeNum, p.centralChequeBank,
     ]
     return hasSearch(values, q)
-  }), [depositedParcels, cityFilter, datePreset, dateFrom, dateTo, operationalDay, minAmount, maxAmount, paymentFilter, q])
+  }), [depositedParcels, cityFilter, datePreset, dateFrom, dateTo, operationalDay, minAmount, maxAmount, paymentFilter, q, serverResults])
 
   const supplierGroups = useMemo(() => {
     const map = new Map()
