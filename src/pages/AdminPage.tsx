@@ -1225,7 +1225,7 @@ export default function AdminPage() {
     const performServerSearch = async () => {
       try {
         console.warn(`🔍 Recherche serveur: "${query}" dans TOUTE la base...`)
-        const results = await searchParcels(query, { limit: 200 })
+        const results = await searchParcels(query, { limit: 50000 })
         setServerSearchResults(results)
         console.warn(`✅ Recherche serveur: ${results.length} résultats trouvés`)
       } catch (error) {
