@@ -587,14 +587,16 @@ export default function AdminPage() {
 
     setLoading(true)
 
-    // 🔍 Détecter si des filtres sont actifs (ville, statut, service, port, driver)
-    const hasFilters =
+    // 🔍 Détecter si des filtres sont actifs (date, ville, statut, service, port, driver)
+    const hasDateFilter = datePreset !== 'all'
+    const hasOtherFilters =
       cityFilter !== 'Toutes' ||
       statusFilter.length > 0 ||
       serviceTypeFilter.length > 0 ||
       portTypeFilter.length > 0 ||
       driverFilter !== 'Tous'
 
+    const hasFilters = hasDateFilter || hasOtherFilters
     const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
 
     console.warn(`📊 CHARGEMENT:`, {
@@ -1370,6 +1372,7 @@ export default function AdminPage() {
   // ⚠️ EXCEPTION: Si filtres actifs → afficher TOUS les résultats
   const displayedFiltered = useMemo(() => {
     const hasActiveFilters =
+      datePreset !== 'all' ||
       cityFilter !== 'Toutes' ||
       statusFilter.length > 0 ||
       serviceTypeFilter.length > 0 ||
@@ -1381,7 +1384,7 @@ export default function AdminPage() {
       return filtered // TOUS les résultats
     }
     return filtered.slice(0, displayLimit)
-  }, [filtered, displayLimit, cityFilter, statusFilter, serviceTypeFilter, portTypeFilter, driverFilter])
+  }, [filtered, displayLimit, datePreset, cityFilter, statusFilter, serviceTypeFilter, portTypeFilter, driverFilter])
 
   // Fonction pour charger plus d'expéditions
   const loadMoreDisplayed = () => {
