@@ -198,23 +198,28 @@ export default function AdminPortAgenciesTab({
     filteredByDate.forEach((p: any) => {
       const originCity = p.originCity || p.sender?.city
       const destCity = p.destinationCity || p.receiver?.city
-      const price = safeParseFloat(p.price)
       const nbColis = safeParseInt(p.nbColis, 1)
 
-      // MONTANTS de port : selon où l'argent est collecté
-      // Port Payé : collecté à l'ORIGINE
-      if (p.portType === 'port_paye' && originCity && stats[originCity]) {
-        stats[originCity].portPaye += price
+      // ✅ NOUVEAUX PORTS : expéditeur et destinataire séparés
+      const senderPort = safeParseFloat(p.sender?.port || p.senderPort || 0)
+      const receiverPort = safeParseFloat(p.receiver?.port || p.receiverPort || 0)
+
+      // 📤 PORT EXPÉDITEUR : collecté à l'agence d'ORIGINE
+      if (senderPort > 0 && originCity && stats[originCity]) {
+        // Déterminer le type de port expéditeur
+        const senderPortType = p.sender?.portType || p.senderPortType || 'port_paye'
+
+        if (senderPortType === 'port_paye') {
+          stats[originCity].portPaye += senderPort
+        } else if (senderPortType === 'port_en_compte_expediteur') {
+          stats[originCity].enCompte += senderPort
+        }
       }
 
-      // Port Dû : collecté à la DESTINATION
-      if (p.portType === 'port_du' && destCity && stats[destCity]) {
-        stats[destCity].portDu += price
-      }
-
-      // En Compte Expéditeur : collecté à l'ORIGINE
-      if (p.portType === 'port_en_compte_expediteur' && originCity && stats[originCity]) {
-        stats[originCity].enCompte += price
+      // 📥 PORT DESTINATAIRE : collecté à l'agence de DESTINATION
+      if (receiverPort > 0 && destCity && stats[destCity]) {
+        // Le port destinataire est toujours "Port Dû" (payé à destination)
+        stats[destCity].portDu += receiverPort
       }
 
       // EXPÉDITIONS : comptées à l'agence d'ORIGINE
@@ -259,6 +264,7 @@ export default function AdminPortAgenciesTab({
         if (portTypeFilter === 'port_paye') return stat.portPaye > 0
         if (portTypeFilter === 'port_du') return stat.portDu > 0
         if (portTypeFilter === 'port_en_compte_expediteur') return stat.enCompte > 0
+        if (portTypeFilter === 'port_en_compte_destinataire') return stat.enCompte > 0
         return true
       })
     }
@@ -454,7 +460,8 @@ export default function AdminPortAgenciesTab({
                   <option value="all">Tous les types</option>
                   <option value="port_paye">✅ Port Payé uniquement</option>
                   <option value="port_du">📮 Port Dû uniquement</option>
-                  <option value="port_en_compte_expediteur">💼 En Compte Expéditeur uniquement</option>
+                  <option value="port_en_compte_expediteur">📤 En Compte Exp uniquement</option>
+                  <option value="port_en_compte_destinataire">📥 En Compte Dest uniquement</option>
                 </select>
               </div>
             </div>
@@ -494,7 +501,8 @@ export default function AdminPortAgenciesTab({
                     <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-100 text-green-700 rounded-lg text-xs font-bold">
                       {portTypeFilter === 'port_paye' && '✅ Port Payé'}
                       {portTypeFilter === 'port_du' && '📮 Port Dû'}
-                      {portTypeFilter === 'port_en_compte_expediteur' && '💼 En Compte Expéditeur'}
+                      {portTypeFilter === 'port_en_compte_expediteur' && '📤 En Compte Exp'}
+                      {portTypeFilter === 'port_en_compte_destinataire' && '📥 En Compte Dest'}
                       <button
                         onClick={() => setPortTypeFilter('all')}
                         className="hover:bg-green-200 rounded p-0.5 transition"
