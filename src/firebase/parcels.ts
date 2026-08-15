@@ -11,8 +11,8 @@ import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
 import { addPayment } from './clients'
 
 export const FIRESTORE_PAGE_LIMITS = {
-  adminLiveParcels: 50000,  // Charge initiale très élevée pour Admin
-  adminNextParcels: 10000,  // Pages suivantes si besoin
+  adminLiveParcels: 1000,  // ⚡ Augmenté pour supporter les filtres (50 → 1000)
+  adminNextParcels: 500,   // ⚡ Pages suivantes augmentées aussi
   users: 500,
   clients: 500,
 }
@@ -231,7 +231,7 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     deliveryAssignedBy:   hasLocalDeliveryDriver ? (data.agentName || '') : '',
     deliveryMethod:       data.deliveryMethod || 'domicile',  // 🚉 Mode de livraison (gare ou domicile)
     codStatus:            hasCod ? 'pending' : null,
-    codPaymentType:       hasCod ? 'especes' : null,  // Mode de paiement par défaut pour COD
+    codPaymentType:       hasCod ? (data.codPaymentType || (data.serviceType === 'retour_bl' ? 'bon_livraison' : (data.serviceType === 'simple' ? 'especes' : (data.serviceType || 'especes')))) : null,  // Mode de paiement COD (especes, cheque, traite, etc.)
     codCollectedAt:       null,
     codCollectedBy:       null,
     codRemisAt:           null,
@@ -764,6 +764,56 @@ export function subscribeAllParcels(callback: any, onError: (err?: any) => void 
     orderBy('createdAt', 'desc'),
     limit(pageSize)
   )
+
+  return onSnapshot(q, snap => {
+    const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const lastSnap = snap.docs[snap.docs.length - 1] || null
+    callback(docs, lastSnap)
+  }, onError)
+}
+
+// ⚡ VERSION OPTIMISÉE avec filtre de date au niveau Firestore
+// Priorité au filtre de date pour éviter de charger toutes les dates
+export function subscribeAllParcelsWithDateFilter(
+  callback: any,
+  onError: (err?: any) => void = () => {},
+  options: {
+    pageSize?: number
+    dateFrom?: Date | null  // Date de début (inclusive)
+    dateTo?: Date | null    // Date de fin (inclusive)
+  } = {}
+) {
+  const {
+    pageSize = FIRESTORE_PAGE_LIMITS.adminLiveParcels,
+    dateFrom = null,
+    dateTo = null,
+  } = options
+
+  // Construction de la requête avec filtres de date
+  const queryConstraints: any[] = []
+
+  // ⚡ FILTRE DE DATE PRIORITAIRE: appliqué au niveau Firestore, pas en mémoire
+  if (dateFrom) {
+    queryConstraints.push(where('createdAt', '>=', Timestamp.fromDate(dateFrom)))
+  }
+  if (dateTo) {
+    // Ajouter 1 jour pour inclure toute la journée
+    const endOfDay = new Date(dateTo)
+    endOfDay.setHours(23, 59, 59, 999)
+    queryConstraints.push(where('createdAt', '<=', Timestamp.fromDate(endOfDay)))
+  }
+
+  // Toujours trier et limiter
+  queryConstraints.push(orderBy('createdAt', 'desc'))
+  queryConstraints.push(limit(pageSize))
+
+  const q = query(collection(db, 'parcels'), ...queryConstraints)
+
+  console.log(`⚡ Firestore query optimisée avec filtres:`, {
+    dateFrom: dateFrom?.toLocaleDateString('fr-MA'),
+    dateTo: dateTo?.toLocaleDateString('fr-MA'),
+    pageSize,
+  })
 
   return onSnapshot(q, snap => {
     const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
