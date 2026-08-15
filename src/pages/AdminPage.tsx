@@ -617,7 +617,7 @@ export default function AdminPage() {
     }
 
     // ⚡ PRIORITÉ AU FILTRE DE DATE: si actif, filtrer directement dans Firestore
-    const hasDateFilter = datePreset !== 'all'
+    // hasDateFilter déjà calculé plus haut (ligne 591)
     let dateFromObj: Date | null = null
     let dateToObj: Date | null = null
 
