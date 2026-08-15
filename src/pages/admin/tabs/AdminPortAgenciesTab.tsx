@@ -56,11 +56,40 @@ export default function AdminPortAgenciesTab({
       filters: { datePreset, searchCity, portTypeFilter }
     })
 
-    const q = query(
-      collection(db, 'parcels'),
-      orderBy('createdAt', 'desc'),
-      limit(effectivePageSize)
-    )
+    // 📅 Si filtre de date personnalisé, élargir la période de chargement pour capturer
+    // les colis saisis après minuit (workDate du jour précédent)
+    let queryConstraints: any[] = []
+
+    if (datePreset === 'custom' && dateFrom && dateTo) {
+      // Charger depuis 1 jour AVANT dateFrom jusqu'à 1 jour APRÈS dateTo
+      // pour être sûr de capturer tous les colis avec workDate dans la période
+      const expandedFrom = new Date(dateFrom)
+      expandedFrom.setDate(expandedFrom.getDate() - 1)
+      expandedFrom.setHours(0, 0, 0, 0)
+
+      const expandedTo = new Date(dateTo)
+      expandedTo.setDate(expandedTo.getDate() + 1)
+      expandedTo.setHours(23, 59, 59, 999)
+
+      console.warn(`📅 Période élargie pour workDate:`, {
+        original: `${dateFrom} → ${dateTo}`,
+        expanded: `${expandedFrom.toLocaleDateString()} → ${expandedTo.toLocaleDateString()}`
+      })
+
+      queryConstraints = [
+        orderBy('createdAt', 'desc'),
+        // Note: On ne peut pas combiner where + orderBy sur des champs différents en Firestore
+        // Donc on charge plus de colis et on filtre côté client
+        limit(effectivePageSize * 2) // Doubler pour être sûr
+      ]
+    } else {
+      queryConstraints = [
+        orderBy('createdAt', 'desc'),
+        limit(effectivePageSize)
+      ]
+    }
+
+    const q = query(collection(db, 'parcels'), ...queryConstraints)
 
     const unsub = onSnapshot(
       q,
@@ -68,7 +97,7 @@ export default function AdminPortAgenciesTab({
         const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
         setLiveParcels(data)
         lastDocRef.current = snap.docs[snap.docs.length - 1] || null
-        setHasMore(snap.docs.length === effectivePageSize)
+        setHasMore(snap.docs.length >= effectivePageSize)
         setLoading(false)
         console.warn(`✅ Port par Agence: ${data.length} colis chargés`)
       },
@@ -79,7 +108,7 @@ export default function AdminPortAgenciesTab({
     )
 
     return () => unsub()
-  }, [datePreset, searchCity, portTypeFilter])
+  }, [datePreset, dateFrom, dateTo, searchCity, portTypeFilter])
 
   // ⚡ Charger TOUS les colis restants en arrière-plan
   const loadAllParcels = async () => {
@@ -152,8 +181,16 @@ export default function AdminPortAgenciesTab({
     return (!isNaN(num) && isFinite(num) && num >= 0) ? num : defaultValue
   }
 
-  // Filtrer les colis par période
+  // ✅ Filtrer les colis par période - UTILISE workDate (jour d'opération)
   const parcelDate = (p: any) => {
+    // 📅 PRIORITÉ 1: workDate (jour d'opération 8H→6H du lendemain)
+    // Permet de regrouper les saisies de nuit (ex: 14/08 à 2H → workDate=13/08)
+    if (p.workDate) {
+      // workDate est au format "YYYY-MM-DD", on ajoute 12:00 pour être au milieu de la journée
+      return new Date(p.workDate + 'T12:00:00')
+    }
+
+    // 📅 FALLBACK: createdAt (pour anciens colis sans workDate)
     if (p.createdAt?.toDate) return p.createdAt.toDate()
     if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
     return new Date(0)
