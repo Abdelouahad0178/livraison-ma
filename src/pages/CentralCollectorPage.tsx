@@ -238,6 +238,35 @@ export default function CentralCollectorPage() {
   //   return () => clearTimeout(timer)
   // }, [liveParcels.length, hasMore])
 
+  // 🔍 RECHERCHE SERVEUR Option 3 (comme AdminPage)
+  // Recherche dans TOUTE la base Firestore, pas seulement les colis chargés
+  useEffect(() => {
+    const searchQuery = query.trim()
+    if (!searchQuery || searchQuery.length < 2) {
+      setServerResults([])
+      setDeepSearching(false)
+      return
+    }
+
+    // ⚡ Recherche serveur dans TOUTE la base
+    const performServerSearch = async () => {
+      setDeepSearching(true)
+      try {
+        console.warn(`🔍 Recherche serveur CentralCollector: "${searchQuery}" dans TOUTE la base...`)
+        const results = await searchParcels(searchQuery, { limit: 50000 })
+        setServerResults(results)
+        setDeepSearching(false)
+        console.warn(`✅ Recherche serveur CentralCollector: ${results.length} résultats trouvés`)
+      } catch (error) {
+        console.error('❌ Erreur recherche serveur CentralCollector:', error)
+        setServerResults([])
+        setDeepSearching(false)
+      }
+    }
+
+    performServerSearch()
+  }, [query])
+
   // 📦 Charger les archives quand l'onglet est sélectionné
   useEffect(() => {
     if (activeTab !== 'archives' || archivesLoaded) return
@@ -1283,74 +1312,7 @@ export default function CentralCollectorPage() {
 
         {activeTab === 'controle' && (
           <>
-            {/* Bandeau chargement progressif */}
-            <section className="bg-white/70 backdrop-blur-xl rounded-3xl border border-indigo-100/60 p-4 shadow-lg">
-              <div className="flex flex-wrap items-center gap-3">
-                <div className="p-2.5 rounded-2xl bg-gradient-to-br from-indigo-400 to-purple-500 text-white shadow-lg">
-                  <Database className="w-5 h-5" />
-                </div>
-                <div className="flex-1 min-w-52">
-                  <p className="text-sm font-black text-slate-800">
-                    {parcels.length.toLocaleString('fr-MA')} colis chargés · {codParcels.length.toLocaleString('fr-MA')} COD détectés
-                  </p>
-                  <p className="text-xs text-slate-500">
-                    {loadingAll
-                      ? `⏳ Chargement complet en cours... +${loadAllProgress.toLocaleString('fr-MA')} colis récupérés`
-                      : hasMore
-                        ? 'Historique plus ancien disponible — chargez par tranches de 800 ou toute la base.'
-                        : '✓ Toute la base est chargée'}
-                  </p>
-                </div>
-                {hasMore && (
-                  <div className="flex gap-2">
-                    <button
-                      onClick={loadMoreParcels}
-                      disabled={loadingMore || loadingAll}
-                      className="px-4 py-2.5 rounded-xl text-xs font-black text-white bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 disabled:opacity-50 transition shadow-lg flex items-center gap-2"
-                    >
-                      {loadingMore ? (
-                        <><span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" /> Chargement...</>
-                      ) : (
-                        <>↓ Charger 800 de plus</>
-                      )}
-                    </button>
-                    <button
-                      onClick={loadAllParcels}
-                      disabled={loadingMore || loadingAll}
-                      className="px-4 py-2.5 rounded-xl text-xs font-black text-indigo-700 bg-indigo-50 border-2 border-indigo-200 hover:bg-indigo-100 disabled:opacity-50 transition flex items-center gap-2"
-                    >
-                      {loadingAll ? (
-                        <><span className="w-3.5 h-3.5 border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" /> {loadAllProgress.toLocaleString('fr-MA')}...</>
-                      ) : (
-                        <>⚡ Tout charger</>
-                      )}
-                    </button>
-                  </div>
-                )}
-              </div>
-            </section>
-
-            {/* ⚠️ Avertissement filtre de date actif */}
-            {ctlDatePreset !== 'all' && hasMore && !loadingAll && (
-              <div className="bg-gradient-to-r from-amber-50 to-orange-50 rounded-2xl border-2 border-amber-300 p-4 shadow-lg">
-                <div className="flex items-start gap-3">
-                  <div className="p-2 rounded-xl bg-amber-400 text-white flex-shrink-0">
-                    <Calendar className="w-5 h-5" />
-                  </div>
-                  <div className="flex-1">
-                    <h3 className="font-black text-amber-900 mb-1">⚠️ Filtre de date actif - Résultats partiels</h3>
-                    <p className="text-sm text-amber-800">
-                      Vous avez activé un filtre de date, mais <strong>toute la base n'est pas encore chargée</strong>.
-                      Les résultats affichés ne concernent que les <strong>{parcels.length.toLocaleString('fr-MA')} colis chargés</strong>.
-                    </p>
-                    <p className="text-sm text-amber-800 mt-2">
-                      Le chargement complet est en cours automatiquement. Vous pouvez aussi cliquer sur <strong>"⚡ Tout charger"</strong> ci-dessus
-                      pour accélérer le processus et obtenir tous les résultats pour votre filtre de date.
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
+            {/* ✅ SUPPRIMÉ: Bandeau de chargement progressif - Utilise maintenant système Option 3 */}
 
             {/* KPIs contrôle */}
             <section className="grid grid-cols-2 lg:grid-cols-4 gap-4">
