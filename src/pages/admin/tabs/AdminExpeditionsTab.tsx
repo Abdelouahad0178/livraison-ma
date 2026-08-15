@@ -12,10 +12,8 @@ import {
   Printer,
   RotateCcw,
   X,
-  Search,
-  Zap,
 } from 'lucide-react'
-import { useState, useEffect, useRef, useMemo } from 'react'
+import { useState } from 'react'
 import { doc, setDoc, deleteDoc } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
 import {
@@ -28,7 +26,6 @@ import {
 } from '../../../firebase/constants'
 import { fmt } from '../../../utils/formatNumber'
 import { printAdminExpeditions } from '../../../utils/agentPrintUtils'
-import VirtualizedTable from '../../../components/VirtualizedTable'
 
 const RETURN_REASONS = [
   'Refus du client',
@@ -84,46 +81,6 @@ export default function AdminExpeditionsTab({
   const [showPrintModal, setShowPrintModal] = useState(false)
   const [printGroupBy, setPrintGroupBy] = useState<'agency' | 'status' | 'none'>('none')
   const [restoringParcel, setRestoringParcel] = useState<string | null>(null)
-
-  // ⚡ Accélérateur de recherche
-  const searchInputRef = useRef<HTMLInputElement>(null)
-  const [advancedSearchActive, setAdvancedSearchActive] = useState(false)
-
-  // ⚡ Raccourci clavier: Ctrl/Cmd + K pour focus recherche
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ctrl/Cmd + K
-      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
-        e.preventDefault()
-        searchInputRef.current?.focus()
-        searchInputRef.current?.select()
-      }
-      // Échap pour clear recherche
-      if (e.key === 'Escape' && document.activeElement === searchInputRef.current) {
-        setSearch('')
-        searchInputRef.current?.blur()
-      }
-    }
-
-    window.addEventListener('keydown', handleKeyDown)
-    return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [setSearch])
-
-  // Rafraîchissement automatique en arrière-plan quand des données sont modifiées
-  useEffect(() => {
-    const handleDataUpdate = () => {
-      // Rafraîchir la page en silence
-      window.location.reload()
-    }
-
-    // Écouter les modifications de données
-    window.addEventListener('parcelDataUpdated', handleDataUpdate)
-
-    // Nettoyer l'écouteur
-    return () => {
-      window.removeEventListener('parcelDataUpdated', handleDataUpdate)
-    }
-  }, [])
 
   const handlePrint = () => {
     if (filtered.length === 0) {
@@ -252,7 +209,7 @@ export default function AdminExpeditionsTab({
         ))}
       </div>
 
-      {/* Bouton Charger plus en HAUT - charge par tranches de 500 ⚡ OPTIMISÉ */}
+      {/* Bouton Charger plus en HAUT - charge par tranches de 800 */}
       {hasMore && (
         <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-2xl border border-blue-200 shadow-sm p-4 mb-4">
           <div className="flex items-center justify-between">
@@ -262,7 +219,7 @@ export default function AdminExpeditionsTab({
                 <h3 className="font-bold text-gray-800">Historique complet disponible</h3>
               </div>
               <p className="text-xs text-gray-600">
-                {allParcels.length} colis chargés · Charger 500 expéditions supplémentaires pour accéder à plus d'historique
+                {allParcels.length} colis chargés · Charger les 800 expéditions suivantes pour accéder à tout l'historique
               </p>
             </div>
             <button
@@ -277,8 +234,7 @@ export default function AdminExpeditionsTab({
                 </>
               ) : (
                 <>
-                  <Zap className="w-4 h-4" />
-                  Charger 500 de plus
+                  ↓ Charger 800 de plus
                 </>
               )}
             </button>
@@ -305,45 +261,13 @@ export default function AdminExpeditionsTab({
           >
             <Plus className="w-4 h-4" /> Nouvelle expédition
           </button>
-          {/* ⚡ Champ de recherche accéléré avec raccourci clavier */}
-          <div className="relative flex-1 min-w-64">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-              <input
-                ref={searchInputRef}
-                value={search}
-                onChange={e => setSearch(e.target.value)}
-                placeholder="Rechercher (ID, N° EXP, nom, tel...)"
-                className={`w-full border-2 rounded-xl pl-10 pr-24 py-2 text-sm bg-white focus:outline-none transition ${
-                  search
-                    ? 'border-blue-500 bg-blue-50'
-                    : 'border-gray-200 focus:border-blue-400'
-                }`}
-              />
-              <div className="absolute right-2 top-1/2 -translate-y-1/2 flex items-center gap-1">
-                {search && (
-                  <button
-                    onClick={() => {
-                      setSearch('')
-                      searchInputRef.current?.focus()
-                    }}
-                    className="p-1 hover:bg-gray-200 rounded text-gray-500 hover:text-gray-700 transition"
-                    title="Effacer (Échap)"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
-                <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 text-[10px] font-semibold text-gray-500 bg-gray-100 border border-gray-300 rounded">
-                  <span className="text-[9px]">⌘</span>K
-                </kbd>
-              </div>
-            </div>
-            {search && (
-              <div className="absolute -bottom-5 left-0 text-[10px] text-blue-600 font-semibold">
-                ⚡ {filtered.length} résultat{filtered.length > 1 ? 's' : ''}
-              </div>
-            )}
-          </div>
+          <Filter className="w-4 h-4 text-gray-400 shrink-0" />
+          <input
+            value={search}
+            onChange={e => setSearch(e.target.value)}
+            placeholder="Rechercher (ID, N EXP, nom, tel...)"
+            className="border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:border-blue-500 focus:outline-none flex-1 min-w-36"
+          />
           <select value={cityFilter} onChange={e => setCityFilter(e.target.value)} className={selectCls}>
             <option value="Toutes">Toutes les villes</option>
             {CITIES.map(c => <option key={c}>{c}</option>)}
@@ -603,12 +527,8 @@ export default function AdminExpeditionsTab({
         </div>
       ) : (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          <VirtualizedTable
-            data={filtered}
-            rowHeight={120}
-            maxHeight={700}
-            className=""
-            headerComponent={
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-215">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
                   {['N EXP', 'Date', 'Expediteur', 'Destinataire', 'Ville', 'Poids', 'Port Payé', 'Port Dû', 'En Compte', 'RETOUR FOND', 'Statut RETOUR FOND', 'Statut', 'Modifier', 'Suivi'].map(h => (
@@ -618,42 +538,43 @@ export default function AdminExpeditionsTab({
                   ))}
                 </tr>
               </thead>
-            }
-            emptyComponent={
-              <div className="px-4 py-12 text-center">
-                {!search && cityFilter === 'Toutes' && driverFilter === 'Tous' && statusFilter.length === 0 ? (
-                  <div className="text-gray-500">
-                    <div className="text-2xl mb-2">🔍</div>
-                    <div className="font-semibold">Utilisez la recherche ou les filtres ci-dessus</div>
-                    <div className="text-sm text-gray-400 mt-1">Tous les colis filtrés s'affichent automatiquement</div>
-                  </div>
-                ) : (
-                  <div className="text-gray-400">Aucun colis trouvé</div>
-                )}
-              </div>
-            }
-            renderRow={(p: any) => {
-              const c = STATUS_COLORS[p.status] || STATUS_COLORS['Initialisé']
-              const cs = p.codAmount > 0
-                ? p.codSenderPaid
-                  ? { label: 'Regle', bg: 'bg-green-100', text: 'text-green-700', dot: 'bg-green-500' }
-                  : p.codReceivedBySource && !p.codSenderPaid
-                    ? { label: 'Recu - a regler', bg: 'bg-purple-100', text: 'text-purple-700', dot: 'bg-purple-500' }
-                    : p.codSentToSource && !p.codReceivedBySource
-                      ? { label: 'En transit source', bg: 'bg-blue-100', text: 'text-blue-700', dot: 'bg-blue-500' }
-                      : COD_STATUS[p.codStatus || 'pending']
-                : null
-              const paymentTypeKey = (p.serviceType?.split(',')[0]?.trim()) || p.codPaymentType
-              const cpt = paymentTypeKey ? COD_PAYMENT_TYPES.find(t => t.key === paymentTypeKey) : null
-              const date = p.expeditionDate
-                ? new Date(p.expeditionDate).toLocaleDateString('fr-MA')
-                : p.createdAt?.toDate?.()
-                  ? p.createdAt.toDate().toLocaleDateString('fr-MA')
-                  : p.history?.[0]?.timestamp
-                    ? new Date(p.history[0].timestamp).toLocaleDateString('fr-MA')
-                    : '-'
-              return (
-                <tr key={p.id} className="hover:bg-gray-50 transition">
+              <tbody className="divide-y divide-gray-50">
+                {filtered.length === 0 ? (
+                  <tr><td colSpan={14} className="px-4 py-12 text-center">
+                    {!search && cityFilter === 'Toutes' && driverFilter === 'Tous' && statusFilter.length === 0 ? (
+                      <div className="text-gray-500">
+                        <div className="text-2xl mb-2">🔍</div>
+                        <div className="font-semibold">Utilisez la recherche ou les filtres ci-dessus</div>
+                        <div className="text-sm text-gray-400 mt-1">Tous les colis filtrés s'affichent automatiquement</div>
+                      </div>
+                    ) : (
+                      <div className="text-gray-400">Aucun colis trouvé</div>
+                    )}
+                  </td></tr>
+                ) : filtered.map((p: any) => {
+                  const c = STATUS_COLORS[p.status] || STATUS_COLORS['Initialisé']
+                  const cs = p.codAmount > 0
+                    ? p.codSenderPaid
+                      ? { label: 'Regle', bg: 'bg-green-100', text: 'text-green-700', dot: 'bg-green-500' }
+                      : p.codReceivedBySource && !p.codSenderPaid
+                        ? { label: 'Recu - a regler', bg: 'bg-purple-100', text: 'text-purple-700', dot: 'bg-purple-500' }
+                        : p.codSentToSource && !p.codReceivedBySource
+                          ? { label: 'En transit source', bg: 'bg-blue-100', text: 'text-blue-700', dot: 'bg-blue-500' }
+                          : COD_STATUS[p.codStatus || 'pending']
+                    : null
+                  // Utiliser serviceType en priorité (plus fiable), sinon codPaymentType en fallback
+                  const paymentTypeKey = (p.serviceType?.split(',')[0]?.trim()) || p.codPaymentType
+                  const cpt = paymentTypeKey ? COD_PAYMENT_TYPES.find(t => t.key === paymentTypeKey) : null
+                  // Utiliser expeditionDate en priorité, puis createdAt
+                  const date = p.expeditionDate
+                    ? new Date(p.expeditionDate).toLocaleDateString('fr-MA')
+                    : p.createdAt?.toDate?.()
+                      ? p.createdAt.toDate().toLocaleDateString('fr-MA')
+                      : p.history?.[0]?.timestamp
+                        ? new Date(p.history[0].timestamp).toLocaleDateString('fr-MA')
+                        : '-'
+                  return (
+                    <tr key={p.id} className="hover:bg-gray-50 transition">
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
                           <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">{p.senderNic || p.nic || p.sender?.nic || '-'}</span>
@@ -716,40 +637,18 @@ export default function AdminExpeditionsTab({
                         }
                       </td>
                       <td className="px-4 py-3">
-                        <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-1.5">
-                            {p.codAmount > 0
-                              ? <span className="text-orange-600 font-bold">{p.codAmount} DH</span>
-                              : <span className="text-gray-300">-</span>
-                            }
-                            <button
-                              onClick={() => setCodEditModal({ parcel: p, value: p.codAmount || 0, loading: false, error: '' })}
-                              className="p-0.5 rounded hover:bg-orange-50 text-gray-400 hover:text-orange-500 transition"
-                              title="Modifier le RETOUR FOND (Admin)"
-                            >
-                              <Edit2 className="w-3 h-3" />
-                            </button>
-                          </div>
-                          {/* 🔄 HISTORIQUE MONTANT COD */}
-                          {p.codAmountHistory && p.codAmountHistory.length > 0 && (
-                            <div className="text-[10px] text-gray-500 space-y-0.5 border-t border-gray-100 pt-1">
-                              {p.codAmountHistory.slice(-3).map((h: any, i: number) => {
-                                const date = new Date(h.changedAt)
-                                const dateStr = date.toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: '2-digit' })
-                                const timeStr = date.toLocaleTimeString('fr-MA', { hour: '2-digit', minute: '2-digit' })
-                                const userName = h.changedBy?.split('@')[0] || 'Admin'
-                                return (
-                                  <div key={i} className="flex items-center gap-1">
-                                    <span className="text-gray-400">{dateStr} {timeStr}</span>
-                                    <span className="text-gray-600 font-medium">{userName}:</span>
-                                    <span className="text-red-500">{h.oldAmount} DH</span>
-                                    <span className="text-gray-400">→</span>
-                                    <span className="text-green-600">{h.newAmount} DH</span>
-                                  </div>
-                                )
-                              })}
-                            </div>
-                          )}
+                        <div className="flex items-center gap-1.5">
+                          {p.codAmount > 0
+                            ? <span className="text-orange-600 font-bold">{p.codAmount} DH</span>
+                            : <span className="text-gray-300">-</span>
+                          }
+                          <button
+                            onClick={() => setCodEditModal({ parcel: p, value: p.codAmount || 0, loading: false, error: '' })}
+                            className="p-0.5 rounded hover:bg-orange-50 text-gray-400 hover:text-orange-500 transition"
+                            title="Modifier le RETOUR FOND (Admin)"
+                          >
+                            <Edit2 className="w-3 h-3" />
+                          </button>
                         </div>
                       </td>
                       <td className="px-4 py-3">
@@ -805,9 +704,11 @@ export default function AdminExpeditionsTab({
                         </a>
                       </td>
                     </tr>
-              )
-            }}
-          />
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
           <div className="border-t border-gray-100 px-4 py-3 bg-gray-50">
             <div className="flex items-center justify-between text-xs text-gray-500">
               <span>
