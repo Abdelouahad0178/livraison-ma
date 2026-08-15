@@ -240,8 +240,10 @@ export default function CentralCollectorPage() {
 
   // 🔍 RECHERCHE SERVEUR Option 3 (comme AdminPage)
   // Recherche dans TOUTE la base Firestore, pas seulement les colis chargés
+  // Écoute AUSSI ctlDebounced pour l'onglet Contrôle
   useEffect(() => {
-    const searchQuery = query.trim()
+    // Prendre la recherche active (Fournisseurs OU Contrôle)
+    const searchQuery = (query.trim() || ctlDebounced.trim())
     if (!searchQuery || searchQuery.length < 2) {
       setServerResults([])
       setDeepSearching(false)
@@ -265,7 +267,7 @@ export default function CentralCollectorPage() {
     }
 
     performServerSearch()
-  }, [query])
+  }, [query, ctlDebounced])
 
   // 📦 Charger les archives quand l'onglet est sélectionné
   useEffect(() => {
@@ -456,6 +458,11 @@ export default function CentralCollectorPage() {
       const n = parseFloat(p.codAmount) || 0
       if (mn !== null && !Number.isNaN(mn) && n < mn) return false
       if (mx !== null && !Number.isNaN(mx) && n > mx) return false
+
+      // ✅ SKIP filtrage client si recherche serveur active (résultats déjà filtrés)
+      if (serverResults.length > 0 && !qq) return true
+      if (serverResults.length > 0 && qq) return true  // Recherche serveur gère tout
+
       if (!qq) return true
       return hasSearch([
         p.trackingId, p.id, p.sender?.nic, p.senderNic, p.sender?.name, p.senderName,
@@ -464,7 +471,7 @@ export default function CentralCollectorPage() {
         p.receiver?.city, p.codAmount, p.status, p.controlledBy,
       ], qq)
     })
-  }, [parcels, ctlDebounced, ctlPayType, ctlCodStatus, ctlControl, ctlParcelStatus, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay, ctlMinAmount, ctlMaxAmount])
+  }, [parcels, ctlDebounced, ctlPayType, ctlCodStatus, ctlControl, ctlParcelStatus, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay, ctlMinAmount, ctlMaxAmount, serverResults])
 
   // Compteurs par ville (pointage ville par ville) - par ville d'ORIGINE
   const ctlCityStats = useMemo(() => {
