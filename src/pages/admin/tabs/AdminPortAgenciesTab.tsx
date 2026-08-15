@@ -265,11 +265,13 @@ export default function AdminPortAgenciesTab({
         const price = safeParseFloat(p.price)
         const portType = p.portType || 'port_paye'
 
-        // Ancien système : un seul port, on le met sur l'expéditeur par défaut
+        // Ancien système : un seul port, déterminer s'il va à l'expéditeur ou destinataire
         if (portType === 'port_paye' || portType === 'port_en_compte_expediteur' || portType === 'port_en_compte') {
+          // Port collecté à l'ORIGINE (expéditeur)
           senderPort = price
           senderPortType = portType
-        } else if (portType === 'port_du') {
+        } else if (portType === 'port_du' || portType === 'port_en_compte_destinataire') {
+          // Port collecté à la DESTINATION (destinataire)
           receiverPort = price
           receiverPortType = portType
         }
