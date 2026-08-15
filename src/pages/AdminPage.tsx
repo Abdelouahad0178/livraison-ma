@@ -351,6 +351,7 @@ export default function AdminPage() {
   // Parcels - Système de chargement progressif optimisé ⚡
   const PAGE_SIZE = 50 // ⚡ OPTIMISÉ: Chargement initial réduit (800 → 50) pour performance
   const LOAD_MORE_SIZE = 500 // ⚡ Taille pour "Charger plus" (compromis entre vitesse et quantité)
+  const FILTERED_PAGE_SIZE = 1000 // 🔍 Quand filtres actifs, charger plus pour couvrir les résultats
   const [parcels,      setParcels]      = useState<any[]>([]) // Pour compatibilité - alias de liveParcels
   const [liveParcels,  setLiveParcels]  = useState<any[]>([]) // Temps réel (premiers 800)
   const [moreParcels,  setMoreParcels]  = useState<any[]>([]) // Chargés progressivement
@@ -575,6 +576,17 @@ export default function AdminPage() {
 
     setLoading(true)
 
+    // 🔍 Détecter si des filtres sont actifs (ville, statut)
+    const hasFilters = cityFilter !== 'Toutes' || statusFilter.length > 0
+    const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
+
+    if (hasFilters) {
+      console.warn(`🔍 FILTRES ACTIFS → Chargement de ${effectivePageSize} colis pour couvrir les résultats`, {
+        ville: cityFilter,
+        statuts: statusFilter
+      })
+    }
+
     // ⚡ PRIORITÉ AU FILTRE DE DATE: si actif, filtrer directement dans Firestore
     const hasDateFilter = datePreset !== 'all'
     let dateFromObj: Date | null = null
@@ -616,14 +628,14 @@ export default function AdminPage() {
           setLiveParcels(data)
           setLoading(false)
           if (!pagedRef.current) lastPageDocRef.current = lastSnap
-          if (data.length < PAGE_SIZE) setHasMore(false)
+          if (data.length < effectivePageSize) setHasMore(false)
         },
         (err: any) => {
           console.error('❌ Erreur chargement:', err)
           setLoading(false)
         },
         {
-          pageSize: PAGE_SIZE,
+          pageSize: effectivePageSize,
           dateFrom: dateFromObj,
           dateTo: dateToObj,
         }
@@ -640,19 +652,19 @@ export default function AdminPage() {
           setLiveParcels(data)
           setLoading(false)
           if (!pagedRef.current) lastPageDocRef.current = lastSnap
-          if (data.length < PAGE_SIZE) setHasMore(false)
+          if (data.length < effectivePageSize) setHasMore(false)
         },
         (err: any) => {
           console.error('❌ Erreur chargement:', err)
           setLoading(false)
         },
         0,
-        PAGE_SIZE
+        effectivePageSize
       )
 
       return () => unsubParcels()
     }
-  }, [isSearchActive, autoReloadEnabled, datePreset, dateFrom, dateTo, operationalDayFormatted])
+  }, [isSearchActive, autoReloadEnabled, datePreset, dateFrom, dateTo, operationalDayFormatted, cityFilter, statusFilter])
 
   // 🔄 Écouter les mises à jour de prix depuis d'autres pages (ex: Facturier)
   useEffect(() => {
