@@ -366,9 +366,20 @@ export default function CentralCollectorPage() {
   // Fusion : temps réel + pages chargées + résultats serveur + pointage optimiste
   const parcels = useMemo(() => {
     const map = new Map()
-    moreParcels.forEach((p: any) => map.set(p.id, p))
-    serverResults.forEach((p: any) => map.set(p.id, p))
-    liveParcels.forEach((p: any) => map.set(p.id, p)) // le temps réel gagne
+
+    // ✅ Si recherche active → SEULEMENT serverResults (pas les 50 de démarrage)
+    if (serverResults.length > 0) {
+      serverResults.forEach((p: any) => map.set(p.id, p))
+      // Temps réel uniquement pour les colis déjà dans serverResults
+      liveParcels.forEach((p: any) => {
+        if (map.has(p.id)) map.set(p.id, p) // Mise à jour temps réel
+      })
+    } else {
+      // Pas de recherche → fusion normale
+      moreParcels.forEach((p: any) => map.set(p.id, p))
+      liveParcels.forEach((p: any) => map.set(p.id, p))
+    }
+
     let arr = [...map.values()]
     if (Object.keys(controlOverrides).length) {
       arr = arr.map((p: any) => controlOverrides[p.id] ? { ...p, ...controlOverrides[p.id] } : p)
