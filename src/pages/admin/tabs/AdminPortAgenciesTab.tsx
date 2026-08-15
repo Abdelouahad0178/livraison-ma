@@ -13,7 +13,9 @@ interface Props {
   setDateTo: (date: string) => void
 }
 
-const PAGE_SIZE = 800 // Nombre de colis chargés par batch
+// ⚡ Système Option 3 (comme AdminPage)
+const PAGE_SIZE = 50 // Chargement initial réduit
+const FILTERED_PAGE_SIZE = 1000 // Quand filtres actifs
 
 export default function AdminPortAgenciesTab({
   datePreset,
@@ -36,13 +38,28 @@ export default function AdminPortAgenciesTab({
   const [hasMore, setHasMore] = useState(true)
   const lastDocRef = useRef<any>(null)
 
-  // ⚡ Chargement initial : PAGE_SIZE colis récents
+  // ⚡ Chargement optimisé avec détection de filtres (Option 3)
   useEffect(() => {
     setLoading(true)
+
+    // 🔍 Détecter si des filtres sont actifs
+    const hasDateFilter = datePreset !== 'all'
+    const hasSearchFilter = searchCity.trim() !== ''
+    const hasPortTypeFilter = portTypeFilter !== 'all'
+    const hasFilters = hasDateFilter || hasSearchFilter || hasPortTypeFilter
+
+    const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
+
+    console.warn(`📊 CHARGEMENT Port par Agence:`, {
+      hasFilters,
+      effectivePageSize,
+      filters: { datePreset, searchCity, portTypeFilter }
+    })
+
     const q = query(
       collection(db, 'parcels'),
       orderBy('createdAt', 'desc'),
-      limit(PAGE_SIZE)
+      limit(effectivePageSize)
     )
 
     const unsub = onSnapshot(
@@ -51,8 +68,9 @@ export default function AdminPortAgenciesTab({
         const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
         setLiveParcels(data)
         lastDocRef.current = snap.docs[snap.docs.length - 1] || null
-        setHasMore(snap.docs.length === PAGE_SIZE)
+        setHasMore(snap.docs.length === effectivePageSize)
         setLoading(false)
+        console.warn(`✅ Port par Agence: ${data.length} colis chargés`)
       },
       (err) => {
         console.error('Erreur chargement initial:', err)
@@ -61,7 +79,7 @@ export default function AdminPortAgenciesTab({
     )
 
     return () => unsub()
-  }, [])
+  }, [datePreset, searchCity, portTypeFilter])
 
   // ⚡ Charger TOUS les colis restants en arrière-plan
   const loadAllParcels = async () => {
@@ -107,19 +125,19 @@ export default function AdminPortAgenciesTab({
     }
   }
 
-  // ⚡ Chargement automatique en arrière-plan après 2 secondes
-  useEffect(() => {
-    if (!hasMore || loadingAll || loadingMore || !lastDocRef.current) return
-    if (liveParcels.length === 0) return
-
-    const timer = setTimeout(() => {
-      if (hasMore && !loadingAll && !loadingMore && lastDocRef.current) {
-        loadAllParcels()
-      }
-    }, 2000)
-
-    return () => clearTimeout(timer)
-  }, [liveParcels.length, hasMore, loadingAll, loadingMore])
+  // ❌ DÉSACTIVÉ: Chargement automatique (Option 3 - charge seulement ce dont on a besoin)
+  // useEffect(() => {
+  //   if (!hasMore || loadingAll || loadingMore || !lastDocRef.current) return
+  //   if (liveParcels.length === 0) return
+  //
+  //   const timer = setTimeout(() => {
+  //     if (hasMore && !loadingAll && !loadingMore && lastDocRef.current) {
+  //       loadAllParcels()
+  //     }
+  //   }, 2000)
+  //
+  //   return () => clearTimeout(timer)
+  // }, [liveParcels.length, hasMore, loadingAll, loadingMore])
 
   // 🔒 Fonction sécurisée pour parser les nombres
   const safeParseFloat = (value: any): number => {
@@ -198,11 +216,27 @@ export default function AdminPortAgenciesTab({
       const destCity = p.destinationCity || p.receiver?.city
 
       // ✅ NOUVEAUX PORTS : expéditeur et destinataire séparés
-      const senderPort = safeParseFloat(p.sender?.port || p.senderPort || 0)
-      const senderPortType = p.sender?.portType || p.senderPortType || 'port_paye'
+      // 🔄 FALLBACK: Si nouveaux champs absents, utiliser ancien système
+      let senderPort = safeParseFloat(p.sender?.port || p.senderPort || 0)
+      let senderPortType = p.sender?.portType || p.senderPortType || 'port_paye'
 
-      const receiverPort = safeParseFloat(p.receiver?.port || p.receiverPort || 0)
-      const receiverPortType = p.receiver?.portType || p.receiverPortType || 'port_du'
+      let receiverPort = safeParseFloat(p.receiver?.port || p.receiverPort || 0)
+      let receiverPortType = p.receiver?.portType || p.receiverPortType || 'port_du'
+
+      // 🔄 COMPATIBILITÉ: Si pas de nouveaux ports, utiliser l'ancien p.price
+      if (senderPort === 0 && receiverPort === 0 && p.price) {
+        const price = safeParseFloat(p.price)
+        const portType = p.portType || 'port_paye'
+
+        // Ancien système : un seul port, on le met sur l'expéditeur par défaut
+        if (portType === 'port_paye' || portType === 'port_en_compte_expediteur' || portType === 'port_en_compte') {
+          senderPort = price
+          senderPortType = portType
+        } else if (portType === 'port_du') {
+          receiverPort = price
+          receiverPortType = portType
+        }
+      }
 
       // 📤 PORT EXPÉDITEUR : collecté à l'agence d'ORIGINE
       if (senderPort > 0 && originCity && stats[originCity]) {
