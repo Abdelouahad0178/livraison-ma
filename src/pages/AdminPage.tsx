@@ -1350,7 +1350,7 @@ export default function AdminPage() {
 
       // Filtre type de service multi-select
       if (serviceTypeFilter.length > 0) {
-        const serviceTypes = p.serviceType?.split(',').map(t => t.trim()).filter(Boolean) || ['simple']
+        const serviceTypes = p.serviceType?.split(',').filter(Boolean) || ['simple']
         const hasMatch = serviceTypes.some((st: string) => serviceTypeFilter.includes(st))
         if (!hasMatch) return false
       }

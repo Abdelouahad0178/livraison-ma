@@ -17,7 +17,6 @@ import {
 } from '../../../firebase/constants'
 import { useAgentCtx } from '../AgentCtx'
 import { OperationalDaySelector } from '../../../components/OperationalDaySelector'
-import MixedPaymentEditModal from '../modals/MixedPaymentEditModal'
 
 import { parcelDate, filterByDate } from '../../../utils/dateFilter'
 
@@ -213,9 +212,6 @@ export default function ParcelsTab() {
     currentStatus: null,
     serviceType: null
   })
-
-  // État pour le modal d'édition paiement mixte
-  const [mixedPaymentModal, setMixedPaymentModal] = useState<any>(null)
 
   // Rafraîchissement automatique en arrière-plan quand des données sont modifiées
   useEffect(() => {
@@ -2006,25 +2002,16 @@ export default function ParcelsTab() {
                                 // Formater le COD
                                 let codText = ''
                                 if (p.codAmount && p.codAmount > 0) {
-                                  // Paiement mixte espèce + chèque
-                                  if (p.codMixedPayment && p.codEspecesAmount && p.codChequeAmount) {
-                                    codText = `${p.codAmount} DH (${p.codEspecesAmount} Esp + ${p.codChequeAmount} Chq)`
-                                  } else {
-                                    const paymentType = p.codPaymentType === 'cheque' ? 'C/Chèque' :
-                                                        p.codPaymentType === 'especes' ? 'C/Espèces' :
-                                                        p.codPaymentType === 'traite' ? 'C/Traite' : 'COD'
-                                    codText = `${p.codAmount} DH (${paymentType})`
-                                  }
+                                  const paymentType = p.codPaymentType === 'cheque' ? 'C/Chèque' :
+                                                      p.codPaymentType === 'especes' ? 'C/Espèces' :
+                                                      p.codPaymentType === 'traite' ? 'C/Traite' : 'COD'
+                                  codText = `${p.codAmount} DH (${paymentType})`
                                 }
 
                                 // Formater le service
-                                const serviceText = p.codMixedPayment ? 'Mixte' :
-                                                   p.serviceType === 'domicile' ? 'Domicile' :
+                                const serviceText = p.serviceType === 'domicile' ? 'Domicile' :
                                                    p.serviceType === 'echange' ? 'Echange' :
-                                                   p.serviceType === 'simple' ? 'Simple' :
-                                                   p.serviceType === 'especes' ? 'C/Espèces' :
-                                                   p.serviceType === 'cheque' ? 'C/Chèque' :
-                                                   p.serviceType === 'traite' ? 'C/Traite' : ''
+                                                   p.serviceType === 'simple' ? 'Simple' : ''
 
                                 data.push([
                                   p.sender?.nic || '',
@@ -2892,14 +2879,6 @@ export default function ParcelsTab() {
                                       Modifié par {parcel.lastModifiedByName}
                                     </span>
                                   )}
-                                </button>
-                              ) : parcel.codMixedPayment ? (
-                                <button
-                                  onClick={() => setMixedPaymentModal(parcel)}
-                                  className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-blue-100 text-blue-700 rounded-lg font-semibold hover:bg-blue-200 transition-colors cursor-pointer"
-                                  title="Cliquer pour éditer les détails du paiement mixte"
-                                >
-                                  💵+📋 Mixte
                                 </button>
                               ) : (
                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-100 text-purple-700 rounded-lg font-semibold">
@@ -5659,17 +5638,6 @@ export default function ParcelsTab() {
             </div>
           </div>
         </div>
-      )}
-
-      {/* Modal édition paiement mixte */}
-      {mixedPaymentModal && (
-        <MixedPaymentEditModal
-          parcel={mixedPaymentModal}
-          onClose={() => setMixedPaymentModal(null)}
-          onSave={() => {
-            setMsg({ type: 'success', text: 'Détails du paiement mixte mis à jour avec succès' })
-          }}
-        />
       )}
     </>
   )

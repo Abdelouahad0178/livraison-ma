@@ -154,12 +154,6 @@ export interface Parcel {
   returnSignatureToken?: string | null
   returnSignatureTokenCreatedAt?: string | null
   returnSignatureConfirmedAt?: string | null
-  // Paiement mixte espèce + chèque
-  codMixedPayment?: boolean | null  // Indique si c'est un paiement mixte
-  codEspecesAmount?: number | null  // Montant en espèces
-  codChequeAmount?: number | null   // Montant en chèque
-  codBankName?: string | null       // Nom de la banque pour le chèque
-  codCheckNumber?: string | null    // Numéro du chèque
 }
 
 // ── CaisseEntry ────────────────────────────────────────────────────────────
