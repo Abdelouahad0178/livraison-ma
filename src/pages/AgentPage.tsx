@@ -732,29 +732,24 @@ export default function AgentPage() {
       let filterDateTo: Date | null = null
 
       if (datePreset === 'custom' && (dateFrom || dateTo)) {
-        // 🗓️ JOUR D'OPÉRATION : 8H → 6H du lendemain
-        // Si dateFrom = dateFrom (même jour), c'est un jour d'opération
-        if (dateFrom && dateTo && dateFrom === dateTo) {
-          // Jour d'opération : 8H du jour → 6H du lendemain
-          filterDateFrom = new Date(dateFrom + 'T08:00:00')
-          filterDateTo = new Date(dateFrom + 'T23:59:59')
-          filterDateTo.setDate(filterDateTo.getDate() + 1) // Lendemain
-          filterDateTo.setHours(6, 0, 0, 0) // 6H du lendemain
+        // ⚡ CHARGER ±7 JOURS pour capturer TOUS les colis avec workDate dans la période
+        // (car createdAt peut être différent de workDate)
+        filterDateFrom = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
+        filterDateTo = dateTo ? new Date(dateTo + 'T23:59:59') : null
 
-          console.log(`🗓️ [Chef d'agence] JOUR D'OPÉRATION pour ${profile.city}:`, {
-            from: filterDateFrom?.toLocaleString('fr-MA'),
-            to: filterDateTo?.toLocaleString('fr-MA')
-          })
-        } else {
-          // Période personnalisée normale
-          filterDateFrom = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
-          filterDateTo = dateTo ? new Date(dateTo + 'T23:59:59') : null
-
-          console.log(`⚡ [Chef d'agence] Période personnalisée pour ${profile.city}:`, {
-            from: filterDateFrom?.toLocaleDateString('fr-MA'),
-            to: filterDateTo?.toLocaleDateString('fr-MA')
-          })
+        // Élargir de ±7 jours pour Firestore
+        if (filterDateFrom) {
+          filterDateFrom.setDate(filterDateFrom.getDate() - 7)
         }
+        if (filterDateTo) {
+          filterDateTo.setDate(filterDateTo.getDate() + 7)
+        }
+
+        console.log(`⚡ [Chef d'agence] Chargement LARGE (±7j) pour ${profile.city}:`, {
+          from: filterDateFrom?.toLocaleDateString('fr-MA'),
+          to: filterDateTo?.toLocaleDateString('fr-MA'),
+          note: 'Filtrage par workDate côté client'
+        })
       } else if (datePreset === 'operational' && operationalDay) {
         // 🗓️ Journée opérationnelle: 8H → 6H lendemain
         const range = getOperationalDayRange(operationalDay)
