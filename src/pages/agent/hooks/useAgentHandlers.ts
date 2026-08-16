@@ -1662,6 +1662,12 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         agentRole:            profile?.role || 'agent',
         hasRetourBL:          form.hasRetourBL || false,  // ⭐ Retour BL obligatoire
         deliveryMethod:       form.enGare ? 'gare' : 'domicile',  // 🚉 Mode de livraison
+        // Paiement mixte espèce + chèque
+        codMixedPayment:      form.mixedPaymentMode || false,
+        codEspecesAmount:     form.mixedPaymentMode ? (parseFloat(form.codEspecesAmount) || 0) : null,
+        codChequeAmount:      form.mixedPaymentMode ? (parseFloat(form.codChequeAmount) || 0) : null,
+        codBankName:          form.mixedPaymentMode ? (form.codBankName || null) : null,
+        codCheckNumber:       form.mixedPaymentMode ? (form.codCheckNumber || null) : null,
       })
 
       // Créer automatiquement un compte portail pour les particuliers

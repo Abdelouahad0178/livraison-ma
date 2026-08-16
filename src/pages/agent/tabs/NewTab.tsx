@@ -34,6 +34,12 @@ const getEmptyForm = () => ({
   deliverySectorId: '', deliveryDriverId: '',
   enGare: true,
   operationDate: todayStr(), // Date de travail ACTUELLE à chaque appel
+  // Paiement mixte espèce + chèque
+  mixedPaymentMode: false,
+  codEspecesAmount: '',
+  codChequeAmount: '',
+  codBankName: '',
+  codCheckNumber: '',
 })
 
 // Types disponibles pour création (sans retour_bl et retourne - ces types sont pour marquage uniquement)
@@ -1354,55 +1360,133 @@ export default function NewTab() {
               const canMultiSelect = st.key === 'cheque' || st.key === 'traite'
 
               return (
-                <button
-                  type="button"
-                  key={st.key}
-                  onClick={() => setForm((p: any) => {
-                    const currentTypes = p.serviceType?.split(',').filter(Boolean) || []
-                    let newTypes: string[]
+                <div key={st.key} className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setForm((p: any) => {
+                      const currentTypes = p.serviceType?.split(',').filter(Boolean) || []
+                      let newTypes: string[]
 
-                    if (st.key === 'simple' || st.key === 'especes') {
-                      // Simple/Espèces: désélectionner tout et sélectionner uniquement celui-ci
-                      newTypes = [st.key]
-                    } else if (st.key === 'cheque' || st.key === 'traite') {
-                      // Chèque/Traite: gestion multi-sélection
-                      const hasSimpleOrEspeces = currentTypes.some((t: string) => t === 'simple' || t === 'especes')
-                      if (hasSimpleOrEspeces) {
-                        // Si simple/especes est sélectionné, le remplacer par cheque/traite
+                      if (st.key === 'simple' || st.key === 'especes') {
+                        // Simple/Espèces: désélectionner tout et sélectionner uniquement celui-ci
                         newTypes = [st.key]
-                      } else if (isSelected) {
-                        // Décocher
-                        newTypes = currentTypes.filter((t: string) => t !== st.key)
-                        if (newTypes.length === 0) newTypes = ['simple'] // Par défaut simple si tout décoché
+                      } else if (st.key === 'cheque' || st.key === 'traite') {
+                        // Chèque/Traite: gestion multi-sélection
+                        const hasSimpleOrEspeces = currentTypes.some((t: string) => t === 'simple' || t === 'especes')
+                        if (hasSimpleOrEspeces) {
+                          // Si simple/especes est sélectionné, le remplacer par cheque/traite
+                          newTypes = [st.key]
+                        } else if (isSelected) {
+                          // Décocher
+                          newTypes = currentTypes.filter((t: string) => t !== st.key)
+                          if (newTypes.length === 0) newTypes = ['simple'] // Par défaut simple si tout décoché
+                        } else {
+                          // Cocher (ajouter à la liste)
+                          newTypes = [...currentTypes.filter((t: string) => t === 'cheque' || t === 'traite'), st.key]
+                        }
                       } else {
-                        // Cocher (ajouter à la liste)
-                        newTypes = [...currentTypes.filter((t: string) => t === 'cheque' || t === 'traite'), st.key]
+                        newTypes = [st.key]
                       }
-                    } else {
-                      newTypes = [st.key]
-                    }
 
-                    const newServiceType = newTypes.join(',')
-                    return {
-                      ...p,
-                      serviceType: newServiceType,
-                      codAmount: newTypes.every(t => t === 'simple') ? '' : p.codAmount
-                    }
-                  })}
-                  onKeyDown={handleKeyNav}
-                  className={`flex flex-col items-center justify-center py-2 rounded-lg border text-xs font-bold transition ${
-                    isSelected
-                      ? 'bg-green-600 border-green-500 text-white'
-                      : 'bg-white border-gray-200 text-gray-600'
-                  }`}
-                >
-                  <span className="text-lg">{st.emoji}</span>
-                  <span className="mt-0.5">{st.label}</span>
-                  {canMultiSelect && isSelected && <span className="text-[10px] mt-0.5">✓</span>}
-                </button>
+                      const newServiceType = newTypes.join(',')
+                      return {
+                        ...p,
+                        serviceType: newServiceType,
+                        codAmount: newTypes.every(t => t === 'simple') ? '' : p.codAmount,
+                        mixedPaymentMode: false, // Désactiver mode mixte si on change de type
+                      }
+                    })}
+                    onKeyDown={handleKeyNav}
+                    className={`w-full flex flex-col items-center justify-center py-2 rounded-lg border text-xs font-bold transition ${
+                      isSelected
+                        ? 'bg-green-600 border-green-500 text-white'
+                        : 'bg-white border-gray-200 text-gray-600'
+                    }`}
+                  >
+                    <span className="text-lg">{st.emoji}</span>
+                    <span className="mt-0.5">{st.label}</span>
+                    {canMultiSelect && isSelected && <span className="text-[10px] mt-0.5">✓</span>}
+                  </button>
+                  {/* Bouton + pour Espèces (mode mixte) */}
+                  {st.key === 'especes' && isSelected && (
+                    <button
+                      type="button"
+                      onClick={() => setForm((p: any) => ({ ...p, mixedPaymentMode: !p.mixedPaymentMode }))}
+                      className={`absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold shadow-lg transition ${
+                        form.mixedPaymentMode
+                          ? 'bg-blue-500 text-white'
+                          : 'bg-yellow-400 text-gray-800 hover:bg-yellow-500'
+                      }`}
+                      title="Activer paiement mixte Espèce + Chèque"
+                    >
+                      +
+                    </button>
+                  )}
+                </div>
               )
             })}
           </div>
+
+          {/* Mode paiement mixte */}
+          {form.mixedPaymentMode && form.serviceType === 'especes' && (
+            <div className="mb-2 p-3 bg-blue-50 border-2 border-blue-300 rounded-lg">
+              <div className="text-xs font-bold text-blue-700 mb-2 flex items-center gap-1.5">
+                <span className="text-base">💵+📋</span> Paiement Mixte (Espèce + Chèque)
+              </div>
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="Montant espèces (DH)"
+                  value={form.codEspecesAmount}
+                  onChange={(e) => {
+                    const normalized = normalizeDecimal(e.target.value)
+                    setForm({ ...form, codEspecesAmount: normalized })
+                  }}
+                  onKeyDown={handleKeyNav}
+                  className={inputCls}
+                />
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="Montant chèque (DH)"
+                  value={form.codChequeAmount}
+                  onChange={(e) => {
+                    const normalized = normalizeDecimal(e.target.value)
+                    const especesAmount = parseFloat(form.codEspecesAmount) || 0
+                    const chequeAmount = parseFloat(normalized) || 0
+                    const total = especesAmount + chequeAmount
+                    setForm({ ...form, codChequeAmount: normalized, codAmount: String(total) })
+                  }}
+                  onKeyDown={handleKeyNav}
+                  className={inputCls}
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <input
+                  type="text"
+                  placeholder="Nom de la banque"
+                  value={form.codBankName}
+                  onChange={(e) => setForm({ ...form, codBankName: e.target.value })}
+                  onKeyDown={handleKeyNav}
+                  className={inputCls}
+                />
+                <input
+                  type="text"
+                  placeholder="N° du chèque"
+                  value={form.codCheckNumber}
+                  onChange={(e) => setForm({ ...form, codCheckNumber: e.target.value })}
+                  onKeyDown={handleKeyNav}
+                  className={inputCls}
+                />
+              </div>
+              <div className="mt-2 text-xs text-blue-600 font-medium">
+                Total : {(parseFloat(form.codEspecesAmount) || 0) + (parseFloat(form.codChequeAmount) || 0)} DH
+                ({form.codEspecesAmount || 0} DH espèces + {form.codChequeAmount || 0} DH chèque)
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-2">
             <label className="flex items-center gap-1.5 px-2 py-1.5 bg-white border border-gray-200 rounded-lg cursor-pointer text-xs">
               <input
@@ -1414,7 +1498,7 @@ export default function NewTab() {
               />
               <span className="font-medium text-gray-700">🧾 Retour BL</span>
             </label>
-            {form.serviceType !== 'simple' && !form.serviceType?.includes('simple') && (
+            {(form.serviceType !== 'simple' && !form.serviceType?.includes('simple') && !form.mixedPaymentMode) && (
               <input
                 id="codAmount"
                 type="text"

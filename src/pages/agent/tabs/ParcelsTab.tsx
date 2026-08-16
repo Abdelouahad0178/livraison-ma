@@ -2002,10 +2002,15 @@ export default function ParcelsTab() {
                                 // Formater le COD
                                 let codText = ''
                                 if (p.codAmount && p.codAmount > 0) {
-                                  const paymentType = p.codPaymentType === 'cheque' ? 'C/Chèque' :
-                                                      p.codPaymentType === 'especes' ? 'C/Espèces' :
-                                                      p.codPaymentType === 'traite' ? 'C/Traite' : 'COD'
-                                  codText = `${p.codAmount} DH (${paymentType})`
+                                  // Paiement mixte espèce + chèque
+                                  if (p.codMixedPayment && p.codEspecesAmount && p.codChequeAmount) {
+                                    codText = `${p.codAmount} DH (${p.codEspecesAmount} Esp + ${p.codChequeAmount} Chq)`
+                                  } else {
+                                    const paymentType = p.codPaymentType === 'cheque' ? 'C/Chèque' :
+                                                        p.codPaymentType === 'especes' ? 'C/Espèces' :
+                                                        p.codPaymentType === 'traite' ? 'C/Traite' : 'COD'
+                                    codText = `${p.codAmount} DH (${paymentType})`
+                                  }
                                 }
 
                                 // Formater le service
