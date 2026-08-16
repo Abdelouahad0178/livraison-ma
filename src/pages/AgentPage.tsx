@@ -1370,12 +1370,14 @@ export default function AgentPage() {
 
     // 🔍 DEBUG: Examiner colis AVANT et APRÈS filtre de date
     if (sourceData.length > 0) {
-      // Échantillon AVANT filtre (3 premiers)
-      const sampleAvant = sourceData.slice(0, 3).map((p: any) => ({
+      // Échantillon AVANT filtre (3 premiers) + ceux qui ne passent PAS
+      const sampleAvant = sourceData.slice(0, 5).map((p: any) => ({
         id: p.id?.substring(0, 8),
+        trackingId: p.trackingId,
         workDate: p.workDate,
         createdAt: p.createdAt?.toDate?.()?.toISOString?.()?.split('T')[0],
-        utilisé: dateExtractor(p).toISOString().split('T')[0]
+        utilisé: dateExtractor(p).toISOString().split('T')[0],
+        status: p.status
       }))
       debugData.avant_filtre = sampleAvant
 
@@ -2639,12 +2641,14 @@ export default function AgentPage() {
           )}
           {debugInfo.avant_filtre && (
             <div className="border-t border-gray-600 my-2 pt-2">
-              <div className="text-gray-400 font-bold mb-1">📅 AVANT filtre (3 premiers):</div>
+              <div className="text-red-400 font-bold mb-1">❌ Colis REJETÉS (5 premiers):</div>
               {debugInfo.avant_filtre.map((p: any, i: number) => (
-                <div key={i} className="text-[10px] text-gray-400 mb-1">
-                  <div>ID: {p.id}</div>
+                <div key={i} className="text-[10px] text-gray-400 mb-1 bg-red-900/20 p-1 rounded">
+                  <div className="text-white">N°: {p.trackingId}</div>
                   <div>workDate: {p.workDate || 'N/A'}</div>
-                  <div>→ {p.utilisé}</div>
+                  <div className="text-yellow-400">createdAt: {p.createdAt || 'N/A'}</div>
+                  <div className="text-red-400">→ Utilisé: {p.utilisé}</div>
+                  <div className="text-gray-500">Statut: {p.status}</div>
                 </div>
               ))}
             </div>
