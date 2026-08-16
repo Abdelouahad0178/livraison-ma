@@ -372,6 +372,7 @@ export default function AdminPage() {
   // ✅ NOUVEAU: Recherche gérée par hook professionnel useFuseSearch (défini plus bas après periodParcels)
   const [isSearchActive, setIsSearchActive] = useState(false) // Pour recharger plus de colis quand recherche active
   const [serverSearchResults, setServerSearchResults] = useState<any[] | null>(null) // Résultats recherche serveur
+  const [isServerSearching, setIsServerSearching] = useState(false) // État recherche serveur en cours
 
   // ⚡ CONTRÔLE DU RECHARGEMENT AUTOMATIQUE
   const [autoReloadEnabled, setAutoReloadEnabled] = useState(true) // true = temps réel actif, false = mode manuel
@@ -1232,7 +1233,7 @@ export default function AdminPage() {
   const search = fuseSearchValue
   const setSearch = setFuseSearch
   const debouncedSearch = fuseDebouncedSearch
-  const isSearching = fuseIsSearching
+  const isSearching = fuseIsSearching || isServerSearching // Recherche locale OU serveur
 
   // ⚡ Détecter si recherche active - MAIS sans charger 2000 colis
   // On garde isSearchActive pour la logique, mais loadLimit reste à 500
@@ -1247,19 +1248,23 @@ export default function AdminPage() {
     const query = fuseDebouncedSearch.trim()
     if (!query || query.length < 2) {
       setServerSearchResults(null)
+      setIsServerSearching(false)
       return
     }
 
     // ⚡ Recherche serveur dans TOUTE la base
     const performServerSearch = async () => {
+      setIsServerSearching(true)
       try {
         console.warn(`🔍 Recherche serveur: "${query}" dans TOUTE la base...`)
         const results = await searchParcels(query, { limit: 50000 })
         setServerSearchResults(results)
+        setIsServerSearching(false)
         console.warn(`✅ Recherche serveur: ${results.length} résultats trouvés`)
       } catch (error) {
         console.error('❌ Erreur recherche serveur:', error)
         setServerSearchResults(null)
+        setIsServerSearching(false)
       }
     }
 
