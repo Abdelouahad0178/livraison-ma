@@ -1527,11 +1527,14 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     } = s.current
     e.preventDefault()
 
-    // Protection contre les doubles soumissions
-    if (loading) {
-      console.warn('⚠️ Soumission déjà en cours, ignorée')
+    // 🔒 Protection RENFORCÉE contre les doubles soumissions
+    if (s.current.submissionInProgress || loading) {
+      console.warn('⚠️ Soumission déjà en cours, BLOQUÉE')
       return
     }
+
+    // Verrouiller immédiatement AVANT tout traitement
+    s.current.submissionInProgress = true
 
     setError('')
 
@@ -1739,6 +1742,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         : (err?.message || "Erreur lors de l'enregistrement. Réessayez."))
     } finally {
       setLoading(false)
+      // 🔓 Déverrouiller pour permettre une nouvelle soumission
+      s.current.submissionInProgress = false
     }
   }
 
