@@ -1004,7 +1004,7 @@ export default function ParcelsTab() {
                     {datePreset === 'operational' && (
                       <div className="flex items-center gap-2 pl-20">
                         <span className="text-xs text-gray-500">Jour d'opération (8H → 6H lendemain)</span>
-                        <input type="date" value={operationalDay ? operationalDay.toISOString().split('T')[0] : ''}
+                        <input type="date" value={operationalDay ? `${operationalDay.getFullYear()}-${String(operationalDay.getMonth() + 1).padStart(2, '0')}-${String(operationalDay.getDate()).padStart(2, '0')}` : ''}
                           onChange={e => {
                             if (!e.target.value) {
                               setOperationalDay(null)
