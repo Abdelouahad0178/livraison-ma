@@ -263,6 +263,10 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     senderNameLower:      (sender?.name ? String(sender.name).toLowerCase().trim() : ''),
     receiverNameLower:    (receiver?.name ? String(receiver.name).toLowerCase().trim() : ''),
     hasRetourBL:          data.hasRetourBL === true,  // ⭐ Retour BL obligatoire
+    // 💵 Paiement mixte espèce + chèque
+    codMixedPayment:      data.codMixedPayment === true,
+    codEspecesAmount:     data.codMixedPayment ? (parseFloat(data.codEspecesAmount as string) || 0) : null,
+    codChequeAmount:      data.codMixedPayment ? (parseFloat(data.codChequeAmount as string) || 0) : null,
   }
   const ref = await addDoc(collection(db, 'parcels'), parcel)
 

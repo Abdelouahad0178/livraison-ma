@@ -830,7 +830,7 @@ export default function NewTab() {
           {/* Type de service */}
           <div className="flex gap-4 px-3 py-1.5 border-b border-gray-200 bg-gray-50">
             {ALL_SERVICE_TYPES.filter(t => t.key !== 'retour_bl').map(st => {
-              const types = createdParcel.serviceType?.split(',').filter(Boolean) || []
+              const types = createdParcel.serviceType?.split(',').map(t => t.trim()).filter(Boolean) || []
               const isSelected = types.includes(st.key)
               return (
                 <label key={st.key} className="flex items-center gap-1 text-[10px] font-semibold">
@@ -1353,7 +1353,7 @@ export default function NewTab() {
           </h3>
           <div className="grid grid-cols-4 gap-2 mb-2">
             {SERVICE_TYPES.map(st => {
-              const types = form.serviceType?.split(',').filter(Boolean) || []
+              const types = form.serviceType?.split(',').map(t => t.trim()).filter(Boolean) || []
               const isSelected = types.includes(st.key)
               const canMultiSelect = st.key === 'cheque' || st.key === 'traite'
 
@@ -1362,7 +1362,7 @@ export default function NewTab() {
                   <button
                     type="button"
                     onClick={() => setForm((p: any) => {
-                      const currentTypes = p.serviceType?.split(',').filter(Boolean) || []
+                      const currentTypes = p.serviceType?.split(',').map(t => t.trim()).filter(Boolean) || []
                       let newTypes: string[]
 
                       if (st.key === 'simple' || st.key === 'especes') {
@@ -1409,11 +1409,14 @@ export default function NewTab() {
                   {st.key === 'especes' && isSelected && (
                     <button
                       type="button"
-                      onClick={() => setForm((p: any) => ({ ...p, mixedPaymentMode: !p.mixedPaymentMode }))}
-                      className={`absolute -top-1 -right-1 w-5 h-5 rounded-full flex items-center justify-center text-xs font-bold shadow-lg transition ${
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        setForm((p: any) => ({ ...p, mixedPaymentMode: !p.mixedPaymentMode }))
+                      }}
+                      className={`absolute -top-2 -right-2 w-8 h-8 rounded-full flex items-center justify-center text-lg font-bold shadow-2xl transition z-10 border-2 ${
                         form.mixedPaymentMode
-                          ? 'bg-blue-500 text-white'
-                          : 'bg-yellow-400 text-gray-800 hover:bg-yellow-500'
+                          ? 'bg-blue-500 text-white border-blue-600'
+                          : 'bg-yellow-400 text-gray-900 border-yellow-500 hover:bg-yellow-500 animate-pulse'
                       }`}
                       title="Activer paiement mixte Espèce + Chèque"
                     >
