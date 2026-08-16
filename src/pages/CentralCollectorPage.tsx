@@ -173,9 +173,9 @@ export default function CentralCollectorPage() {
   const [ctlDisplayLimit, setCtlDisplayLimit] = useState(200)
   const [pointing, setPointing] = useState(false)
 
-  // ⚡ Debounce de la recherche contrôle (300ms — filtre dynamique)
+  // ⚡ Debounce de la recherche contrôle (150ms — filtre dynamique réactif)
   useEffect(() => {
-    const timer = setTimeout(() => setCtlDebounced(ctlQuery), 300)
+    const timer = setTimeout(() => setCtlDebounced(ctlQuery), 150)
     return () => clearTimeout(timer)
   }, [ctlQuery])
 
@@ -244,7 +244,7 @@ export default function CentralCollectorPage() {
   useEffect(() => {
     // Prendre la recherche active (Fournisseurs OU Contrôle)
     const searchQuery = (query.trim() || ctlDebounced.trim())
-    if (!searchQuery || searchQuery.length < 2) {
+    if (!searchQuery || searchQuery.length < 3) {
       setServerResults([])
       setDeepSearching(false)
       return

@@ -1246,7 +1246,7 @@ export default function AdminPage() {
   // Recherche dans TOUTE la base Firestore, pas seulement les 50 colis chargés
   useEffect(() => {
     const query = fuseDebouncedSearch.trim()
-    if (!query || query.length < 2) {
+    if (!query || query.length < 3) {
       setServerSearchResults(null)
       setIsServerSearching(false)
       return

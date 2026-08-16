@@ -162,7 +162,7 @@ const matchesSearch = (values: any, query: any) => {
 const serviceToPaymentType = (st: any) =>
   st === 'retour_bl' ? 'bon_livraison' : (st === 'simple' ? 'especes' : (st || 'especes'))
 
-function useDebounce(value: any, delay = 280) {
+function useDebounce(value: any, delay = 150) {
   const [d, setD] = useState(value)
   useEffect(() => { const t = setTimeout(() => setD(value), delay); return () => clearTimeout(t) }, [value, delay])
   return d
@@ -342,7 +342,7 @@ export default function AgentPage() {
   // Recherche dans TOUTE la base Firestore, pas seulement les colis chargés
   useEffect(() => {
     const query = debouncedSearch.trim()
-    if (!query || query.length < 2) {
+    if (!query || query.length < 3) {
       setServerSearchResults(null)
       setIsSearching(false)
       return

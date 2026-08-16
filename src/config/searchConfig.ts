@@ -30,7 +30,7 @@ export const ADMIN_SEARCH_CONFIG = {
     { name: 'destinationCity', weight: 0.5 },
   ],
   threshold: 0.25, // Balance entre précision et flexibilité (0.0 = exact, 1.0 = tout)
-  debounceMs: 300,
+  debounceMs: 150,
   limit: 1000, // Limite à 1000 résultats pour performance
 }
 
@@ -46,7 +46,7 @@ export const CHEF_AGENCE_SEARCH_CONFIG = {
     { name: 'senderNic', weight: 2.0 },
   ],
   threshold: 0.3,
-  debounceMs: 300,
+  debounceMs: 150,
   limit: 500,
 }
 
@@ -61,7 +61,7 @@ export const ENCAISSEUR_SEARCH_CONFIG = {
     { name: 'codAmount', weight: 2.5 }, // Important pour encaisseur
   ],
   threshold: 0.3,
-  debounceMs: 300,
+  debounceMs: 150,
   limit: 500,
 }
 
