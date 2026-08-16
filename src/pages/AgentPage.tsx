@@ -687,6 +687,43 @@ export default function AgentPage() {
     if (profile.role === 'agentpro' && showAllCities) {
       console.log(`🚀 [Agent Pro] Chargement de TOUTES les villes (comme Admin)`)
 
+      // 🗓️ SI JOUR D'OPÉRATION → charger avec filtre Firestore
+      if (datePreset === 'operational' && operationalDay) {
+        const range = getOperationalDayRange(operationalDay)
+        const dateFromObj = range.start
+        const dateToObj = range.end
+
+        console.log(`🗓️ [Agent Pro] Jour d'opération Firestore (Toutes villes):`, {
+          from: dateFromObj?.toLocaleString('fr-MA'),
+          to: dateToObj?.toLocaleString('fr-MA')
+        })
+
+        const unsubAll = subscribeAllParcelsWithDateFilter(
+          (data: any, lastSnap: any) => {
+            console.log(`✅ [Agent Pro - Jour d'opération] ${data.length} colis chargés`)
+            setParcels(data)
+            setLiveParcels(data)
+            setLoadingParcels(false)
+            setLastSnapWithDateFilter(lastSnap)
+            setHasMoreWithDateFilter(data.length >= effectivePageSize)
+          },
+          onError,
+          {
+            pageSize: effectivePageSize,
+            dateFrom: dateFromObj,
+            dateTo: dateToObj
+          }
+        )
+
+        setReturnParcels([])
+        setPendingAideParcels([])
+        unsubscribersRef.current.push(unsubAll)
+        return () => {
+          unsubscribersRef.current.forEach(unsub => unsub())
+          unsubscribersRef.current = []
+        }
+      }
+
       // 🔥 SI FILTRE DE DATE CUSTOM → utiliser subscribeAllParcelsWithDateFilter (comme Admin)
       if (datePreset === 'custom' && (dateFrom || dateTo)) {
         const dateFromObj = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
