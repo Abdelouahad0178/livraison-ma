@@ -2630,7 +2630,7 @@ export default function AgentPage() {
 
     {/* 🔍 PANEL DEBUG - Affichage des infos de filtrage */}
     {debugInfo && (
-      <div className="fixed bottom-4 right-4 bg-black/90 text-white p-4 rounded-lg shadow-2xl text-xs font-mono max-w-md z-[99999]">
+      <div className="fixed bottom-4 right-4 bg-black text-white p-4 rounded-lg shadow-2xl text-xs font-mono max-w-md border-4 border-yellow-400" style={{ zIndex: 999999 }}>
         <div className="flex items-center justify-between mb-2">
           <span className="font-bold text-yellow-400">🔍 DEBUG FILTRES</span>
           <button onClick={() => setDebugInfo(null)} className="text-red-400 hover:text-red-300">✕</button>
