@@ -1368,6 +1368,17 @@ export default function AgentPage() {
 
     debugData.etape2_apres_date = dateFilteredData.length
 
+    // 🔍 DEBUG: Examiner quelques colis pour voir leurs dates
+    if (sourceData.length > 0) {
+      const sample = sourceData.slice(0, 3).map((p: any) => ({
+        id: p.id?.substring(0, 8),
+        workDate: p.workDate,
+        createdAt: p.createdAt?.toDate?.()?.toISOString?.()?.split('T')[0],
+        extractedDate: dateExtractor(p).toISOString().split('T')[0]
+      }))
+      debugData.echantillon = sample
+    }
+
     const filtered = dateFilteredData.filter((p: any) => {
     // 🔒 FILTRE VILLE OBLIGATOIRE (sauf en mode "Toutes les villes")
     // Le chef d'agence ne voit QUE les colis de sa ville, SAUF si showAllCities est activé
@@ -2584,6 +2595,19 @@ export default function AgentPage() {
             <div>Service: {debugInfo.filtres?.serviceFilter || 'all'}</div>
             <div>Livreur: {debugInfo.filtres?.driverFilter || 'all'}</div>
           </div>
+          {debugInfo.echantillon && (
+            <div className="border-t border-gray-600 my-2 pt-2">
+              <div className="text-yellow-400 font-bold mb-1">📅 Échantillon dates (3 premiers):</div>
+              {debugInfo.echantillon.map((p: any, i: number) => (
+                <div key={i} className="text-[10px] text-gray-300 mb-1">
+                  <div>ID: {p.id}</div>
+                  <div>workDate: {p.workDate || 'N/A'}</div>
+                  <div>createdAt: {p.createdAt || 'N/A'}</div>
+                  <div className="text-cyan-400">→ Utilisé: {p.extractedDate}</div>
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     )}
