@@ -35,7 +35,7 @@ import { OperationalDaySelector } from '../components/OperationalDaySelector'
 
 // ⚡ Système de chargement optimisé (Option 3 - comme AdminPage)
 const PAGE_SIZE = 50 // Chargement initial réduit
-const FILTERED_PAGE_SIZE = 5000 // Quand filtres actifs (augmenté pour périodes avec beaucoup d'expéditions)
+const FILTERED_PAGE_SIZE = 50000 // Quand filtres actifs (max Firestore, peut être lent si beaucoup de colis)
 
 const money = (n: any) => (parseFloat(n) || 0).toLocaleString('fr-MA')
 const asDate = (value: any) => {

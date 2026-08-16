@@ -351,7 +351,7 @@ export default function AdminPage() {
   // Parcels - Système de chargement progressif optimisé ⚡
   const PAGE_SIZE = 50 // ⚡ OPTIMISÉ: Chargement initial réduit (800 → 50) pour performance
   const LOAD_MORE_SIZE = 500 // ⚡ Taille pour "Charger plus" (compromis entre vitesse et quantité)
-  const FILTERED_PAGE_SIZE = 5000 // 🔍 Quand filtres actifs, charger plus pour couvrir les résultats
+  const FILTERED_PAGE_SIZE = 50000 // 🔍 Quand filtres actifs (max Firestore, peut être lent si beaucoup de colis)
   const [parcels,      setParcels]      = useState<any[]>([]) // Pour compatibilité - alias de liveParcels
   const [liveParcels,  setLiveParcels]  = useState<any[]>([]) // Temps réel (premiers 800)
   const [moreParcels,  setMoreParcels]  = useState<any[]>([]) // Chargés progressivement
