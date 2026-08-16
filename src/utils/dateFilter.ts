@@ -77,17 +77,19 @@ export const filterByDate = <T>(
     start = from ? new Date(from) : null
     if (start) { start.setHours(0, 0, 0, 0); end = new Date(from + 'T23:59:59') }
   } else if (preset === 'custom') {
-    // 🗓️ Si même jour (from === to), appliquer logique du JOUR D'OPÉRATION (8H → 6H lendemain)
-    if (from && to && from === to) {
-      const opDay = new Date(from + 'T08:00:00')
-      const range = getOperationalDayRange(opDay)
-      start = range.start
-      end = range.end
+    // 🗓️ TOUJOURS utiliser JOUR D'OPÉRATION (8H → 6H lendemain)
+    // Ex: 13/08 → 15/08 = du 13/08 à 8H jusqu'au 16/08 à 6H
+    if (from) {
+      start = new Date(from + 'T08:00:00') // Début du jour d'opération du premier jour
     } else {
-      // Sinon, période normale (00:00 → 23:59)
-      start = from ? new Date(from) : null
-      if (start) { start.setHours(0, 0, 0, 0) }
-      end = to ? new Date(to + 'T23:59:59') : endOfToday
+      start = null
+    }
+    if (to) {
+      const endDay = new Date(to)
+      endDay.setDate(endDay.getDate() + 1) // Lendemain
+      end = new Date(endDay.toISOString().split('T')[0] + 'T06:00:00') // 6H du lendemain
+    } else {
+      end = endOfToday
     }
   }
   return list.filter(item => {

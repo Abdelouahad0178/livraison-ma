@@ -1529,6 +1529,10 @@ export default function AgentPage() {
     if (parcelStatusFilter !== 'all' && p.status !== parcelStatusFilter) {
       return false
     }
+    // ⛔ EXCLURE les retours du comptage (sauf si filtre statut = Retourné explicitement)
+    if (parcelStatusFilter === 'all' && (p.status?.includes('Retour') || p.wasReturned)) {
+      return false
+    }
     // Filtre de direction (Envoyés/Reçus) - SEULEMENT si "Ma ville uniquement"
     // Avec "Toutes les villes", ce filtre n'a pas de sens (tous les colis sont envoyés de quelque part et reçus quelque part)
     if (!showAllCities && profileCity && parcelDirection !== 'all') {

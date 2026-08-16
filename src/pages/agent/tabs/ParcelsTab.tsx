@@ -979,10 +979,17 @@ export default function ParcelsTab() {
                         { key: 'today',  label: "Auj." },
                         { key: 'week',   label: '7 j' },
                         { key: 'month',  label: 'Mois' },
+                        { key: 'operational', label: '🗓️ J.Opé' },
                         { key: 'day',    label: 'Jour' },
                         { key: 'custom', label: 'Période' },
                       ].map(({ key, label }) => (
-                        <button key={key} onClick={() => setDatePreset(key)}
+                        <button key={key} onClick={() => {
+                          setDatePreset(key)
+                          // 🗓️ Si J.Opé et pas de date définie, utiliser dateFrom ou aujourd'hui
+                          if (key === 'operational' && !operationalDay) {
+                            setOperationalDay(dateFrom ? new Date(dateFrom) : new Date())
+                          }
+                        }}
                           className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
                             datePreset === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                           }`}
@@ -990,6 +997,15 @@ export default function ParcelsTab() {
                       ))}
                     </div>
 
+                    {datePreset === 'operational' && (
+                      <div className="flex items-center gap-2 pl-20">
+                        <span className="text-xs text-gray-500">Jour d'opération (8H → 6H lendemain)</span>
+                        <input type="date" value={operationalDay ? operationalDay.toISOString().split('T')[0] : ''}
+                          onChange={e => setOperationalDay(e.target.value ? new Date(e.target.value) : null)}
+                          className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
+                        />
+                      </div>
+                    )}
                     {datePreset === 'day' && (
                       <div className="flex items-center gap-2 pl-20">
                         <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
