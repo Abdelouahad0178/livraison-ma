@@ -1503,13 +1503,28 @@ export default function AgentPage() {
     if (parcelStatusFilter !== 'all' && p.status !== parcelStatusFilter) {
       return false
     }
-    if (parcelDirection === 'sent' && profileCity && !showAllCities && p.sender?.city !== profileCity) {
-      return false
+    // Filtre de direction (Envoyés/Reçus)
+    if (parcelDirection === 'sent') {
+      // Mode "Envoyés" : colis envoyés
+      if (showAllCities) {
+        // Toutes les villes : montrer tous les colis envoyés
+        // (pas de filtre supplémentaire)
+      } else if (profileCity) {
+        // Ma ville uniquement : seulement les colis envoyés de ma ville
+        if (p.sender?.city !== profileCity && p.originCity !== profileCity) return false
+      }
     }
-    if (parcelDirection === 'received' && profileCity && !showAllCities) {
-      const destinationVisible = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
-        && isParcelVisibleInDestinationAgency(p)
-      if (!destinationVisible) return false
+    if (parcelDirection === 'received') {
+      // Mode "Reçus" : colis reçus
+      if (showAllCities) {
+        // Toutes les villes : montrer tous les colis reçus (qui sont visibles dans leur agence de destination)
+        if (!isParcelVisibleInDestinationAgency(p)) return false
+      } else if (profileCity) {
+        // Ma ville uniquement : seulement les colis reçus dans ma ville
+        const destinationVisible = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
+          && isParcelVisibleInDestinationAgency(p)
+        if (!destinationVisible) return false
+      }
     }
     // ⭐ Filtre par ville de destination
     if (destinationCityFilter !== 'all') {
