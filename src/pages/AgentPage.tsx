@@ -1637,9 +1637,9 @@ export default function AgentPage() {
       firstRenderRef.current = false
       return
     }
-    // Scroller vers le haut quand les filtres changent
+    // Scroller vers le haut quand les filtres changent (SAUF dates pour ne pas déranger la saisie)
     window.scrollTo({ top: 0, behavior: 'smooth' })
-  }, [datePreset, dateFrom, dateTo, serviceFilter, parcelStatusFilter, parcelDirection, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter])
+  }, [datePreset, serviceFilter, parcelStatusFilter, parcelDirection, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter])
 
   // ── Phase 3: memoized stats — only recompute when Firestore sends new data ──
 
