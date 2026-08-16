@@ -1464,10 +1464,10 @@ export default function AgentPage() {
     if (parcelStatusFilter !== 'all' && p.status !== parcelStatusFilter) {
       return false
     }
-    if (parcelDirection === 'sent' && profileCity && p.sender?.city !== profileCity) {
+    if (parcelDirection === 'sent' && profileCity && !showAllCities && p.sender?.city !== profileCity) {
       return false
     }
-    if (parcelDirection === 'received' && profileCity) {
+    if (parcelDirection === 'received' && profileCity && !showAllCities) {
       const destinationVisible = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
         && isParcelVisibleInDestinationAgency(p)
       if (!destinationVisible) return false
