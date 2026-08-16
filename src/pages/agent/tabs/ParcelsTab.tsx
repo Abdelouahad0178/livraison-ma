@@ -2014,9 +2014,13 @@ export default function ParcelsTab() {
                                 }
 
                                 // Formater le service
-                                const serviceText = p.serviceType === 'domicile' ? 'Domicile' :
+                                const serviceText = p.codMixedPayment ? 'Mixte' :
+                                                   p.serviceType === 'domicile' ? 'Domicile' :
                                                    p.serviceType === 'echange' ? 'Echange' :
-                                                   p.serviceType === 'simple' ? 'Simple' : ''
+                                                   p.serviceType === 'simple' ? 'Simple' :
+                                                   p.serviceType === 'especes' ? 'C/Espèces' :
+                                                   p.serviceType === 'cheque' ? 'C/Chèque' :
+                                                   p.serviceType === 'traite' ? 'C/Traite' : ''
 
                                 data.push([
                                   p.sender?.nic || '',

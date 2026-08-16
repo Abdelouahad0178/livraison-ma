@@ -38,8 +38,6 @@ const getEmptyForm = () => ({
   mixedPaymentMode: false,
   codEspecesAmount: '',
   codChequeAmount: '',
-  codBankName: '',
-  codCheckNumber: '',
 })
 
 // Types disponibles pour création (sans retour_bl et retourne - ces types sont pour marquage uniquement)
@@ -1433,7 +1431,7 @@ export default function NewTab() {
               <div className="text-xs font-bold text-blue-700 mb-2 flex items-center gap-1.5">
                 <span className="text-base">💵+📋</span> Paiement Mixte (Espèce + Chèque)
               </div>
-              <div className="grid grid-cols-2 gap-2 mb-2">
+              <div className="grid grid-cols-2 gap-2">
                 <input
                   type="text"
                   inputMode="decimal"
@@ -1441,7 +1439,10 @@ export default function NewTab() {
                   value={form.codEspecesAmount}
                   onChange={(e) => {
                     const normalized = normalizeDecimal(e.target.value)
-                    setForm({ ...form, codEspecesAmount: normalized })
+                    const especesAmount = parseFloat(normalized) || 0
+                    const chequeAmount = parseFloat(form.codChequeAmount) || 0
+                    const total = especesAmount + chequeAmount
+                    setForm({ ...form, codEspecesAmount: normalized, codAmount: String(total) })
                   }}
                   onKeyDown={handleKeyNav}
                   className={inputCls}
@@ -1462,27 +1463,12 @@ export default function NewTab() {
                   className={inputCls}
                 />
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="text"
-                  placeholder="Nom de la banque"
-                  value={form.codBankName}
-                  onChange={(e) => setForm({ ...form, codBankName: e.target.value })}
-                  onKeyDown={handleKeyNav}
-                  className={inputCls}
-                />
-                <input
-                  type="text"
-                  placeholder="N° du chèque"
-                  value={form.codCheckNumber}
-                  onChange={(e) => setForm({ ...form, codCheckNumber: e.target.value })}
-                  onKeyDown={handleKeyNav}
-                  className={inputCls}
-                />
-              </div>
               <div className="mt-2 text-xs text-blue-600 font-medium">
                 Total : {(parseFloat(form.codEspecesAmount) || 0) + (parseFloat(form.codChequeAmount) || 0)} DH
                 ({form.codEspecesAmount || 0} DH espèces + {form.codChequeAmount || 0} DH chèque)
+              </div>
+              <div className="mt-2 text-xs text-gray-500 italic">
+                ℹ️ Les détails du chèque (banque, N°) seront ajoutés après livraison
               </div>
             </div>
           )}

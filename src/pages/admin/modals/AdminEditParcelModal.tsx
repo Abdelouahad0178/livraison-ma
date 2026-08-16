@@ -209,6 +209,39 @@ export default function AdminEditParcelModal({
                   onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, codAmount: e.target.value } }))}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400" />
               </div>
+
+              {/* Champs paiement mixte */}
+              {adminEditModal.parcel.codMixedPayment && (
+                <>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">💵 Montant espèces (DH)</label>
+                    <input type="number" min="0" step="0.01" value={adminEditModal.form.codEspecesAmount || ''}
+                      onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, codEspecesAmount: e.target.value } }))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400 bg-blue-50" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">📋 Montant chèque (DH)</label>
+                    <input type="number" min="0" step="0.01" value={adminEditModal.form.codChequeAmount || ''}
+                      onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, codChequeAmount: e.target.value } }))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400 bg-blue-50" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">🏦 Nom de la banque</label>
+                    <input value={adminEditModal.form.codBankName || ''}
+                      onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, codBankName: e.target.value } }))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400 bg-blue-50"
+                      placeholder="Ex: Attijariwafa Bank" />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">🔢 Numéro du chèque</label>
+                    <input value={adminEditModal.form.codCheckNumber || ''}
+                      onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, codCheckNumber: e.target.value } }))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400 bg-blue-50"
+                      placeholder="Ex: 123456" />
+                  </div>
+                </>
+              )}
+
               <div className="col-span-2">
                 <label className="block text-xs text-gray-500 mb-1">Nature marchandise</label>
                 <input value={adminEditModal.form.natureOfGoods}
