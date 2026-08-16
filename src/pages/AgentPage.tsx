@@ -1503,27 +1503,18 @@ export default function AgentPage() {
     if (parcelStatusFilter !== 'all' && p.status !== parcelStatusFilter) {
       return false
     }
-    // Filtre de direction (Envoyés/Reçus)
-    if (parcelDirection === 'sent') {
-      // Mode "Envoyés" : colis envoyés
-      if (showAllCities) {
-        // Toutes les villes : montrer tous les colis envoyés
-        // (pas de filtre supplémentaire)
-      } else if (profileCity) {
-        // Ma ville uniquement : seulement les colis envoyés de ma ville
-        if (p.sender?.city !== profileCity && p.originCity !== profileCity) return false
-      }
-    }
-    if (parcelDirection === 'received') {
-      // Mode "Reçus" : colis reçus
-      if (showAllCities) {
-        // Toutes les villes : montrer tous les colis reçus (qui sont visibles dans leur agence de destination)
-        if (!isParcelVisibleInDestinationAgency(p)) return false
-      } else if (profileCity) {
-        // Ma ville uniquement : seulement les colis reçus dans ma ville
-        const destinationVisible = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
+    // Filtre de direction (Envoyés/Reçus) - SEULEMENT si "Ma ville uniquement"
+    // Avec "Toutes les villes", ce filtre n'a pas de sens (tous les colis sont envoyés de quelque part et reçus quelque part)
+    if (!showAllCities && profileCity && parcelDirection !== 'all') {
+      if (parcelDirection === 'sent') {
+        // Envoyés : colis créés/envoyés DEPUIS ma ville
+        const isSentFromMyCity = p.sender?.city === profileCity || p.originCity === profileCity
+        if (!isSentFromMyCity) return false
+      } else if (parcelDirection === 'received') {
+        // Reçus : colis qui arrivent DANS ma ville
+        const isReceivedInMyCity = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
           && isParcelVisibleInDestinationAgency(p)
-        if (!destinationVisible) return false
+        if (!isReceivedInMyCity) return false
       }
     }
     // ⭐ Filtre par ville de destination
