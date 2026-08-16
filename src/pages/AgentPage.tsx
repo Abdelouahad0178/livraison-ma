@@ -727,17 +727,28 @@ export default function AgentPage() {
 
     // CHEF D'AGENCE : seulement sa ville
     if ((profile.role === 'chef_agence' || profile.role === 'agentpro') && profile.city) {
-      // 🔥 SI FILTRE DE DATE CUSTOM → passer les dates à subscribeAgencyParcels
+      // 🔥 SI FILTRE DE DATE CUSTOM OU OPERATIONAL → passer les dates à subscribeAgencyParcels
       let filterDateFrom: Date | null = null
       let filterDateTo: Date | null = null
 
       if (datePreset === 'custom' && (dateFrom || dateTo)) {
+        // Filtre personnalisé
         filterDateFrom = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
         filterDateTo = dateTo ? new Date(dateTo + 'T23:59:59') : null
 
         console.log(`⚡ [Chef d'agence] Filtre de date Firestore pour ${profile.city}:`, {
           from: filterDateFrom?.toLocaleDateString('fr-MA'),
           to: filterDateTo?.toLocaleDateString('fr-MA')
+        })
+      } else if (datePreset === 'operational' && operationalDay) {
+        // 🗓️ Journée opérationnelle: 8H → 6H lendemain
+        const range = getOperationalDayRange(operationalDay)
+        filterDateFrom = range.start
+        filterDateTo = range.end
+
+        console.log(`🗓️ [Chef d'agence] Jour d'opération Firestore pour ${profile.city}:`, {
+          from: filterDateFrom?.toLocaleString('fr-MA'),
+          to: filterDateTo?.toLocaleString('fr-MA')
         })
       } else {
         // SINON → CHARGER 10 DERNIERS JOURS (gestion quotidienne)
