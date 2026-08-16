@@ -20,17 +20,20 @@ type WithCreatedAt = {
 }
 
 export const parcelDate = (p: any): Date => {
-  // ✅ PRIORITÉ: workDate (jour opérationnel) si disponible
-  if (p.workDate) {
-    // workDate est au format YYYY-MM-DD, le convertir à midi pour éviter les problèmes de timezone
-    return new Date(p.workDate + 'T12:00:00')
-  }
+  // ⚠️ TEMPORAIRE: Ignorer workDate et utiliser SEULEMENT createdAt
+  // workDate semble incorrect (tous à août au lieu de juillet)
 
-  // Sinon, utiliser createdAt
+  // Utiliser createdAt directement
   const ca = p.createdAt as { toDate?: () => Date } | undefined | null
   if (ca?.toDate) return ca.toDate()
   const ts = p.history?.[0]?.timestamp
   if (ts) return new Date(ts)
+
+  // Fallback: si vraiment pas de createdAt, utiliser workDate
+  if (p.workDate) {
+    return new Date(p.workDate + 'T12:00:00')
+  }
+
   return new Date(0)
 }
 
