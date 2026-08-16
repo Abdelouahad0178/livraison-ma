@@ -829,7 +829,7 @@ export default function AgentPage() {
       unsubscribersRef.current.forEach(unsub => unsub())
       unsubscribersRef.current = []
     }
-  }, [profile?.role, profile?.city, authTick, showAllCities, datePreset, dateFrom, dateTo, serviceFilter, parcelStatusFilter, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, codDocumentStatusFilter]) // ⚡ TOUS les filtres pour recharger 50→1000
+  }, [profile?.role, profile?.city, authTick, showAllCities, datePreset, dateFrom, dateTo, operationalDay, serviceFilter, parcelStatusFilter, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, codDocumentStatusFilter]) // ⚡ TOUS les filtres pour recharger 50→1000
 
   // ❌ DÉSACTIVÉ: Chargement automatique de tous les colis (désormais MANUEL uniquement)
   // useEffect(() => {
