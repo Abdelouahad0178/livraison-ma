@@ -727,21 +727,36 @@ export default function AgentPage() {
 
     // CHEF D'AGENCE : seulement sa ville
     if ((profile.role === 'chef_agence' || profile.role === 'agentpro') && profile.city) {
-      // 🔄 CHARGER 365 JOURS (1 an) pour permettre le filtrage côté client
-      // Les filtres de date s'appliquent ensuite via filteredParcels useMemo
-      const filterDateFrom = new Date()
-      filterDateFrom.setDate(filterDateFrom.getDate() - 365)
-      filterDateFrom.setHours(0, 0, 0, 0)
-      const filterDateTo = null // Jusqu'à maintenant
+      // 🔥 SI FILTRE DE DATE CUSTOM → passer les dates à subscribeAgencyParcels
+      let filterDateFrom: Date | null = null
+      let filterDateTo: Date | null = null
+
+      if (datePreset === 'custom' && (dateFrom || dateTo)) {
+        filterDateFrom = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
+        filterDateTo = dateTo ? new Date(dateTo + 'T23:59:59') : null
+
+        console.log(`⚡ [Chef d'agence] Filtre de date Firestore pour ${profile.city}:`, {
+          from: filterDateFrom?.toLocaleDateString('fr-MA'),
+          to: filterDateTo?.toLocaleDateString('fr-MA')
+        })
+      } else {
+        // SINON → CHARGER 365 JOURS (1 an)
+        filterDateFrom = new Date()
+        filterDateFrom.setDate(filterDateFrom.getDate() - 365)
+        filterDateFrom.setHours(0, 0, 0, 0)
+        filterDateTo = null // Jusqu'à maintenant
+
+        console.log(`📦 [Chef] Chargement AUTO 365 jours`)
+      }
 
       agencyDateFilterRef.current = { dateFrom: filterDateFrom, dateTo: filterDateTo }
-      console.log(`📦 [Chef] Chargement AUTO 365 jours (filtres de date appliqués côté client)`)
 
       const unsubAgency = subscribeAgencyParcels(
         profile.city,
         (data: any) => {
-          console.log(`✅ [Chef d'agence] ${data.length} colis chargés (${effectivePageSize} max)`)
+          console.log(`✅ [Chef d'agence] ${data.length} colis chargés pour ${profile.city}`)
           setLiveParcels(data)
+          setParcels(data)
           setLoadingParcels(false)
           if (data.length < effectivePageSize) setHasMoreAgency(false)
         },
