@@ -732,11 +732,19 @@ export default function AgentPage() {
       let filterDateTo: Date | null = null
 
       if (datePreset === 'custom' && (dateFrom || dateTo)) {
-        // Filtre personnalisé
+        // Filtre personnalisé + MARGE DE 2 JOURS pour capturer colis avec createdAt ≠ workDate
         filterDateFrom = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
         filterDateTo = dateTo ? new Date(dateTo + 'T23:59:59') : null
 
-        console.log(`⚡ [Chef d'agence] Filtre de date Firestore pour ${profile.city}:`, {
+        // ⚡ Élargir de ±2 jours pour Firestore (filtre côté client par workDate ensuite)
+        if (filterDateFrom) {
+          filterDateFrom.setDate(filterDateFrom.getDate() - 2)
+        }
+        if (filterDateTo) {
+          filterDateTo.setDate(filterDateTo.getDate() + 2)
+        }
+
+        console.log(`⚡ [Chef d'agence] Filtre de date Firestore pour ${profile.city} (±2j):`, {
           from: filterDateFrom?.toLocaleDateString('fr-MA'),
           to: filterDateTo?.toLocaleDateString('fr-MA')
         })
