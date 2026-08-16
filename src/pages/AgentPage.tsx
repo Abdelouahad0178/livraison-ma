@@ -1368,15 +1368,35 @@ export default function AgentPage() {
 
     debugData.etape2_apres_date = dateFilteredData.length
 
-    // 🔍 DEBUG: Examiner quelques colis pour voir leurs dates
+    // 🔍 DEBUG: Examiner colis AVANT et APRÈS filtre de date
     if (sourceData.length > 0) {
-      const sample = sourceData.slice(0, 3).map((p: any) => ({
+      // Échantillon AVANT filtre (3 premiers)
+      const sampleAvant = sourceData.slice(0, 3).map((p: any) => ({
         id: p.id?.substring(0, 8),
         workDate: p.workDate,
         createdAt: p.createdAt?.toDate?.()?.toISOString?.()?.split('T')[0],
-        extractedDate: dateExtractor(p).toISOString().split('T')[0]
+        utilisé: dateExtractor(p).toISOString().split('T')[0]
       }))
-      debugData.echantillon = sample
+      debugData.avant_filtre = sampleAvant
+
+      // Échantillon APRÈS filtre (colis qui PASSENT)
+      if (dateFilteredData.length > 0) {
+        const sampleApres = dateFilteredData.slice(0, 3).map((p: any) => ({
+          id: p.id?.substring(0, 8),
+          workDate: p.workDate,
+          createdAt: p.createdAt?.toDate?.()?.toISOString?.()?.split('T')[0],
+          utilisé: dateExtractor(p).toISOString().split('T')[0]
+        }))
+        debugData.apres_filtre = sampleApres
+      }
+
+      // Statistiques sur les workDate
+      const avecWorkDate = sourceData.filter((p: any) => p.workDate).length
+      const sansWorkDate = sourceData.length - avecWorkDate
+      debugData.stats_workDate = {
+        avec: avecWorkDate,
+        sans: sansWorkDate
+      }
     }
 
     const filtered = dateFilteredData.filter((p: any) => {
@@ -2595,15 +2615,36 @@ export default function AgentPage() {
             <div>Service: {debugInfo.filtres?.serviceFilter || 'all'}</div>
             <div>Livreur: {debugInfo.filtres?.driverFilter || 'all'}</div>
           </div>
-          {debugInfo.echantillon && (
+          {debugInfo.stats_workDate && (
             <div className="border-t border-gray-600 my-2 pt-2">
-              <div className="text-yellow-400 font-bold mb-1">📅 Échantillon dates (3 premiers):</div>
-              {debugInfo.echantillon.map((p: any, i: number) => (
-                <div key={i} className="text-[10px] text-gray-300 mb-1">
+              <div className="text-yellow-400 font-bold mb-1">📊 Stats workDate:</div>
+              <div className="text-[10px] text-gray-300">
+                <div>Avec workDate: {debugInfo.stats_workDate.avec}</div>
+                <div>Sans workDate: {debugInfo.stats_workDate.sans}</div>
+              </div>
+            </div>
+          )}
+          {debugInfo.apres_filtre && (
+            <div className="border-t border-gray-600 my-2 pt-2">
+              <div className="text-green-400 font-bold mb-1">✅ Colis qui PASSENT (3 premiers):</div>
+              {debugInfo.apres_filtre.map((p: any, i: number) => (
+                <div key={i} className="text-[10px] text-gray-300 mb-1 bg-green-900/20 p-1 rounded">
                   <div>ID: {p.id}</div>
                   <div>workDate: {p.workDate || 'N/A'}</div>
                   <div>createdAt: {p.createdAt || 'N/A'}</div>
-                  <div className="text-cyan-400">→ Utilisé: {p.extractedDate}</div>
+                  <div className="text-green-400">→ Utilisé: {p.utilisé}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          {debugInfo.avant_filtre && (
+            <div className="border-t border-gray-600 my-2 pt-2">
+              <div className="text-gray-400 font-bold mb-1">📅 AVANT filtre (3 premiers):</div>
+              {debugInfo.avant_filtre.map((p: any, i: number) => (
+                <div key={i} className="text-[10px] text-gray-400 mb-1">
+                  <div>ID: {p.id}</div>
+                  <div>workDate: {p.workDate || 'N/A'}</div>
+                  <div>→ {p.utilisé}</div>
                 </div>
               ))}
             </div>
