@@ -466,15 +466,26 @@ export default function AdminPortAgenciesTab({
               </label>
               <div className="flex flex-wrap gap-2 items-center">
                 {[
-                  { key: 'all', label: 'Toutes les dates' },
-                  { key: 'today', label: "Aujourd'hui" },
-                  { key: 'week', label: '7 derniers jours' },
-                  { key: 'month', label: 'Ce mois' },
-                  { key: 'custom', label: 'Personnalisé' },
+                  { key: 'all', label: 'Tous' },
+                  { key: 'today', label: "Auj." },
+                  { key: 'week', label: '7j' },
+                  { key: 'month', label: 'Mois' },
+                  { key: 'operational', label: '🗓️ J.Opé' },
+                  { key: 'custom', label: 'Période' },
                 ].map(({ key, label }) => (
                   <button
                     key={key}
-                    onClick={() => setDatePreset(key)}
+                    onClick={() => {
+                      setDatePreset(key)
+                      // 🗓️ Si J.Opé et pas de date définie, utiliser dateFrom ou aujourd'hui
+                      if (key === 'operational' && !operationalDay) {
+                        setOperationalDay(
+                          dateFrom
+                            ? new Date(dateFrom + 'T00:00:00')
+                            : new Date()
+                        )
+                      }
+                    }}
                     className={`px-4 py-2 rounded-xl text-xs font-bold transition ${
                       datePreset === key
                         ? 'bg-purple-600 text-white shadow-md'
@@ -484,6 +495,25 @@ export default function AdminPortAgenciesTab({
                     {label}
                   </button>
                 ))}
+
+                {datePreset === 'operational' && (
+                  <div className="flex items-center gap-2 ml-2">
+                    <span className="text-xs text-gray-500">Jour d'opération (8H → 6H lendemain)</span>
+                    <input
+                      type="date"
+                      value={operationalDay ? `${operationalDay.getFullYear()}-${String(operationalDay.getMonth() + 1).padStart(2, '0')}-${String(operationalDay.getDate()).padStart(2, '0')}` : ''}
+                      onChange={e => {
+                        if (!e.target.value) {
+                          setOperationalDay(null)
+                          return
+                        }
+                        setOperationalDay(new Date(e.target.value + 'T00:00:00'))
+                      }}
+                      className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500"
+                    />
+                  </div>
+                )}
+
                 {datePreset === 'custom' && (
                   <div className="flex items-center gap-2 ml-2">
                     <input
@@ -561,6 +591,7 @@ export default function AdminPortAgenciesTab({
                       {datePreset === 'today' && "Aujourd'hui"}
                       {datePreset === 'week' && "7 derniers jours"}
                       {datePreset === 'month' && "Ce mois"}
+                      {datePreset === 'operational' && operationalDay && `J.Opé ${operationalDay.toLocaleDateString('fr-MA')}`}
                       {datePreset === 'custom' && `${dateFrom} → ${dateTo}`}
                       <button
                         onClick={() => setDatePreset('all')}
