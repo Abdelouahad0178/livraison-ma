@@ -1338,20 +1338,22 @@ export default function AgentPage() {
   const profileCity = profile?.city
   const profileRole = profile?.role
 
+  const [debugInfo, setDebugInfo] = useState<any>(null)
+
   const filteredParcels = useMemo(() => {
     // 🔍 Si recherche serveur active, utiliser ses résultats en priorité
     const sourceData = (debouncedSearch && serverSearchResults !== null)
       ? serverSearchResults
       : allDisplayParcels
 
-    console.warn(`🔍 DEBUG filteredParcels - Source:`, {
-      total: sourceData.length,
+    const debugData: any = {
+      etape1_source: sourceData.length,
       datePreset,
       dateFrom,
       dateTo,
       dateFilterType,
       showAllCities
-    })
+    }
 
     // 📅 Extracteur de date selon le type de filtre (création/livraison)
     const dateExtractor = dateFilterType === 'livraison'
@@ -1364,10 +1366,7 @@ export default function AgentPage() {
     // ✅ Toujours appliquer le filtre par date (même si un livreur est sélectionné)
     const dateFilteredData = filterByDate(sourceData, datePreset, dateFrom, dateTo, dateExtractor, operationalDay)
 
-    console.warn(`📅 DEBUG après filtre date:`, {
-      avant: sourceData.length,
-      après: dateFilteredData.length
-    })
+    debugData.etape2_apres_date = dateFilteredData.length
 
     const filtered = dateFilteredData.filter((p: any) => {
     // 🔒 FILTRE VILLE OBLIGATOIRE (sauf en mode "Toutes les villes")
@@ -1471,17 +1470,19 @@ export default function AgentPage() {
     return true
     })
 
-    console.warn(`✅ DEBUG filteredParcels FINAL:`, {
-      total: filtered.length,
-      filtresActifs: {
-        parcelStatusFilter,
-        parcelDirection,
-        serviceFilter,
-        destinationCityFilter,
-        driverFilter,
-        portTypeFilter
-      }
-    })
+    debugData.etape3_final = filtered.length
+    debugData.filtres = {
+      parcelStatusFilter,
+      parcelDirection,
+      serviceFilter,
+      destinationCityFilter,
+      driverFilter,
+      portTypeFilter,
+      encaissementFilter
+    }
+
+    // Mettre à jour les infos de debug
+    setTimeout(() => setDebugInfo(debugData), 0)
 
     return filtered
   }, [allDisplayParcels, datePreset, dateFrom, dateTo, dateFilterType, operationalDay, profileCity, profileRole, subTab, uid, serviceFilter,
@@ -2556,6 +2557,37 @@ export default function AgentPage() {
       )}
 
     </div>
+
+    {/* 🔍 PANEL DEBUG - Affichage des infos de filtrage */}
+    {debugInfo && (
+      <div className="fixed bottom-4 right-4 bg-black/90 text-white p-4 rounded-lg shadow-2xl text-xs font-mono max-w-md z-[99999]">
+        <div className="flex items-center justify-between mb-2">
+          <span className="font-bold text-yellow-400">🔍 DEBUG FILTRES</span>
+          <button onClick={() => setDebugInfo(null)} className="text-red-400 hover:text-red-300">✕</button>
+        </div>
+        <div className="space-y-1">
+          <div className="text-green-400">📦 Chargés: {debugInfo.etape1_source} colis</div>
+          <div className="text-blue-400">📅 Après date: {debugInfo.etape2_apres_date} colis</div>
+          <div className="text-purple-400">✅ Final: {debugInfo.etape3_final} colis</div>
+          <div className="border-t border-gray-600 my-2 pt-2">
+            <div className="text-gray-400">Période: {debugInfo.datePreset}</div>
+            <div className="text-gray-400">Du: {debugInfo.dateFrom || 'N/A'}</div>
+            <div className="text-gray-400">Au: {debugInfo.dateTo || 'N/A'}</div>
+            <div className="text-gray-400">Type: {debugInfo.dateFilterType}</div>
+            <div className={debugInfo.showAllCities ? 'text-green-400' : 'text-red-400'}>
+              Villes: {debugInfo.showAllCities ? '🌍 Toutes' : '📍 Ma ville'}
+            </div>
+          </div>
+          <div className="border-t border-gray-600 my-2 pt-2 text-gray-300">
+            <div>Statut: {debugInfo.filtres?.parcelStatusFilter || 'all'}</div>
+            <div>Direction: {debugInfo.filtres?.parcelDirection || 'all'}</div>
+            <div>Service: {debugInfo.filtres?.serviceFilter || 'all'}</div>
+            <div>Livreur: {debugInfo.filtres?.driverFilter || 'all'}</div>
+          </div>
+        </div>
+      </div>
+    )}
+
     </AgentCtx.Provider>
   )
 }
