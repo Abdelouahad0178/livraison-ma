@@ -478,7 +478,7 @@ export default function AdminPortAgenciesTab({
                     onClick={() => {
                       setDatePreset(key)
                       // 🗓️ Si J.Opé et pas de date définie, utiliser dateFrom ou aujourd'hui
-                      if (key === 'operational' && !operationalDay) {
+                      if (key === 'operational' && !operationalDay && setOperationalDay) {
                         setOperationalDay(
                           dateFrom
                             ? new Date(dateFrom + 'T00:00:00')
@@ -503,6 +503,7 @@ export default function AdminPortAgenciesTab({
                       type="date"
                       value={operationalDay ? `${operationalDay.getFullYear()}-${String(operationalDay.getMonth() + 1).padStart(2, '0')}-${String(operationalDay.getDate()).padStart(2, '0')}` : ''}
                       onChange={e => {
+                        if (!setOperationalDay) return
                         if (!e.target.value) {
                           setOperationalDay(null)
                           return
