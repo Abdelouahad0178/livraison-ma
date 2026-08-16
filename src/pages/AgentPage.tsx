@@ -1529,18 +1529,29 @@ export default function AgentPage() {
     if (parcelStatusFilter !== 'all' && p.status !== parcelStatusFilter) {
       return false
     }
-    // Filtre de direction (Envoyés/Reçus) - SEULEMENT si "Ma ville uniquement"
-    // Avec "Toutes les villes", ce filtre n'a pas de sens (tous les colis sont envoyés de quelque part et reçus quelque part)
-    if (!showAllCities && profileCity && parcelDirection !== 'all') {
-      if (parcelDirection === 'sent') {
-        // Envoyés : colis créés/envoyés DEPUIS ma ville
-        const isSentFromMyCity = p.sender?.city === profileCity || p.originCity === profileCity
-        if (!isSentFromMyCity) return false
-      } else if (parcelDirection === 'received') {
-        // Reçus : colis qui arrivent DANS ma ville
-        const isReceivedInMyCity = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
-          && isParcelVisibleInDestinationAgency(p)
-        if (!isReceivedInMyCity) return false
+    // Filtre de direction (Envoyés/Reçus)
+    if (parcelDirection !== 'all') {
+      if (showAllCities) {
+        // Mode "Toutes les villes" : filtrer par statut/visibilité
+        if (parcelDirection === 'sent') {
+          // "Envoyés" : Tous les colis (car tous sont envoyés de quelque part)
+          // Pas de filtre supplémentaire
+        } else if (parcelDirection === 'received') {
+          // "Reçus" : Seulement les colis visibles dans une agence de destination
+          if (!isParcelVisibleInDestinationAgency(p)) return false
+        }
+      } else if (profileCity) {
+        // Mode "Ma ville" : filtrer par ville d'origine/destination
+        if (parcelDirection === 'sent') {
+          // Envoyés : colis créés/envoyés DEPUIS ma ville
+          const isSentFromMyCity = p.sender?.city === profileCity || p.originCity === profileCity
+          if (!isSentFromMyCity) return false
+        } else if (parcelDirection === 'received') {
+          // Reçus : colis qui arrivent DANS ma ville
+          const isReceivedInMyCity = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
+            && isParcelVisibleInDestinationAgency(p)
+          if (!isReceivedInMyCity) return false
+        }
       }
     }
     // ⭐ Filtre par ville de destination
