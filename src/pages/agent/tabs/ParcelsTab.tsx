@@ -3081,6 +3081,29 @@ export default function ParcelsTab() {
                   </div>
                 )
               })()}
+
+              {/* Bouton Charger plus (pagination avec filtre de date) */}
+              {hasMoreWithDateFilter && (
+                <div className="flex justify-center py-6">
+                  <button
+                    onClick={handleLoadMoreWithDateFilter}
+                    disabled={loadingMoreWithDateFilter}
+                    className="flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed shadow-lg"
+                  >
+                    {loadingMoreWithDateFilter ? (
+                      <>
+                        <div className="w-5 h-5 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                        <span>Chargement...</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-5 h-5" />
+                        <span>Charger 1000 expéditions supplémentaires</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              )}
             </div>
           ) : (
             // ═══════════════════════════════════════════════════════════════════
