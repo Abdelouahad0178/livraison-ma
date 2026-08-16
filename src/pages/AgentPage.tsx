@@ -1469,61 +1469,11 @@ export default function AgentPage() {
   const profileCity = profile?.city
   const profileRole = profile?.role
 
-  const [debugInfo, setDebugInfo] = useState<any>(null)
-  const [debugPanelPos, setDebugPanelPos] = useState({ x: 16, y: 16 })
-  const [isDraggingPanel, setIsDraggingPanel] = useState(false)
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
-
-  // Gestion du drag du panel debug
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (isDraggingPanel) {
-        setDebugPanelPos({
-          x: e.clientX - dragOffset.x,
-          y: e.clientY - dragOffset.y
-        })
-      }
-    }
-    const handleMouseUp = () => {
-      setIsDraggingPanel(false)
-    }
-    if (isDraggingPanel) {
-      document.addEventListener('mousemove', handleMouseMove)
-      document.addEventListener('mouseup', handleMouseUp)
-      return () => {
-        document.removeEventListener('mousemove', handleMouseMove)
-        document.removeEventListener('mouseup', handleMouseUp)
-      }
-    }
-  }, [isDraggingPanel, dragOffset])
-
   const filteredParcels = useMemo(() => {
     // 🔍 Si recherche serveur active, utiliser ses résultats en priorité
     const sourceData = (debouncedSearch && serverSearchResults !== null)
       ? serverSearchResults
       : allDisplayParcels
-
-    const debugData: any = {
-      etape1_source: sourceData.length,
-      datePreset,
-      dateFrom,
-      dateTo,
-      dateFilterType,
-      showAllCities
-    }
-
-    // 🔍 DEBUG: Calculer les dates start/end pour affichage
-    let debugStart: any = null, debugEnd: any = null
-    if (datePreset === 'custom' && dateFrom) {
-      debugStart = new Date(dateFrom + 'T08:00:00')
-      if (dateTo) {
-        const endDay = new Date(dateTo)
-        endDay.setDate(endDay.getDate() + 1)
-        debugEnd = new Date(endDay.toISOString().split('T')[0] + 'T06:00:00')
-      }
-      debugData.calculatedStart = debugStart?.toISOString()
-      debugData.calculatedEnd = debugEnd?.toISOString()
-    }
 
     // 📅 Extracteur de date selon le type de filtre (création/livraison)
     const dateExtractor = dateFilterType === 'livraison'
@@ -1535,46 +1485,6 @@ export default function AgentPage() {
 
     // ✅ Toujours appliquer le filtre par date (même si un livreur est sélectionné)
     const dateFilteredData = filterByDate(sourceData, datePreset, dateFrom, dateTo, dateExtractor, operationalDay)
-
-    debugData.etape2_apres_date = dateFilteredData.length
-
-    // 🔍 DEBUG: Examiner colis AVANT et APRÈS filtre de date
-    if (sourceData.length > 0) {
-      // Trouver les VRAIS colis rejetés par le filtre de date
-      const dateFilteredIds = new Set(dateFilteredData.map((p: any) => p.id))
-      const rejectedByDate = sourceData
-        .filter((p: any) => !dateFilteredIds.has(p.id))
-        .slice(0, 5)
-        .map((p: any) => ({
-          id: p.id?.substring(0, 8),
-          trackingId: p.trackingId,
-          workDate: p.workDate,
-          createdAt: p.createdAt?.toDate?.()?.toISOString?.(),
-          utilisé: dateExtractor(p).toISOString(),
-          status: p.status,
-          raison: 'Hors période filtrée'
-        }))
-      debugData.rejetes_par_date = rejectedByDate
-
-      // Échantillon APRÈS filtre (colis qui PASSENT)
-      if (dateFilteredData.length > 0) {
-        const sampleApres = dateFilteredData.slice(0, 3).map((p: any) => ({
-          id: p.id?.substring(0, 8),
-          workDate: p.workDate,
-          createdAt: p.createdAt?.toDate?.()?.toISOString?.(),
-          utilisé: dateExtractor(p).toISOString()
-        }))
-        debugData.apres_filtre = sampleApres
-      }
-
-      // Statistiques sur les workDate
-      const avecWorkDate = sourceData.filter((p: any) => p.workDate).length
-      const sansWorkDate = sourceData.length - avecWorkDate
-      debugData.stats_workDate = {
-        avec: avecWorkDate,
-        sans: sansWorkDate
-      }
-    }
 
     const filtered = dateFilteredData.filter((p: any) => {
     // 🔒 FILTRE VILLE OBLIGATOIRE (sauf en mode "Toutes les villes")
@@ -1687,20 +1597,6 @@ export default function AgentPage() {
     }
     return true
     })
-
-    debugData.etape3_final = filtered.length
-    debugData.filtres = {
-      parcelStatusFilter,
-      parcelDirection,
-      serviceFilter,
-      destinationCityFilter,
-      driverFilter,
-      portTypeFilter,
-      encaissementFilter
-    }
-
-    // Mettre à jour les infos de debug
-    setTimeout(() => setDebugInfo(debugData), 0)
 
     return filtered
   }, [allDisplayParcels, datePreset, dateFrom, dateTo, dateFilterType, operationalDay, profileCity, profileRole, subTab, uid, serviceFilter,
@@ -2827,103 +2723,6 @@ export default function AgentPage() {
       )}
 
     </div>
-
-    {/* 🔍 PANEL DEBUG - Affichage des infos de filtrage */}
-    {debugInfo && (
-      <div
-        className="fixed bg-black text-white rounded-lg shadow-2xl text-xs font-mono max-w-md border-4 border-yellow-400"
-        style={{
-          zIndex: 999999,
-          left: `${debugPanelPos.x}px`,
-          top: `${debugPanelPos.y}px`,
-          maxHeight: 'calc(100vh - 32px)',
-          display: 'flex',
-          flexDirection: 'column'
-        }}
-      >
-        <div
-          className="flex items-center justify-between p-3 cursor-move bg-yellow-900 rounded-t-md select-none"
-          onMouseDown={(e) => {
-            setIsDraggingPanel(true)
-            const rect = e.currentTarget.parentElement!.getBoundingClientRect()
-            setDragOffset({
-              x: e.clientX - rect.left,
-              y: e.clientY - rect.top
-            })
-          }}
-        >
-          <span className="font-bold text-yellow-400">🔍 DEBUG FILTRES (déplaçable)</span>
-          <button
-            onClick={() => setDebugInfo(null)}
-            className="text-red-400 hover:text-red-300 ml-2"
-            onMouseDown={(e) => e.stopPropagation()}
-          >✕</button>
-        </div>
-        <div className="space-y-1 overflow-y-auto p-4" style={{ maxHeight: 'calc(100vh - 100px)' }}>
-          <div className="text-green-400">📦 Chargés: {debugInfo.etape1_source} colis</div>
-          <div className="text-blue-400">📅 Après date: {debugInfo.etape2_apres_date} colis</div>
-          <div className="text-purple-400">✅ Final: {debugInfo.etape3_final} colis</div>
-          <div className="border-t border-gray-600 my-2 pt-2">
-            <div className="text-gray-400">Période: {debugInfo.datePreset}</div>
-            <div className="text-gray-400">Du: {debugInfo.dateFrom || 'N/A'}</div>
-            <div className="text-gray-400">Au: {debugInfo.dateTo || 'N/A'}</div>
-            {debugInfo.calculatedStart && (
-              <div className="text-yellow-400 mt-2">
-                <div>🗓️ Start calculé: {debugInfo.calculatedStart}</div>
-                <div>🗓️ End calculé: {debugInfo.calculatedEnd || 'N/A'}</div>
-              </div>
-            )}
-            <div className="text-gray-400">Type: {debugInfo.dateFilterType}</div>
-            <div className={debugInfo.showAllCities ? 'text-green-400' : 'text-red-400'}>
-              Villes: {debugInfo.showAllCities ? '🌍 Toutes' : '📍 Ma ville'}
-            </div>
-          </div>
-          <div className="border-t border-gray-600 my-2 pt-2 text-gray-300">
-            <div>Statut: {debugInfo.filtres?.parcelStatusFilter || 'all'}</div>
-            <div>Direction: {debugInfo.filtres?.parcelDirection || 'all'}</div>
-            <div>Service: {debugInfo.filtres?.serviceFilter || 'all'}</div>
-            <div>Livreur: {debugInfo.filtres?.driverFilter || 'all'}</div>
-          </div>
-          {debugInfo.stats_workDate && (
-            <div className="border-t border-gray-600 my-2 pt-2">
-              <div className="text-yellow-400 font-bold mb-1">📊 Stats workDate:</div>
-              <div className="text-[10px] text-gray-300">
-                <div>Avec workDate: {debugInfo.stats_workDate.avec}</div>
-                <div>Sans workDate: {debugInfo.stats_workDate.sans}</div>
-              </div>
-            </div>
-          )}
-          {debugInfo.apres_filtre && (
-            <div className="border-t border-gray-600 my-2 pt-2">
-              <div className="text-green-400 font-bold mb-1">✅ Colis qui PASSENT (3 premiers):</div>
-              {debugInfo.apres_filtre.map((p: any, i: number) => (
-                <div key={i} className="text-[10px] text-gray-300 mb-1 bg-green-900/20 p-1 rounded">
-                  <div>ID: {p.id}</div>
-                  <div>workDate: {p.workDate || 'N/A'}</div>
-                  <div>createdAt: {p.createdAt || 'N/A'}</div>
-                  <div className="text-green-400">→ Utilisé: {p.utilisé}</div>
-                </div>
-              ))}
-            </div>
-          )}
-          {debugInfo.rejetes_par_date && debugInfo.rejetes_par_date.length > 0 && (
-            <div className="border-t border-gray-600 my-2 pt-2">
-              <div className="text-red-400 font-bold mb-1">❌ Rejetés par filtre de DATE ({debugInfo.rejetes_par_date.length} montrés / {debugInfo.etape1_source - debugInfo.etape2_apres_date} total):</div>
-              {debugInfo.rejetes_par_date.map((p: any, i: number) => (
-                <div key={i} className="text-[10px] text-gray-400 mb-1 bg-red-900/20 p-1 rounded">
-                  <div className="text-white">N°: {p.trackingId}</div>
-                  <div>workDate: {p.workDate || 'N/A'}</div>
-                  <div className="text-yellow-400">createdAt: {p.createdAt || 'N/A'}</div>
-                  <div className="text-red-400">→ Utilisé: {p.utilisé}</div>
-                  <div className="text-gray-500">Statut: {p.status}</div>
-                  <div className="text-orange-400">⚠️ {p.raison}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
-    )}
 
     </AgentCtx.Provider>
   )
