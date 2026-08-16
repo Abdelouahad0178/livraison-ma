@@ -113,9 +113,9 @@ const fmtModDate = (ts: any) => {
 }
 
 const parcelDate = (p: any) => {
-  // 📅 Utiliser workDate (date de travail) pour respecter les sessions 8h→6h
-  if (p.workDate) return new Date(p.workDate + 'T12:00:00')
+  // 📅 Utiliser createdAt (date de création) en priorité
   if (p.createdAt?.toDate) return p.createdAt.toDate()
+  if (p.workDate) return new Date(p.workDate + 'T12:00:00')
   if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
   return new Date(0)
 }
@@ -732,24 +732,14 @@ export default function AgentPage() {
       let filterDateTo: Date | null = null
 
       if (datePreset === 'custom' && (dateFrom || dateTo)) {
-        // ⚡ CHARGER ±7 JOURS pour capturer TOUS les colis avec workDate dans la période
-        // (car createdAt peut être différent de workDate)
-        filterDateFrom = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
-        filterDateTo = dateTo ? new Date(dateTo + 'T23:59:59') : null
+        // ⚡ CHARGER 365 JOURS (comme avant) pour garantir TOUS les colis
+        // Le filtrage par workDate se fait côté client
+        filterDateFrom = new Date()
+        filterDateFrom.setDate(filterDateFrom.getDate() - 365)
+        filterDateFrom.setHours(0, 0, 0, 0)
+        filterDateTo = null // Jusqu'à maintenant
 
-        // Élargir de ±7 jours pour Firestore
-        if (filterDateFrom) {
-          filterDateFrom.setDate(filterDateFrom.getDate() - 7)
-        }
-        if (filterDateTo) {
-          filterDateTo.setDate(filterDateTo.getDate() + 7)
-        }
-
-        console.log(`⚡ [Chef d'agence] Chargement LARGE (±7j) pour ${profile.city}:`, {
-          from: filterDateFrom?.toLocaleDateString('fr-MA'),
-          to: filterDateTo?.toLocaleDateString('fr-MA'),
-          note: 'Filtrage par workDate côté client'
-        })
+        console.log(`📦 [Chef d'agence] Chargement 365 jours pour ${profile.city} (filtrage par workDate côté client)`)
       } else if (datePreset === 'operational' && operationalDay) {
         // 🗓️ Journée opérationnelle: 8H → 6H lendemain
         const range = getOperationalDayRange(operationalDay)

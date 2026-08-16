@@ -77,9 +77,18 @@ export const filterByDate = <T>(
     start = from ? new Date(from) : null
     if (start) { start.setHours(0, 0, 0, 0); end = new Date(from + 'T23:59:59') }
   } else if (preset === 'custom') {
-    start = from ? new Date(from) : null
-    if (start) { start.setHours(0, 0, 0, 0) }
-    end = to ? new Date(to + 'T23:59:59') : endOfToday
+    // 🗓️ Si même jour (from === to), appliquer logique du JOUR D'OPÉRATION (8H → 6H lendemain)
+    if (from && to && from === to) {
+      const opDay = new Date(from + 'T08:00:00')
+      const range = getOperationalDayRange(opDay)
+      start = range.start
+      end = range.end
+    } else {
+      // Sinon, période normale (00:00 → 23:59)
+      start = from ? new Date(from) : null
+      if (start) { start.setHours(0, 0, 0, 0) }
+      end = to ? new Date(to + 'T23:59:59') : endOfToday
+    }
   }
   return list.filter(item => {
     const d = getDate(item)
