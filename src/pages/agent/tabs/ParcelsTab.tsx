@@ -987,7 +987,11 @@ export default function ParcelsTab() {
                           setDatePreset(key)
                           // 🗓️ Si J.Opé et pas de date définie, utiliser dateFrom ou aujourd'hui
                           if (key === 'operational' && !operationalDay) {
-                            setOperationalDay(dateFrom ? new Date(dateFrom) : new Date())
+                            setOperationalDay(
+                              dateFrom
+                                ? new Date(dateFrom + 'T00:00:00')  // ✅ Heure locale
+                                : new Date()  // OK, new Date() sans argument est déjà en heure locale
+                            )
                           }
                         }}
                           className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
@@ -1001,7 +1005,14 @@ export default function ParcelsTab() {
                       <div className="flex items-center gap-2 pl-20">
                         <span className="text-xs text-gray-500">Jour d'opération (8H → 6H lendemain)</span>
                         <input type="date" value={operationalDay ? operationalDay.toISOString().split('T')[0] : ''}
-                          onChange={e => setOperationalDay(e.target.value ? new Date(e.target.value) : null)}
+                          onChange={e => {
+                            if (!e.target.value) {
+                              setOperationalDay(null)
+                              return
+                            }
+                            // ✅ Forcer l'interprétation en heure locale avec 'T00:00:00'
+                            setOperationalDay(new Date(e.target.value + 'T00:00:00'))
+                          }}
                           className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
                         />
                       </div>
