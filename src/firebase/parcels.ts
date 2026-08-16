@@ -1017,7 +1017,8 @@ export function subscribeAgentParcels(agentId: any, callback: any, onError: (err
     }, 50)
   }
 
-  const since = daysAgoTimestamp(60)
+  // ✅ 180 jours (6 mois) au lieu de 60 pour voir plus d'historique
+  const since = daysAgoTimestamp(180)
   const q1 = query(collection(db, 'parcels'), where('agentId', '==', agentId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(2000))
   const q2 = query(collection(db, 'parcels'), where('destinationAgentId', '==', agentId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(2000))
 

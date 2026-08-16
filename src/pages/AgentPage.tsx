@@ -864,12 +864,8 @@ export default function AgentPage() {
   useEffect(() => {
     if (profile?.role === 'chef_agence' || profile?.role === 'agentpro') {
       setSubTab('all')
-      if (!chefDefaultTodayRef.current) {
-        setDatePreset('today')
-        setCodDatePreset('today')
-        setArrivageDatePreset('today')
-        chefDefaultTodayRef.current = true
-      }
+      // ✅ NE PLUS forcer 'today' - laisser l'utilisateur choisir
+      // Le filtre par défaut est 'all' (ligne 291)
     }
   }, [profile?.role])
 
