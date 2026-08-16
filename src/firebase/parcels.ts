@@ -822,6 +822,57 @@ export function subscribeAllParcelsWithDateFilter(
   }, onError)
 }
 
+// 📄 Charger plus de colis avec filtre de date (pagination)
+export async function loadMoreParcelsWithDateFilter(
+  lastDoc: any,
+  options: {
+    pageSize?: number
+    dateFrom?: Date | null
+    dateTo?: Date | null
+  } = {}
+) {
+  const {
+    pageSize = 1000,
+    dateFrom = null,
+    dateTo = null,
+  } = options
+
+  if (!lastDoc) {
+    return { docs: [], lastSnap: null, hasMore: false }
+  }
+
+  try {
+    const queryConstraints: any[] = []
+
+    if (dateFrom) {
+      queryConstraints.push(where('createdAt', '>=', Timestamp.fromDate(dateFrom)))
+    }
+    if (dateTo) {
+      const endOfDay = new Date(dateTo)
+      endOfDay.setHours(23, 59, 59, 999)
+      queryConstraints.push(where('createdAt', '<=', Timestamp.fromDate(endOfDay)))
+    }
+
+    queryConstraints.push(orderBy('createdAt', 'desc'))
+    queryConstraints.push(startAfter(lastDoc))
+    queryConstraints.push(limit(pageSize))
+
+    const q = query(collection(db, 'parcels'), ...queryConstraints)
+    const snap = await getDocs(q)
+
+    const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const lastSnap = snap.docs[snap.docs.length - 1] || null
+    const hasMore = docs.length >= pageSize
+
+    console.log(`📄 [loadMoreParcelsWithDateFilter] ${docs.length} colis supplémentaires chargés`)
+
+    return { docs, lastSnap, hasMore }
+  } catch (error) {
+    console.error('loadMoreParcelsWithDateFilter error:', error)
+    return { docs: [], lastSnap: null, hasMore: false }
+  }
+}
+
 // 🚀 SYSTÈME DE CHARGEMENT PROGRESSIF ET INTELLIGENT
 // Charge initialement un petit lot, puis continue automatiquement en arrière-plan
 export function subscribeAllParcelsWithArchives(callback: any, onError: (err?: any) => void = () => {}, initialPageSize = 1000) {

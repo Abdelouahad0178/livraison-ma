@@ -10,7 +10,7 @@ import {
   updateParcel, deleteParcel, markParcelAsReturned, loadReturnedParcelOnTruck, validateReturnArrival, validateParcelEntry,
   updateParcelStatus, isParcelVisibleInDestinationAgency,
   subscribeAgencyParcels, subscribeAgencyReturnParcels, subscribePendingAideAgentParcels, subscribeAllParcels,
-  subscribeAllParcelsWithDateFilter,
+  subscribeAllParcelsWithDateFilter, loadMoreParcelsWithDateFilter,
   createReturnParcel, searchParcelByTrackingId, searchParcels, getMoreAgencyParcels, getParcelsPage,
   subscribeAllParcelsWithArchives, loadMoreParcelsWithArchives,
 } from '../firebase/parcels'
@@ -285,6 +285,11 @@ export default function AgentPage() {
   const [allCitiesTotalLoaded, setAllCitiesTotalLoaded] = useState(0)
   const agencyPagedRef = useRef(false)
   const agencyDateFilterRef = useRef<{ dateFrom: Date | null; dateTo: Date | null }>({ dateFrom: null, dateTo: null })
+
+  // États pour pagination avec filtre de date
+  const [lastSnapWithDateFilter, setLastSnapWithDateFilter] = useState<any>(null)
+  const [hasMoreWithDateFilter, setHasMoreWithDateFilter] = useState(false)
+  const [loadingMoreWithDateFilter, setLoadingMoreWithDateFilter] = useState(false)
 
   const [search, setSearch]             = useState('')
   const [serverSearchResults, setServerSearchResults] = useState<any[] | null>(null) // Résultats recherche serveur
@@ -672,11 +677,14 @@ export default function AgentPage() {
         })
 
         const unsubAll = subscribeAllParcelsWithDateFilter(
-          (data: any) => {
+          (data: any, lastSnap: any) => {
             console.log(`✅ [Agent Pro - Avec filtre date] ${data.length} colis chargés`)
             setParcels(data)
             setLiveParcels(data)
             setLoadingParcels(false)
+            // Stocker lastSnap pour pagination et vérifier s'il y a plus de colis
+            setLastSnapWithDateFilter(lastSnap)
+            setHasMoreWithDateFilter(data.length >= effectivePageSize)
           },
           onError,
           {
@@ -1584,6 +1592,14 @@ export default function AgentPage() {
   }, [allDisplayParcels, datePreset, dateFrom, dateTo, dateFilterType, operationalDay, profileCity, profileRole, subTab, uid, serviceFilter,
        parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, codDocumentStatusFilter, debouncedSearch, serverSearchResults, showAllCities])
 
+  // 📜 Scroll automatique vers le haut après filtrage
+  useEffect(() => {
+    // Scroller vers le haut quand les filtres changent (sauf au premier rendu)
+    if (filteredParcels.length > 0) {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+  }, [datePreset, dateFrom, dateTo, serviceFilter, parcelStatusFilter, parcelDirection, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter])
+
   // ── Phase 3: memoized stats — only recompute when Firestore sends new data ──
 
   // Note: homeChefStats and homeAgentStats are now calculated in HomeTab.tsx
@@ -2346,6 +2362,11 @@ export default function AgentPage() {
     showAllCities, setShowAllCities,
     loadMoreAllCitiesParcels,
     allCitiesTotalLoaded,
+
+    // ── Pagination avec filtre de date
+    hasMoreWithDateFilter,
+    loadingMoreWithDateFilter,
+    handleLoadMoreWithDateFilter,
   }
 
   // ⭐ Calculer le nombre de COD qui nécessitent une action (badge notification)
@@ -2364,6 +2385,40 @@ export default function AgentPage() {
 
   // ⭐ Calculer le nombre de colis perdus non résolus (badge notification)
   const lostParcelsCount = lostParcels.filter(lp => lp.status !== 'found').length
+
+  // 📄 Charger plus de colis avec filtre de date
+  const handleLoadMoreWithDateFilter = async () => {
+    if (!lastSnapWithDateFilter || loadingMoreWithDateFilter) return
+
+    setLoadingMoreWithDateFilter(true)
+
+    try {
+      const dateFromObj = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
+      const dateToObj = dateTo ? new Date(dateTo + 'T23:59:59') : null
+
+      const result = await loadMoreParcelsWithDateFilter(lastSnapWithDateFilter, {
+        pageSize: FILTERED_PAGE_SIZE,
+        dateFrom: dateFromObj,
+        dateTo: dateToObj
+      })
+
+      if (result.docs.length > 0) {
+        // Ajouter les nouveaux colis à la liste existante
+        setParcels(prev => [...prev, ...result.docs])
+        setLiveParcels(prev => [...prev, ...result.docs])
+        setLastSnapWithDateFilter(result.lastSnap)
+        setHasMoreWithDateFilter(result.hasMore)
+
+        console.log(`📄 ${result.docs.length} colis supplémentaires chargés (total: ${parcels.length + result.docs.length})`)
+      } else {
+        setHasMoreWithDateFilter(false)
+      }
+    } catch (error) {
+      console.error('Erreur chargement colis supplémentaires:', error)
+    } finally {
+      setLoadingMoreWithDateFilter(false)
+    }
+  }
 
   return (
     <AgentCtx.Provider value={ctxValue}>
