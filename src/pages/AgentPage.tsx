@@ -10,6 +10,7 @@ import {
   updateParcel, deleteParcel, markParcelAsReturned, loadReturnedParcelOnTruck, validateReturnArrival, validateParcelEntry,
   updateParcelStatus, isParcelVisibleInDestinationAgency,
   subscribeAgencyParcels, subscribeAgencyReturnParcels, subscribePendingAideAgentParcels, subscribeAllParcels,
+  subscribeAllParcelsWithDateFilter,
   createReturnParcel, searchParcelByTrackingId, searchParcels, getMoreAgencyParcels, getParcelsPage,
   subscribeAllParcelsWithArchives, loadMoreParcelsWithArchives,
 } from '../firebase/parcels'
@@ -660,7 +661,41 @@ export default function AgentPage() {
     if (profile.role === 'agentpro' && showAllCities) {
       console.log(`🚀 [Agent Pro] Chargement de TOUTES les villes (comme Admin)`)
 
-      // Utiliser la même requête qu'Admin : subscribeAllParcels
+      // 🔥 SI FILTRE DE DATE CUSTOM → utiliser subscribeAllParcelsWithDateFilter (comme Admin)
+      if (datePreset === 'custom' && (dateFrom || dateTo)) {
+        const dateFromObj = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
+        const dateToObj = dateTo ? new Date(dateTo + 'T23:59:59') : null
+
+        console.log(`⚡ [Agent Pro] Filtre de date Firestore:`, {
+          from: dateFromObj?.toLocaleDateString('fr-MA'),
+          to: dateToObj?.toLocaleDateString('fr-MA')
+        })
+
+        const unsubAll = subscribeAllParcelsWithDateFilter(
+          (data: any) => {
+            console.log(`✅ [Agent Pro - Avec filtre date] ${data.length} colis chargés`)
+            setParcels(data)
+            setLiveParcels(data)
+            setLoadingParcels(false)
+          },
+          onError,
+          {
+            pageSize: effectivePageSize,
+            dateFrom: dateFromObj,
+            dateTo: dateToObj
+          }
+        )
+
+        setReturnParcels([])
+        setPendingAideParcels([])
+        unsubscribersRef.current.push(unsubAll)
+        return () => {
+          unsubscribersRef.current.forEach(unsub => unsub())
+          unsubscribersRef.current = []
+        }
+      }
+
+      // SINON → subscribeAllParcels normal
       const unsubAll = subscribeAllParcels(
         (data: any) => {
           console.log(`✅ [Agent Pro - Toutes villes] ${data.length} colis chargés`)
