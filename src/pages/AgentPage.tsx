@@ -740,13 +740,13 @@ export default function AgentPage() {
           to: filterDateTo?.toLocaleDateString('fr-MA')
         })
       } else {
-        // SINON → CHARGER 365 JOURS (1 an)
+        // SINON → CHARGER 10 DERNIERS JOURS (gestion quotidienne)
         filterDateFrom = new Date()
-        filterDateFrom.setDate(filterDateFrom.getDate() - 365)
+        filterDateFrom.setDate(filterDateFrom.getDate() - 10)
         filterDateFrom.setHours(0, 0, 0, 0)
         filterDateTo = null // Jusqu'à maintenant
 
-        console.log(`📦 [Chef] Chargement AUTO 365 jours`)
+        console.log(`📦 [Chef] Chargement AUTO 10 derniers jours`)
       }
 
       agencyDateFilterRef.current = { dateFrom: filterDateFrom, dateTo: filterDateTo }
