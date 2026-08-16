@@ -342,11 +342,21 @@ export default function AdminPage() {
 
   // 🗓️ Journée opérationnelle
   const {
-    selectedDay: operationalDay,
-    setSelectedDay: setOperationalDay,
+    selectedDay: operationalDayRaw,
+    setSelectedDay: setOperationalDayRaw,
     formatted: operationalDayFormatted,
     isToday: operationalIsToday,
   } = useOperationalDaySelector()
+
+  // Wrapper pour accepter null dans AdminPortAgenciesTab
+  const operationalDay: Date = operationalDayRaw
+  const setOperationalDay = (day: Date | null) => {
+    if (day === null) {
+      setOperationalDayRaw(new Date()) // Reset vers aujourd'hui
+    } else {
+      setOperationalDayRaw(day)
+    }
+  }
 
   const [codDatePreset, setCodDatePreset] = useState('all')
   const [codDateFrom,   setCodDateFrom]   = useState('')
@@ -2141,6 +2151,8 @@ export default function AdminPage() {
               setDateFrom={setDateFrom}
               dateTo={dateTo}
               setDateTo={setDateTo}
+              operationalDay={operationalDay}
+              setOperationalDay={setOperationalDay}
             />
           </Suspense>
         )}

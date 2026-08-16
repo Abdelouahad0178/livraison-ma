@@ -4,17 +4,25 @@ import { useOperationalDaySelector } from '../../hooks/useOperationalDay'
 const AdminPortAgenciesTab = lazy(() => import('../admin/tabs/AdminPortAgenciesTab'))
 
 const AdminPortAgenciesPage = () => {
-  const [datePreset, setDatePreset] = useState('month')
+  const [datePreset, setDatePreset] = useState('all')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
   // 🗓️ Journée opérationnelle
   const {
-    selectedDay: operationalDay,
-    setSelectedDay: setOperationalDay,
+    selectedDay: operationalDayRaw,
+    setSelectedDay: setOperationalDayRaw,
   } = useOperationalDaySelector()
 
-  const allParcels: any[] = [] // Placeholder - dans un contexte réel, cela viendrait d'un hook ou contexte
+  // Wrapper pour accepter null (reset vers aujourd'hui)
+  const operationalDay: Date | null = operationalDayRaw
+  const setOperationalDay = (day: Date | null) => {
+    if (day === null) {
+      setOperationalDayRaw(new Date()) // Reset vers aujourd'hui
+    } else {
+      setOperationalDayRaw(day)
+    }
+  }
 
   return (
     <div>
@@ -32,7 +40,6 @@ const AdminPortAgenciesPage = () => {
         </div>
       }>
         <AdminPortAgenciesTab
-          allParcels={allParcels}
           datePreset={datePreset}
           setDatePreset={setDatePreset}
           dateFrom={dateFrom}
