@@ -276,7 +276,8 @@ export default function AgentPage() {
   const [loadAllAgencyProgress, setLoadAllAgencyProgress] = useState(0)
   const agencyLastDocsRef = useRef<any>(null)
   // Mode "Toutes villes" pour agent pro uniquement
-  const [showAllCities, setShowAllCities] = useState(false)
+  // ✅ TRUE par défaut pour voir toutes les villes (Agent Pro / Chef)
+  const [showAllCities, setShowAllCities] = useState(true)
   // Curseurs séparés pour chargement progressif (parcels + archives)
   const [allCitiesParcelsLastSnap, setAllCitiesParcelsLastSnap] = useState<any>(null)
   const [allCitiesArchivesLastSnap, setAllCitiesArchivesLastSnap] = useState<any>(null)
