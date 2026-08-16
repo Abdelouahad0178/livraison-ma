@@ -656,8 +656,33 @@ export default function AgentPage() {
       }
     }
 
-    // ✅ AGENT PRO = CHEF D'AGENCE (mêmes droits + fonctions supplémentaires)
-    // Agent Pro voit TOUS les colis de sa ville, comme Chef d'agence
+    // ✅ AGENT PRO avec "Toutes les villes" = comme ADMIN (tous les colis)
+    if (profile.role === 'agentpro' && showAllCities) {
+      console.log(`🚀 [Agent Pro] Chargement de TOUTES les villes (comme Admin)`)
+
+      // Utiliser la même requête qu'Admin : subscribeAllParcels
+      const unsubAll = subscribeAllParcels(
+        (data: any) => {
+          console.log(`✅ [Agent Pro - Toutes villes] ${data.length} colis chargés`)
+          setParcels(data)
+          setLiveParcels(data)
+          setLoadingParcels(false)
+        },
+        onError,
+        0, // offset
+        effectivePageSize // ⚡ 50 ou 1000 selon filtres
+      )
+
+      setReturnParcels([])
+      setPendingAideParcels([])
+      unsubscribersRef.current.push(unsubAll)
+      return () => {
+        unsubscribersRef.current.forEach(unsub => unsub())
+        unsubscribersRef.current = []
+      }
+    }
+
+    // CHEF D'AGENCE : seulement sa ville
     if ((profile.role === 'chef_agence' || profile.role === 'agentpro') && profile.city) {
       // 🔄 CHARGER 365 JOURS (1 an) pour permettre le filtrage côté client
       // Les filtres de date s'appliquent ensuite via filteredParcels useMemo
