@@ -1681,62 +1681,6 @@ export default function AdminPage() {
       </header>
 
       <main className="w-[95%] mx-auto p-4 pb-16">
-        <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 mb-4">
-          <div className="flex flex-col lg:flex-row lg:items-center gap-3">
-            <div className="flex items-center gap-2 min-w-0">
-              <div className="w-9 h-9 bg-blue-50 text-blue-600 rounded-xl flex items-center justify-center shrink-0">
-                <Calendar className="w-4 h-4" />
-              </div>
-              <div className="min-w-0">
-                <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Période admin</p>
-                <p className="text-sm font-bold text-gray-800 truncate">{periodLabel}</p>
-              </div>
-            </div>
-            <div className="flex flex-wrap gap-2 items-center lg:ml-auto">
-              {[
-                { key: 'all',    label: 'Tout' },
-                { key: 'operational', label: '🗓️ Journée opérationnelle' },
-                { key: 'today',  label: "Aujourd'hui" },
-                { key: 'week',   label: '7 derniers jours' },
-                { key: 'month',  label: 'Ce mois' },
-                { key: 'custom', label: 'Personnalisé' },
-              ].map(({ key, label }) => (
-                <button key={key} onClick={() => setAdminDatePreset(key)}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                    adminDatePreset === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                  }`}
-                >{label}</button>
-              ))}
-              {adminDatePreset === 'custom' && (
-                <div className="flex items-center gap-2">
-                  <input type="date" value={adminDateFrom} onChange={e => setAdminDateFrom(e.target.value)}
-                    className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
-                  />
-                  <span className="text-gray-400 text-xs">?</span>
-                  <input type="date" value={adminDateTo} onChange={e => setAdminDateTo(e.target.value)}
-                    className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
-                  />
-                </div>
-              )}
-              <span className="text-xs text-gray-400 bg-gray-100 rounded-lg px-2 py-1">
-                {periodParcels.length} colis à {periodUsers.length} utilisateurs
-              </span>
-            </div>
-
-            {/* 🗓️ Sélecteur de journée opérationnelle */}
-            {adminDatePreset === 'operational' && (
-              <div className="mt-4">
-                <OperationalDaySelector
-                  selectedDay={operationalDay}
-                  onDayChange={setOperationalDay}
-                  showTimeRange={true}
-                  showTodayButton={true}
-                />
-              </div>
-            )}
-          </div>
-        </div>
-
         {/* Section */}
         {mainTab === 'home' && (
           <Suspense fallback={<div className="mt-6 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
