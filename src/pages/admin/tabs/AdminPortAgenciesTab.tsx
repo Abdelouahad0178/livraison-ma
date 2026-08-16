@@ -15,7 +15,7 @@ interface Props {
 
 // ⚡ Système Option 3 (comme AdminPage)
 const PAGE_SIZE = 50 // Chargement initial réduit
-const FILTERED_PAGE_SIZE = 50000 // Quand filtres actifs (max Firestore, peut être lent si beaucoup de colis)
+const FILTERED_PAGE_SIZE = 1000 // Quand filtres actifs
 
 export default function AdminPortAgenciesTab({
   datePreset,

@@ -11,7 +11,7 @@ import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
 import { addPayment } from './clients'
 
 export const FIRESTORE_PAGE_LIMITS = {
-  adminLiveParcels: 1000,  // ⚡ Augmenté pour supporter les filtres (50 → 1000)
+  adminLiveParcels: 10000,  // ⚡ Augmenté pour supporter les filtres avec beaucoup d'expéditions
   adminNextParcels: 500,   // ⚡ Pages suivantes augmentées aussi
   users: 500,
   clients: 500,

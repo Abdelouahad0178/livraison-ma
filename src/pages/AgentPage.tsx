@@ -267,7 +267,7 @@ export default function AgentPage() {
 
   // ⚡ Système de chargement optimisé (Option 3)
   const PAGE_SIZE = 50 // Chargement initial réduit pour performance
-  const FILTERED_PAGE_SIZE = 50000 // Quand filtres actifs (max Firestore, peut être lent si beaucoup de colis)
+  const FILTERED_PAGE_SIZE = 1000 // Quand filtres actifs
   const AGENCY_PAGE_SIZE = PAGE_SIZE // Compatibilité (sera remplacé par effectivePageSize)
   const [liveParcels, setLiveParcels] = useState<any[]>([]) // Premiers 600 en temps réel
   const [moreParcels, setMoreParcels] = useState<any[]>([]) // Chargés progressivement
