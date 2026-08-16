@@ -1,6 +1,8 @@
 import { lazy, Suspense, useEffect, useState, useMemo, useRef } from 'react'
 import { useAdminContext } from '../../contexts/AdminContext'
-import { subscribeAllParcels, deleteParcel } from '../../firebase/firestore'
+import { subscribeAllParcels, subscribeAllParcelsWithDateFilter, deleteParcel } from '../../firebase/firestore'
+import { useOperationalDaySelector } from '../../hooks/useOperationalDay'
+import { getOperationalDayRange } from '../../config/operationalDay'
 import { Package } from 'lucide-react'
 
 const AdminExpeditionsTab = lazy(() => import('../admin/tabs/AdminExpeditionsTab'))
@@ -20,6 +22,12 @@ const AdminExpeditionsPage = () => {
   const [deleteConfirm, setDeleteConfirm] = useState<any>(null)
   const [deleting, setDeleting] = useState(false)
 
+  // 🗓️ Journée opérationnelle
+  const {
+    selectedDay: operationalDay,
+    setSelectedDay: setOperationalDay,
+  } = useOperationalDaySelector()
+
   const lastPageDocRef = useRef<any>(null)
 
   // Debounce search
@@ -31,9 +39,10 @@ const AdminExpeditionsPage = () => {
   // Load parcels when search or filters are active
   useEffect(() => {
     const hasSearch = search.trim() !== ''
+    const hasDateFilter = datePreset !== 'all'
     const hasFilter = cityFilter !== 'Toutes' || driverFilter !== 'Tous' || statusFilter.length > 0
 
-    if (!hasSearch && !hasFilter) {
+    if (!hasSearch && !hasFilter && !hasDateFilter) {
       console.log('📭 Aucun filtre/recherche → Liste vide')
       setParcels([])
       setLoading(false)
@@ -41,27 +50,75 @@ const AdminExpeditionsPage = () => {
     }
 
     setLoading(true)
-    const loadLimit = hasSearch ? 5000 : 300
+    const loadLimit = hasSearch ? 5000 : 1000
 
-    console.log(`📦 Chargement ${loadLimit} colis (recherche: ${hasSearch ? 'OUI' : 'NON'}, filtre: ${hasFilter ? 'OUI' : 'NON'})`)
+    console.log(`📦 Chargement ${loadLimit} colis (recherche: ${hasSearch ? 'OUI' : 'NON'}, filtre: ${hasFilter ? 'OUI' : 'NON'}, date: ${hasDateFilter ? 'OUI' : 'NON'})`)
 
-    const unsubParcels = subscribeAllParcels(
-      (data: any, lastSnap: any) => {
-        console.log(`✅ ${data.length} colis chargés`)
-        setParcels(data)
-        setLoading(false)
-        if (!lastPageDocRef.current) lastPageDocRef.current = lastSnap
-      },
-      (err: any) => {
-        console.error('❌ Erreur chargement:', err)
-        setLoading(false)
-      },
-      0,
-      loadLimit
-    )
+    // 🗓️ SI JOUR D'OPÉRATION ou CUSTOM → charger avec filtre Firestore
+    if (datePreset === 'operational' && operationalDay) {
+      const range = getOperationalDayRange(operationalDay)
+      console.log(`🗓️ Jour d'opération:`, { from: range.start, to: range.end })
 
-    return () => unsubParcels()
-  }, [search, cityFilter, driverFilter, statusFilter])
+      const unsubParcels = subscribeAllParcelsWithDateFilter(
+        (data: any, lastSnap: any) => {
+          console.log(`✅ ${data.length} colis chargés (jour d'opération)`)
+          setParcels(data)
+          setLoading(false)
+          if (!lastPageDocRef.current) lastPageDocRef.current = lastSnap
+        },
+        (err: any) => {
+          console.error('❌ Erreur chargement:', err)
+          setLoading(false)
+        },
+        {
+          pageSize: loadLimit,
+          dateFrom: range.start,
+          dateTo: range.end
+        }
+      )
+      return () => unsubParcels()
+    } else if (datePreset === 'custom' && (dateFrom || dateTo)) {
+      const dateFromObj = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
+      const dateToObj = dateTo ? new Date(dateTo + 'T23:59:59') : null
+      console.log(`📅 Filtre de date custom:`, { from: dateFromObj, to: dateToObj })
+
+      const unsubParcels = subscribeAllParcelsWithDateFilter(
+        (data: any, lastSnap: any) => {
+          console.log(`✅ ${data.length} colis chargés (filtre custom)`)
+          setParcels(data)
+          setLoading(false)
+          if (!lastPageDocRef.current) lastPageDocRef.current = lastSnap
+        },
+        (err: any) => {
+          console.error('❌ Erreur chargement:', err)
+          setLoading(false)
+        },
+        {
+          pageSize: loadLimit,
+          dateFrom: dateFromObj,
+          dateTo: dateToObj
+        }
+      )
+      return () => unsubParcels()
+    } else {
+      // Chargement normal
+      const unsubParcels = subscribeAllParcels(
+        (data: any, lastSnap: any) => {
+          console.log(`✅ ${data.length} colis chargés`)
+          setParcels(data)
+          setLoading(false)
+          if (!lastPageDocRef.current) lastPageDocRef.current = lastSnap
+        },
+        (err: any) => {
+          console.error('❌ Erreur chargement:', err)
+          setLoading(false)
+        },
+        0,
+        loadLimit
+      )
+      return () => unsubParcels()
+    }
+  }, [search, cityFilter, driverFilter, statusFilter, datePreset, dateFrom, dateTo, operationalDay])
 
   // Filter parcels
   const filtered = useMemo(() => {

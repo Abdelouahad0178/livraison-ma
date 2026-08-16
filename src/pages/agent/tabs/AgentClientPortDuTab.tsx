@@ -103,10 +103,9 @@ export default function AgentClientPortDuTab({ agencyCity, profile }: Props) {
       filtered = filtered.filter(t => t.driverName === driverFilter)
     }
 
-    // Filtre par date
+    // 📅 CORRECTION TIMEZONE: 00:00 → 23:59
     if (dateFrom) {
-      const fromDate = new Date(dateFrom)
-      fromDate.setHours(0, 0, 0, 0)
+      const fromDate = new Date(dateFrom + 'T00:00:00')
       filtered = filtered.filter(t => {
         const transDate = t.createdAt?.toDate ? t.createdAt.toDate() : new Date(t.createdAt)
         return transDate >= fromDate
@@ -114,8 +113,7 @@ export default function AgentClientPortDuTab({ agencyCity, profile }: Props) {
     }
 
     if (dateTo) {
-      const toDate = new Date(dateTo)
-      toDate.setHours(23, 59, 59, 999)
+      const toDate = new Date(dateTo + 'T23:59:59')
       filtered = filtered.filter(t => {
         const transDate = t.createdAt?.toDate ? t.createdAt.toDate() : new Date(t.createdAt)
         return transDate <= toDate

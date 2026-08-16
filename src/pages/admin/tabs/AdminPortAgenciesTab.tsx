@@ -1,8 +1,9 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import { Building2, TrendingUp, Package, Search, Filter, X, Calendar, ChevronDown, Loader2, AlertCircle } from 'lucide-react'
 import { CITIES } from '../../../firebase/constants'
-import { collection, query, orderBy, limit, onSnapshot, startAfter, getDocs } from 'firebase/firestore'
+import { collection, query, orderBy, limit, onSnapshot, startAfter, getDocs, where, Timestamp } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
+import { getOperationalDayRange } from '../../../config/operationalDay'
 
 interface Props {
   datePreset: string
@@ -11,6 +12,8 @@ interface Props {
   setDateFrom: (date: string) => void
   dateTo: string
   setDateTo: (date: string) => void
+  operationalDay?: Date
+  setOperationalDay?: (day: Date) => void
 }
 
 // ⚡ Système Option 3 (comme AdminPage)
@@ -23,7 +26,9 @@ export default function AdminPortAgenciesTab({
   dateFrom,
   setDateFrom,
   dateTo,
-  setDateTo
+  setDateTo,
+  operationalDay,
+  setOperationalDay
 }: Props) {
   // États pour filtres et recherche
   const [searchCity, setSearchCity] = useState('')
@@ -56,33 +61,46 @@ export default function AdminPortAgenciesTab({
       filters: { datePreset, searchCity, portTypeFilter }
     })
 
-    // 📅 Si filtre de date personnalisé, élargir la période de chargement pour capturer
-    // les colis saisis après minuit (workDate du jour précédent)
+    // 📅 Gérer les différents filtres de date
     let queryConstraints: any[] = []
 
-    if (datePreset === 'custom' && dateFrom && dateTo) {
-      // Charger depuis 1 jour AVANT dateFrom jusqu'à 1 jour APRÈS dateTo
-      // pour être sûr de capturer tous les colis avec workDate dans la période
-      const expandedFrom = new Date(dateFrom)
-      expandedFrom.setDate(expandedFrom.getDate() - 1)
-      expandedFrom.setHours(0, 0, 0, 0)
+    // 🗓️ JOUR D'OPÉRATION : charger avec filtre Firestore
+    if (datePreset === 'operational' && operationalDay) {
+      const range = getOperationalDayRange(operationalDay)
+      const fromTimestamp = Timestamp.fromDate(range.start)
+      const toTimestamp = Timestamp.fromDate(range.end)
 
-      const expandedTo = new Date(dateTo)
-      expandedTo.setDate(expandedTo.getDate() + 1)
-      expandedTo.setHours(23, 59, 59, 999)
-
-      console.warn(`📅 Période élargie pour workDate:`, {
-        original: `${dateFrom} → ${dateTo}`,
-        expanded: `${expandedFrom.toLocaleDateString()} → ${expandedTo.toLocaleDateString()}`
+      console.warn(`🗓️ Jour d'opération:`, {
+        from: range.start.toLocaleString('fr-MA'),
+        to: range.end.toLocaleString('fr-MA')
       })
 
       queryConstraints = [
+        where('createdAt', '>=', fromTimestamp),
+        where('createdAt', '<=', toTimestamp),
         orderBy('createdAt', 'desc'),
-        // Note: On ne peut pas combiner where + orderBy sur des champs différents en Firestore
-        // Donc on charge plus de colis et on filtre côté client
+        limit(effectivePageSize)
+      ]
+    } else if (datePreset === 'custom' && dateFrom && dateTo) {
+      // 📅 FILTRE CUSTOM : 00:00 → 23:59
+      const fromDate = new Date(dateFrom + 'T00:00:00')
+      const toDate = new Date(dateTo + 'T23:59:59')
+      const fromTimestamp = Timestamp.fromDate(fromDate)
+      const toTimestamp = Timestamp.fromDate(toDate)
+
+      console.warn(`📅 Filtre custom:`, {
+        from: fromDate.toLocaleDateString('fr-MA'),
+        to: toDate.toLocaleDateString('fr-MA')
+      })
+
+      queryConstraints = [
+        where('createdAt', '>=', fromTimestamp),
+        where('createdAt', '<=', toTimestamp),
+        orderBy('createdAt', 'desc'),
         limit(effectivePageSize * 2) // Doubler pour être sûr
       ]
     } else {
+      // Chargement normal
       queryConstraints = [
         orderBy('createdAt', 'desc'),
         limit(effectivePageSize)
@@ -108,7 +126,7 @@ export default function AdminPortAgenciesTab({
     )
 
     return () => unsub()
-  }, [datePreset, dateFrom, dateTo, searchCity, portTypeFilter])
+  }, [datePreset, dateFrom, dateTo, operationalDay, searchCity, portTypeFilter])
 
   // ⚡ Charger TOUS les colis restants en arrière-plan
   const loadAllParcels = async () => {
@@ -210,15 +228,20 @@ export default function AdminPortAgenciesTab({
       if (datePreset === 'today') return pDate >= today
       if (datePreset === 'week') return pDate >= weekAgo
       if (datePreset === 'month') return pDate >= monthStart
+      if (datePreset === 'operational' && operationalDay) {
+        // 🗓️ JOUR D'OPÉRATION : 8H → 6H lendemain
+        const range = getOperationalDayRange(operationalDay)
+        return pDate >= range.start && pDate <= range.end
+      }
       if (datePreset === 'custom' && dateFrom && dateTo) {
-        const from = new Date(dateFrom)
-        const to = new Date(dateTo)
-        to.setHours(23, 59, 59, 999)
+        // 📅 CORRECTION TIMEZONE: 00:00 → 23:59
+        const from = new Date(dateFrom + 'T00:00:00')
+        const to = new Date(dateTo + 'T23:59:59')
         return pDate >= from && pDate <= to
       }
       return true // 'all'
     })
-  }, [liveParcels, datePreset, dateFrom, dateTo])
+  }, [liveParcels, datePreset, dateFrom, dateTo, operationalDay])
 
   // ✅ Calculer les statistiques par agence - 4 TYPES DE PORT SÉPARÉS
   const portStats = useMemo(() => {

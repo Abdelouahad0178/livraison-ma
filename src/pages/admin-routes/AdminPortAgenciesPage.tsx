@@ -1,4 +1,5 @@
 import { lazy, Suspense, useState } from 'react'
+import { useOperationalDaySelector } from '../../hooks/useOperationalDay'
 
 const AdminPortAgenciesTab = lazy(() => import('../admin/tabs/AdminPortAgenciesTab'))
 
@@ -6,6 +7,13 @@ const AdminPortAgenciesPage = () => {
   const [datePreset, setDatePreset] = useState('month')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+
+  // 🗓️ Journée opérationnelle
+  const {
+    selectedDay: operationalDay,
+    setSelectedDay: setOperationalDay,
+  } = useOperationalDaySelector()
+
   const allParcels: any[] = [] // Placeholder - dans un contexte réel, cela viendrait d'un hook ou contexte
 
   return (
@@ -31,6 +39,8 @@ const AdminPortAgenciesPage = () => {
           setDateFrom={setDateFrom}
           dateTo={dateTo}
           setDateTo={setDateTo}
+          operationalDay={operationalDay}
+          setOperationalDay={setOperationalDay}
         />
       </Suspense>
     </div>

@@ -407,10 +407,9 @@ function CreateInvoiceModal({ clients, onClose, uid, userName }: any) {
               return date >= startDate
             })
           } else if (periodFilter === 'custom' && dateFrom) {
-            const from = new Date(dateFrom)
-            from.setHours(0, 0, 0, 0)
-            const to = dateTo ? new Date(dateTo) : new Date()
-            to.setHours(23, 59, 59, 999)
+            // 📅 CORRECTION TIMEZONE: 00:00 → 23:59
+            const from = new Date(dateFrom + 'T00:00:00')
+            const to = dateTo ? new Date(dateTo + 'T23:59:59') : new Date()
             filtered = parcels.filter((p: any) => {
               const date = p.createdAt?.toDate?.() || new Date(0)
               return date >= from && date <= to

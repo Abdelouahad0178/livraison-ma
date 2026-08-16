@@ -238,7 +238,8 @@ export default function AdminArchivageTab() {
     if (dateFrom || dateTo) {
       list = list.filter((p: any) => {
         const date = p.archivedAt?.toDate?.() || new Date(0)
-        const from = dateFrom ? new Date(dateFrom) : null
+        // 📅 CORRECTION TIMEZONE: 00:00 → 23:59
+        const from = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
         const to = dateTo ? new Date(dateTo + 'T23:59:59') : null
         if (from && date < from) return false
         if (to && date > to) return false

@@ -28,7 +28,8 @@ function formatDate(ts: any) {
 
 function filterByDateRange(list: any, dateFrom: any, dateTo: any) {
   if (!dateFrom && !dateTo) return list
-  const start = dateFrom ? new Date(dateFrom) : null
+  // 📅 CORRECTION TIMEZONE: 00:00 → 23:59
+  const start = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
   const end   = dateTo   ? new Date(dateTo + 'T23:59:59') : null
   return list.filter((p: any) => {
     const d = p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt || 0)

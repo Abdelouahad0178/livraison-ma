@@ -251,8 +251,9 @@ export default function PointeurPageNew() {
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
         if (createdAt < monthStart) return false
       } else if (datePreset === 'custom') {
+        // 📅 CORRECTION TIMEZONE: 00:00 → 23:59
         if (dateFrom) {
-          const from = new Date(dateFrom)
+          const from = new Date(dateFrom + 'T00:00:00')
           if (createdAt < from) return false
         }
         if (dateTo) {

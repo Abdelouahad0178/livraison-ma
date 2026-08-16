@@ -123,7 +123,11 @@ const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parc
   if      (preset === 'today')  { start = new Date(); start.setHours(0,0,0,0) }
   else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate()-6); start.setHours(0,0,0,0) }
   else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
-  else if (preset === 'custom') { start = from ? new Date(from) : null; end = to ? new Date(to+'T23:59:59') : now }
+  else if (preset === 'custom') {
+    // 📅 CORRECTION TIMEZONE: 00:00 → 23:59 (pas minuit → minuit)
+    start = from ? new Date(from + 'T00:00:00') : null
+    end = to ? new Date(to + 'T23:59:59') : now
+  }
   else if (preset === 'operational' && operationalDay) {
     // 🗓️ Mode journée opérationnelle: 08:00 → 06:00 (lendemain)
     const range = getOperationalDayRange(operationalDay)

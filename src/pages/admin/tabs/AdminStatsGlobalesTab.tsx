@@ -87,9 +87,9 @@ export default function AdminStatsGlobalesTab({
       if (datePreset === 'week') return pDate >= weekAgo
       if (datePreset === 'month') return pDate >= monthStart
       if (datePreset === 'custom' && dateFrom && dateTo) {
-        const from = new Date(dateFrom)
-        const to = new Date(dateTo)
-        to.setHours(23, 59, 59, 999)
+        // 📅 CORRECTION TIMEZONE: 00:00 → 23:59
+        const from = new Date(dateFrom + 'T00:00:00')
+        const to = new Date(dateTo + 'T23:59:59')
         return pDate >= from && pDate <= to
       }
       return true // 'all'

@@ -11,7 +11,11 @@ const filterByDate = (list: any, preset: any, from: any, to: any, getDate: any) 
   if      (preset === 'today')  { start = new Date(); start.setHours(0,0,0,0) }
   else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate()-6); start.setHours(0,0,0,0) }
   else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
-  else if (preset === 'custom') { start = from ? new Date(from) : null; end = to ? new Date(to+'T23:59:59') : now }
+  else if (preset === 'custom') {
+    // 📅 CORRECTION TIMEZONE: 00:00 → 23:59
+    start = from ? new Date(from + 'T00:00:00') : null
+    end = to ? new Date(to + 'T23:59:59') : now
+  }
   return list.filter((item: any) => {
     const d = getDate(item)
     if (start && d < start) return false
