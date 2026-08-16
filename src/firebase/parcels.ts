@@ -1125,7 +1125,7 @@ export function subscribeAgencyParcels(
   city: any,
   callback: any,
   onError: (err?: any) => void = () => {},
-  pageLimit = 1000,
+  pageLimit = 10000, // ⚡ Augmenté pour charger suffisamment de colis (2 requêtes séparées)
   callbackWithLastDoc?: (lastDoc: any) => void,
   dateFrom?: Date | null,
   dateTo?: Date | null
