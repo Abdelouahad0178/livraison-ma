@@ -976,7 +976,6 @@ export default function ParcelsTab() {
                       <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Période</span>
                       {[
                         { key: 'all',    label: 'Récent' },
-                        { key: 'operational', label: '🗓️ J.Opé' },
                         { key: 'today',  label: "Auj." },
                         { key: 'week',   label: '7 j' },
                         { key: 'month',  label: 'Mois' },
@@ -991,17 +990,6 @@ export default function ParcelsTab() {
                       ))}
                     </div>
 
-                    {datePreset === 'operational' && (
-                      <div className="px-4 py-3">
-                        <OperationalDaySelector
-                          selectedDay={operationalDay}
-                          onDayChange={setOperationalDay}
-                          showTimeRange={false}
-                          showTodayButton={true}
-                          className="text-xs"
-                        />
-                      </div>
-                    )}
                     {datePreset === 'day' && (
                       <div className="flex items-center gap-2 pl-20">
                         <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
