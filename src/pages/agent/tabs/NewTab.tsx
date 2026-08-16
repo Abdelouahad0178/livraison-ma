@@ -999,7 +999,14 @@ export default function NewTab() {
                 placeholder="N EXP"
                 value={form.senderNic}
                 onChange={f('senderNic')}
-                onBlur={(e) => checkDuplicateNic(e.target.value)}
+                onBlur={(e) => {
+                  // 🚀 VÉRIFICATION EN ARRIÈRE-PLAN (ne bloque pas la saisie)
+                  const nic = e.target.value
+                  if (nic && nic.trim()) {
+                    // Lancer la vérification sans attendre (pas de await)
+                    checkDuplicateNic(nic).catch(() => {})
+                  }
+                }}
                 onKeyDown={handleKeyNav}
                 className={inputCls}
               />
