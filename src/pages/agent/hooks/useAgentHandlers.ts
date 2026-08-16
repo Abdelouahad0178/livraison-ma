@@ -1667,64 +1667,58 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         deliveryMethod:       form.enGare ? 'gare' : 'domicile',  // 🚉 Mode de livraison
       })
 
-      // Créer automatiquement un compte portail pour les particuliers
+      // 🚀 OPÉRATIONS POST-CRÉATION EN ARRIÈRE-PLAN (sans bloquer l'UI)
+
+      // Créer automatiquement un compte portail pour les particuliers (ARRIÈRE-PLAN)
       if (!form.clientId && form.senderName && form.senderTel) {
-        try {
-          const result = await createParticularPortalAccount({
-            name: form.senderName,
-            tel: form.senderTel,
-            city: form.senderCity || '',
-            address: form.senderAddress || '',
-            nic: form.senderNic || ''
-          })
-          if (result.success && !result.alreadyExists) {
-          }
-        } catch (err: any) {
-          console.error('❌ Erreur création compte portail particulier:', err)
-          // Ne pas bloquer la création du colis si la création du compte échoue
-        }
+        createParticularPortalAccount({
+          name: form.senderName,
+          tel: form.senderTel,
+          city: form.senderCity || '',
+          address: form.senderAddress || '',
+          nic: form.senderNic || ''
+        }).catch(err => console.error('❌ Erreur création compte portail particulier:', err))
       }
 
+      // addPayment pour autoDebit (ARRIÈRE-PLAN)
       if (form.autoDebit && form.clientId && (parcel.price as number) > 0) {
-        try {
-          await addPayment({
-            clientId:    form.clientId,
-            parcelId:    parcel.trackingId,
-            amount:      parcel.price as number,
-            type:        'debit',
-            invoiced:    true,
-            description: `Livraison ${parcel.trackingId} → ${form.receiverCity}`,
-            createdBy:   auth.currentUser?.uid,
-          })
-        } catch (err: any) { console.error('addPayment:', err) }
+        addPayment({
+          clientId:    form.clientId,
+          parcelId:    parcel.trackingId,
+          amount:      parcel.price as number,
+          type:        'debit',
+          invoiced:    true,
+          description: `Livraison ${parcel.trackingId} → ${form.receiverCity}`,
+          createdBy:   auth.currentUser?.uid,
+        }).catch(err => console.error('addPayment:', err))
       }
+
+      // addPayment pour port_en_compte (ARRIÈRE-PLAN)
       if (autoPortType === 'port_en_compte' && form.clientId && (parcel.price as number) > 0) {
-        try {
-          await addPayment({
-            clientId:    form.clientId,
-            parcelId:    parcel.trackingId,
-            amount:      parcel.price as number,
-            type:        'debit',
-            invoiced:    true,
-            description: `Port en compte — ${parcel.trackingId} → ${form.receiverCity}`,
-            createdBy:   auth.currentUser?.uid,
-          })
-        } catch (err: any) { console.error('addPayment port_en_compte:', err) }
+        addPayment({
+          clientId:    form.clientId,
+          parcelId:    parcel.trackingId,
+          amount:      parcel.price as number,
+          type:        'debit',
+          invoiced:    true,
+          description: `Port en compte — ${parcel.trackingId} → ${form.receiverCity}`,
+          createdBy:   auth.currentUser?.uid,
+        }).catch(err => console.error('addPayment port_en_compte:', err))
       }
+
+      // createCaisseEntry pour port_paye (ARRIÈRE-PLAN)
       if (parcel.portType === 'port_paye' && (parcel.price as number) > 0) {
         const agentName = profile?.name || 'Agent'
-        try {
-          await createCaisseEntry({
-            type: 'entree', category: 'port_paye',
-            amount: parcel.price as number,
-            description: `Port payé — ${parcel.trackingId} → ${form.receiverCity}`,
-            reference: parcel.trackingId,
-            agentId: auth.currentUser?.uid,
-            agentName,
-            city: profile?.city || form.senderCity || '',
-            cashierId: auth.currentUser?.uid, cashierName: agentName,
-          })
-        } catch (err: any) { console.error('createCaisseEntry port_paye:', err) }
+        createCaisseEntry({
+          type: 'entree', category: 'port_paye',
+          amount: parcel.price as number,
+          description: `Port payé — ${parcel.trackingId} → ${form.receiverCity}`,
+          reference: parcel.trackingId,
+          agentId: auth.currentUser?.uid,
+          agentName,
+          city: profile?.city || form.senderCity || '',
+          cashierId: auth.currentUser?.uid, cashierName: agentName,
+        }).catch(err => console.error('createCaisseEntry port_paye:', err))
       }
       // Mise à jour client si clientId Firestore existant
       if (form.clientId && form.senderName.trim()) {
