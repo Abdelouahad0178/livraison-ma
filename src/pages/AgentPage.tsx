@@ -1376,6 +1376,32 @@ export default function AgentPage() {
   const profileRole = profile?.role
 
   const [debugInfo, setDebugInfo] = useState<any>(null)
+  const [debugPanelPos, setDebugPanelPos] = useState({ x: 16, y: 16 })
+  const [isDraggingPanel, setIsDraggingPanel] = useState(false)
+  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 })
+
+  // Gestion du drag du panel debug
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isDraggingPanel) {
+        setDebugPanelPos({
+          x: e.clientX - dragOffset.x,
+          y: e.clientY - dragOffset.y
+        })
+      }
+    }
+    const handleMouseUp = () => {
+      setIsDraggingPanel(false)
+    }
+    if (isDraggingPanel) {
+      document.addEventListener('mousemove', handleMouseMove)
+      document.addEventListener('mouseup', handleMouseUp)
+      return () => {
+        document.removeEventListener('mousemove', handleMouseMove)
+        document.removeEventListener('mouseup', handleMouseUp)
+      }
+    }
+  }, [isDraggingPanel, dragOffset])
 
   const filteredParcels = useMemo(() => {
     // 🔍 Si recherche serveur active, utiliser ses résultats en priorité
@@ -2630,12 +2656,36 @@ export default function AgentPage() {
 
     {/* 🔍 PANEL DEBUG - Affichage des infos de filtrage */}
     {debugInfo && (
-      <div className="fixed bottom-4 right-4 bg-black text-white p-4 rounded-lg shadow-2xl text-xs font-mono max-w-md border-4 border-yellow-400" style={{ zIndex: 999999 }}>
-        <div className="flex items-center justify-between mb-2">
-          <span className="font-bold text-yellow-400">🔍 DEBUG FILTRES</span>
-          <button onClick={() => setDebugInfo(null)} className="text-red-400 hover:text-red-300">✕</button>
+      <div
+        className="fixed bg-black text-white rounded-lg shadow-2xl text-xs font-mono max-w-md border-4 border-yellow-400"
+        style={{
+          zIndex: 999999,
+          left: `${debugPanelPos.x}px`,
+          top: `${debugPanelPos.y}px`,
+          maxHeight: 'calc(100vh - 32px)',
+          display: 'flex',
+          flexDirection: 'column'
+        }}
+      >
+        <div
+          className="flex items-center justify-between p-3 cursor-move bg-yellow-900 rounded-t-md select-none"
+          onMouseDown={(e) => {
+            setIsDraggingPanel(true)
+            const rect = e.currentTarget.parentElement!.getBoundingClientRect()
+            setDragOffset({
+              x: e.clientX - rect.left,
+              y: e.clientY - rect.top
+            })
+          }}
+        >
+          <span className="font-bold text-yellow-400">🔍 DEBUG FILTRES (déplaçable)</span>
+          <button
+            onClick={() => setDebugInfo(null)}
+            className="text-red-400 hover:text-red-300 ml-2"
+            onMouseDown={(e) => e.stopPropagation()}
+          >✕</button>
         </div>
-        <div className="space-y-1">
+        <div className="space-y-1 overflow-y-auto p-4" style={{ maxHeight: 'calc(100vh - 100px)' }}>
           <div className="text-green-400">📦 Chargés: {debugInfo.etape1_source} colis</div>
           <div className="text-blue-400">📅 Après date: {debugInfo.etape2_apres_date} colis</div>
           <div className="text-purple-400">✅ Final: {debugInfo.etape3_final} colis</div>
