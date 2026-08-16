@@ -773,7 +773,7 @@ export default function AgentPage() {
           if (data.length < effectivePageSize) setHasMoreAgency(false)
         },
         onError,
-        effectivePageSize, // ⚡ 50 ou 1000 selon filtres
+        Math.max(effectivePageSize, 5000), // ⚡ Minimum 5000 pour charger suffisamment de colis (2 requêtes séparées)
         (lastDocs: any) => {
           if (!agencyPagedRef.current) {
             agencyLastDocsRef.current = lastDocs
