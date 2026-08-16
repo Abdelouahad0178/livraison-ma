@@ -77,17 +77,15 @@ export const filterByDate = <T>(
     start = from ? new Date(from) : null
     if (start) { start.setHours(0, 0, 0, 0); end = new Date(from + 'T23:59:59') }
   } else if (preset === 'custom') {
-    // 🗓️ TOUJOURS utiliser JOUR D'OPÉRATION (8H → 6H lendemain)
-    // Ex: 13/08 → 15/08 = du 13/08 à 8H jusqu'au 16/08 à 6H
+    // 📅 FILTRE PÉRIODE : Plage de dates normale (00:00 → 23:59)
+    // Ex: 13/08 → 15/08 = du 13/08 à 00:00 jusqu'au 15/08 à 23:59
     if (from) {
-      start = new Date(from + 'T08:00:00') // Début du jour d'opération du premier jour
+      start = new Date(from + 'T00:00:00')
     } else {
       start = null
     }
     if (to) {
-      const endDay = new Date(to)
-      endDay.setDate(endDay.getDate() + 1) // Lendemain
-      end = new Date(endDay.toISOString().split('T')[0] + 'T06:00:00') // 6H du lendemain
+      end = new Date(to + 'T23:59:59')
     } else {
       end = endOfToday
     }

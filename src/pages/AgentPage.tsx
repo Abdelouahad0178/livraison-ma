@@ -124,7 +124,7 @@ const entryDate = (e: any) => {
   if (e.createdAt) return new Date(e.createdAt)
   return new Date(0)
 }
-const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parcelDate) => {
+const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parcelDate, operationalDay?: any) => {
   if (preset === 'all') return list
   const now = new Date()
   const endOfToday = new Date(); endOfToday.setHours(23,59,59,999)
@@ -133,7 +133,28 @@ const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parc
   else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate()-6); start.setHours(0,0,0,0) }
   else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
   else if (preset === 'day')    { start = from ? new Date(from) : null; if (start) { start.setHours(0,0,0,0); end = new Date(from+'T23:59:59') } }
-  else if (preset === 'custom') { start = from ? new Date(from) : null; if (start) start.setHours(0,0,0,0); end = to ? new Date(to+'T23:59:59') : endOfToday }
+  else if (preset === 'operational' && operationalDay) {
+    // 🗓️ JOUR D'OPÉRATION : 8H → 6H lendemain
+    const range = getOperationalDayRange(operationalDay)
+    start = range.start
+    end = range.end
+    console.log('🗓️ OPERATIONAL RANGE:', { start, end })
+  }
+  else if (preset === 'custom') {
+    // 📅 FILTRE PÉRIODE : Plage de dates normale (00:00 → 23:59)
+    if (from) {
+      start = new Date(from + 'T00:00:00')
+      console.log('📅 CUSTOM START:', from, '→', start)
+    } else {
+      start = null
+    }
+    if (to) {
+      end = new Date(to + 'T23:59:59')
+      console.log('📅 CUSTOM END:', to, '→', end)
+    } else {
+      end = endOfToday
+    }
+  }
   return list.filter((p: any) => {
     const d = getDate(p)
     if (start && d < start) return false
@@ -1452,6 +1473,19 @@ export default function AgentPage() {
       showAllCities
     }
 
+    // 🔍 DEBUG: Calculer les dates start/end pour affichage
+    let debugStart: any = null, debugEnd: any = null
+    if (datePreset === 'custom' && dateFrom) {
+      debugStart = new Date(dateFrom + 'T08:00:00')
+      if (dateTo) {
+        const endDay = new Date(dateTo)
+        endDay.setDate(endDay.getDate() + 1)
+        debugEnd = new Date(endDay.toISOString().split('T')[0] + 'T06:00:00')
+      }
+      debugData.calculatedStart = debugStart?.toISOString()
+      debugData.calculatedEnd = debugEnd?.toISOString()
+    }
+
     // 📅 Extracteur de date selon le type de filtre (création/livraison)
     const dateExtractor = dateFilterType === 'livraison'
       ? (p: any) => {
@@ -1476,8 +1510,8 @@ export default function AgentPage() {
           id: p.id?.substring(0, 8),
           trackingId: p.trackingId,
           workDate: p.workDate,
-          createdAt: p.createdAt?.toDate?.()?.toISOString?.()?.split('T')[0],
-          utilisé: dateExtractor(p).toISOString().split('T')[0],
+          createdAt: p.createdAt?.toDate?.()?.toISOString?.(),
+          utilisé: dateExtractor(p).toISOString(),
           status: p.status,
           raison: 'Hors période filtrée'
         }))
@@ -1488,8 +1522,8 @@ export default function AgentPage() {
         const sampleApres = dateFilteredData.slice(0, 3).map((p: any) => ({
           id: p.id?.substring(0, 8),
           workDate: p.workDate,
-          createdAt: p.createdAt?.toDate?.()?.toISOString?.()?.split('T')[0],
-          utilisé: dateExtractor(p).toISOString().split('T')[0]
+          createdAt: p.createdAt?.toDate?.()?.toISOString?.(),
+          utilisé: dateExtractor(p).toISOString()
         }))
         debugData.apres_filtre = sampleApres
       }
@@ -2794,6 +2828,12 @@ export default function AgentPage() {
             <div className="text-gray-400">Période: {debugInfo.datePreset}</div>
             <div className="text-gray-400">Du: {debugInfo.dateFrom || 'N/A'}</div>
             <div className="text-gray-400">Au: {debugInfo.dateTo || 'N/A'}</div>
+            {debugInfo.calculatedStart && (
+              <div className="text-yellow-400 mt-2">
+                <div>🗓️ Start calculé: {debugInfo.calculatedStart}</div>
+                <div>🗓️ End calculé: {debugInfo.calculatedEnd || 'N/A'}</div>
+              </div>
+            )}
             <div className="text-gray-400">Type: {debugInfo.dateFilterType}</div>
             <div className={debugInfo.showAllCities ? 'text-green-400' : 'text-red-400'}>
               Villes: {debugInfo.showAllCities ? '🌍 Toutes' : '📍 Ma ville'}
