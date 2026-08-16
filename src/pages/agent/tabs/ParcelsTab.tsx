@@ -722,8 +722,8 @@ export default function ParcelsTab() {
                 </div>
               </button>
 
-              {/* ✅ Bouton "Toutes les villes" - Réactivé pour éviter filtre trop restrictif */}
-              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+              {/* ✅ Bouton "Toutes les villes" - UNIQUEMENT pour Agent Pro */}
+              {profile?.role === 'agentpro' && (
                 <button
                   onClick={() => setShowAllCities(!showAllCities)}
                   className="w-full flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-xl shadow-sm hover:border-purple-400 hover:bg-purple-50 transition"
