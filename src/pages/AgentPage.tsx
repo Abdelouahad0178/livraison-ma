@@ -1593,11 +1593,15 @@ export default function AgentPage() {
        parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, codDocumentStatusFilter, debouncedSearch, serverSearchResults, showAllCities])
 
   // 📜 Scroll automatique vers le haut après filtrage
+  const firstRenderRef = useRef(true)
   useEffect(() => {
-    // Scroller vers le haut quand les filtres changent (sauf au premier rendu)
-    if (filteredParcels.length > 0) {
-      window.scrollTo({ top: 0, behavior: 'smooth' })
+    // Skip au premier rendu
+    if (firstRenderRef.current) {
+      firstRenderRef.current = false
+      return
     }
+    // Scroller vers le haut quand les filtres changent
+    window.scrollTo({ top: 0, behavior: 'smooth' })
   }, [datePreset, dateFrom, dateTo, serviceFilter, parcelStatusFilter, parcelDirection, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter])
 
   // ── Phase 3: memoized stats — only recompute when Firestore sends new data ──
@@ -2026,6 +2030,41 @@ export default function AgentPage() {
     return () => window.removeEventListener('keydown', handleEsc)
   }, [globalScanModal])
 
+  // 📄 Charger plus de colis avec filtre de date
+  const handleLoadMoreWithDateFilter = async () => {
+    if (!lastSnapWithDateFilter || loadingMoreWithDateFilter) return
+
+    setLoadingMoreWithDateFilter(true)
+
+    try {
+      const dateFromObj = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
+      const dateToObj = dateTo ? new Date(dateTo + 'T23:59:59') : null
+
+      const result = await loadMoreParcelsWithDateFilter(lastSnapWithDateFilter, {
+        pageSize: FILTERED_PAGE_SIZE,
+        dateFrom: dateFromObj,
+        dateTo: dateToObj
+      })
+
+      if (result.docs.length > 0) {
+        // Ajouter les nouveaux colis à la liste existante
+        const newTotal = parcels.length + result.docs.length
+        setParcels(prev => [...prev, ...result.docs])
+        setLiveParcels(prev => [...prev, ...result.docs])
+        setLastSnapWithDateFilter(result.lastSnap)
+        setHasMoreWithDateFilter(result.hasMore)
+
+        console.log(`📄 ${result.docs.length} colis supplémentaires chargés (total: ${newTotal})`)
+      } else {
+        setHasMoreWithDateFilter(false)
+      }
+    } catch (error) {
+      console.error('Erreur chargement colis supplémentaires:', error)
+    } finally {
+      setLoadingMoreWithDateFilter(false)
+    }
+  }
+
   const ctxValue = {
     // ── Core
     profile, navigate,
@@ -2385,40 +2424,6 @@ export default function AgentPage() {
 
   // ⭐ Calculer le nombre de colis perdus non résolus (badge notification)
   const lostParcelsCount = lostParcels.filter(lp => lp.status !== 'found').length
-
-  // 📄 Charger plus de colis avec filtre de date
-  const handleLoadMoreWithDateFilter = async () => {
-    if (!lastSnapWithDateFilter || loadingMoreWithDateFilter) return
-
-    setLoadingMoreWithDateFilter(true)
-
-    try {
-      const dateFromObj = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
-      const dateToObj = dateTo ? new Date(dateTo + 'T23:59:59') : null
-
-      const result = await loadMoreParcelsWithDateFilter(lastSnapWithDateFilter, {
-        pageSize: FILTERED_PAGE_SIZE,
-        dateFrom: dateFromObj,
-        dateTo: dateToObj
-      })
-
-      if (result.docs.length > 0) {
-        // Ajouter les nouveaux colis à la liste existante
-        setParcels(prev => [...prev, ...result.docs])
-        setLiveParcels(prev => [...prev, ...result.docs])
-        setLastSnapWithDateFilter(result.lastSnap)
-        setHasMoreWithDateFilter(result.hasMore)
-
-        console.log(`📄 ${result.docs.length} colis supplémentaires chargés (total: ${parcels.length + result.docs.length})`)
-      } else {
-        setHasMoreWithDateFilter(false)
-      }
-    } catch (error) {
-      console.error('Erreur chargement colis supplémentaires:', error)
-    } finally {
-      setLoadingMoreWithDateFilter(false)
-    }
-  }
 
   return (
     <AgentCtx.Provider value={ctxValue}>
