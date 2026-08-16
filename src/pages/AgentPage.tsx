@@ -1344,6 +1344,15 @@ export default function AgentPage() {
       ? serverSearchResults
       : allDisplayParcels
 
+    console.warn(`🔍 DEBUG filteredParcels - Source:`, {
+      total: sourceData.length,
+      datePreset,
+      dateFrom,
+      dateTo,
+      dateFilterType,
+      showAllCities
+    })
+
     // 📅 Extracteur de date selon le type de filtre (création/livraison)
     const dateExtractor = dateFilterType === 'livraison'
       ? (p: any) => {
@@ -1355,7 +1364,12 @@ export default function AgentPage() {
     // ✅ Toujours appliquer le filtre par date (même si un livreur est sélectionné)
     const dateFilteredData = filterByDate(sourceData, datePreset, dateFrom, dateTo, dateExtractor, operationalDay)
 
-    return dateFilteredData.filter((p: any) => {
+    console.warn(`📅 DEBUG après filtre date:`, {
+      avant: sourceData.length,
+      après: dateFilteredData.length
+    })
+
+    const filtered = dateFilteredData.filter((p: any) => {
     // 🔒 FILTRE VILLE OBLIGATOIRE (sauf en mode "Toutes les villes")
     // Le chef d'agence ne voit QUE les colis de sa ville, SAUF si showAllCities est activé
     if (!showAllCities && profileCity && (profileRole === 'chef_agence' || profileRole === 'agentpro')) {
@@ -1456,6 +1470,20 @@ export default function AgentPage() {
     }
     return true
     })
+
+    console.warn(`✅ DEBUG filteredParcels FINAL:`, {
+      total: filtered.length,
+      filtresActifs: {
+        parcelStatusFilter,
+        parcelDirection,
+        serviceFilter,
+        destinationCityFilter,
+        driverFilter,
+        portTypeFilter
+      }
+    })
+
+    return filtered
   }, [allDisplayParcels, datePreset, dateFrom, dateTo, dateFilterType, operationalDay, profileCity, profileRole, subTab, uid, serviceFilter,
        parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, codDocumentStatusFilter, debouncedSearch, serverSearchResults, showAllCities])
 
