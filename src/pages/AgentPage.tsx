@@ -342,7 +342,7 @@ export default function AgentPage() {
   // Recherche dans TOUTE la base Firestore, pas seulement les colis chargés
   useEffect(() => {
     const query = debouncedSearch.trim()
-    if (!query || query.length < 3) {
+    if (!query || query.length < 5) {
       setServerSearchResults(null)
       setIsSearching(false)
       return

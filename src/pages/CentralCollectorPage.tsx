@@ -244,7 +244,7 @@ export default function CentralCollectorPage() {
   useEffect(() => {
     // Prendre la recherche active (Fournisseurs OU Contrôle)
     const searchQuery = (query.trim() || ctlDebounced.trim())
-    if (!searchQuery || searchQuery.length < 3) {
+    if (!searchQuery || searchQuery.length < 5) {
       setServerResults([])
       setDeepSearching(false)
       return
