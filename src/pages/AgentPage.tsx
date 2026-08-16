@@ -267,7 +267,7 @@ export default function AgentPage() {
 
   // ⚡ Système de chargement optimisé (Option 3)
   const PAGE_SIZE = 50 // Chargement initial réduit pour performance
-  const FILTERED_PAGE_SIZE = 1000 // Quand filtres actifs
+  const FILTERED_PAGE_SIZE = 5000 // Quand filtres actifs (augmenté pour périodes avec beaucoup d'expéditions)
   const AGENCY_PAGE_SIZE = PAGE_SIZE // Compatibilité (sera remplacé par effectivePageSize)
   const [liveParcels, setLiveParcels] = useState<any[]>([]) // Premiers 600 en temps réel
   const [moreParcels, setMoreParcels] = useState<any[]>([]) // Chargés progressivement
