@@ -625,6 +625,7 @@ export default function AgentPage() {
     const hasOtherFilters =
       serviceFilter !== 'all' ||
       parcelStatusFilter !== 'all' ||
+      parcelDirection !== 'all' ||
       destinationCityFilter !== 'all' ||
       driverFilter !== 'all' ||
       portTypeFilter !== 'all' ||
