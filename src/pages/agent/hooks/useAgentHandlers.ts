@@ -182,6 +182,18 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       for (const parcel of selectedParcels) {
         console.log('📦 Assignation colis:', parcel.trackingId, 'au livreur ID:', bulkAssignDriverId)
 
+        // ⚡ OPTIMISTIC UPDATE : Mettre à jour l'UI IMMÉDIATEMENT
+        updateParcelLocal(parcel.id, {
+          deliveryDriverId: bulkAssignDriverId,
+          deliveryDriverName: driver?.name || 'Livreur',
+          deliverySectorId: sector?.id || '',
+          deliverySectorCode: sector?.code || '',
+          deliverySectorName: sector?.name || '',
+          deliveryAssignedBy: profile?.name || 'Chef agence',
+          deliveryAssignedAt: new Date().toISOString(),
+          status: 'En cours de livraison',
+        })
+
         await assignDeliveryDriver(
           parcel.id,
           bulkAssignDriverId,
@@ -234,6 +246,21 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       const vehicleLabel = vehicle
         ? [vehicle.matricule, vehicle.marque, vehicle.modele].filter(Boolean).join(' - ')
         : ''
+
+      // ⚡ OPTIMISTIC UPDATE : Mettre à jour l'UI IMMÉDIATEMENT
+      updateParcelLocal(parcel.id, {
+        deliveryDriverId: driverId,
+        deliveryDriverName: driver?.name || '',
+        deliverySectorId: sector?.id || '',
+        deliverySectorCode: sector?.code || '',
+        deliverySectorName: sector?.name || '',
+        deliveryVehicleId: vehicle?.id || '',
+        deliveryVehicleLabel: vehicleLabel,
+        deliveryAssignedBy: profile?.name || 'Chef agence',
+        deliveryAssignedAt: new Date().toISOString(),
+        status: 'En cours de livraison',
+      })
+
       await assignDeliveryDriver(parcel.id, driverId, driver?.name || '', {
         deliverySectorId:     sector?.id || '',
         deliverySectorCode:   sector?.code || '',
@@ -558,6 +585,18 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const { setAllCodParcels, setParcels } = s.current
     setAllCodParcels((prev: any) => prev ? prev.map((p: any) => p.id === id ? { ...p, ...fields } : p) : prev)
     setParcels((prev: any) => prev.map((p: any) => p.id === id ? { ...p, ...fields } : p))
+  }
+
+  // ⚡ OPTIMISTIC UPDATE : Met à jour l'état local IMMÉDIATEMENT après modification
+  const updateParcelLocal = (id: any, fields: any) => {
+    const { setParcels, setLiveParcels, setReturnParcels, setAllCodParcels } = s.current
+    const updateFn = (prev: any) => prev.map((p: any) => p.id === id ? { ...p, ...fields } : p)
+
+    // Mettre à jour tous les états qui contiennent des parcels
+    setParcels(updateFn)
+    setLiveParcels?.(updateFn)
+    setReturnParcels?.(updateFn)
+    setAllCodParcels?.((prev: any) => prev ? updateFn(prev) : prev)
   }
 
   const handleRemitCod = async (parcel: any) => {
