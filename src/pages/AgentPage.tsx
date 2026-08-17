@@ -809,11 +809,23 @@ export default function AgentPage() {
       let filterDateTo: Date | null = null
 
       if (datePreset === 'custom' && (dateFrom || dateTo)) {
-        // 📦 AUCUNE LIMITE : Charger tous les colis, filtrage côté client
-        filterDateFrom = null
-        filterDateTo = null
+        // 📅 FILTRE PÉRIODE : Utiliser les dates exactes sélectionnées
+        if (dateFrom) {
+          filterDateFrom = new Date(dateFrom + 'T00:00:00')
+        } else {
+          filterDateFrom = null
+        }
 
-        console.log(`📦 [Chef d'agence] Période custom pour ${profile.city} - SANS LIMITE (filtrage côté client)`)
+        if (dateTo) {
+          filterDateTo = new Date(dateTo + 'T23:59:59')
+        } else {
+          filterDateTo = null
+        }
+
+        console.log(`📅 [Chef d'agence] Période custom pour ${profile.city}:`, {
+          from: filterDateFrom?.toLocaleDateString('fr-MA'),
+          to: filterDateTo?.toLocaleDateString('fr-MA')
+        })
       } else if (datePreset === 'operational' && operationalDay) {
         // 🗓️ Journée opérationnelle: 8H → 6H lendemain
         const range = getOperationalDayRange(operationalDay)
