@@ -79,9 +79,10 @@ import AgentReturnModal from './agent/modals/AgentReturnModal'
 import { printCharge, printTable, printBonRamassage } from '../utils/agentPrintUtils'
 import { getOperationalDayRange } from '../config/operationalDay'
 import DateFilter from './agent/DateFilter'
-import ParcelsTab from './agent/tabs/ParcelsTab'  // ⭐ Import direct pour mise à jour temps réel
-import DirectorCaisseSimple from './director/DirectorCaisseSimple'  // ⭐ Nouveau système de caisse simple
 import { useOperationalDaySelector } from '../hooks/useOperationalDay' // 🗓️ Journée opérationnelle
+// ⚡ OPTIMISATION : Lazy loading pour tous les tabs (y compris ParcelsTab) pour chargement rapide
+const ParcelsTab = lazy(() => import('./agent/tabs/ParcelsTab'))
+const DirectorCaisseSimple = lazy(() => import('./director/DirectorCaisseSimple'))
 const HomeTab = lazy(() => import('./agent/tabs/HomeTab'))
 const NewTab = lazy(() => import('./agent/tabs/NewTab'))
 const CodTab = lazy(() => import('./agent/tabs/CodTab'))
@@ -125,11 +126,17 @@ const entryDate = (e: any) => {
   return new Date(0)
 }
 const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parcelDate, operationalDay?: any) => {
-  if (preset === 'all') return list
   const now = new Date()
   const endOfToday = new Date(); endOfToday.setHours(23,59,59,999)
   let start: any = null, end: any = endOfToday
-  if      (preset === 'today')  { start = new Date(); start.setHours(0,0,0,0) }
+
+  // ⚡ OPTIMISATION : "Récent" = 30 derniers jours au lieu de tout l'historique
+  if (preset === 'all') {
+    start = new Date()
+    start.setDate(now.getDate() - 30) // 30 jours en arrière
+    start.setHours(0, 0, 0, 0)
+  }
+  else if (preset === 'today')  { start = new Date(); start.setHours(0,0,0,0) }
   else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate()-6); start.setHours(0,0,0,0) }
   else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
   else if (preset === 'day')    { start = from ? new Date(from) : null; if (start) { start.setHours(0,0,0,0); end = new Date(from+'T23:59:59') } }
@@ -163,7 +170,7 @@ const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parc
   })
 }
 const dateFilterLabel = (preset: string): string => (({
-  all: 'Solde total',
+  all: 'Solde 30 jours', // ⚡ Optimisé : 30 derniers jours au lieu de tout l'historique
   today: "Solde aujourd'hui",
   week: 'Solde 7 jours',
   month: 'Solde ce mois',
@@ -607,39 +614,55 @@ export default function AgentPage() {
     return () => window.removeEventListener('keydown', handleGlobalKeyDown)
   }, [tab])
 
+  // ⚡ OPTIMISATION : Charger les données secondaires après un délai pour affichage rapide
   useEffect(() => {
     if (!profile?.role) return
     const uid = auth.currentUser?.uid
     if (!uid) return
-    const isAide = profile.role === 'aide_agent'
-    const isAgentPro = profile.role === 'agentpro'
-    const onListenerError = (label: any) => (err: any) => {
-      console.error(`AgentPage ${label}:`, err)
-      if (err.code === 'permission-denied') {
-        auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
+
+    const unsubscribers: (() => void)[] = []
+
+    // ⏱️ Délai de 500ms pour afficher l'interface rapidement avant de charger les données
+    const delayTimer = setTimeout(() => {
+      const isAide = profile.role === 'aide_agent'
+      const isAgentPro = profile.role === 'agentpro'
+      const onListenerError = (label: any) => (err: any) => {
+        console.error(`AgentPage ${label}:`, err)
+        if (err.code === 'permission-denied') {
+          auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
+        }
       }
-    }
-    // aide_agent a accès limité, agentpro a les mêmes accès que chef_agence
-    const unsubClients     = subscribeClients(setClients, onListenerError('subscribeClients'))
-    const unsubDrivers     = (isAide) ? null : subscribeDrivers(setDrivers, onListenerError('subscribeDrivers'))
-    const unsubUsers       = (isAide) ? null : subscribeAllUsers(data => {
-      setAgencyCashiers(data.filter(u => u.role === 'caissier'))
-      setAllUsers(data)
-    }, onListenerError('subscribeAllUsers'))
-    const unsubCodRequests = isAide ? null : subscribeAgentCodRequests(uid, setAgentCodRequests, onListenerError('subscribeAgentCodRequests'))
+      // aide_agent a accès limité, agentpro a les mêmes accès que chef_agence
+      unsubscribers.push(subscribeClients(setClients, onListenerError('subscribeClients')))
+      if (!isAide) {
+        unsubscribers.push(subscribeDrivers(setDrivers, onListenerError('subscribeDrivers')))
+        unsubscribers.push(subscribeAllUsers(data => {
+          setAgencyCashiers(data.filter(u => u.role === 'caissier'))
+          setAllUsers(data)
+        }, onListenerError('subscribeAllUsers')))
+        unsubscribers.push(subscribeAgentCodRequests(uid, setAgentCodRequests, onListenerError('subscribeAgentCodRequests')))
+      }
+    }, 500)
+
     return () => {
-      unsubClients()
-      unsubDrivers?.()
-      unsubUsers?.()
-      unsubCodRequests?.()
+      clearTimeout(delayTimer)
+      unsubscribers.forEach(unsub => unsub())
     }
   }, [profile?.role, authTick])
 
   // 🔄 Chargement optimisé avec détection de filtres (Option 3)
+  // ⚡ OPTIMISATION : Charger les parcels uniquement si l'onglet nécessite des parcels
   useEffect(() => {
     if (!profile) return
     const uid = auth.currentUser?.uid
     if (!uid) return
+
+    // ⚡ Ne charger les parcels que si on est sur un onglet qui en a besoin
+    const tabsNeedingParcels = ['home', 'parcels', 'cod', 'charge', 'arrivage', 'retours', 'portsDu', 'portsEnCompte']
+    if (!tabsNeedingParcels.includes(tab)) {
+      console.log(`⏭️ Onglet "${tab}" ne nécessite pas de parcels, chargement ignoré`)
+      return
+    }
 
     // 🔍 Détecter si des filtres sont actifs
     const hasDateFilter = datePreset !== 'all'
@@ -811,13 +834,14 @@ export default function AgentPage() {
           to: filterDateTo?.toLocaleString('fr-MA')
         })
       } else {
-        // SINON → CHARGER 10 DERNIERS JOURS (gestion quotidienne)
+        // ⚡ OPTIMISATION : CHARGER 30 DERNIERS JOURS (au lieu de tout l'historique)
+        // Correspond au filtre "Récent" côté client
         filterDateFrom = new Date()
-        filterDateFrom.setDate(filterDateFrom.getDate() - 10)
+        filterDateFrom.setDate(filterDateFrom.getDate() - 30)
         filterDateFrom.setHours(0, 0, 0, 0)
         filterDateTo = null // Jusqu'à maintenant
 
-        console.log(`📦 [Chef] Chargement AUTO 10 derniers jours`)
+        console.log(`📦 [Chef] Chargement AUTO 30 derniers jours (Récent optimisé)`)
       }
 
       agencyDateFilterRef.current = { dateFrom: filterDateFrom, dateTo: filterDateTo }
@@ -868,7 +892,7 @@ export default function AgentPage() {
       unsubscribersRef.current.forEach(unsub => unsub())
       unsubscribersRef.current = []
     }
-  }, [profile?.role, profile?.city, authTick, showAllCities, datePreset, dateFrom, dateTo, operationalDay, serviceFilter, parcelStatusFilter, parcelDirection, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, codDocumentStatusFilter]) // ⚡ TOUS les filtres pour recharger 50→1000
+  }, [tab, profile?.role, profile?.city, authTick, showAllCities, datePreset, dateFrom, dateTo, operationalDay, serviceFilter, parcelStatusFilter, parcelDirection, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, codDocumentStatusFilter]) // ⚡ TOUS les filtres pour recharger 50→1000 + tab pour chargement lazy
 
   // ❌ DÉSACTIVÉ: Chargement automatique de tous les colis (désormais MANUEL uniquement)
   // useEffect(() => {
@@ -1076,46 +1100,60 @@ export default function AgentPage() {
   }, [profile?.city, profile?.role, authTick])
 
   // ⭐ TEMPS RÉEL : toujours subscribe aux arrivages pour afficher le badge de notification
+  // ⚡ OPTIMISATION : Retarder de 2 secondes pour affichage rapide initial
   useEffect(() => {
     if (!profile?.city) return
     const isAide = profile.role === 'aide_agent'
     if (isAide) return
-    const onErr = (label: any) => (err: any) => {
-      console.error(`AgentPage ${label}:`, err)
-      if (err.code === 'permission-denied') {
-        auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
+
+    const unsubscribers: (() => void)[] = []
+
+    // ⏱️ Délai de 2s pour afficher l'interface rapidement
+    const delayTimer = setTimeout(() => {
+      const onErr = (label: any) => (err: any) => {
+        console.error(`AgentPage ${label}:`, err)
+        if (err.code === 'permission-denied') {
+          auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
+        }
       }
-    }
-    const unsubArrivages = subscribeArrivages(profile.city, setArrivages, onErr('subscribeArrivages'))
-    const unsubBonBatch = subscribeBonRamasageBatches(profile.city, setBonBatches, onErr('subscribeBonRamasageBatches'))
-    const unsubNotes = (profile.role === 'chef_agence' || profile.role === 'agentpro') ? subscribeAgentNotesByCity(profile.city, setAgentNotes, onErr('subscribeAgentNotes')) : null
-    const unsubUsers = (profile.role === 'chef_agence' || profile.role === 'agentpro') ? subscribeAllUsers(setUsers, onErr('subscribeAllUsers')) : null
-    let unsubT1: any = null, unsubT2: any = null
-    const mergeTransit = (() => {
-      let normal: any[] = [], retour: any[] = []
-      const merge = () => {
-        const list = [...normal, ...retour]
-          .sort((a, b) => (a.chauffeurName || '').localeCompare(b.chauffeurName || ''))
-        setTransitParcels(list)
-        setArrivedBoxes((prev: any) => {
-          const next = {}
-          list.forEach(p => {
-            const total = p.nbColis || 1
-            ;(next as any)[p.id] = prev[p.id] !== undefined ? Math.min(prev[p.id], total) : 0
+      unsubscribers.push(subscribeArrivages(profile.city, setArrivages, onErr('subscribeArrivages')))
+      unsubscribers.push(subscribeBonRamasageBatches(profile.city, setBonBatches, onErr('subscribeBonRamasageBatches')))
+      if (profile.role === 'chef_agence' || profile.role === 'agentpro') {
+        unsubscribers.push(subscribeAgentNotesByCity(profile.city, setAgentNotes, onErr('subscribeAgentNotes')))
+        unsubscribers.push(subscribeAllUsers(setUsers, onErr('subscribeAllUsers')))
+      }
+
+      const mergeTransit = (() => {
+        let normal: any[] = [], retour: any[] = []
+        const merge = () => {
+          const list = [...normal, ...retour]
+            .sort((a, b) => (a.chauffeurName || '').localeCompare(b.chauffeurName || ''))
+          setTransitParcels(list)
+          setArrivedBoxes((prev: any) => {
+            const next = {}
+            list.forEach(p => {
+              const total = p.nbColis || 1
+              ;(next as any)[p.id] = prev[p.id] !== undefined ? Math.min(prev[p.id], total) : 0
+            })
+            return next
           })
-          return next
-        })
-      }
-      return {
-        setNormal: (v: any) => { normal = v; merge() },
-        setRetour: (v: any) => { retour = v; merge() },
-      }
-    })()
-    const q1 = query(collection(db, 'parcels'), where('destinationCity', '==', profile.city), where('status', '==', 'En transit'))
-    const q2 = query(collection(db, 'parcels'), where('destinationCity', '==', profile.city), where('status', '==', 'Retour en transit'))
-    unsubT1 = onSnapshot(q1, snap => mergeTransit.setNormal(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onErr('subscribeTransitNormal'))
-    unsubT2 = onSnapshot(q2, snap => mergeTransit.setRetour(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onErr('subscribeTransitRetour'))
-    return () => { unsubArrivages(); unsubBonBatch?.(); unsubT1?.(); unsubT2?.(); unsubNotes?.(); unsubUsers?.() }
+        }
+        return {
+          setNormal: (v: any) => { normal = v; merge() },
+          setRetour: (v: any) => { retour = v; merge() },
+        }
+      })()
+      const q1 = query(collection(db, 'parcels'), where('destinationCity', '==', profile.city), where('status', '==', 'En transit'))
+      const q2 = query(collection(db, 'parcels'), where('destinationCity', '==', profile.city), where('status', '==', 'Retour en transit'))
+      const unsubT1 = onSnapshot(q1, snap => mergeTransit.setNormal(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onErr('subscribeTransitNormal'))
+      const unsubT2 = onSnapshot(q2, snap => mergeTransit.setRetour(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onErr('subscribeTransitRetour'))
+      unsubscribers.push(unsubT1, unsubT2)
+    }, 2000)
+
+    return () => {
+      clearTimeout(delayTimer)
+      unsubscribers.forEach(unsub => unsub())
+    }
   }, [profile?.city, profile?.role, authTick]) // ⭐ Enlevé 'tab' - toujours actif maintenant
 
   // Lazy: caisse, versements, rapports — uniquement a la premiere visite de l'onglet

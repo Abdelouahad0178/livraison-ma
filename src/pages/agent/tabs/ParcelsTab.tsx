@@ -975,7 +975,7 @@ export default function ParcelsTab() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Période</span>
                       {[
-                        { key: 'all',    label: 'Récent' },
+                        { key: 'all',    label: '30j' }, // ⚡ Optimisé : 30 derniers jours
                         { key: 'today',  label: "Auj." },
                         { key: 'week',   label: '7 j' },
                         { key: 'month',  label: 'Mois' },

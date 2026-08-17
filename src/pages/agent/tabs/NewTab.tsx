@@ -165,24 +165,24 @@ export default function NewTab() {
     return () => clearTimeout(timer)
   }, [])
 
-  // Vérifier si le N° EXP existe déjà dans l'agence courante
+  // 🇲🇦 Vérifier si le N° EXP existe déjà dans TOUTE LA PLATEFORME (toutes les agences du Maroc)
   const checkDuplicateNic = async (nic: string) => {
     if (!nic || nic.trim() === '') return
-    if (!profile?.city) return // Pas de vérification si pas de ville définie
 
     try {
-      // Chercher uniquement dans les colis de la même agence (ville)
+      // 🌍 Chercher dans TOUTES les agences du Maroc (pas seulement l'agence locale)
       const q = query(
         collection(db, 'parcels'),
         where('sender.nic', '==', nic.trim()),
-        where('originCity', '==', profile.city),
         limit(1)
       )
       const snapshot = await getDocs(q)
 
       if (!snapshot.empty) {
         const existingParcel = snapshot.docs[0].data()
-        alert(`⚠️ ATTENTION - N° EXP DÉJÀ EXISTANT!\n\nLe N° EXP "${nic}" existe déjà dans votre agence (${profile.city}).\n\nExpédition existante: ${existingParcel.trackingId}\nExpéditeur: ${existingParcel.sender?.name || '—'}\n\n❌ NE PAS DOUBLER L'EXPÉDITION!\n\nLe N° EXP sera effacé.`)
+        const existingCity = existingParcel.originCity || 'Ville inconnue'
+
+        alert(`⚠️ ATTENTION - N° EXP DÉJÀ EXISTANT!\n\n🇲🇦 Le N° EXP "${nic}" existe DÉJÀ dans la plateforme.\n\n📍 Agence: ${existingCity}\n📦 Expédition: ${existingParcel.trackingId}\n👤 Expéditeur: ${existingParcel.sender?.name || '—'}\n\n❌ NE PAS DOUBLER L'EXPÉDITION!\n\nLe N° EXP sera effacé.`)
 
         // Effacer le N° EXP dupliqué
         setForm((prev: any) => ({ ...prev, senderNic: '' }))
