@@ -203,6 +203,52 @@ export async function collectPortDu(parcelId: string, agentName: string, agentId
     portCollectedBy:     agentName,
     portCollectedById:   agentId,
     portCollectedAt:     serverTimestamp(),
+    portDuReceivedMethod: 'especes', // Par défaut espèces pour cette fonction
+  })
+}
+
+/**
+ * Collecter un port dû payé par chèque avec détails du chèque
+ * @param parcelId ID du colis
+ * @param details Détails du chèque (banque, numéro, date)
+ * @param collectedBy Nom de la personne qui collecte
+ * @param collectedById ID de la personne qui collecte
+ */
+export async function collectPortDuCheque(
+  parcelId: string,
+  details: {
+    banque: string
+    numero: string
+    dateEncaissement: string
+  },
+  collectedBy: string,
+  collectedById: string
+): Promise<void> {
+  const parcelRef = doc(db, 'parcels', parcelId)
+
+  // Vérifier que le colis existe et est bien un port dû
+  const snap = await getDoc(parcelRef)
+  if (!snap.exists()) {
+    throw new Error('Colis introuvable')
+  }
+
+  const parcel = snap.data()
+  if (parcel.portType !== 'port_du') {
+    throw new Error('Ce colis n\'est pas un port dû')
+  }
+
+  // Mettre à jour avec les détails du chèque
+  await updateDoc(parcelRef, {
+    portStatus: 'collected',
+    portCollectedBy: collectedBy,
+    portCollectedById: collectedById,
+    portCollectedAt: serverTimestamp(),
+    portDuReceivedMethod: 'cheque',
+    portDuChequeBanque: details.banque,
+    portDuChequeNumero: details.numero,
+    portDuChequeDateEncaissement: details.dateEncaissement,
+    portDuChequeFinalizedAt: new Date().toISOString(),
+    portDuChequeFinalizedBy: collectedBy,
   })
 }
 
@@ -423,7 +469,10 @@ export function subscribeCodParcels(city: string, callback: (rows: FirestoreRow[
 // ────────────────────────────────────────────────────────────────────────────
 
 /**
- * Récupère tous les ports payés par chèque pour une agence
+ * Récupère tous les ports payés/dus par chèque pour une agence
+ * Inclut à la fois:
+ * - Les ports PAYÉS (port_paye) avec portPayeMethod === 'cheque'
+ * - Les ports DUS (port_du) avec portDuReceivedMethod === 'cheque'
  * @param agencyCity Ville de l'agence
  * @param callback Fonction appelée avec la liste des colis
  * @param onError Fonction appelée en cas d'erreur
@@ -433,21 +482,62 @@ export function subscribePortPayeCheque(
   callback: (parcels: FirestoreRow[]) => void,
   onError: (err?: any) => void = () => {}
 ) {
-  // Query pour les colis créés dans cette agence avec port payé par chèque
-  const q = query(
+  let portPayeParcels: FirestoreRow[] = []
+  let portDuParcels: FirestoreRow[] = []
+
+  const merge = () => {
+    // Fusionner et dédupliquer par ID
+    const map = new Map<string, FirestoreRow>()
+    portPayeParcels.forEach(p => map.set(p.id, p))
+    portDuParcels.forEach(p => map.set(p.id, p))
+
+    // Trier par date décroissante
+    const sorted = Array.from(map.values()).sort((a, b) => {
+      const timeA = a.createdAt?.toMillis?.() || 0
+      const timeB = b.createdAt?.toMillis?.() || 0
+      return timeB - timeA
+    })
+
+    callback(sorted)
+  }
+
+  // Query 1: Ports PAYÉS par chèque (créés dans cette agence)
+  const q1 = query(
     collection(db, 'parcels'),
     where('originCity', '==', agencyCity),
     where('portType', '==', 'port_paye'),
     orderBy('createdAt', 'desc'),
-    limit(500) // Limite pour éviter de charger trop de données
+    limit(500)
   )
 
-  return onSnapshot(q, snap => {
-    const parcels = snap.docs
+  // Query 2: Ports DUS payés par chèque (destination = cette agence)
+  const q2 = query(
+    collection(db, 'parcels'),
+    where('destinationCity', '==', agencyCity),
+    where('portType', '==', 'port_du'),
+    orderBy('createdAt', 'desc'),
+    limit(500)
+  )
+
+  const unsub1 = onSnapshot(q1, snap => {
+    portPayeParcels = snap.docs
       .map(rowFromDoc)
-      .filter(p => p.portPayeMethod === 'cheque') // Filtrer uniquement les chèques
-    callback(parcels)
+      .filter(p => p.portPayeMethod === 'cheque')
+    merge()
   }, onError)
+
+  const unsub2 = onSnapshot(q2, snap => {
+    portDuParcels = snap.docs
+      .map(rowFromDoc)
+      .filter(p => p.portDuReceivedMethod === 'cheque')
+    merge()
+  }, onError)
+
+  // Retourner une fonction de désinscription qui annule les deux souscriptions
+  return () => {
+    unsub1()
+    unsub2()
+  }
 }
 
 /**

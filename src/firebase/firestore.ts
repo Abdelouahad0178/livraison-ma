@@ -55,9 +55,9 @@ export {
   remitCod, settleCodToSender, markCodSentToSource, confirmCodReceivedBySource,
   markCodSentToChef, validateCodByChef,  // ⭐ Nouvelles fonctions
   batchSettleCods, fetchAllAgentCodParcels,
-  collectPortDu, addPortDuToClientAccount, markPortDuReceivedByAgent, subscribeCodParcels,
+  collectPortDu, collectPortDuCheque, addPortDuToClientAccount, markPortDuReceivedByAgent, subscribeCodParcels,
   subscribeClientPortDuTransactions, collectClientPortDu, cancelClientPortDu,
-  subscribePortPayeCheque, finalizePortPayeCheque,  // 💳 Gestion ports payés par chèque
+  subscribePortPayeCheque, finalizePortPayeCheque,  // 💳 Gestion ports payés/dus par chèque
 } from './cod'
 
 export {

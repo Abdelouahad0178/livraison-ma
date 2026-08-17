@@ -111,12 +111,20 @@ export interface Parcel {
   codRemisAt: string | null
   codRemisBy: string | null
   portType: PortType
+  // 💵 Port PAYÉ par chèque (payé à la création par l'expéditeur)
   portPayeMethod?: 'espece' | 'cheque'  // Méthode de paiement du port payé
   portPayeChequeBanque?: string          // Banque du chèque
   portPayeChequeNumero?: string          // Numéro du chèque
   portPayeChequeDateEncaissement?: string // Date d'encaissement du chèque
   portPayeChequeFinalizedAt?: string     // Date de finalisation des détails du chèque
   portPayeChequeFinalizedBy?: string     // Qui a finalisé les détails du chèque
+  // 💰 Port DÛ par chèque (payé à la livraison par le destinataire)
+  portDuReceivedMethod?: 'especes' | 'cheque' // Méthode de paiement du port dû
+  portDuChequeBanque?: string            // Banque du chèque (port dû)
+  portDuChequeNumero?: string            // Numéro du chèque (port dû)
+  portDuChequeDateEncaissement?: string  // Date d'encaissement du chèque (port dû)
+  portDuChequeFinalizedAt?: string       // Date de finalisation (port dû)
+  portDuChequeFinalizedBy?: string       // Qui a finalisé (port dû)
   clientId: string | null
   clientName: string | null
   returnOf: string | null

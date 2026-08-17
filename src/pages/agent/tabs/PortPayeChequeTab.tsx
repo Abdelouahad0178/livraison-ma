@@ -5,6 +5,7 @@ import { CheckCircle, X, AlertCircle, Package, Search, Calendar, Filter, Downloa
 interface PortPayeChequeParcel {
   id: string
   trackingId: string
+  portType: string // 'port_paye' ou 'port_du'
   sender: {
     name: string
     nic?: string
@@ -16,12 +17,20 @@ interface PortPayeChequeParcel {
     city?: string
   }
   price: number
+  // Champs port PAYÉ
   portPayeMethod?: string
   portPayeChequeBanque?: string
   portPayeChequeNumero?: string
   portPayeChequeDateEncaissement?: string
   portPayeChequeFinalizedAt?: string
   portPayeChequeFinalizedBy?: string
+  // Champs port DÛ
+  portDuReceivedMethod?: string
+  portDuChequeBanque?: string
+  portDuChequeNumero?: string
+  portDuChequeDateEncaissement?: string
+  portDuChequeFinalizedAt?: string
+  portDuChequeFinalizedBy?: string
   createdAt: any
   createdBy?: string
 }
@@ -77,15 +86,25 @@ export default function PortPayeChequeTab({ agencyCity, profile }: Props) {
     }
   }, [agencyCity])
 
+  // Helper pour savoir si un port est finalisé (fonctionne pour port_paye et port_du)
+  const isFinalized = (p: PortPayeChequeParcel) => {
+    if (p.portType === 'port_paye') {
+      return !!p.portPayeChequeFinalizedAt
+    } else if (p.portType === 'port_du') {
+      return !!p.portDuChequeFinalizedAt
+    }
+    return false
+  }
+
   // Filtrage avancé
   const filteredParcels = useMemo(() => {
     let filtered = parcels
 
     // Filtre par statut
     if (statusFilter === 'pending') {
-      filtered = filtered.filter(p => !p.portPayeChequeFinalizedAt)
+      filtered = filtered.filter(p => !isFinalized(p))
     } else if (statusFilter === 'finalized') {
-      filtered = filtered.filter(p => !!p.portPayeChequeFinalizedAt)
+      filtered = filtered.filter(p => isFinalized(p))
     }
 
     // Filtre par recherche (tracking, N° EXP, nom expéditeur/destinataire)
@@ -121,8 +140,8 @@ export default function PortPayeChequeTab({ agencyCity, profile }: Props) {
 
   // Statistiques
   const stats = useMemo(() => {
-    const pending = filteredParcels.filter(p => !p.portPayeChequeFinalizedAt)
-    const finalized = filteredParcels.filter(p => !!p.portPayeChequeFinalizedAt)
+    const pending = filteredParcels.filter(p => !isFinalized(p))
+    const finalized = filteredParcels.filter(p => isFinalized(p))
 
     return {
       totalPending: pending.reduce((sum, p) => sum + (p.price || 0), 0),
@@ -186,21 +205,30 @@ export default function PortPayeChequeTab({ agencyCity, profile }: Props) {
 
   // Export CSV
   const handleExportCSV = () => {
-    const headers = ['Date', 'Tracking', 'N° EXP', 'Expéditeur', 'Destinataire', 'Montant', 'Banque', 'N° Chèque', 'Date encaissement', 'Statut', 'Finalisé par', 'Date finalisation']
-    const rows = filteredParcels.map(p => [
-      p.createdAt?.toDate?.()?.toLocaleDateString('fr-FR') || '',
-      p.trackingId,
-      p.sender?.nic || '',
-      p.sender?.name || '',
-      p.receiver?.name || '',
-      `${p.price} DH`,
-      p.portPayeChequeBanque || '',
-      p.portPayeChequeNumero || '',
-      p.portPayeChequeDateEncaissement || '',
-      p.portPayeChequeFinalizedAt ? 'Finalisé' : 'En attente',
-      p.portPayeChequeFinalizedBy || '',
-      p.portPayeChequeFinalizedAt || ''
-    ])
+    const headers = ['Date', 'Tracking', 'N° EXP', 'Type', 'Expéditeur', 'Destinataire', 'Montant', 'Banque', 'N° Chèque', 'Date encaissement', 'Statut', 'Finalisé par']
+    const rows = filteredParcels.map(p => {
+      const isPortDu = p.portType === 'port_du'
+      const chequeBanque = isPortDu ? p.portDuChequeBanque : p.portPayeChequeBanque
+      const chequeNumero = isPortDu ? p.portDuChequeNumero : p.portPayeChequeNumero
+      const chequeDateEncaissement = isPortDu ? p.portDuChequeDateEncaissement : p.portPayeChequeDateEncaissement
+      const chequeFinalizedBy = isPortDu ? p.portDuChequeFinalizedBy : p.portPayeChequeFinalizedBy
+      const finalized = isFinalized(p)
+
+      return [
+        p.createdAt?.toDate?.()?.toLocaleDateString('fr-FR') || '',
+        p.trackingId,
+        p.sender?.nic || '',
+        isPortDu ? 'Port Dû' : 'Port Payé',
+        p.sender?.name || '',
+        p.receiver?.name || '',
+        `${p.price} DH`,
+        chequeBanque || '',
+        chequeNumero || '',
+        chequeDateEncaissement || '',
+        finalized ? 'Finalisé' : 'En attente',
+        chequeFinalizedBy || ''
+      ]
+    })
 
     const csv = [headers, ...rows].map(row => row.join(',')).join('\n')
     const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' })
@@ -381,7 +409,7 @@ export default function PortPayeChequeTab({ agencyCity, profile }: Props) {
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
             }`}
           >
-            En attente ({parcels.filter(p => !p.portPayeChequeFinalizedAt).length})
+            En attente ({parcels.filter(p => !isFinalized(p)).length})
           </button>
           <button
             onClick={() => setStatusFilter('finalized')}
@@ -391,7 +419,7 @@ export default function PortPayeChequeTab({ agencyCity, profile }: Props) {
                 : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
             }`}
           >
-            Finalisés ({parcels.filter(p => !!p.portPayeChequeFinalizedAt).length})
+            Finalisés ({parcels.filter(p => isFinalized(p)).length})
           </button>
         </div>
       </div>
@@ -412,39 +440,56 @@ export default function PortPayeChequeTab({ agencyCity, profile }: Props) {
             )}
           </div>
         ) : (
-          filteredParcels.map((parcel) => (
-            <div
-              key={parcel.id}
-              className={`border rounded-xl p-4 ${
-                parcel.portPayeChequeFinalizedAt
-                  ? 'bg-green-50 border-green-200'
-                  : 'bg-orange-50 border-orange-200'
-              }`}
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-3">
-                    <div className="flex items-center gap-2">
-                      <Package className="w-4 h-4 text-gray-600" />
-                      <div className="flex flex-col">
-                        <span className="font-mono text-sm font-bold text-blue-600">
-                          {parcel.trackingId}
-                        </span>
-                        {parcel.sender?.nic && (
-                          <span className="text-xs text-gray-500">
-                            N° EXP: {parcel.sender.nic}
+          filteredParcels.map((parcel) => {
+            const isPortDu = parcel.portType === 'port_du'
+            const finalized = isFinalized(parcel)
+            const chequeBanque = isPortDu ? parcel.portDuChequeBanque : parcel.portPayeChequeBanque
+            const chequeNumero = isPortDu ? parcel.portDuChequeNumero : parcel.portPayeChequeNumero
+            const chequeDateEncaissement = isPortDu ? parcel.portDuChequeDateEncaissement : parcel.portPayeChequeDateEncaissement
+            const chequeFinalizedBy = isPortDu ? parcel.portDuChequeFinalizedBy : parcel.portPayeChequeFinalizedBy
+
+            return (
+              <div
+                key={parcel.id}
+                className={`border rounded-xl p-4 ${
+                  finalized
+                    ? 'bg-green-50 border-green-200'
+                    : 'bg-orange-50 border-orange-200'
+                }`}
+              >
+                <div className="flex items-start justify-between">
+                  <div className="flex-1">
+                    <div className="flex items-center gap-3 mb-3">
+                      <div className="flex items-center gap-2">
+                        <Package className="w-4 h-4 text-gray-600" />
+                        <div className="flex flex-col">
+                          <span className="font-mono text-sm font-bold text-blue-600">
+                            {parcel.trackingId}
                           </span>
-                        )}
+                          {parcel.sender?.nic && (
+                            <span className="text-xs text-gray-500">
+                              N° EXP: {parcel.sender.nic}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {/* Badge type de port */}
+                      <div className={`px-2 py-1 rounded-full text-xs font-bold ${
+                        isPortDu
+                          ? 'bg-purple-200 text-purple-900'
+                          : 'bg-blue-200 text-blue-900'
+                      }`}>
+                        {isPortDu ? '💰 Port Dû' : '💵 Port Payé'}
+                      </div>
+                      {/* Badge statut */}
+                      <div className={`px-2 py-1 rounded-full text-xs font-bold ${
+                        finalized
+                          ? 'bg-green-200 text-green-900'
+                          : 'bg-orange-200 text-orange-900'
+                      }`}>
+                        {finalized ? '✅ Finalisé' : '⏳ En attente'}
                       </div>
                     </div>
-                    <div className={`px-2 py-1 rounded-full text-xs font-bold ${
-                      parcel.portPayeChequeFinalizedAt
-                        ? 'bg-green-200 text-green-900'
-                        : 'bg-orange-200 text-orange-900'
-                    }`}>
-                      {parcel.portPayeChequeFinalizedAt ? '✅ Finalisé' : '⏳ En attente'}
-                    </div>
-                  </div>
 
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                     <div>
@@ -473,33 +518,33 @@ export default function PortPayeChequeTab({ agencyCity, profile }: Props) {
                       </p>
                     </div>
 
-                    {parcel.portPayeChequeFinalizedAt && (
+                    {finalized && (
                       <>
                         <div>
                           <p className="text-xs text-gray-500">Banque</p>
-                          <p className="font-medium text-green-900">{parcel.portPayeChequeBanque || '—'}</p>
+                          <p className="font-medium text-green-900">{chequeBanque || '—'}</p>
                         </div>
                         <div>
                           <p className="text-xs text-gray-500">N° Chèque</p>
-                          <p className="font-medium text-green-900">{parcel.portPayeChequeNumero || '—'}</p>
+                          <p className="font-medium text-green-900">{chequeNumero || '—'}</p>
                         </div>
                         <div>
                           <p className="text-xs text-gray-500">Date encaissement</p>
                           <p className="font-medium text-green-900">
-                            {parcel.portPayeChequeDateEncaissement || '—'}
+                            {chequeDateEncaissement || '—'}
                           </p>
                         </div>
                         <div>
                           <p className="text-xs text-gray-500">Finalisé par</p>
-                          <p className="font-medium text-green-900">{parcel.portPayeChequeFinalizedBy || '—'}</p>
+                          <p className="font-medium text-green-900">{chequeFinalizedBy || '—'}</p>
                         </div>
                       </>
                     )}
                   </div>
                 </div>
 
-                {/* Actions */}
-                {!parcel.portPayeChequeFinalizedAt && (
+                {/* Actions - Finaliser uniquement pour ports PAYÉS non finalisés */}
+                {!finalized && !isPortDu && (
                   <div className="flex flex-col gap-2 ml-4">
                     <button
                       onClick={() => handleOpenFinalizeModal(parcel)}
@@ -512,7 +557,8 @@ export default function PortPayeChequeTab({ agencyCity, profile }: Props) {
                 )}
               </div>
             </div>
-          ))
+          )
+        })
         )}
       </div>
 

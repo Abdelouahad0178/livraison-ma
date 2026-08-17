@@ -1,12 +1,13 @@
-import { Banknote, Trash2, CheckSquare, Square } from 'lucide-react'
+import { Banknote, Trash2, CheckSquare, Square, X, CheckCircle } from 'lucide-react'
 import { useState } from 'react'
 import { useAgentCtx } from '../AgentCtx'
 import { fmtFixed as fmtAmt } from '../../../utils/formatNumber'
-import { updateParcel } from '../../../firebase/firestore'
+import { updateParcel, collectPortDuCheque, createCaisseEntry } from '../../../firebase/firestore'
 
 export default function DriversTab() {
   const {
     uid,
+    profile,
     parcels,
     setTab,
     portDuReceiving,
@@ -20,6 +21,17 @@ export default function DriversTab() {
   // 🔧 États pour la sélection multiple
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [deleteLoading, setDeleteLoading] = useState(false)
+
+  // 💳 États pour la modal de paiement du port dû
+  const [showPaymentModal, setShowPaymentModal] = useState(false)
+  const [selectedParcel, setSelectedParcel] = useState<any>(null)
+  const [paymentMethod, setPaymentMethod] = useState<'especes' | 'cheque' | null>(null)
+  const [chequeForm, setChequeForm] = useState({
+    banque: '',
+    numero: '',
+    dateEncaissement: new Date().toISOString().split('T')[0]
+  })
+  const [collectingCheque, setCollectingCheque] = useState(false)
 
   const toggleSelection = (id: string) => {
     const newSet = new Set(selectedIds)
@@ -74,6 +86,102 @@ export default function DriversTab() {
       alert(`❌ Erreur: ${err.message}`)
     } finally {
       setDeleteLoading(false)
+    }
+  }
+
+  // 💳 Ouvrir la modal de choix du mode de paiement
+  const handleOpenPaymentModal = (parcel: any) => {
+    // 🔒 Vérification: seuls Chef d'agence et Agent pro peuvent collecter
+    if (profile?.role !== 'chef_agence' && profile?.role !== 'agentpro') {
+      alert('⚠️ Seuls le Chef d\'agence et l\'Agent pro peuvent réceptionner les ports dus.')
+      return
+    }
+
+    setSelectedParcel(parcel)
+    setPaymentMethod(null)
+    setChequeForm({
+      banque: '',
+      numero: '',
+      dateEncaissement: new Date().toISOString().split('T')[0]
+    })
+    setShowPaymentModal(true)
+  }
+
+  // 💳 Collecter le port dû par chèque
+  const handleCollectPortDuCheque = async () => {
+    if (!selectedParcel) return
+
+    // 🔒 Vérification de rôle
+    if (profile?.role !== 'chef_agence' && profile?.role !== 'agentpro') {
+      alert('⚠️ Seuls le Chef d\'agence et l\'Agent pro peuvent collecter les ports dus.')
+      return
+    }
+
+    // Validation
+    if (!chequeForm.banque.trim()) {
+      alert('⚠️ Veuillez saisir le nom de la banque')
+      return
+    }
+    if (!chequeForm.numero.trim()) {
+      alert('⚠️ Veuillez saisir le numéro du chèque')
+      return
+    }
+    if (!chequeForm.dateEncaissement) {
+      alert('⚠️ Veuillez saisir la date d\'encaissement')
+      return
+    }
+
+    setCollectingCheque(true)
+    try {
+      const name = profile?.name || 'Chef'
+      const agentId = uid || ''
+
+      // Collecter le port dû par chèque avec les détails
+      await collectPortDuCheque(
+        selectedParcel.id,
+        {
+          banque: chequeForm.banque.trim(),
+          numero: chequeForm.numero.trim(),
+          dateEncaissement: chequeForm.dateEncaissement
+        },
+        name,
+        agentId
+      )
+
+      // Créer l'entrée de caisse
+      await createCaisseEntry({
+        type: 'entree',
+        category: 'port_du',
+        amount: selectedParcel.price || 0,
+        description: `Port dû CHÈQUE — ${selectedParcel.trackingId} (${selectedParcel.receiver?.name || 'Destinataire'})`,
+        reference: selectedParcel.trackingId,
+        agentId,
+        agentName: name,
+        city: profile?.city || selectedParcel.receiver?.city || '',
+        cashierId: agentId,
+        cashierName: name,
+      })
+
+      // Fermer la modal
+      setShowPaymentModal(false)
+      setSelectedParcel(null)
+      setPaymentMethod(null)
+
+      alert(`✅ Port dû collecté par chèque!\n\n💳 Banque: ${chequeForm.banque}\n📋 Chèque N°: ${chequeForm.numero}`)
+    } catch (err: any) {
+      alert(`❌ Erreur: ${err.message}`)
+    } finally {
+      setCollectingCheque(false)
+    }
+  }
+
+  // 💵 Collecter le port dû en espèces
+  const handleCollectPortDuEspeces = () => {
+    if (selectedParcel) {
+      setShowPaymentModal(false)
+      handleReceivePortDuEspeces(selectedParcel)
+      setSelectedParcel(null)
+      setPaymentMethod(null)
     }
   }
 
@@ -218,16 +326,20 @@ export default function DriversTab() {
                 </div>
                 <div className="text-right shrink-0">
                   <p className="text-base font-black text-orange-700">{fmtAmt(p.price || 0)} DH</p>
-                  <button
-                    onClick={() => handleReceivePortDuEspeces(p)}
-                    disabled={portDuReceiving[p.id]}
-                    className="mt-1 flex items-center gap-1 text-xs bg-orange-500 hover:bg-orange-600 disabled:opacity-40 text-white px-2.5 py-1.5 rounded-lg font-semibold transition"
-                  >
-                    {portDuReceiving[p.id]
-                      ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
-                      : <Banknote className="w-3 h-3" />}
-                    Réceptionner
-                  </button>
+                  {profile?.role === 'chef_agence' || profile?.role === 'agentpro' ? (
+                    <button
+                      onClick={() => handleOpenPaymentModal(p)}
+                      disabled={portDuReceiving[p.id]}
+                      className="mt-1 flex items-center gap-1 text-xs bg-orange-500 hover:bg-orange-600 disabled:opacity-40 text-white px-2.5 py-1.5 rounded-lg font-semibold transition"
+                    >
+                      {portDuReceiving[p.id]
+                        ? <div className="w-3 h-3 border border-white border-t-transparent rounded-full animate-spin" />
+                        : <Banknote className="w-3 h-3" />}
+                      Réceptionner
+                    </button>
+                  ) : (
+                    <p className="mt-1 text-xs text-gray-400 italic">Chef/Agent pro seulement</p>
+                  )}
                 </div>
               </div>
             ))}
@@ -306,6 +418,163 @@ export default function DriversTab() {
       })()}
 
       {/* Ancien versement groupé masqué : le port dû est reçu colis par colis pour éviter les doublons caisse. */}
+
+      {/* ── MODAL CHOIX MODE DE PAIEMENT PORT DÛ ── */}
+      {showPaymentModal && selectedParcel && (
+        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full">
+            {/* Header */}
+            <div className="bg-gradient-to-r from-orange-600 to-red-600 text-white px-6 py-4 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold">Réceptionner Port Dû</h2>
+                <p className="text-orange-100 text-sm mt-1">
+                  {selectedParcel.trackingId} • {fmtAmt(selectedParcel.price || 0)} DH
+                </p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowPaymentModal(false)
+                  setSelectedParcel(null)
+                  setPaymentMethod(null)
+                }}
+                className="text-white hover:bg-white/20 rounded-lg p-1 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="p-6 space-y-4">
+              {/* Choix du mode de paiement */}
+              {!paymentMethod && (
+                <>
+                  <p className="text-sm text-gray-600 font-medium">
+                    Comment le port dû a-t-il été payé ?
+                  </p>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      onClick={() => setPaymentMethod('especes')}
+                      className="flex flex-col items-center justify-center p-4 border-2 border-gray-300 rounded-xl hover:border-green-500 hover:bg-green-50 transition"
+                    >
+                      <span className="text-3xl mb-2">💵</span>
+                      <span className="font-bold text-gray-700">Espèce</span>
+                    </button>
+                    <button
+                      onClick={() => setPaymentMethod('cheque')}
+                      className="flex flex-col items-center justify-center p-4 border-2 border-gray-300 rounded-xl hover:border-blue-500 hover:bg-blue-50 transition"
+                    >
+                      <span className="text-3xl mb-2">📋</span>
+                      <span className="font-bold text-gray-700">Chèque</span>
+                    </button>
+                  </div>
+                </>
+              )}
+
+              {/* Formulaire chèque */}
+              {paymentMethod === 'cheque' && (
+                <>
+                  <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                    <p className="text-sm text-blue-800 font-medium">
+                      📋 Veuillez saisir les détails du chèque
+                    </p>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">
+                      Banque <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={chequeForm.banque}
+                      onChange={(e) => setChequeForm({ ...chequeForm, banque: e.target.value })}
+                      placeholder="Ex: Attijariwafa Bank"
+                      className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none"
+                      autoFocus
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">
+                      Numéro du chèque <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={chequeForm.numero}
+                      onChange={(e) => setChequeForm({ ...chequeForm, numero: e.target.value })}
+                      placeholder="Ex: 12345678"
+                      className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-semibold text-gray-700 mb-1">
+                      Date d'encaissement <span className="text-red-500">*</span>
+                    </label>
+                    <input
+                      type="date"
+                      value={chequeForm.dateEncaissement}
+                      onChange={(e) => setChequeForm({ ...chequeForm, dateEncaissement: e.target.value })}
+                      className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none"
+                    />
+                  </div>
+                </>
+              )}
+
+              {/* Confirmation espèces */}
+              {paymentMethod === 'especes' && (
+                <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                  <div className="flex items-center gap-3">
+                    <span className="text-3xl">💵</span>
+                    <div>
+                      <p className="font-bold text-green-900">Paiement en espèces</p>
+                      <p className="text-sm text-green-700 mt-1">
+                        Le port dû sera enregistré comme payé en espèces
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="bg-gray-50 px-6 py-4 flex gap-3">
+              <button
+                onClick={() => {
+                  if (paymentMethod) {
+                    setPaymentMethod(null)
+                  } else {
+                    setShowPaymentModal(false)
+                    setSelectedParcel(null)
+                  }
+                }}
+                disabled={collectingCheque}
+                className="flex-1 py-2 px-4 border-2 border-gray-300 rounded-xl text-gray-700 font-semibold hover:bg-gray-100 transition disabled:opacity-50"
+              >
+                {paymentMethod ? '← Retour' : 'Annuler'}
+              </button>
+              {paymentMethod && (
+                <button
+                  onClick={paymentMethod === 'cheque' ? handleCollectPortDuCheque : handleCollectPortDuEspeces}
+                  disabled={collectingCheque}
+                  className="flex-1 py-2 px-4 bg-gradient-to-r from-orange-600 to-red-600 text-white rounded-xl font-semibold hover:shadow-xl transition disabled:opacity-50 flex items-center justify-center gap-2"
+                >
+                  {collectingCheque ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Collecte...
+                    </>
+                  ) : (
+                    <>
+                      <CheckCircle className="w-4 h-4" />
+                      Valider
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
