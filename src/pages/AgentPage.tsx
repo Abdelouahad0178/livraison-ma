@@ -815,14 +815,28 @@ export default function AgentPage() {
       let filterDateTo: Date | null = null
 
       if (datePreset === 'custom' && (dateFrom || dateTo)) {
-        // ⚡ CHARGER 365 JOURS (comme avant) pour garantir TOUS les colis
-        // Le filtrage par workDate se fait côté client
-        filterDateFrom = new Date()
-        filterDateFrom.setDate(filterDateFrom.getDate() - 365)
-        filterDateFrom.setHours(0, 0, 0, 0)
-        filterDateTo = null // Jusqu'à maintenant
+        // ⚡ OPTIMISATION : Utiliser directement les dates sélectionnées + marge de 7 jours
+        if (dateFrom) {
+          filterDateFrom = new Date(dateFrom + 'T00:00:00')
+          filterDateFrom.setDate(filterDateFrom.getDate() - 7) // Marge de 7 jours avant
+        } else {
+          filterDateFrom = new Date()
+          filterDateFrom.setDate(filterDateFrom.getDate() - 365)
+          filterDateFrom.setHours(0, 0, 0, 0)
+        }
 
-        console.log(`📦 [Chef d'agence] Chargement 365 jours pour ${profile.city} (filtrage par workDate côté client)`)
+        if (dateTo) {
+          filterDateTo = new Date(dateTo + 'T23:59:59')
+          filterDateTo.setDate(filterDateTo.getDate() + 7) // Marge de 7 jours après
+        } else {
+          filterDateTo = new Date()
+          filterDateTo.setHours(23, 59, 59, 999)
+        }
+
+        console.log(`📦 [Chef d'agence] Période custom pour ${profile.city}:`, {
+          from: filterDateFrom.toLocaleDateString('fr-MA'),
+          to: filterDateTo.toLocaleDateString('fr-MA')
+        })
       } else if (datePreset === 'operational' && operationalDay) {
         // 🗓️ Journée opérationnelle: 8H → 6H lendemain
         const range = getOperationalDayRange(operationalDay)
@@ -834,14 +848,13 @@ export default function AgentPage() {
           to: filterDateTo?.toLocaleString('fr-MA')
         })
       } else {
-        // ⚡ OPTIMISATION : CHARGER 30 DERNIERS JOURS (au lieu de tout l'historique)
-        // Correspond au filtre "Récent" côté client
+        // 📦 CHARGER 90 DERNIERS JOURS par défaut (bon compromis performance/données)
         filterDateFrom = new Date()
-        filterDateFrom.setDate(filterDateFrom.getDate() - 30)
+        filterDateFrom.setDate(filterDateFrom.getDate() - 90)
         filterDateFrom.setHours(0, 0, 0, 0)
         filterDateTo = null // Jusqu'à maintenant
 
-        console.log(`📦 [Chef] Chargement AUTO 30 derniers jours (Récent optimisé)`)
+        console.log(`📦 [Chef] Chargement AUTO 90 derniers jours`)
       }
 
       agencyDateFilterRef.current = { dateFrom: filterDateFrom, dateTo: filterDateTo }
