@@ -101,6 +101,7 @@ const AgentClientPortDuTab = lazy(() => import('./agent/tabs/AgentClientPortDuTa
 const AgentPortsEnCompteTab = lazy(() => import('./agent/tabs/AgentPortsEnCompteTab'))
 const AgentVersementsTab = lazy(() => import('./agent/tabs/AgentVersementsTab'))
 const AgentInvoicesTab = lazy(() => import('./agent/tabs/AgentInvoicesTab'))
+const PortPayeChequeTab = lazy(() => import('./agent/tabs/PortPayeChequeTab'))
 
 const MOD_STATUS = {
   pending:  { label: 'En attente', bg: 'bg-amber-100', text: 'text-amber-700' },
@@ -2654,6 +2655,16 @@ export default function AgentPage() {
         <Suspense fallback={null}>
           <AgentPortsEnCompteTab
             allParcels={allDisplayParcels}
+            profile={profile}
+          />
+        </Suspense>
+      )}
+
+      {/* ── PORTS PAYÉS PAR CHÈQUE TAB ── */}
+      {tab === 'portpayecheque' && (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+        <Suspense fallback={null}>
+          <PortPayeChequeTab
+            agencyCity={profile?.city || ''}
             profile={profile}
           />
         </Suspense>

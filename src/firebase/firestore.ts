@@ -57,6 +57,7 @@ export {
   batchSettleCods, fetchAllAgentCodParcels,
   collectPortDu, addPortDuToClientAccount, markPortDuReceivedByAgent, subscribeCodParcels,
   subscribeClientPortDuTransactions, collectClientPortDu, cancelClientPortDu,
+  subscribePortPayeCheque, finalizePortPayeCheque,  // 💳 Gestion ports payés par chèque
 } from './cod'
 
 export {

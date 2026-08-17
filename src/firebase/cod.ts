@@ -417,3 +417,77 @@ export function subscribeCodParcels(city: string, callback: (rows: FirestoreRow[
     ))
   }, onError)
 }
+
+// ────────────────────────────────────────────────────────────────────────────
+// 💳 GESTION DES PORTS PAYÉS PAR CHÈQUE
+// ────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Récupère tous les ports payés par chèque pour une agence
+ * @param agencyCity Ville de l'agence
+ * @param callback Fonction appelée avec la liste des colis
+ * @param onError Fonction appelée en cas d'erreur
+ */
+export function subscribePortPayeCheque(
+  agencyCity: string,
+  callback: (parcels: FirestoreRow[]) => void,
+  onError: (err?: any) => void = () => {}
+) {
+  // Query pour les colis créés dans cette agence avec port payé par chèque
+  const q = query(
+    collection(db, 'parcels'),
+    where('originCity', '==', agencyCity),
+    where('portType', '==', 'port_paye'),
+    orderBy('createdAt', 'desc'),
+    limit(500) // Limite pour éviter de charger trop de données
+  )
+
+  return onSnapshot(q, snap => {
+    const parcels = snap.docs
+      .map(rowFromDoc)
+      .filter(p => p.portPayeMethod === 'cheque') // Filtrer uniquement les chèques
+    callback(parcels)
+  }, onError)
+}
+
+/**
+ * Finaliser un port payé par chèque (ajouter détails banque, numéro, date)
+ * @param parcelId ID du colis
+ * @param details Détails du chèque (banque, numéro, date)
+ * @param finalizedBy Nom de la personne qui finalise
+ */
+export async function finalizePortPayeCheque(
+  parcelId: string,
+  details: {
+    banque: string
+    numero: string
+    dateEncaissement: string
+  },
+  finalizedBy: string
+): Promise<void> {
+  const parcelRef = doc(db, 'parcels', parcelId)
+
+  // Vérifier que le colis existe et est bien un port payé par chèque
+  const snap = await getDoc(parcelRef)
+  if (!snap.exists()) {
+    throw new Error('Colis introuvable')
+  }
+
+  const parcel = snap.data()
+  if (parcel.portType !== 'port_paye') {
+    throw new Error('Ce colis n\'est pas un port payé')
+  }
+
+  if (parcel.portPayeMethod !== 'cheque') {
+    throw new Error('Ce colis n\'est pas payé par chèque')
+  }
+
+  // Mettre à jour les détails du chèque
+  await updateDoc(parcelRef, {
+    portPayeChequeBanque: details.banque,
+    portPayeChequeNumero: details.numero,
+    portPayeChequeDateEncaissement: details.dateEncaissement,
+    portPayeChequeFinalizedAt: new Date().toISOString(),
+    portPayeChequeFinalizedBy: finalizedBy,
+  })
+}
