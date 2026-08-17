@@ -126,17 +126,11 @@ const entryDate = (e: any) => {
   return new Date(0)
 }
 const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parcelDate, operationalDay?: any) => {
+  if (preset === 'all') return list
   const now = new Date()
   const endOfToday = new Date(); endOfToday.setHours(23,59,59,999)
   let start: any = null, end: any = endOfToday
-
-  // ⚡ OPTIMISATION : "Récent" = 30 derniers jours au lieu de tout l'historique
-  if (preset === 'all') {
-    start = new Date()
-    start.setDate(now.getDate() - 30) // 30 jours en arrière
-    start.setHours(0, 0, 0, 0)
-  }
-  else if (preset === 'today')  { start = new Date(); start.setHours(0,0,0,0) }
+  if      (preset === 'today')  { start = new Date(); start.setHours(0,0,0,0) }
   else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate()-6); start.setHours(0,0,0,0) }
   else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
   else if (preset === 'day')    { start = from ? new Date(from) : null; if (start) { start.setHours(0,0,0,0); end = new Date(from+'T23:59:59') } }
@@ -170,7 +164,7 @@ const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parc
   })
 }
 const dateFilterLabel = (preset: string): string => (({
-  all: 'Solde 30 jours', // ⚡ Optimisé : 30 derniers jours au lieu de tout l'historique
+  all: 'Solde total',
   today: "Solde aujourd'hui",
   week: 'Solde 7 jours',
   month: 'Solde ce mois',
@@ -815,28 +809,11 @@ export default function AgentPage() {
       let filterDateTo: Date | null = null
 
       if (datePreset === 'custom' && (dateFrom || dateTo)) {
-        // ⚡ OPTIMISATION : Utiliser directement les dates sélectionnées + marge de 7 jours
-        if (dateFrom) {
-          filterDateFrom = new Date(dateFrom + 'T00:00:00')
-          filterDateFrom.setDate(filterDateFrom.getDate() - 7) // Marge de 7 jours avant
-        } else {
-          filterDateFrom = new Date()
-          filterDateFrom.setDate(filterDateFrom.getDate() - 365)
-          filterDateFrom.setHours(0, 0, 0, 0)
-        }
+        // 📦 AUCUNE LIMITE : Charger tous les colis, filtrage côté client
+        filterDateFrom = null
+        filterDateTo = null
 
-        if (dateTo) {
-          filterDateTo = new Date(dateTo + 'T23:59:59')
-          filterDateTo.setDate(filterDateTo.getDate() + 7) // Marge de 7 jours après
-        } else {
-          filterDateTo = new Date()
-          filterDateTo.setHours(23, 59, 59, 999)
-        }
-
-        console.log(`📦 [Chef d'agence] Période custom pour ${profile.city}:`, {
-          from: filterDateFrom.toLocaleDateString('fr-MA'),
-          to: filterDateTo.toLocaleDateString('fr-MA')
-        })
+        console.log(`📦 [Chef d'agence] Période custom pour ${profile.city} - SANS LIMITE (filtrage côté client)`)
       } else if (datePreset === 'operational' && operationalDay) {
         // 🗓️ Journée opérationnelle: 8H → 6H lendemain
         const range = getOperationalDayRange(operationalDay)
@@ -848,13 +825,11 @@ export default function AgentPage() {
           to: filterDateTo?.toLocaleString('fr-MA')
         })
       } else {
-        // 📦 CHARGER 90 DERNIERS JOURS par défaut (bon compromis performance/données)
-        filterDateFrom = new Date()
-        filterDateFrom.setDate(filterDateFrom.getDate() - 90)
-        filterDateFrom.setHours(0, 0, 0, 0)
-        filterDateTo = null // Jusqu'à maintenant
+        // 📦 AUCUNE LIMITE : Charger tous les colis disponibles
+        filterDateFrom = null
+        filterDateTo = null
 
-        console.log(`📦 [Chef] Chargement AUTO 90 derniers jours`)
+        console.log(`📦 [Chef] Chargement SANS LIMITE (tous les colis)`)
       }
 
       agencyDateFilterRef.current = { dateFrom: filterDateFrom, dateTo: filterDateTo }
