@@ -470,6 +470,24 @@
         { "fieldPath": "receiverTel", "order": "ASCENDING"  },
         { "fieldPath": "createdAt",   "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "originCity", "order": "ASCENDING"  },
+        { "fieldPath": "portType",   "order": "ASCENDING"  },
+        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "destinationCity", "order": "ASCENDING"  },
+        { "fieldPath": "portType",        "order": "ASCENDING"  },
+        { "fieldPath": "createdAt",       "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [
