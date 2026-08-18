@@ -1284,20 +1284,18 @@ export default function ParcelsTab() {
 
               {/* NOUVELLE POLITIQUE : Plus de validation nécessaire - section retirée */}
 
-              {/* ⚡ Afficher TOUJOURS la section de chargement camion */}
-              <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 space-y-3">
-                <div className="flex items-center justify-between gap-3 flex-wrap">
-                  <div>
-                    <h3 className="text-sm font-bold text-blue-800 flex items-center gap-2">
-                      <Truck className="w-4 h-4" /> Chargement camion groupé
-                    </h3>
-                    <p className="text-xs text-blue-500 mt-0.5">
-                      {loadableParcels.length > 0
-                        ? `${selectedCount} sélectionné(s) sur ${loadableParcels.length} colis au dépôt source`
-                        : "Aucun colis prêt pour le chargement (statut 'Initialisé' requis)"
-                      }
-                    </p>
-                  </div>
+              {/* ⚡ Toujours afficher la section de chargement camion */}
+              {true && (
+                <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div>
+                      <h3 className="text-sm font-bold text-blue-800 flex items-center gap-2">
+                        <Truck className="w-4 h-4" /> Chargement camion groupé
+                      </h3>
+                      <p className="text-xs text-blue-500 mt-0.5">
+                        {selectedCount} sélectionné(s) sur {loadableParcels.length} colis au dépôt source
+                      </p>
+                    </div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <button
                         type="button"
@@ -1488,7 +1486,7 @@ export default function ParcelsTab() {
                     </div>
                   </div>
                 </div>
-              </div>
+              )}
 
               {/* ⭐ NOUVEAU: Panneau d'assignation en masse à un livreur (chef d'agence et agentpro) */}
               {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (() => {
