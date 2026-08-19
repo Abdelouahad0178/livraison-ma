@@ -256,12 +256,43 @@ export default function CaisseChefTab() {
         // Si le filtre est 'all', montrer TOUS les colis
         if (datePreset === 'all') return true
 
-        // Si pas de date d'assignation, inclure quand même (colis récemment assignés)
-        if (!p.deliveryAssignedAt) return true
+        // Si pas de date d'assignation, EXCLURE du filtre (ne pas inclure par défaut)
+        if (!p.deliveryAssignedAt) return false
 
-        // Sinon, filtrer par date d'assignation
+        // Convertir la date Firestore en Date JS
         const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
-        return filterByDate([p], datePreset, dateFrom, dateTo, () => assignedDate).length > 0
+
+        // Logique de filtrage directe selon le preset
+        const now = new Date()
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+
+        if (datePreset === 'today') {
+          const tomorrow = new Date(today)
+          tomorrow.setDate(tomorrow.getDate() + 1)
+          return assignedDate >= today && assignedDate < tomorrow
+        }
+
+        if (datePreset === '7days') {
+          const sevenDaysAgo = new Date(today)
+          sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
+          return assignedDate >= sevenDaysAgo && assignedDate < new Date(today.getTime() + 24 * 60 * 60 * 1000)
+        }
+
+        if (datePreset === 'thisMonth') {
+          const firstDay = new Date(now.getFullYear(), now.getMonth(), 1)
+          const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59)
+          return assignedDate >= firstDay && assignedDate <= lastDay
+        }
+
+        if (datePreset === 'custom' && dateFrom && dateTo) {
+          const from = new Date(dateFrom)
+          const to = new Date(dateTo)
+          to.setHours(23, 59, 59, 999)
+          return assignedDate >= from && assignedDate <= to
+        }
+
+        // Par défaut, inclure si aucun filtre spécifique
+        return true
       })
 
       // Recalculer les statistiques pour les colis filtrés
