@@ -170,14 +170,25 @@ export default function CaisseChefTab() {
       // Séparer les ports dû pour les calculs de collecte
       // IMPORTANT: Le livreur livre TOUTES les expéditions (port payé + port dû)
       // mais ne collecte de l'argent QUE pour les ports dû
-      const portDuParcels = driver.parcels.filter((p: any) => p.portType === 'port_du')
+
+      // LOGIQUE ROBUSTE : Une expédition est PORT DÛ si :
+      // 1. portType === 'port_du' ET
+      // 2. portPayeMethod n'est PAS défini (sinon c'est un port payé)
+      const portDuParcels = driver.parcels.filter((p: any) =>
+        p.portType === 'port_du' && !p.portPayeMethod
+      )
 
       // DEBUG: Vérifier les types de port
       if (driver.parcels.length !== portDuParcels.length) {
         console.log(`[DEBUG] Livreur ${driver.name}:`, {
           total: driver.parcels.length,
           portDu: portDuParcels.length,
-          portTypes: driver.parcels.map((p: any) => ({ nic: p.senderNic || p.trackingId, portType: p.portType }))
+          details: driver.parcels.map((p: any) => ({
+            nic: p.senderNic || p.trackingId,
+            portType: p.portType,
+            portPayeMethod: p.portPayeMethod,
+            isPortDu: p.portType === 'port_du' && !p.portPayeMethod
+          }))
         })
       }
 
@@ -689,7 +700,8 @@ export default function CaisseChefTab() {
                         </thead>
                         <tbody>
                           {driver.parcels.map((parcel: any) => {
-                              const isPortDu = parcel.portType === 'port_du'
+                              // LOGIQUE COHÉRENTE : Port dû seulement si portType='port_du' ET pas de portPayeMethod
+                              const isPortDu = parcel.portType === 'port_du' && !parcel.portPayeMethod
                               const delay = deliveryDelays.find((d: any) =>
                                 d.parcelId === parcel.id && !d.resolvedAt
                               )
