@@ -579,9 +579,9 @@ export default function AdminExpeditionsTab({
                     <tr key={p.id} className="hover:bg-gray-50 transition">
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
-                          <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">{p.senderNic || p.nic || p.sender?.nic || '-'}</span>
+                          <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg">{p.senderNic || p.sender?.nic || p.trackingId || '-'}</span>
                           <button
-                            onClick={() => setNicEditModal({ parcel: p, value: p.senderNic || p.nic || p.sender?.nic || '', loading: false, error: '' })}
+                            onClick={() => setNicEditModal({ parcel: p, value: p.senderNic || p.sender?.nic || '', loading: false, error: '' })}
                             className="p-0.5 rounded hover:bg-blue-50 text-gray-400 hover:text-blue-500 transition"
                             title="Modifier le N° EXP (Admin)"
                           >

@@ -76,7 +76,7 @@ export default function AdminDuplicatesTab() {
       snapshot.forEach(doc => {
         const parcel = doc.data()
         const createdAt = parcel.createdAt?.toDate() || new Date()
-        const nic = parcel.sender?.nic || ''
+        const nic = parcel.senderNic || parcel.sender?.nic || ''
 
         // Ignorer les expéditions sans NIC
         if (!nic) return

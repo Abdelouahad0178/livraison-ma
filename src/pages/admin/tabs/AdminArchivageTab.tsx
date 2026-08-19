@@ -195,7 +195,7 @@ export default function AdminArchivageTab() {
         .map(doc => ({ id: doc.id, ...doc.data() }))
         .filter((p: any) => {
           const search = searchQuery.toLowerCase()
-          const nic = String(p.nic || p.senderNic || '').toLowerCase()
+          const nic = String(p.senderNic || p.sender?.nic || p.trackingId || '').toLowerCase()
           return (
             p.trackingId?.toLowerCase().includes(search) ||
             p.sender?.name?.toLowerCase().includes(search) ||
@@ -685,7 +685,7 @@ export default function AdminArchivageTab() {
               <tbody className="divide-y divide-gray-100">
                 {filteredArchives.map((parcel: any) => {
                   const sc = STATUS_COLORS[parcel.status] || STATUS_COLORS['Livré']
-                  const nexp = parcel.nic || parcel.senderNic || ''
+                  const nexp = parcel.senderNic || parcel.sender?.nic || parcel.trackingId || ''
                   return (
                     <tr key={parcel.id} className="hover:bg-gray-50 transition">
                       <td className="px-3 py-3">

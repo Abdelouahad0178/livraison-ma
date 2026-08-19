@@ -1306,7 +1306,7 @@ export default function AdminPage() {
         results = serverSearchResults || periodParcels.filter((p: any) =>
           p.trackingId?.toUpperCase() === searchQuery ||
           p.sender?.nic?.toUpperCase() === searchQuery ||
-          (p.senderNic || p.nic)?.toUpperCase() === searchQuery
+          (p.senderNic || p.sender?.nic || p.trackingId)?.toUpperCase() === searchQuery
         )
         console.warn(`🎯 Recherche exacte: ${results.length} résultats pour "${searchQuery}"`)
       } else {

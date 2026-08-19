@@ -187,7 +187,7 @@ export default function CaisseChefTab() {
       const portsCollectes = agentEntries.filter((e: any) =>
         e.type === 'entree' &&
         e.category === 'port_du' &&
-        driver.parcels.some((p: any) => p.nic === e.reference)
+        driver.parcels.some((p: any) => p.senderNic === e.reference)
       )
 
       const now = new Date()
@@ -253,7 +253,7 @@ export default function CaisseChefTab() {
       const portsCollectes = agentEntries.filter((e: any) =>
         e.type === 'entree' &&
         e.category === 'port_du' &&
-        filteredParcels.some((p: any) => p.nic === e.reference)
+        filteredParcels.some((p: any) => p.senderNic === e.reference)
       )
 
       const now = new Date()
@@ -289,7 +289,7 @@ export default function CaisseChefTab() {
       const q = searchQuery.toLowerCase()
       result = result.filter(d =>
         d.name.toLowerCase().includes(q) ||
-        d.parcels.some((p: any) => p.nic?.toLowerCase().includes(q))
+        d.parcels.some((p: any) => p.senderNic?.toLowerCase().includes(q))
       )
     }
 
@@ -340,7 +340,7 @@ export default function CaisseChefTab() {
         // Créer un nouveau retard
         await createDeliveryDelay({
           parcelId: delayModal.parcel.id,
-          nic: delayModal.parcel.nic,
+          nic: delayModal.parcel.senderNic || delayModal.parcel.sender?.nic || delayModal.parcel.trackingId,
           driverId: delayModal.driver.id,
           driverName: delayModal.driver.name,
           city: profile?.city,
@@ -660,7 +660,7 @@ export default function CaisseChefTab() {
                       <table className="w-full text-sm">
                         <thead>
                           <tr className="border-b border-gray-200">
-                            <th className="text-left py-2 px-3 font-semibold text-gray-700">N° Colis</th>
+                            <th className="text-left py-2 px-3 font-semibold text-gray-700">N° EXP</th>
                             <th className="text-left py-2 px-3 font-semibold text-gray-700">Client</th>
                             <th className="text-right py-2 px-3 font-semibold text-gray-700">Port dû</th>
                             <th className="text-center py-2 px-3 font-semibold text-gray-700">Status</th>
@@ -686,7 +686,7 @@ export default function CaisseChefTab() {
                                 <tr key={parcel.id} className="border-b border-gray-100 hover:bg-white transition">
                                   <td className="py-2 px-3">
                                     <span className="font-mono text-xs font-semibold text-blue-600">
-                                      {parcel.nic}
+                                      {parcel.senderNic || parcel.sender?.nic || parcel.trackingId}
                                     </span>
                                   </td>
                                   <td className="py-2 px-3">
@@ -951,9 +951,9 @@ export default function CaisseChefTab() {
               {/* Info colis */}
               <div className="bg-gray-50 rounded-lg p-4 space-y-2">
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-gray-600">Colis:</span>
+                  <span className="text-sm text-gray-600">N° EXP:</span>
                   <span className="font-mono font-semibold text-blue-600">
-                    {delayModal.parcel.nic}
+                    {delayModal.parcel.senderNic || delayModal.parcel.sender?.nic || delayModal.parcel.trackingId}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">
