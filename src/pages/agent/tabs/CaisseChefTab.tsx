@@ -208,7 +208,7 @@ export default function CaisseChefTab() {
         // Garder TOUTES les expéditions (port payé + port dû)
         parcels: driver.parcels,
         // Ajouter les ports dû séparément pour référence
-        portDuParcels: portDuParcels
+        portDuParcels: portDuParcels,
         assignedTodayCount: assignedToday.length,
         portsACollecterCount: portsACollecter.length,
         portsACollecterMontant: portsACollecter.reduce((sum: number, p: any) =>
