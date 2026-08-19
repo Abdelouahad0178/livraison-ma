@@ -167,8 +167,11 @@ export default function CaisseChefTab() {
     })
 
     return Array.from(driversMap.values()).map(driver => {
+      // Filtrer uniquement les colis port_du pour cette page de caisse
+      const portDuParcels = driver.parcels.filter((p: any) => p.portType === 'port_du')
+
       // Calculs par livreur
-      const assignedToday = driver.parcels.filter((p: any) => {
+      const assignedToday = portDuParcels.filter((p: any) => {
         // Colis sans date d'assignation = considérés comme assignés aujourd'hui
         if (!p.deliveryAssignedAt) return true
 
@@ -178,8 +181,7 @@ export default function CaisseChefTab() {
         return assignedDate >= today
       })
 
-      const portsACollecter = driver.parcels.filter((p: any) =>
-        p.portType === 'port_du' &&
+      const portsACollecter = portDuParcels.filter((p: any) =>
         !p.portStatus &&
         (p.status === 'En cours de livraison' || p.status === 'Livré')
       )
@@ -187,12 +189,12 @@ export default function CaisseChefTab() {
       const portsCollectes = agentEntries.filter((e: any) =>
         e.type === 'entree' &&
         e.category === 'port_du' &&
-        driver.parcels.some((p: any) => p.senderNic === e.reference)
+        portDuParcels.some((p: any) => p.senderNic === e.reference)
       )
 
       const now = new Date()
       const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-      const enRetard = driver.parcels.filter((p: any) => {
+      const enRetard = portDuParcels.filter((p: any) => {
         if (p.status !== 'En cours de livraison') return false
         if (!p.deliveryAssignedAt) return false
         const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
@@ -201,6 +203,7 @@ export default function CaisseChefTab() {
 
       return {
         ...driver,
+        parcels: portDuParcels, // Remplacer parcels par uniquement les port_du
         assignedTodayCount: assignedToday.length,
         portsACollecterCount: portsACollecter.length,
         portsACollecterMontant: portsACollecter.reduce((sum: number, p: any) =>
@@ -245,7 +248,6 @@ export default function CaisseChefTab() {
       })
 
       const portsACollecter = filteredParcels.filter((p: any) =>
-        p.portType === 'port_du' &&
         !p.portStatus &&
         (p.status === 'En cours de livraison' || p.status === 'Livré')
       )
@@ -610,7 +612,7 @@ export default function CaisseChefTab() {
                     <div>
                       <h3 className="font-semibold text-gray-900">{driver.name}</h3>
                       <p className="text-xs text-gray-500">
-                        {driver.assignedTodayCount} colis aujourd'hui
+                        {driver.parcels.length} expéditions
                       </p>
                     </div>
                   </div>
@@ -668,9 +670,7 @@ export default function CaisseChefTab() {
                           </tr>
                         </thead>
                         <tbody>
-                          {driver.parcels
-                            .filter((p: any) => p.portType === 'port_du')
-                            .map((parcel: any) => {
+                          {driver.parcels.map((parcel: any) => {
                               const delay = deliveryDelays.find((d: any) =>
                                 d.parcelId === parcel.id && !d.resolvedAt
                               )
@@ -735,9 +735,9 @@ export default function CaisseChefTab() {
                       </table>
                     </div>
 
-                    {driver.parcels.filter((p: any) => p.portType === 'port_du').length === 0 && (
+                    {driver.parcels.length === 0 && (
                       <div className="text-center py-8 text-gray-500 text-sm">
-                        Aucune expédition avec port dû
+                        Aucune expédition
                       </div>
                     )}
                   </div>
