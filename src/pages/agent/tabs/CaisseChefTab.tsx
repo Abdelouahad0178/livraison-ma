@@ -172,6 +172,15 @@ export default function CaisseChefTab() {
       // mais ne collecte de l'argent QUE pour les ports dû
       const portDuParcels = driver.parcels.filter((p: any) => p.portType === 'port_du')
 
+      // DEBUG: Vérifier les types de port
+      if (driver.parcels.length !== portDuParcels.length) {
+        console.log(`[DEBUG] Livreur ${driver.name}:`, {
+          total: driver.parcels.length,
+          portDu: portDuParcels.length,
+          portTypes: driver.parcels.map((p: any) => ({ nic: p.senderNic || p.trackingId, portType: p.portType }))
+        })
+      }
+
       // Calculs par livreur - basés uniquement sur les ports dû
       const assignedToday = driver.parcels.filter((p: any) => {
         // Colis sans date d'assignation = considérés comme assignés aujourd'hui
@@ -183,7 +192,9 @@ export default function CaisseChefTab() {
         return assignedDate >= today
       })
 
+      // CORRECTION: Double-vérification explicite pour exclure les ports payés
       const portsACollecter = portDuParcels.filter((p: any) =>
+        p.portType === 'port_du' &&  // Vérification explicite : UNIQUEMENT port dû
         !p.portStatus &&
         (p.status === 'En cours de livraison' || p.status === 'Livré')
       )
@@ -197,6 +208,7 @@ export default function CaisseChefTab() {
       const now = new Date()
       const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
       const enRetard = portDuParcels.filter((p: any) => {
+        if (p.portType !== 'port_du') return false  // Vérification explicite
         if (p.status !== 'En cours de livraison') return false
         if (!p.deliveryAssignedAt) return false
         const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
