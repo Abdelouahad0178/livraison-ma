@@ -735,3 +735,101 @@ export async function cancelDeliverySheet(sheetId: string, reason?: string) {
     cancelReason: reason || '',
   })
 }
+
+// -- Retards de livraison (Delivery Delays) ----------------------------------
+
+/**
+ * Crée un nouveau retard de livraison
+ */
+export async function createDeliveryDelay(data: {
+  parcelId: string
+  senderNic: string
+  driverId: string
+  driverName: string
+  city: string
+  reason: string
+  reasonDetail?: string
+  createdBy: string
+  createdById: string | null
+}) {
+  const ref = await addDoc(collection(db, 'deliveryDelays'), {
+    parcelId: data.parcelId,
+    senderNic: data.senderNic,
+    driverId: data.driverId,
+    driverName: data.driverName,
+    city: data.city,
+    reason: data.reason,
+    reasonDetail: data.reasonDetail || '',
+    createdBy: data.createdBy,
+    createdById: data.createdById,
+    resolvedAt: null,
+    resolvedBy: null,
+    resolvedById: null,
+    createdAt: serverTimestamp(),
+  })
+  return ref.id
+}
+
+/**
+ * Met à jour un retard de livraison
+ */
+export async function updateDeliveryDelay(delayId: string, data: any) {
+  await updateDoc(doc(db, 'deliveryDelays', delayId), {
+    ...data,
+    updatedAt: serverTimestamp(),
+  })
+}
+
+/**
+ * Supprime un retard de livraison
+ */
+export async function deleteDeliveryDelay(delayId: string) {
+  await deleteDoc(doc(db, 'deliveryDelays', delayId))
+}
+
+/**
+ * Abonnement aux retards de livraison par ville
+ */
+export function subscribeDeliveryDelays(
+  city: string,
+  callback: (delays: any[]) => void,
+  onError: (err?: any) => void = () => {}
+) {
+  const q = query(
+    collection(db, 'deliveryDelays'),
+    where('city', '==', city),
+    orderBy('createdAt', 'desc'),
+    limit(200)
+  )
+  return onSnapshot(
+    q,
+    snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+    onError
+  )
+}
+
+/**
+ * Récupère les retards non résolus pour un livreur
+ */
+export async function getDriverActiveDelays(driverId: string) {
+  const q = query(
+    collection(db, 'deliveryDelays'),
+    where('driverId', '==', driverId),
+    where('resolvedAt', '==', null)
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+}
+
+/**
+ * Récupère les retards pour un colis spécifique
+ */
+export async function getParcelDelays(parcelId: string) {
+  const q = query(
+    collection(db, 'deliveryDelays'),
+    where('parcelId', '==', parcelId),
+    orderBy('createdAt', 'desc')
+  )
+  const snap = await getDocs(q)
+  return snap.docs.map(d => ({ id: d.id, ...d.data() }))
+}

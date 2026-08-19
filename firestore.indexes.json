@@ -488,6 +488,30 @@
         { "fieldPath": "portType",        "order": "ASCENDING"  },
         { "fieldPath": "createdAt",       "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "deliveryDelays",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "city",      "order": "ASCENDING"  },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "deliveryDelays",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "driverId",   "order": "ASCENDING" },
+        { "fieldPath": "resolvedAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "deliveryDelays",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "parcelId",  "order": "ASCENDING"  },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

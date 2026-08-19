@@ -1069,6 +1069,27 @@ service cloud.firestore {
       allow delete: if isAdmin() || isFacturier();
     }
 
+    // ═══════════════════════════════════════════════════════════════════════════
+    // RETARDS DE LIVRAISON (deliveryDelays)
+    // ═══════════════════════════════════════════════════════════════════════════
+    match /deliveryDelays/{delayId} {
+      // Lecture : Admin, Chef d'agence, AgentPro, ou créateur du retard
+      allow read: if isAdmin()
+        || isChefAgence()
+        || (signedIn() && request.auth.uid == resource.data.createdById);
+      // Création : Chef d'agence ou AgentPro uniquement
+      allow create: if signedIn() && isChefAgence()
+        && request.resource.data.createdById == request.auth.uid
+        && request.resource.data.city == userCity();
+      // Mise à jour : Admin, Chef d'agence, AgentPro de la même ville, ou créateur
+      allow update: if isAdmin()
+        || (isChefAgence() && resource.data.city == userCity())
+        || (signedIn() && request.auth.uid == resource.data.createdById);
+      // Suppression : Admin ou Chef d'agence de la même ville
+      allow delete: if isAdmin()
+        || (isChefAgence() && resource.data.city == userCity());
+    }
+
     match /{document=**} {
       allow read:  if isStaff();
       allow write: if isAdmin();

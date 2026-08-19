@@ -48,6 +48,8 @@ export {
   createArrivage, subscribeArrivages, subscribeAllArrivedParcels,
   subscribeArrivedParcelsByCity, subscribeAllArrivages,
   createAutoArrivageForCity, saveArrivagePointage,
+  createDeliveryDelay, updateDeliveryDelay, deleteDeliveryDelay,
+  subscribeDeliveryDelays, getDriverActiveDelays, getParcelDelays,
 } from './delivery'
 
 export {

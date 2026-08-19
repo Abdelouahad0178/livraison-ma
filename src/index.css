@@ -74,6 +74,7 @@ button {
 @media print {
   body * { visibility: hidden; }
   #ticket-print, #ticket-print * { visibility: visible; }
+  #port-agence-print, #port-agence-print * { visibility: visible; }
   #ticket-print {
     position: static;
     width: 148mm;
@@ -81,6 +82,63 @@ button {
     margin: 0 auto;
     page-break-inside: avoid;
     break-inside: avoid;
+  }
+
+  /* Optimiser Port par Agence pour tenir sur une seule page A4 */
+  #port-agence-print {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    padding: 10mm !important;
+    font-size: 9px !important;
+    page-break-inside: avoid;
+    break-inside: avoid;
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+
+  #port-agence-print h1 {
+    font-size: 18px !important;
+    margin-bottom: 4px !important;
+  }
+
+  #port-agence-print p {
+    font-size: 10px !important;
+    margin: 2px 0 !important;
+  }
+
+  #port-agence-print table {
+    width: 100% !important;
+    border-collapse: collapse !important;
+    font-size: 8px !important;
+    margin-top: 8px !important;
+  }
+
+  #port-agence-print th {
+    padding: 4px 6px !important;
+    font-size: 10px !important;
+    border: 2px solid #000 !important;
+    background-color: #1f2937 !important;
+    color: #fff !important;
+    font-weight: bold !important;
+    text-transform: uppercase !important;
+    letter-spacing: 0.5px !important;
+  }
+
+  #port-agence-print th svg {
+    display: none !important;
+  }
+
+  #port-agence-print td {
+    padding: 3px 5px !important;
+    font-size: 9px !important;
+    border: 1px solid #333 !important;
+  }
+
+  #port-agence-print tfoot td {
+    font-weight: bold !important;
+    background-color: #f9fafb !important;
   }
 
   /* Masquer tout sauf le tableau d'arrivages lors de l'impression */
@@ -113,6 +171,12 @@ button {
 
   thead {
     background-color: #f3f4f6 !important;
+  }
+
+  /* Forcer tout le contenu sur une seule page */
+  @page {
+    size: A4;
+    margin: 10mm;
   }
 }
 

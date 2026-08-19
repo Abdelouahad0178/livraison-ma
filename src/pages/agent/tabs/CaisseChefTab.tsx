@@ -167,11 +167,13 @@ export default function CaisseChefTab() {
     })
 
     return Array.from(driversMap.values()).map(driver => {
-      // Filtrer uniquement les colis port_du pour cette page de caisse
+      // Séparer les ports dû pour les calculs de collecte
+      // IMPORTANT: Le livreur livre TOUTES les expéditions (port payé + port dû)
+      // mais ne collecte de l'argent QUE pour les ports dû
       const portDuParcels = driver.parcels.filter((p: any) => p.portType === 'port_du')
 
-      // Calculs par livreur
-      const assignedToday = portDuParcels.filter((p: any) => {
+      // Calculs par livreur - basés uniquement sur les ports dû
+      const assignedToday = driver.parcels.filter((p: any) => {
         // Colis sans date d'assignation = considérés comme assignés aujourd'hui
         if (!p.deliveryAssignedAt) return true
 
@@ -203,7 +205,10 @@ export default function CaisseChefTab() {
 
       return {
         ...driver,
-        parcels: portDuParcels, // Remplacer parcels par uniquement les port_du
+        // Garder TOUTES les expéditions (port payé + port dû)
+        parcels: driver.parcels,
+        // Ajouter les ports dû séparément pour référence
+        portDuParcels: portDuParcels
         assignedTodayCount: assignedToday.length,
         portsACollecterCount: portsACollecter.length,
         portsACollecterMontant: portsACollecter.reduce((sum: number, p: any) =>
@@ -664,17 +669,20 @@ export default function CaisseChefTab() {
                           <tr className="border-b border-gray-200">
                             <th className="text-left py-2 px-3 font-semibold text-gray-700">N° EXP</th>
                             <th className="text-left py-2 px-3 font-semibold text-gray-700">Client</th>
-                            <th className="text-right py-2 px-3 font-semibold text-gray-700">Port dû</th>
+                            <th className="text-center py-2 px-3 font-semibold text-gray-700">Type</th>
+                            <th className="text-right py-2 px-3 font-semibold text-gray-700">Montant</th>
                             <th className="text-center py-2 px-3 font-semibold text-gray-700">Status</th>
                             <th className="text-center py-2 px-3 font-semibold text-gray-700">Actions</th>
                           </tr>
                         </thead>
                         <tbody>
                           {driver.parcels.map((parcel: any) => {
+                              const isPortDu = parcel.portType === 'port_du'
                               const delay = deliveryDelays.find((d: any) =>
                                 d.parcelId === parcel.id && !d.resolvedAt
                               )
                               const isLate = (() => {
+                                if (!isPortDu) return false // Port payé ne peut pas être en retard de collecte
                                 if (parcel.status !== 'En cours de livraison' || !parcel.deliveryAssignedAt) return false
                                 const assignedDate = parcel.deliveryAssignedAt?.toDate ? parcel.deliveryAssignedAt.toDate() : new Date(parcel.deliveryAssignedAt)
                                 const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
@@ -693,11 +701,27 @@ export default function CaisseChefTab() {
                                     <div className="text-gray-900">{parcel.receiver?.name || '-'}</div>
                                     <div className="text-xs text-gray-500">{parcel.receiver?.tel || '-'}</div>
                                   </td>
+                                  <td className="py-2 px-3 text-center">
+                                    {isPortDu ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-orange-100 text-orange-700 text-xs font-medium">
+                                        Port dû
+                                      </span>
+                                    ) : (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-xs font-medium">
+                                        Port payé
+                                      </span>
+                                    )}
+                                  </td>
                                   <td className="py-2 px-3 text-right font-semibold text-gray-900">
                                     {fmtAmt(parcel.price)} DH
                                   </td>
                                   <td className="py-2 px-3 text-center">
-                                    {isCollected ? (
+                                    {!isPortDu ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-gray-100 text-gray-600 text-xs font-semibold">
+                                        <Check className="w-3 h-3" />
+                                        Déjà payé
+                                      </span>
+                                    ) : isCollected ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-700 text-xs font-semibold">
                                         <Check className="w-3 h-3" />
                                         Collecté
@@ -715,7 +739,7 @@ export default function CaisseChefTab() {
                                     )}
                                   </td>
                                   <td className="py-2 px-3 text-center">
-                                    {!isCollected && (
+                                    {isPortDu && !isCollected && (
                                       <button
                                         onClick={() => openDelayModal(parcel, driver)}
                                         className={`text-xs px-3 py-1 rounded-lg font-medium transition ${

@@ -102,6 +102,7 @@ const AgentPortsEnCompteTab = lazy(() => import('./agent/tabs/AgentPortsEnCompte
 const AgentVersementsTab = lazy(() => import('./agent/tabs/AgentVersementsTab'))
 const AgentInvoicesTab = lazy(() => import('./agent/tabs/AgentInvoicesTab'))
 const PortPayeChequeTab = lazy(() => import('./agent/tabs/PortPayeChequeTab'))
+const CaisseChefTab = lazy(() => import('./agent/tabs/CaisseChefTab'))
 
 const MOD_STATUS = {
   pending:  { label: 'En attente', bg: 'bg-amber-100', text: 'text-amber-700' },
@@ -2528,12 +2529,18 @@ export default function AgentPage() {
         {tab === 'parcels' && <ParcelsTab />}
 
         {tab === 'caisse' && (
-          <DirectorCaisseSimple
-            profile={profile}
-            agencyCash={agencyCash}
-            driverVersements={driverVersements}
-            adminTransfers={myAdminTransfers}
-          />
+          profile?.role === 'chef_agence' ? (
+            <Suspense fallback={<div className="text-center py-8">Chargement...</div>}>
+              <CaisseChefTab />
+            </Suspense>
+          ) : (
+            <DirectorCaisseSimple
+              profile={profile}
+              agencyCash={agencyCash}
+              driverVersements={driverVersements}
+              adminTransfers={myAdminTransfers}
+            />
+          )
         )}
 
         {tab === 'cod' && (

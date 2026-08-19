@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
-import { Building2, TrendingUp, Package, Search, Filter, X, Calendar, ChevronDown, Loader2, AlertCircle } from 'lucide-react'
+import { Building2, TrendingUp, Package, Printer, Filter, X, Calendar, ChevronDown, Loader2, AlertCircle } from 'lucide-react'
 import { CITIES } from '../../../firebase/constants'
 import { collection, query, orderBy, limit, onSnapshot, startAfter, getDocs, where, Timestamp } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
@@ -30,9 +30,11 @@ export default function AdminPortAgenciesTab({
   operationalDay,
   setOperationalDay
 }: Props) {
-  // États pour filtres et recherche
-  const [searchCity, setSearchCity] = useState('')
+  // États pour filtres
+  const [selectedCity, setSelectedCity] = useState<string>('all') // all ou nom de ville
   const [portTypeFilter, setPortTypeFilter] = useState('all') // all, port_paye, port_du, port_en_compte_expediteur
+  const [directionFilter, setDirectionFilter] = useState('all') // all, sent (envoyées), received (reçues)
+  const [originCityFilter, setOriginCityFilter] = useState<string>('all') // Filtre ville d'origine (pour mode "Reçues")
   const [showFilters, setShowFilters] = useState(true)
 
   // États pour chargement progressif
@@ -43,22 +45,29 @@ export default function AdminPortAgenciesTab({
   const [hasMore, setHasMore] = useState(true)
   const lastDocRef = useRef<any>(null)
 
+  // 🔄 Réinitialiser le filtre ville d'origine quand on quitte le mode "Reçues"
+  useEffect(() => {
+    if (directionFilter !== 'received') {
+      setOriginCityFilter('all')
+    }
+  }, [directionFilter])
+
   // ⚡ Chargement optimisé avec détection de filtres (Option 3)
   useEffect(() => {
     setLoading(true)
 
     // 🔍 Détecter si des filtres sont actifs
     const hasDateFilter = datePreset !== 'all'
-    const hasSearchFilter = searchCity.trim() !== ''
+    const hasCityFilter = selectedCity !== 'all'
     const hasPortTypeFilter = portTypeFilter !== 'all'
-    const hasFilters = hasDateFilter || hasSearchFilter || hasPortTypeFilter
+    const hasFilters = hasDateFilter || hasCityFilter || hasPortTypeFilter
 
     const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
 
     console.warn(`📊 CHARGEMENT Port par Agence:`, {
       hasFilters,
       effectivePageSize,
-      filters: { datePreset, searchCity, portTypeFilter }
+      filters: { datePreset, selectedCity, portTypeFilter }
     })
 
     // 📅 Gérer les différents filtres de date
@@ -126,7 +135,7 @@ export default function AdminPortAgenciesTab({
     )
 
     return () => unsub()
-  }, [datePreset, dateFrom, dateTo, operationalDay, searchCity, portTypeFilter])
+  }, [datePreset, dateFrom, dateTo, operationalDay, selectedCity, portTypeFilter])
 
   // ⚡ Charger TOUS les colis restants en arrière-plan
   const loadAllParcels = async () => {
@@ -300,8 +309,9 @@ export default function AdminPortAgenciesTab({
         }
       }
 
-      // 📤 PORT EXPÉDITEUR : collecté à l'agence d'ORIGINE
-      if (senderPort > 0 && originCity && stats[originCity]) {
+      // 📤 PORT EXPÉDITEUR : collecté à l'agence d'ORIGINE (expéditions envoyées)
+      // Ne comptabiliser que si le filtre autorise les envoyées (all ou sent)
+      if (senderPort > 0 && originCity && stats[originCity] && (directionFilter === 'all' || directionFilter === 'sent')) {
         if (senderPortType === 'port_paye') {
           stats[originCity].portPaye += senderPort
         } else if (senderPortType === 'port_en_compte_expediteur' || senderPortType === 'port_en_compte') {
@@ -309,8 +319,11 @@ export default function AdminPortAgenciesTab({
         }
       }
 
-      // 📥 PORT DESTINATAIRE : collecté à l'agence de DESTINATION
-      if (receiverPort > 0 && destCity && stats[destCity]) {
+      // 📥 PORT DESTINATAIRE : collecté à l'agence de DESTINATION (expéditions reçues)
+      // Ne comptabiliser que si le filtre autorise les reçues (all ou received)
+      // ET si le filtre ville d'origine est respecté (en mode received)
+      const matchesOriginFilter = directionFilter !== 'received' || originCityFilter === 'all' || originCity === originCityFilter
+      if (receiverPort > 0 && destCity && stats[destCity] && (directionFilter === 'all' || directionFilter === 'received') && matchesOriginFilter) {
         if (receiverPortType === 'port_du') {
           stats[destCity].portDu += receiverPort
         } else if (receiverPortType === 'port_en_compte_destinataire' || receiverPortType === 'port_en_compte') {
@@ -318,9 +331,18 @@ export default function AdminPortAgenciesTab({
         }
       }
 
-      // ✅ EXPÉDITIONS : comptées à l'agence d'ORIGINE (PAS les colis !)
-      if (originCity && stats[originCity]) {
-        stats[originCity].nbExpeditions += 1
+      // ✅ EXPÉDITIONS : comptées selon la direction
+      if (directionFilter === 'all' || directionFilter === 'sent') {
+        // Expéditions envoyées : comptées à l'agence d'ORIGINE
+        if (originCity && stats[originCity]) {
+          stats[originCity].nbExpeditions += 1
+        }
+      } else if (directionFilter === 'received') {
+        // Expéditions reçues : comptées à l'agence de DESTINATION
+        // Et filtrées par ville d'origine si spécifié
+        if (destCity && stats[destCity] && matchesOriginFilter) {
+          stats[destCity].nbExpeditions += 1
+        }
       }
     })
 
@@ -333,16 +355,15 @@ export default function AdminPortAgenciesTab({
       enCompteDest: Math.round(stat.enCompteDest * 100) / 100,
       totalPort: Math.round((stat.portPaye + stat.portDu + stat.enCompteExp + stat.enCompteDest) * 100) / 100,
     }))
-  }, [filteredByDate])
+  }, [filteredByDate, directionFilter, originCityFilter])
 
-  // Appliquer les filtres de recherche et type de port
+  // Appliquer les filtres de ville et type de port
   const filteredStats = useMemo(() => {
     let filtered = portStats
 
-    // Filtre par recherche ville
-    if (searchCity.trim()) {
-      const query = searchCity.toLowerCase().trim()
-      filtered = filtered.filter(stat => stat.city.toLowerCase().includes(query))
+    // Filtre par ville sélectionnée
+    if (selectedCity !== 'all') {
+      filtered = filtered.filter(stat => stat.city === selectedCity)
     }
 
     // Filtre par type de port - 4 TYPES SÉPARÉS
@@ -357,7 +378,7 @@ export default function AdminPortAgenciesTab({
     }
 
     return filtered
-  }, [portStats, searchCity, portTypeFilter])
+  }, [portStats, selectedCity, portTypeFilter])
 
   // ✅ Calculer les totaux sur les stats FILTRÉES - 4 TYPES + EXPÉDITIONS SEULEMENT
   const totauxFiltres = useMemo(() => {
@@ -380,10 +401,53 @@ export default function AdminPortAgenciesTab({
     }
   }, [filteredStats])
 
-  const hasActiveFilter = searchCity.trim() !== '' || portTypeFilter !== 'all' || datePreset !== 'all'
+  const hasActiveFilter = selectedCity !== 'all' || portTypeFilter !== 'all' || datePreset !== 'all' || directionFilter !== 'all' || (directionFilter === 'received' && originCityFilter !== 'all')
+
+  // 🖨️ Fonction d'impression
+  const handlePrint = () => {
+    window.print()
+  }
 
   return (
-    <div className="mt-4 space-y-4">
+    <>
+      {/* 🖨️ Styles d'impression */}
+      <style>{`
+        @media print {
+          @page {
+            margin: 1cm;
+            size: A4 landscape;
+          }
+          body {
+            print-color-adjust: exact;
+            -webkit-print-color-adjust: exact;
+          }
+          .print-page-break {
+            page-break-before: always;
+          }
+          /* Assurer que les gradients et couleurs sont visibles */
+          * {
+            print-color-adjust: exact !important;
+            -webkit-print-color-adjust: exact !important;
+          }
+          /* Optimiser l'affichage du tableau */
+          table {
+            page-break-inside: auto;
+          }
+          tr {
+            page-break-inside: avoid;
+            page-break-after: auto;
+          }
+          thead {
+            display: table-header-group;
+          }
+          /* Enlever les ombres à l'impression pour meilleure lisibilité */
+          .shadow-xl, .shadow-lg, .shadow-sm {
+            box-shadow: none !important;
+          }
+        }
+      `}</style>
+
+      <div className="mt-4 space-y-4">
       {/* Chargement initial */}
       {loading && (
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-12 text-center">
@@ -393,21 +457,69 @@ export default function AdminPortAgenciesTab({
       )}
 
       {!loading && (
-        <>
+        <div id="port-agence-print">
+          {/* 🖨️ En-tête d'impression simplifié - visible uniquement à l'impression */}
+          <div className="hidden print:block bg-white pb-4 mb-4">
+            {/* Titre principal avec détails */}
+            <div className="text-center mb-4">
+              <h1 className="text-3xl font-black text-gray-900">
+                Port par Agence
+                {selectedCity !== 'all' && ` - ${selectedCity}`}
+              </h1>
+              <p className="text-lg font-bold text-indigo-700 mt-2">
+                {totauxFiltres.nbExpeditions} expédition{totauxFiltres.nbExpeditions > 1 ? 's' : ''}
+                {directionFilter === 'sent' && ' envoyée' + (totauxFiltres.nbExpeditions > 1 ? 's' : '')}
+                {directionFilter === 'received' && (
+                  <>
+                    {' reçue' + (totauxFiltres.nbExpeditions > 1 ? 's' : '')}
+                    {originCityFilter !== 'all' && ` de ${originCityFilter}`}
+                  </>
+                )}
+              </p>
+              {datePreset === 'operational' && operationalDay && (
+                <p className="text-lg font-semibold text-gray-600 mt-2">
+                  Jour d'opération : {operationalDay.toLocaleDateString('fr-MA', {
+                    weekday: 'long',
+                    year: 'numeric',
+                    month: 'long',
+                    day: 'numeric'
+                  })}
+                </p>
+              )}
+              {datePreset !== 'operational' && datePreset !== 'all' && (
+                <p className="text-lg font-semibold text-gray-600 mt-2">
+                  Période : {dateFrom ? new Date(dateFrom).toLocaleDateString('fr-MA') : ''} - {dateTo ? new Date(dateTo).toLocaleDateString('fr-MA') : ''}
+                </p>
+              )}
+            </div>
+
+            {/* Ligne de séparation */}
+            <div className="mt-4 border-t-2 border-gray-300"></div>
+          </div>
+
           {/* En-tête */}
-          <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 rounded-2xl p-6 shadow-xl">
-            <div className="flex items-center gap-3 text-white">
-              <Building2 className="w-8 h-8" />
-              <div>
-                <h2 className="text-2xl font-black">Port par Agence</h2>
-                <p className="text-blue-100 text-sm mt-1">Port Payé et En Compte (collecté par expéditeur) · Port Dû (collecté à destination)</p>
+          <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 rounded-2xl p-6 shadow-xl print:hidden">
+            <div className="flex items-center justify-between gap-3 text-white">
+              <div className="flex items-center gap-3">
+                <Building2 className="w-8 h-8" />
+                <div>
+                  <h2 className="text-2xl font-black">Port par Agence</h2>
+                  <p className="text-blue-100 text-sm mt-1">Port Payé et En Compte (collecté par expéditeur) · Port Dû (collecté à destination)</p>
+                </div>
               </div>
+              <button
+                onClick={handlePrint}
+                className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 backdrop-blur-sm rounded-xl transition-colors font-bold print:hidden"
+              >
+                <Printer className="w-5 h-5" />
+                Imprimer
+              </button>
             </div>
           </div>
 
           {/* Avertissement chargement progressif */}
           {hasMore && datePreset !== 'all' && (
-            <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-l-4 border-orange-500 rounded-lg p-4 shadow-sm">
+            <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-l-4 border-orange-500 rounded-lg p-4 shadow-sm print:hidden">
               <div className="flex items-start gap-3">
                 <AlertCircle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
                 <div className="flex-1">
@@ -428,7 +540,7 @@ export default function AdminPortAgenciesTab({
 
           {/* Indicateur de chargement en arrière-plan */}
           {loadingAll && (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center gap-3">
+            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center gap-3 print:hidden">
               <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
               <p className="text-sm text-blue-900">
                 <span className="font-semibold">Chargement en arrière-plan...</span> {liveParcels.length} colis déjà disponibles
@@ -437,7 +549,7 @@ export default function AdminPortAgenciesTab({
           )}
 
       {/* Section Filtres */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
+      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden print:hidden">
         {/* En-tête des filtres */}
         <button
           onClick={() => setShowFilters(!showFilters)}
@@ -534,52 +646,130 @@ export default function AdminPortAgenciesTab({
               </div>
             </div>
 
-            {/* Ligne 2: Recherche et Type de port */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-gray-100 pt-4">
-              {/* Recherche ville */}
-              <div>
-                <label className="block text-xs font-bold text-gray-600 mb-2 uppercase tracking-wide">
-                  <Search className="w-3.5 h-3.5 inline mr-1" />
-                  Rechercher une ville
-                </label>
-                <div className="relative">
-                  <input
-                    type="text"
-                    value={searchCity}
-                    onChange={(e) => setSearchCity(e.target.value)}
-                    placeholder="Ex: Casablanca, Rabat..."
-                    className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm"
-                  />
-                  {searchCity && (
-                    <button
-                      onClick={() => setSearchCity('')}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 p-1 hover:bg-gray-100 rounded-lg transition"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  )}
-                </div>
-              </div>
-
-              {/* Filtre type de port */}
-              <div>
-                <label className="block text-xs font-bold text-gray-600 mb-2 uppercase tracking-wide">
-                  <Filter className="w-3.5 h-3.5 inline mr-1" />
-                  Type de port
-                </label>
-                <select
-                  value={portTypeFilter}
-                  onChange={(e) => setPortTypeFilter(e.target.value)}
-                  className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm font-medium"
+            {/* Ligne 2: Filtre Ville par boutons */}
+            <div className="border-t border-gray-100 pt-4">
+              <label className="block text-xs font-bold text-gray-600 mb-3 uppercase tracking-wide">
+                <Building2 className="w-3.5 h-3.5 inline mr-1" />
+                Filtrer par ville / agence
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setSelectedCity('all')}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition ${
+                    selectedCity === 'all'
+                      ? 'bg-purple-600 text-white shadow-md'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
                 >
-                  <option value="all">Tous les types</option>
-                  <option value="port_paye">✅ Port Payé uniquement</option>
-                  <option value="port_du">📮 Port Dû uniquement</option>
-                  <option value="port_en_compte_expediteur">📤 En Compte Exp uniquement</option>
-                  <option value="port_en_compte_destinataire">📥 En Compte Dest uniquement</option>
-                </select>
+                  Toutes les villes
+                </button>
+                {CITIES.map(city => (
+                  <button
+                    key={city}
+                    onClick={() => setSelectedCity(city)}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition ${
+                      selectedCity === city
+                        ? 'bg-blue-600 text-white shadow-md'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {city}
+                  </button>
+                ))}
               </div>
             </div>
+
+            {/* Ligne 3: Filtre type de port */}
+            <div className="border-t border-gray-100 pt-4">
+              <label className="block text-xs font-bold text-gray-600 mb-2 uppercase tracking-wide">
+                <Filter className="w-3.5 h-3.5 inline mr-1" />
+                Type de port
+              </label>
+              <select
+                value={portTypeFilter}
+                onChange={(e) => setPortTypeFilter(e.target.value)}
+                className="w-full px-4 py-2.5 border border-gray-200 rounded-xl focus:ring-2 focus:ring-purple-500 focus:border-transparent text-sm font-medium"
+              >
+                <option value="all">Tous les types</option>
+                <option value="port_paye">✅ Port Payé uniquement</option>
+                <option value="port_du">📮 Port Dû uniquement</option>
+                <option value="port_en_compte_expediteur">📤 En Compte Exp uniquement</option>
+                <option value="port_en_compte_destinataire">📥 En Compte Dest uniquement</option>
+              </select>
+            </div>
+
+            {/* Ligne 4: Filtre Direction (Envoyées / Reçues) */}
+            <div className="border-t border-gray-100 pt-4">
+              <label className="block text-xs font-bold text-gray-600 mb-3 uppercase tracking-wide">
+                🔄 Direction des expéditions
+              </label>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  onClick={() => setDirectionFilter('all')}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition ${
+                    directionFilter === 'all'
+                      ? 'bg-green-600 text-white shadow-md'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  Toutes (envoyées + reçues)
+                </button>
+                <button
+                  onClick={() => setDirectionFilter('sent')}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition ${
+                    directionFilter === 'sent'
+                      ? 'bg-orange-600 text-white shadow-md'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  📤 Envoyées (origine)
+                </button>
+                <button
+                  onClick={() => setDirectionFilter('received')}
+                  className={`px-4 py-2 rounded-xl text-xs font-bold transition ${
+                    directionFilter === 'received'
+                      ? 'bg-teal-600 text-white shadow-md'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  📥 Reçues (destination)
+                </button>
+              </div>
+            </div>
+
+            {/* Ligne 5: Filtre Ville d'origine (visible uniquement en mode "Reçues") */}
+            {directionFilter === 'received' && (
+              <div className="border-t border-gray-100 pt-4 bg-teal-50/30 p-4 rounded-lg">
+                <label className="block text-xs font-bold text-teal-700 mb-3 uppercase tracking-wide">
+                  📍 Ville d'origine (expéditions reçues de...)
+                </label>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    onClick={() => setOriginCityFilter('all')}
+                    className={`px-4 py-2 rounded-xl text-xs font-bold transition ${
+                      originCityFilter === 'all'
+                        ? 'bg-teal-600 text-white shadow-md'
+                        : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
+                    }`}
+                  >
+                    Toutes les villes
+                  </button>
+                  {CITIES.map(city => (
+                    <button
+                      key={city}
+                      onClick={() => setOriginCityFilter(city)}
+                      className={`px-4 py-2 rounded-xl text-xs font-bold transition ${
+                        originCityFilter === city
+                          ? 'bg-teal-700 text-white shadow-md'
+                          : 'bg-white text-gray-600 hover:bg-gray-100 border border-gray-200'
+                      }`}
+                    >
+                      {city}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* Bouton Reset et Tags actifs */}
             {hasActiveFilter && (
@@ -601,12 +791,12 @@ export default function AdminPortAgenciesTab({
                       </button>
                     </span>
                   )}
-                  {searchCity && (
+                  {selectedCity !== 'all' && (
                     <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-blue-100 text-blue-700 rounded-lg text-xs font-bold">
-                      <Search className="w-3 h-3" />
-                      Ville: "{searchCity}"
+                      <Building2 className="w-3 h-3" />
+                      Ville: {selectedCity}
                       <button
-                        onClick={() => setSearchCity('')}
+                        onClick={() => setSelectedCity('all')}
                         className="hover:bg-blue-200 rounded p-0.5 transition"
                       >
                         <X className="w-3 h-3" />
@@ -627,11 +817,36 @@ export default function AdminPortAgenciesTab({
                       </button>
                     </span>
                   )}
+                  {directionFilter !== 'all' && (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-100 text-amber-700 rounded-lg text-xs font-bold">
+                      {directionFilter === 'sent' && '📤 Envoyées'}
+                      {directionFilter === 'received' && '📥 Reçues'}
+                      <button
+                        onClick={() => setDirectionFilter('all')}
+                        className="hover:bg-amber-200 rounded p-0.5 transition"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  )}
+                  {directionFilter === 'received' && originCityFilter !== 'all' && (
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-teal-100 text-teal-700 rounded-lg text-xs font-bold">
+                      📍 Origine: {originCityFilter}
+                      <button
+                        onClick={() => setOriginCityFilter('all')}
+                        className="hover:bg-teal-200 rounded p-0.5 transition"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  )}
                 </div>
                 <button
                   onClick={() => {
-                    setSearchCity('')
+                    setSelectedCity('all')
                     setPortTypeFilter('all')
+                    setDirectionFilter('all')
+                    setOriginCityFilter('all')
                     setDatePreset('all')
                   }}
                   className="px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-xl font-bold transition-colors flex items-center gap-2 text-xs"
@@ -646,7 +861,7 @@ export default function AdminPortAgenciesTab({
       </div>
 
       {/* Carte résumé (filtré) */}
-      <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-orange-200 rounded-xl p-6 shadow-lg">
+      <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-orange-200 rounded-xl p-6 shadow-lg print:bg-gray-50 print:rounded-none print:mb-6">
         <div className="flex items-center justify-between mb-4">
           <h3 className="text-lg font-bold text-gray-800">
             📊 Résumé {hasActiveFilter ? '(Filtré)' : 'Global'}
@@ -655,7 +870,7 @@ export default function AdminPortAgenciesTab({
             {filteredStats.length} agence(s) affichée(s)
           </span>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+        <div className="flex flex-wrap items-center justify-around gap-6">
           <div className="flex items-center gap-3">
             <Package className="w-8 h-8 text-indigo-600" />
             <div>
@@ -702,9 +917,9 @@ export default function AdminPortAgenciesTab({
       </div>
 
       {/* Tableau par agence */}
-      <div className="bg-white rounded-2xl shadow-xl border-2 border-purple-100 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
+      <div className="bg-white rounded-2xl shadow-xl border-2 border-purple-100 overflow-hidden print:rounded-none print:border print:border-gray-300">
+        <div className="overflow-x-auto print:overflow-visible">
+          <table className="w-full print:text-sm">
             <thead className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white">
               <tr>
                 <th className="px-6 py-4 text-left font-bold whitespace-nowrap">
@@ -722,13 +937,16 @@ export default function AdminPortAgenciesTab({
                 <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-orange-600/30">
                   💰 Port Dû
                 </th>
-                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-purple-600/30">
+                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-green-600/30">
+                  💵 Total (Payé + Dû)
+                </th>
+                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-purple-600/30 print:hidden">
                   📤 En Compte Exp
                 </th>
-                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-pink-600/30">
+                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-pink-600/30 print:hidden">
                   📥 En Compte Dest
                 </th>
-                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-green-600/30">
+                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-green-600/30 print:hidden">
                   💵 Total Port
                 </th>
               </tr>
@@ -761,17 +979,22 @@ export default function AdminPortAgenciesTab({
                       {stat.portDu.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-right font-bold bg-purple-50/50">
+                  <td className="px-6 py-4 text-right font-bold bg-green-50/50">
+                    <span className="text-green-700 text-xl">
+                      {(stat.portPaye + stat.portDu).toLocaleString('fr-MA')} DH
+                    </span>
+                  </td>
+                  <td className="px-6 py-4 text-right font-bold bg-purple-50/50 print:hidden">
                     <span className="text-purple-700 text-lg">
                       {stat.enCompteExp.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-right font-bold bg-pink-50/50">
+                  <td className="px-6 py-4 text-right font-bold bg-pink-50/50 print:hidden">
                     <span className="text-pink-700 text-lg">
                       {stat.enCompteDest.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-right font-bold bg-green-50/50">
+                  <td className="px-6 py-4 text-right font-bold bg-green-50/50 print:hidden">
                     <span className="text-green-700 text-xl">
                       {stat.totalPort.toLocaleString('fr-MA')} DH
                     </span>
@@ -802,17 +1025,22 @@ export default function AdminPortAgenciesTab({
                       {totauxFiltres.portDu.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-5 text-right bg-purple-100">
+                  <td className="px-6 py-5 text-right bg-green-100">
+                    <span className="text-green-900 text-2xl font-black">
+                      {(totauxFiltres.portPaye + totauxFiltres.portDu).toLocaleString('fr-MA')} DH
+                    </span>
+                  </td>
+                  <td className="px-6 py-5 text-right bg-purple-100 print:hidden">
                     <span className="text-purple-900 text-xl font-black">
                       {totauxFiltres.enCompteExp.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-5 text-right bg-pink-100">
+                  <td className="px-6 py-5 text-right bg-pink-100 print:hidden">
                     <span className="text-pink-900 text-xl font-black">
                       {totauxFiltres.enCompteDest.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-5 text-right bg-green-100">
+                  <td className="px-6 py-5 text-right bg-green-100 print:hidden">
                     <span className="text-green-900 text-2xl font-black">
                       {totauxFiltres.totalPort.toLocaleString('fr-MA')} DH
                     </span>
@@ -854,8 +1082,9 @@ export default function AdminPortAgenciesTab({
           )}
         </div>
       )}
-        </>
+        </div>
       )}
-    </div>
+      </div>
+    </>
   )
 }
