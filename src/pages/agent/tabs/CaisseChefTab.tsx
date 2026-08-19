@@ -265,6 +265,11 @@ export default function CaisseChefTab() {
       })
 
       // Recalculer les statistiques pour les colis filtrés
+      // IMPORTANT: Filtrer uniquement les ports dus (même logique que drivers)
+      const filteredPortDuParcels = filteredParcels.filter((p: any) =>
+        p.portType === 'port_du' && !p.portPayeMethod
+      )
+
       const assignedToday = filteredParcels.filter((p: any) => {
         // Colis sans date d'assignation = considérés comme assignés aujourd'hui
         if (!p.deliveryAssignedAt) return true
@@ -275,7 +280,9 @@ export default function CaisseChefTab() {
         return assignedDate >= today
       })
 
-      const portsACollecter = filteredParcels.filter((p: any) =>
+      const portsACollecter = filteredPortDuParcels.filter((p: any) =>
+        p.portType === 'port_du' &&  // Vérification explicite
+        !p.portPayeMethod &&          // Exclure ports payés
         !p.portStatus &&
         (p.status === 'En cours de livraison' || p.status === 'Livré')
       )
@@ -283,12 +290,14 @@ export default function CaisseChefTab() {
       const portsCollectes = agentEntries.filter((e: any) =>
         e.type === 'entree' &&
         e.category === 'port_du' &&
-        filteredParcels.some((p: any) => p.senderNic === e.reference)
+        filteredPortDuParcels.some((p: any) => p.senderNic === e.reference)
       )
 
       const now = new Date()
       const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-      const enRetard = filteredParcels.filter((p: any) => {
+      const enRetard = filteredPortDuParcels.filter((p: any) => {
+        if (p.portType !== 'port_du') return false  // Vérification explicite
+        if (p.portPayeMethod) return false          // Exclure ports payés
         if (p.status !== 'En cours de livraison') return false
         if (!p.deliveryAssignedAt) return false
         const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
