@@ -102,12 +102,13 @@ export default function AdminHomeTab({
       badge: codStats.collectedDH > 0 ? `${fmt(codStats.collectedDH)} DH` : null,
       action: () => setMainTab('cod'),
     },
-    {
-      key: 'versements', label: '💰 Versements Livreurs', desc: 'Gérer les versements des livreurs',
-      icon: Banknote, grad: 'from-teal-500 via-cyan-600 to-blue-700',
-      glow: 'bg-teal-50/80', stat: 'Port Dû & COD',
-      action: () => setMainTab('versements'),
-    },
+    // CACHÉ: Versements Livreurs
+    // {
+    //   key: 'versements', label: '💰 Versements Livreurs', desc: 'Gérer les versements des livreurs',
+    //   icon: Banknote, grad: 'from-teal-500 via-cyan-600 to-blue-700',
+    //   glow: 'bg-teal-50/80', stat: 'Port Dû & COD',
+    //   action: () => setMainTab('versements'),
+    // },
     {
       key: 'port_agencies', label: '📮 Port par agence', desc: 'Statistiques de port par ville',
       icon: Building2, grad: 'from-purple-500 via-pink-600 to-rose-700',
