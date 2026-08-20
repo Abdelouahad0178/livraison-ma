@@ -145,24 +145,27 @@ export default function AdminHomeTab({
       glow: 'bg-green-50/80', stat: 'Gestion clientèle',
       action: () => navigate('/clients'),
     },
-    {
-      key: 'fleet', label: 'Parc véhicules', desc: 'Camions · Fourgons · Voitures',
-      icon: Car, grad: 'from-slate-500 via-gray-600 to-zinc-700',
-      glow: 'bg-gray-50/80', stat: 'Suivi du parc automobile',
-      action: () => navigate('/fleet'),
-    },
-    {
-      key: 'dashboard', label: 'Tableau de bord', desc: 'Statistiques & graphiques globaux',
-      icon: TrendingUp, grad: 'from-indigo-500 via-indigo-600 to-blue-800',
-      glow: 'bg-indigo-50/80', stat: `${total} colis au total`,
-      action: () => navigate('/dashboard'),
-    },
-    {
-      key: 'agencies', label: 'Agences', desc: 'Responsables, flux et performance',
-      icon: Building2, grad: 'from-cyan-500 via-sky-600 to-blue-700',
-      glow: 'bg-cyan-50/80', stat: `${agencyStats.length} villes suivies`,
-      action: () => setMainTab('agencies'),
-    },
+    // CACHÉ: Parc véhicules
+    // {
+    //   key: 'fleet', label: 'Parc véhicules', desc: 'Camions · Fourgons · Voitures',
+    //   icon: Car, grad: 'from-slate-500 via-gray-600 to-zinc-700',
+    //   glow: 'bg-gray-50/80', stat: 'Suivi du parc automobile',
+    //   action: () => navigate('/fleet'),
+    // },
+    // CACHÉ: Tableau de bord
+    // {
+    //   key: 'dashboard', label: 'Tableau de bord', desc: 'Statistiques & graphiques globaux',
+    //   icon: TrendingUp, grad: 'from-indigo-500 via-indigo-600 to-blue-800',
+    //   glow: 'bg-indigo-50/80', stat: `${total} colis au total`,
+    //   action: () => navigate('/dashboard'),
+    // },
+    // CACHÉ: Agences
+    // {
+    //   key: 'agencies', label: 'Agences', desc: 'Responsables, flux et performance',
+    //   icon: Building2, grad: 'from-cyan-500 via-sky-600 to-blue-700',
+    //   glow: 'bg-cyan-50/80', stat: `${agencyStats.length} villes suivies`,
+    //   action: () => setMainTab('agencies'),
+    // },
     {
       key: 'alerts', label: 'Alertes', desc: 'Retards et RETOUR FOND non remis',
       icon: AlertTriangle, grad: 'from-red-500 via-rose-600 to-orange-600',
