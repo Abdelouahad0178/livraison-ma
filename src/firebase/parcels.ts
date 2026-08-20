@@ -1154,16 +1154,18 @@ export function subscribeAgencyParcels(
     }, 50)
   }
 
-  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(365)
+  // 📦 OPTIMISATION: Charger seulement 60 jours au lieu de 365 pour alléger le site
+  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(60)
   const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
 
+  // 🗄️ Exclure les colis archivés pour ne charger que les actifs
   const q1 = dateTo
-    ? query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('createdAt', 'desc'), limit(pageLimit))
-    : query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
+    ? query(collection(db, 'parcels'), where('originCity', '==', city), where('isArchived', '!=', true), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('isArchived'), orderBy('createdAt', 'desc'), limit(pageLimit))
+    : query(collection(db, 'parcels'), where('originCity', '==', city), where('isArchived', '!=', true), where('createdAt', '>=', since), orderBy('isArchived'), orderBy('createdAt', 'desc'), limit(pageLimit))
 
   const q2 = dateTo
-    ? query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('createdAt', 'desc'), limit(pageLimit))
-    : query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
+    ? query(collection(db, 'parcels'), where('destinationCity', '==', city), where('isArchived', '!=', true), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('isArchived'), orderBy('createdAt', 'desc'), limit(pageLimit))
+    : query(collection(db, 'parcels'), where('destinationCity', '==', city), where('isArchived', '!=', true), where('createdAt', '>=', since), orderBy('isArchived'), orderBy('createdAt', 'desc'), limit(pageLimit))
 
   const unsub1 = onSnapshot(q1, snap => {
     created = snap.docs.map(d => ({ id: d.id, ...d.data() }))
@@ -1188,21 +1190,24 @@ export async function getMoreAgencyParcels(
   dateFrom?: Date | null,
   dateTo?: Date | null
 ): Promise<{ docs: any[]; lastDocs: any; hasMore: boolean }> {
-  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(365)
+  // 📦 OPTIMISATION: Charger seulement 60 jours au lieu de 365
+  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(60)
   const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
   const results: any[] = []
   let newLastCreatedDoc: any = null
   let newLastArrivedDoc: any = null
 
   try {
-    // Query 1: colis créés dans cette ville
+    // Query 1: colis créés dans cette ville (exclure archivés)
     if (lastDocs.lastCreatedDoc) {
       const q1 = dateTo
         ? query(
             collection(db, 'parcels'),
             where('originCity', '==', city),
+            where('isArchived', '!=', true),
             where('createdAt', '>=', since),
             where('createdAt', '<=', until),
+            orderBy('isArchived'),
             orderBy('createdAt', 'desc'),
             startAfter(lastDocs.lastCreatedDoc),
             limit(pageSize)
@@ -1561,7 +1566,7 @@ export async function searchParcels(
     if (!term || term.trim().length === 0) return []
 
     const searchTerm = term.trim()
-    const includeArchived = options.includeArchived ?? true // Par défaut: inclure archives
+    const includeArchived = options.includeArchived ?? false // Par défaut: NE PAS inclure archives (performance)
     const results: any[] = []
     const uniqueIds = new Set<string>()
     const agencyCity = options.agencyCity

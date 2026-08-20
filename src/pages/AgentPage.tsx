@@ -316,6 +316,7 @@ export default function AgentPage() {
   const [loadingMoreWithDateFilter, setLoadingMoreWithDateFilter] = useState(false)
 
   const [search, setSearch]             = useState('')
+  const [includeArchived, setIncludeArchived] = useState(false) // 🗄️ Inclure archives dans recherche
   const [serverSearchResults, setServerSearchResults] = useState<any[] | null>(null) // Résultats recherche serveur
   const [isSearching, setIsSearching]   = useState(false) // Loading state pour recherche
   // Utiliser 'all' par défaut pour voir tous les colis, pas seulement ceux du jour de travail
@@ -383,8 +384,8 @@ export default function AgentPage() {
     const performServerSearch = async () => {
       setIsSearching(true)
       try {
-        console.warn(`🔍 Recherche serveur AgentPage: "${query}" dans TOUTE la base...`)
-        const results = await searchParcels(query, { limit: 50000 })
+        console.warn(`🔍 Recherche serveur AgentPage: "${query}" ${includeArchived ? '(avec archives)' : '(sans archives)'}`)
+        const results = await searchParcels(query, { limit: 50000, includeArchived })
         setServerSearchResults(results)
         setIsSearching(false)
         console.warn(`✅ Recherche serveur AgentPage: ${results.length} résultats trouvés`)
@@ -396,7 +397,7 @@ export default function AgentPage() {
     }
 
     performServerSearch()
-  }, [debouncedSearch])
+  }, [debouncedSearch, includeArchived])
 
   const [editingParcel, setEditingParcel] = useState<any>(null)
   const [editForm, setEditForm]         = useState<any>(null)
@@ -2248,6 +2249,7 @@ export default function AgentPage() {
     loadingMore, setLoadingMore,
     pendingAideParcels, setPendingAideParcels,
     search, setSearch,
+    includeArchived, setIncludeArchived,  // 🗄️ Inclure archives dans recherche
     isSearching,
     datePreset, setDatePreset,
     dateFrom, setDateFrom,

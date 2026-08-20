@@ -59,6 +59,7 @@ export default function ParcelsTab() {
 
     // Search / filters
     search, setSearch,
+    includeArchived, setIncludeArchived,
     isSearching,
     datePreset, setDatePreset,
     dateFrom, setDateFrom,
@@ -686,6 +687,21 @@ export default function ParcelsTab() {
             </button>
           )}
         </div>}
+
+        {/* 🗄️ Checkbox Archives - visible seulement quand recherche active */}
+        {search && (
+          <label className="flex items-center gap-2 px-4 py-2 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer hover:bg-amber-100 transition-colors">
+            <input
+              type="checkbox"
+              checked={includeArchived}
+              onChange={e => setIncludeArchived(e.target.checked)}
+              className="w-4 h-4 text-amber-600 border-amber-300 rounded focus:ring-amber-500 cursor-pointer"
+            />
+            <span className="text-sm font-medium text-amber-900">
+              🗄️ Inclure archives (+30 jours)
+            </span>
+          </label>
+        )}
 
         {/* ── TOGGLE FILTRES ── */}
         {(() => {

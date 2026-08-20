@@ -267,6 +267,64 @@ export function telechargerFichier(contenu: string, nomFichier: string, type: st
 }
 
 /**
+ * Archivage SOFT - Marque les colis comme archivés sans les supprimer
+ * Colis restent dans Firestore mais ne sont plus chargés par défaut
+ */
+export async function marquerColisCommArchives(
+  policy: ArchivagePolicy = POLITIQUES_PREDEFINIES.AGGRESSIVE
+): Promise<ArchivageResult> {
+  const result: ArchivageResult = {
+    success: false,
+    archived: 0,
+    errors: 0,
+    details: []
+  }
+
+  try {
+    // Récupérer les colis éligibles
+    const archivables = await getColisArchivables(undefined, policy)
+
+    if (archivables.length === 0) {
+      result.success = true
+      result.details.push('Aucun colis à archiver')
+      return result
+    }
+
+    // Marquer par batches
+    const batches = []
+    for (let i = 0; i < archivables.length; i += policy.batchSize) {
+      const batch = writeBatch(db)
+      const chunk = archivables.slice(i, i + policy.batchSize)
+
+      chunk.forEach(parcel => {
+        const parcelRef = doc(db, 'parcels', parcel.id)
+        batch.update(parcelRef, {
+          isArchived: true,
+          archivedAt: new Date().toISOString(),
+          archivedBy: 'auto-system'
+        })
+      })
+
+      batches.push(batch.commit())
+    }
+
+    await Promise.all(batches)
+
+    result.success = true
+    result.archived = archivables.length
+    result.details.push(`${archivables.length} colis marqués comme archivés`)
+    result.details.push(`Politique: ${policy.delaiMinimumJours} jours`)
+    result.details.push('Les colis restent accessibles via recherche')
+
+  } catch (error: any) {
+    result.errors = 1
+    result.details.push(`Erreur: ${error.message}`)
+  }
+
+  return result
+}
+
+/**
  * Statistiques d'archivage
  */
 export async function getStatistiquesArchivage(city?: string): Promise<{
