@@ -234,8 +234,6 @@ export default function CaisseChefTab() {
           return isPortDu && !p.portStatus && isInDelivery
         case 'collecte':
           return isPortDu && isCollected
-        case 'non_collecte':
-          return isPortDu && !p.portStatus && !isInDelivery
         case 'en_retard':
           return isPortDu && isLate
         default:
@@ -551,8 +549,6 @@ export default function CaisseChefTab() {
               return isPortDu && !p.portStatus && isInDelivery
             case 'collecte':
               return isPortDu && isCollected
-            case 'non_collecte':
-              return isPortDu && !p.portStatus && !isInDelivery
             case 'en_retard':
               return isPortDu && isLate
             default:
@@ -1062,7 +1058,6 @@ export default function CaisseChefTab() {
                 <option value="all">Tous les statuts</option>
                 <option value="a_collecter">📦 À collecter</option>
                 <option value="collecte">✅ Collecté</option>
-                <option value="non_collecte">❌ Non collecté</option>
                 <option value="en_retard">⏰ En retard</option>
               </select>
 
@@ -1113,7 +1108,6 @@ export default function CaisseChefTab() {
                     <span className="text-xs px-2 py-1 bg-blue-600 text-white rounded">
                       {statusFilter === 'a_collecter' ? 'À collecter' :
                        statusFilter === 'collecte' ? 'Collecté' :
-                       statusFilter === 'non_collecte' ? 'Non collecté' :
                        'En retard'}
                     </span>
                   )}
