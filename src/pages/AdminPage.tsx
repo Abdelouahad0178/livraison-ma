@@ -45,6 +45,7 @@ import { subscribeAllAgentNotes } from '../firebase/agentNotes'
 import {
   DEFAULT_OPERATION_LOCKS, subscribeOperationLocks, updateGlobalSiteLock, updateAgencyLock,
 } from '../firebase/operationLocks'
+import { shouldTriggerSearch } from '../utils/searchUtils'
 import {
   CAISSE_CATEGORIES, CITIES, STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS,
   DIRECTOR_PERMISSIONS, DEFAULT_TARIFF_CONFIG, calculateTariff, normalizeTariffConfig,
@@ -1263,7 +1264,8 @@ export default function AdminPage() {
   // Recherche dans TOUTE la base Firestore, pas seulement les 50 colis chargés
   useEffect(() => {
     const query = fuseDebouncedSearch.trim()
-    if (!query || query.length < 5) {
+    // Vérifier si la recherche doit être déclenchée (5 chiffres ou 3 lettres min)
+    if (!shouldTriggerSearch(query)) {
       setServerSearchResults(null)
       setIsServerSearching(false)
       return

@@ -20,6 +20,7 @@ import { collectPortDu, uncollectPortDu } from '../../../firebase/cod'
 import { updateParcel, searchParcels } from '../../../firebase/parcels'
 import { collection, query, where, onSnapshot, documentId } from 'firebase/firestore'
 import { db } from '../../../firebase/db'
+import { shouldTriggerSearch } from '../../../utils/searchUtils'
 
 // Types
 interface DelayReason {
@@ -118,7 +119,8 @@ export default function CaisseChefTab() {
   useEffect(() => {
     const searchTerm = searchQuery.trim()
 
-    if (!searchTerm || searchTerm.length < 3) {
+    // Vérifier si la recherche doit être déclenchée (5 chiffres ou 3 lettres min)
+    if (!shouldTriggerSearch(searchTerm)) {
       setSearchResults(null)
       setSearching(false)
       // Réinitialiser le filtre de statut quand la recherche est vidée
