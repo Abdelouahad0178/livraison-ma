@@ -121,6 +121,8 @@ export default function CaisseChefTab() {
     if (!searchTerm || searchTerm.length < 3) {
       setSearchResults(null)
       setSearching(false)
+      // Réinitialiser le filtre de statut quand la recherche est vidée
+      setStatusFilter('all')
       return
     }
 
@@ -208,6 +210,39 @@ export default function CaisseChefTab() {
       }
     }
   }, [searchQuery, includeArchived, profile?.city])
+
+  // Filtrer les résultats de recherche par statut de collecte
+  const filteredSearchResults = useMemo(() => {
+    if (!searchResults || statusFilter === 'all') return searchResults
+
+    const now = new Date()
+    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+
+    return searchResults.filter((p: any) => {
+      const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
+      const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
+      const isInDelivery = p.status === 'En cours de livraison' || p.status === 'Livré'
+
+      let isLate = false
+      if (isPortDu && p.status === 'En cours de livraison' && p.deliveryAssignedAt) {
+        const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
+        isLate = assignedDate < oneDayAgo
+      }
+
+      switch (statusFilter) {
+        case 'a_collecter':
+          return isPortDu && !p.portStatus && isInDelivery
+        case 'collecte':
+          return isPortDu && isCollected
+        case 'non_collecte':
+          return isPortDu && !p.portStatus && !isInDelivery
+        case 'en_retard':
+          return isPortDu && isLate
+        default:
+          return true
+      }
+    })
+  }, [searchResults, statusFilter])
 
   // 🔒 Fonction sécurisée pour parser les montants
   const safeParseAmount = (value: any): number => {
@@ -493,9 +528,10 @@ export default function CaisseChefTab() {
         return true
       })
 
-      // Appliquer le filtre de statut de collecte si sélectionné
+      // Appliquer le filtre de statut de collecte UNIQUEMENT si on n'est PAS en mode recherche
+      // (en mode recherche, le filtre s'applique aux résultats de recherche)
       let statusFilteredParcels = filteredParcels
-      if (statusFilter !== 'all') {
+      if (statusFilter !== 'all' && !searchQuery.trim()) {
         const now = new Date()
         const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
 
@@ -1073,10 +1109,23 @@ export default function CaisseChefTab() {
                 <h3 className="font-semibold text-gray-900 flex items-center gap-2">
                   <Search className="w-5 h-5 text-blue-600" />
                   Résultats de recherche
+                  {statusFilter !== 'all' && (
+                    <span className="text-xs px-2 py-1 bg-blue-600 text-white rounded">
+                      {statusFilter === 'a_collecter' ? 'À collecter' :
+                       statusFilter === 'collecte' ? 'Collecté' :
+                       statusFilter === 'non_collecte' ? 'Non collecté' :
+                       'En retard'}
+                    </span>
+                  )}
                 </h3>
                 <span className="text-sm text-gray-600">
-                  {searchResults.length} résultat{searchResults.length > 1 ? 's' : ''}
-                  {searchResults.length === 50 && (
+                  {filteredSearchResults?.length || 0} résultat{(filteredSearchResults?.length || 0) > 1 ? 's' : ''}
+                  {statusFilter !== 'all' && searchResults && (
+                    <span className="ml-2 text-gray-500">
+                      (sur {searchResults.length})
+                    </span>
+                  )}
+                  {(filteredSearchResults?.length || 0) === 50 && (
                     <span className="ml-2 text-amber-600 font-medium">
                       (max 50)
                     </span>
@@ -1084,7 +1133,7 @@ export default function CaisseChefTab() {
                 </span>
               </div>
 
-              {searchResults.length === 0 ? (
+              {!filteredSearchResults || filteredSearchResults.length === 0 ? (
                 <div className="text-center py-12 text-gray-500">
                   <Package className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                   <p>Aucune expédition trouvée</p>
@@ -1106,7 +1155,7 @@ export default function CaisseChefTab() {
                         </tr>
                       </thead>
                       <tbody>
-                        {searchResults.map((parcel: any) => {
+                        {filteredSearchResults!.map((parcel: any) => {
                           const isPortDu = parcel.portType === 'port_du' && !parcel.portPayeMethod
                           const delay = deliveryDelays.find((d: any) =>
                             d.parcelId === parcel.id && !d.resolvedAt
