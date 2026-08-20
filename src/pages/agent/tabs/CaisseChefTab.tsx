@@ -68,6 +68,9 @@ export default function CaisseChefTab() {
   const [searchResults, setSearchResults] = useState<any[] | null>(null)
   const [searching, setSearching] = useState(false)
 
+  // Cache local des modifications faites dans searchResults
+  const [modifiedParcels, setModifiedParcels] = useState<Map<string, any>>(new Map())
+
   // État livreurs
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set())
   const [delayModal, setDelayModal] = useState<any>(null)
@@ -125,6 +128,8 @@ export default function CaisseChefTab() {
       setSearching(false)
       setStatusFilter('all')
       setIncludeArchived(false)
+      // Vider le cache après un court délai pour permettre au contexte de se mettre à jour
+      setTimeout(() => setModifiedParcels(new Map()), 1000)
       return
     }
 
@@ -310,14 +315,22 @@ export default function CaisseChefTab() {
     }
   }, [dataSource, adminTransfers, profile?.city])
 
-  // 🔄 Source de données fusionnée (parcels + searchResults)
+  // 🔄 Source de données fusionnée (parcels + searchResults + cache modifications)
   const dataSource = useMemo(() => {
     let source = parcels
+
+    // Appliquer d'abord le cache des modifications locales
+    if (modifiedParcels.size > 0) {
+      source = parcels.map((p: any) => {
+        const modified = modifiedParcels.get(p.id)
+        return modified ? { ...p, ...modified } : p
+      })
+    }
 
     // Si en mode recherche, merger searchResults dans parcels
     if (searchResults && searchResults.length > 0) {
       const searchIds = new Set(searchResults.map((p: any) => p.id))
-      source = parcels.map((p: any) => {
+      source = source.map((p: any) => {
         if (searchIds.has(p.id)) {
           return searchResults.find((sr: any) => sr.id === p.id) || p
         }
@@ -333,7 +346,7 @@ export default function CaisseChefTab() {
     }
 
     return source
-  }, [parcels, searchResults])
+  }, [parcels, searchResults, modifiedParcels])
 
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
@@ -784,6 +797,9 @@ export default function CaisseChefTab() {
       // Mise à jour optimiste pour affichage instantané
       updateParcelOptimistic(parcel.id, updatedData)
 
+      // 🔄 Ajouter au cache local des modifications
+      setModifiedParcels(prev => new Map(prev).set(parcel.id, updatedData))
+
       // 🔄 Mise à jour locale de searchResults pour recalcul immédiat des stats
       if (searchResults) {
         setSearchResults(prev =>
@@ -837,6 +853,9 @@ export default function CaisseChefTab() {
       // Mise à jour optimiste pour affichage instantané
       updateParcelOptimistic(parcel.id, updatedData)
 
+      // 🔄 Ajouter au cache local des modifications
+      setModifiedParcels(prev => new Map(prev).set(parcel.id, updatedData))
+
       // 🔄 Mise à jour locale de searchResults pour recalcul immédiat des stats
       if (searchResults) {
         setSearchResults(prev =>
@@ -888,6 +907,9 @@ export default function CaisseChefTab() {
         status: 'Livré',
         deliveredAt: now,
       })
+
+      // 🔄 Ajouter au cache local des modifications
+      setModifiedParcels(prev => new Map(prev).set(parcel.id, updatedData))
 
       // 🔄 Mise à jour locale de searchResults pour recalcul immédiat des stats
       if (searchResults) {
