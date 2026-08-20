@@ -136,6 +136,13 @@ export default function ArchivePage() {
         (p.destinationCity || '').toLowerCase().includes(q)
       )
     }
+
+    // 🔒 LIMITE: Max 50 résultats pour éviter surcharge
+    const MAX_RESULTS = 50
+    if (list.length > MAX_RESULTS) {
+      list = list.slice(0, MAX_RESULTS)
+    }
+
     return list
   }, [parcels, search, statusFilter, directionFilter, originCityFilter, destCityFilter, dateFrom, dateTo, city])
 
@@ -349,9 +356,16 @@ export default function ArchivePage() {
             </div>
           ) : (
             <div className="space-y-2">
-              <p className="text-xs text-gray-400 px-1">
-                {filtered.length} colis{anyPeriod || search || statusFilter !== 'all' ? ' (filtrés)' : ' archivés'}
-              </p>
+              <div className="flex items-center justify-between gap-2 px-1">
+                <p className="text-xs text-gray-400">
+                  {filtered.length} colis{anyPeriod || search || statusFilter !== 'all' ? ' (filtrés)' : ' archivés'}
+                </p>
+                {filtered.length === 50 && (
+                  <p className="text-xs text-amber-600 font-medium">
+                    ⚠️ Limité à 50 résultats max
+                  </p>
+                )}
+              </div>
 
               {paged.map((p: any) => {
                 const sc = STATUS_COLORS[p.status] || STATUS_COLORS['Livré']
