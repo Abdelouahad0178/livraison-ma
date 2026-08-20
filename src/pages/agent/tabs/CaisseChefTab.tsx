@@ -71,6 +71,9 @@ export default function CaisseChefTab() {
   // Cache local des modifications faites dans searchResults
   const [modifiedParcels, setModifiedParcels] = useState<Record<string, any>>({})
 
+  // Compteur pour forcer le recalcul des stats
+  const [statsUpdateCounter, setStatsUpdateCounter] = useState(0)
+
   // État livreurs
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set())
   const [delayModal, setDelayModal] = useState<any>(null)
@@ -302,8 +305,6 @@ export default function CaisseChefTab() {
 
   // Calcul des statistiques
   const stats = useMemo(() => {
-    console.log('🔄 RECALCUL STATS - dataSource:', dataSource.length, 'parcels')
-
     // Ports à collecter (port_du non encaissés, livrés ou en cours de livraison, SAUF retournés)
     const portsACollecter = dataSource.filter((p: any) =>
       p.portType === 'port_du' &&
@@ -320,12 +321,6 @@ export default function CaisseChefTab() {
       (p.portStatus === 'collected' || p.portStatus === 'received') &&
       p.destinationCity === profile?.city
     )
-
-    console.log('📊 STATS:', {
-      'Ports collectés': portsCollectes.length,
-      'IDs collectés': portsCollectes.map(p => p.id),
-      'Ports à collecter': portsACollecter.length
-    })
 
     // Expéditions en retard (en cours de livraison depuis >24h)
     const now = new Date()
@@ -358,7 +353,7 @@ export default function CaisseChefTab() {
       enRetardCount: enRetard.length,
       soldeAVerser,
     }
-  }, [dataSource, adminTransfers, profile?.city, modifiedParcels])
+  }, [dataSource, adminTransfers, profile?.city, modifiedParcels, statsUpdateCounter])
 
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
@@ -814,17 +809,11 @@ export default function CaisseChefTab() {
         portDuReceivedMethod: 'especes',
       }
 
-      console.log('💰 COLLECTE - Parcel:', parcel.id, 'Prix:', parcel.price, 'DH')
-
       // Mise à jour optimiste pour affichage instantané
       updateParcelOptimistic(parcel.id, updatedData)
 
       // 🔄 Ajouter au cache local des modifications
-      setModifiedParcels(prev => {
-        const newCache = { ...prev, [parcel.id]: updatedData }
-        console.log('📦 Cache modifiedParcels mis à jour:', Object.keys(newCache).length, 'parcels')
-        return newCache
-      })
+      setModifiedParcels(prev => ({ ...prev, [parcel.id]: updatedData }))
 
       // 🔄 Mise à jour locale de searchResults pour recalcul immédiat des stats
       if (searchResults) {
@@ -834,6 +823,9 @@ export default function CaisseChefTab() {
           ) : prev
         )
       }
+
+      // Forcer le recalcul des stats
+      setStatsUpdateCounter(prev => prev + 1)
 
       await collectPortDu(
         parcel.id,
@@ -890,6 +882,9 @@ export default function CaisseChefTab() {
           ) : prev
         )
       }
+
+      // Forcer le recalcul des stats
+      setStatsUpdateCounter(prev => prev + 1)
 
       await uncollectPortDu(parcel.id)
     } catch (err: any) {
