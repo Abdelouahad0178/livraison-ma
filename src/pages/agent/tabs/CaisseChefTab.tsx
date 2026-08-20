@@ -17,7 +17,7 @@ import {
   subscribeDeliveryDelays
 } from '../../../firebase/delivery'
 import { collectPortDu, uncollectPortDu } from '../../../firebase/cod'
-import { updateParcel } from '../../../firebase/parcels'
+import { updateParcel, searchParcels } from '../../../firebase/parcels'
 
 // Types
 interface DelayReason {
@@ -60,6 +60,9 @@ export default function CaisseChefTab() {
   // Filtres
   const [driverFilter, setDriverFilter] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
+  const [includeArchived, setIncludeArchived] = useState(false)
+  const [searchResults, setSearchResults] = useState<any[] | null>(null)
+  const [searching, setSearching] = useState(false)
 
   // État livreurs
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set())
@@ -107,6 +110,38 @@ export default function CaisseChefTab() {
 
     return () => unsubscribe()
   }, [profile?.city])
+
+  // 🔍 Recherche serveur dans TOUTES les expéditions
+  useEffect(() => {
+    const query = searchQuery.trim()
+
+    if (!query || query.length < 3) {
+      setSearchResults(null)
+      setSearching(false)
+      return
+    }
+
+    const performSearch = async () => {
+      setSearching(true)
+      try {
+        console.log(`🔍 Recherche serveur: "${query}" (archives: ${includeArchived})`)
+        const results = await searchParcels(query, { limit: 50, includeArchived })
+        // Filtrer par ville si chef d'agence
+        const filtered = results.filter((p: any) =>
+          p.destinationCity === profile?.city || p.originCity === profile?.city
+        )
+        setSearchResults(filtered)
+        console.log(`✅ ${filtered.length} résultats trouvés`)
+      } catch (error) {
+        console.error('❌ Erreur recherche:', error)
+        setSearchResults([])
+      } finally {
+        setSearching(false)
+      }
+    }
+
+    performSearch()
+  }, [searchQuery, includeArchived, profile?.city])
 
   // 🔒 Fonction sécurisée pour parser les montants
   const safeParseAmount = (value: any): number => {
@@ -892,22 +927,117 @@ export default function CaisseChefTab() {
                     type="text"
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
-                    placeholder="Rechercher livreur ou n° colis..."
+                    placeholder="🔍 Rechercher dans TOUTES les expéditions..."
                     className="w-full pl-9 pr-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500"
                   />
+                  {searching && (
+                    <div className="absolute right-3 top-1/2 -translate-y-1/2">
+                      <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin" />
+                    </div>
+                  )}
                 </div>
               </div>
+
+              {/* 🗄️ Checkbox Archives (visible seulement si recherche active) */}
+              {searchQuery.trim() && (
+                <label className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer hover:bg-amber-100 transition-colors whitespace-nowrap">
+                  <input
+                    type="checkbox"
+                    checked={includeArchived}
+                    onChange={e => setIncludeArchived(e.target.checked)}
+                    className="w-4 h-4 text-amber-600 border-amber-300 rounded focus:ring-amber-500 cursor-pointer"
+                  />
+                  <span className="text-sm font-medium text-amber-900">
+                    🗄️ Inclure archives (+30j)
+                  </span>
+                </label>
+              )}
             </div>
           </div>
 
-          {/* Liste des livreurs */}
-          <div className="space-y-3">
-            {filteredDrivers.length === 0 && (
-              <div className="bg-white border border-gray-200 rounded-xl p-8 text-center">
-                <User className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                <p className="text-gray-500">Aucun livreur trouvé</p>
+          {/* Résultats de recherche OU Liste des livreurs */}
+          {searchResults !== null ? (
+            <div className="bg-white border border-gray-200 rounded-xl p-4">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="font-semibold text-gray-900">
+                  🔍 Résultats de recherche
+                </h3>
+                <span className="text-sm text-gray-500">
+                  {searchResults.length} résultat{searchResults.length > 1 ? 's' : ''}
+                  {searchResults.length === 50 && (
+                    <span className="ml-2 text-amber-600 font-medium">
+                      (max 50)
+                    </span>
+                  )}
+                </span>
               </div>
-            )}
+
+              {searchResults.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <Package className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                  <p>Aucune expédition trouvée</p>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-[600px] overflow-y-auto">
+                  {searchResults.map((parcel: any) => (
+                    <div key={parcel.id} className="border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-mono text-sm font-semibold text-gray-900">
+                              {parcel.trackingId || parcel.senderNic}
+                            </span>
+                            {parcel.isArchived && (
+                              <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded">
+                                🗄️ Archivé
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-600 truncate">
+                            <strong>De:</strong> {parcel.sender?.name || '—'} ({parcel.originCity})
+                          </p>
+                          <p className="text-xs text-gray-600 truncate">
+                            <strong>À:</strong> {parcel.receiver?.name || '—'} ({parcel.destinationCity})
+                          </p>
+                          <div className="flex items-center gap-2 mt-1">
+                            <span className={`px-2 py-0.5 text-xs rounded ${
+                              parcel.status === 'Livré' ? 'bg-green-100 text-green-700' :
+                              parcel.status === 'En cours de livraison' ? 'bg-blue-100 text-blue-700' :
+                              'bg-gray-100 text-gray-700'
+                            }`}>
+                              {parcel.status}
+                            </span>
+                            {parcel.deliveryDriverName && (
+                              <span className="text-xs text-gray-500">
+                                👤 {parcel.deliveryDriverName}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {parcel.price && (
+                          <div className="text-right">
+                            <div className="text-sm font-bold text-gray-900">
+                              {parseFloat(parcel.price).toFixed(2)} DH
+                            </div>
+                            <div className="text-xs text-gray-500">
+                              {parcel.portType === 'port_du' ? 'Port dû' : 'Port payé'}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {filteredDrivers.length === 0 && (
+                <div className="bg-white border border-gray-200 rounded-xl p-8 text-center">
+                  <User className="w-12 h-12 text-gray-300 mx-auto mb-3" />
+                  <p className="text-gray-500">Aucun livreur trouvé</p>
+                </div>
+              )}
 
             {filteredDrivers.map(driver => (
               <div key={driver.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
@@ -1131,7 +1261,8 @@ export default function CaisseChefTab() {
                 )}
               </div>
             ))}
-          </div>
+            </div>
+          )}
         </div>
       )}
 
