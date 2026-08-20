@@ -156,6 +156,8 @@ export default function CaisseChefTab() {
 
           const unsubscribers: (() => void)[] = []
 
+          alert(`🎯 CRÉATION LISTENER TEMPS RÉEL\n\n${batches.length} batch(es)\nTotal: ${parcelIds.length} parcels surveillés`)
+
           batches.forEach((batch) => {
             const q = query(
               collection(db, 'parcels'),
@@ -780,6 +782,8 @@ export default function CaisseChefTab() {
       return
     }
 
+    alert(`📦 DÉBUT COLLECTE\n\nID: ${parcel.id}\nStatut avant: ${parcel.portStatus || 'null'}`)
+
     setCollectingPortIds(prev => new Set(prev).add(parcel.id))
     try {
       // Mise à jour optimiste pour affichage instantané
@@ -791,11 +795,15 @@ export default function CaisseChefTab() {
         portDuReceivedMethod: 'especes',
       })
 
+      alert(`🔄 MISE À JOUR OPTIMISTE OK\n\nAppel de collectPortDu...`)
+
       await collectPortDu(
         parcel.id,
         profile?.name || '',
         uid || ''
       )
+
+      alert(`✅ COLLECTE FIREBASE OK\n\nLe listener devrait maintenant détecter le changement`)
     } catch (err: any) {
       console.error('Erreur collecte port:', err)
       alert(`❌ Erreur: ${err.message}`)
