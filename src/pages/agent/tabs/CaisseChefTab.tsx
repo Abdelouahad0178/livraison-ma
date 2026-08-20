@@ -168,6 +168,11 @@ export default function CaisseChefTab() {
                 ...doc.data()
               }))
 
+              console.log('🔄 [CaisseChef] Listener temps réel:', {
+                nbUpdates: updatedParcels.length,
+                parcels: updatedParcels.map(p => ({ id: p.id, portStatus: p.portStatus }))
+              })
+
               // Mettre à jour searchResults avec les nouvelles données
               setSearchResults((prev) => {
                 if (!prev) return prev
@@ -178,7 +183,21 @@ export default function CaisseChefTab() {
                   return newData || p
                 })
 
+                console.log('📊 [CaisseChef] SearchResults mis à jour:', {
+                  avant: prev.length,
+                  après: updated.length
+                })
+
                 return updated
+              })
+
+              // 🔄 Mettre à jour le contexte global pour recalculer les stats
+              updatedParcels.forEach((updatedParcel: any) => {
+                console.log('🔄 [CaisseChef] Update contexte:', {
+                  id: updatedParcel.id,
+                  portStatus: updatedParcel.portStatus
+                })
+                updateParcelOptimistic(updatedParcel.id, updatedParcel)
               })
             }, (error) => {
               console.error('❌ Erreur listener temps réel:', error)
@@ -253,6 +272,12 @@ export default function CaisseChefTab() {
 
   // Calcul des statistiques
   const stats = useMemo(() => {
+    console.log('📊 [CaisseChef] Calcul stats:', {
+      'parcels.length': parcels.length,
+      'searchResults': searchResults?.length || 0,
+      'ville': profile?.city
+    })
+
     // 🔄 Source de données : merge parcels avec searchResults pour stats à jour
     let dataSource = parcels
 
@@ -273,6 +298,11 @@ export default function CaisseChefTab() {
           dataSource.push(sr)
         }
       })
+
+      console.log('🔄 [CaisseChef] Merge effectué:', {
+        'dataSource.length': dataSource.length,
+        'searchResults ports status': searchResults.map(sr => ({ id: sr.id, portStatus: sr.portStatus }))
+      })
     }
 
     // Ports à collecter (port_du non encaissés, livrés ou en cours de livraison)
@@ -282,6 +312,11 @@ export default function CaisseChefTab() {
       (p.status === 'En cours de livraison' || p.status === 'Livré') &&
       p.destinationCity === profile?.city
     )
+
+    console.log('📦 [CaisseChef] Ports à collecter:', {
+      count: portsACollecter.length,
+      ids: portsACollecter.map(p => p.id)
+    })
 
     // Ports collectés (ceux avec portStatus 'collected' ou 'received')
     const portsCollectes = dataSource.filter((p: any) =>
