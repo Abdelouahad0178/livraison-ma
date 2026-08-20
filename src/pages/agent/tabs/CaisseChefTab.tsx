@@ -643,13 +643,8 @@ export default function CaisseChefTab() {
       result = result.filter(d => d.id === driverFilter)
     }
 
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase()
-      result = result.filter(d =>
-        d.name.toLowerCase().includes(q) ||
-        d.parcels.some((p: any) => p.senderNic?.toLowerCase().includes(q))
-      )
-    }
+    // Note: searchQuery est utilisé pour la recherche serveur, pas pour filtrer
+    // la liste normale des livreurs. Donc on ne filtre PAS par searchQuery ici.
 
     console.error('🔍 [filteredDrivers] FIN:', {
       'Drivers après filtrage': result.length,
