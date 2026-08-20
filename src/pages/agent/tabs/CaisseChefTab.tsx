@@ -1260,10 +1260,6 @@ export default function CaisseChefTab() {
                                   <span className="font-mono text-xs font-semibold text-blue-600">
                                     {parcel.senderNic || parcel.sender?.nic || parcel.trackingId}
                                   </span>
-                                  {/* DEBUG: Afficher le statut brut */}
-                                  <span className="text-xs text-red-600 font-mono">
-                                    STATUS: "{parcel.status}"
-                                  </span>
                                   {parcel.isArchived && (
                                     <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded w-fit">
                                       🗄️ Archivé
@@ -1313,7 +1309,7 @@ export default function CaisseChefTab() {
                                 {fmtAmt(parcel.price)} DH
                               </td>
                               <td className="py-2 px-3 text-center">
-                                {parcel.status?.toLowerCase().includes('retour') ? (
+                                {(parcel.returnedAt || parcel.wasReturned) ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-semibold">
                                     <X className="w-3 h-3" />
                                     Retourné
@@ -1342,7 +1338,7 @@ export default function CaisseChefTab() {
                               </td>
                               <td className="py-2 px-3 text-center">
                                 <div className="flex items-center justify-center gap-2">
-                                  {parcel.status?.toLowerCase().includes('retour') ? (
+                                  {(parcel.returnedAt || parcel.wasReturned) ? (
                                     <span className="text-xs text-gray-500 italic">-</span>
                                   ) : isPortDu && (
                                     <>
