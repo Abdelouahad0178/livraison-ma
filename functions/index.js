@@ -1458,29 +1458,42 @@ async function runWeeklyArchiving() {
 
   const DAYS_THRESHOLD = 30
   const BATCH_SIZE = 100
+  const MAX_ITERATIONS = 200  // Protection: max 20,000 colis par run
 
   const cutoffDate = new Date()
   cutoffDate.setDate(cutoffDate.getDate() - DAYS_THRESHOLD)
   const cutoffTimestamp = Timestamp.fromDate(cutoffDate)
 
   let totalArchived = 0
-  let hasMore = true
+  let totalProcessed = 0
+  let lastDoc = null
+  let iterations = 0
 
   console.log(`📦 Archivage de TOUS les colis de +${DAYS_THRESHOLD} jours (tous statuts)...`)
 
-  while (hasMore) {
-    // Chercher tous les colis de +30 jours (TOUS statuts)
-    const query = db.collection('parcels')
+  while (iterations < MAX_ITERATIONS) {
+    iterations++
+
+    // 🔄 Pagination correcte avec startAfter
+    let query = db.collection('parcels')
       .where('createdAt', '<', cutoffTimestamp)
       .orderBy('createdAt')
       .limit(BATCH_SIZE)
 
+    if (lastDoc) {
+      query = query.startAfter(lastDoc)
+    }
+
     const snapshot = await query.get()
 
+    // ✅ Vraiment fini quand plus aucun doc
     if (snapshot.empty) {
-      hasMore = false
+      console.log('✅ Tous les colis de +30j ont été parcourus')
       break
     }
+
+    totalProcessed += snapshot.size
+    lastDoc = snapshot.docs[snapshot.docs.length - 1]
 
     // Filtrer déjà archivés et COD non payé
     const batch = db.batch()
@@ -1514,37 +1527,30 @@ async function runWeeklyArchiving() {
     if (batchCount > 0) {
       await batch.commit()
       totalArchived += batchCount
-      console.log(`✅ ${totalArchived} colis archivés...`)
-    } else {
-      // Aucun colis archivé dans ce batch = tous déjà archivés, arrêter
-      hasMore = false
-      break
-    }
-
-    // Si batch incomplet, on a fini
-    if (snapshot.size < BATCH_SIZE) {
-      hasMore = false
+      console.log(`✅ Batch ${iterations}: ${batchCount} archivés (Total: ${totalArchived} / ${totalProcessed} parcourus)`)
     }
 
     // Pause anti-throttling
-    if (snapshot.size === BATCH_SIZE && hasMore) {
-      await new Promise(resolve => setTimeout(resolve, 500))
-    }
+    await new Promise(resolve => setTimeout(resolve, 300))
   }
 
-  console.log(`🎉 Archivage automatique terminé: ${totalArchived} colis archivés`)
+  if (iterations >= MAX_ITERATIONS) {
+    console.log(`⚠️ Limite de ${MAX_ITERATIONS} itérations atteinte`)
+  }
+
+  console.log(`🎉 Archivage terminé: ${totalArchived} archivés sur ${totalProcessed} colis parcourus`)
 
   // Log dans director_logs
   await db.collection('director_logs').add({
     type: 'auto_archiving',
     action: 'Archivage automatique hebdomadaire',
-    details: { totalArchived, daysThreshold: DAYS_THRESHOLD, allStatuses: true },
+    details: { totalArchived, totalProcessed, daysThreshold: DAYS_THRESHOLD, allStatuses: true },
     userId: 'system',
     userName: 'Système automatique',
     timestamp: FieldValue.serverTimestamp()
   })
 
-  return { success: true, totalArchived }
+  return { success: true, totalArchived, totalProcessed }
 }
 
 // Archivage automatique chaque samedi à 02h00 (heure Casablanca)

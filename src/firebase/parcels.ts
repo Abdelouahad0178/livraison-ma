@@ -1474,17 +1474,31 @@ export async function getRealParcelsCount() {
 export async function getRealParcelsStats() {
   try {
     const statuses = ['Livré', 'Retourné', 'Retour finalisé']
-    const [activeSnapshot, ...statusSnapshots] = await Promise.all([
+
+    // 🗄️ Compter total ET archivés pour soustraire
+    const [totalSnapshot, archivedSnapshot, ...statusSnapshots] = await Promise.all([
       getCountFromServer(collection(db, 'parcels')),
+      getCountFromServer(query(collection(db, 'parcels'), where('isArchived', '==', true))),
       ...statuses.map(status =>
         getCountFromServer(query(collection(db, 'parcels'), where('status', '==', status)))
       )
     ])
 
-    const livres = statusSnapshots[0].data().count
-    const retournes = statusSnapshots[1].data().count + statusSnapshots[2].data().count
-    const active = activeSnapshot.data().count
-    const enCours = active - livres - retournes
+    const total = totalSnapshot.data().count
+    const archived = archivedSnapshot.data().count
+
+    // 📊 Soustraire archivés du total et de chaque statut
+    // Note: Les statuts incluent encore les archivés car on ne peut pas combiner where('status') + where('isArchived')
+    // sans index composite. On soustrait une proportion estimée.
+    const livresTotal = statusSnapshots[0].data().count
+    const retournesTotal = statusSnapshots[1].data().count + statusSnapshots[2].data().count
+
+    // Estimation: soustraire proportionnellement
+    const archivedRatio = total > 0 ? archived / total : 0
+    const livres = Math.max(0, Math.round(livresTotal * (1 - archivedRatio)))
+    const retournes = Math.max(0, Math.round(retournesTotal * (1 - archivedRatio)))
+    const active = total - archived
+    const enCours = Math.max(0, active - livres - retournes)
 
     return {
       total: active,

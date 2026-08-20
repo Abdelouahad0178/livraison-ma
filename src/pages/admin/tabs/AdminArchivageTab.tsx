@@ -172,7 +172,12 @@ export default function AdminArchivageTab() {
 
       setAutoArchiveResult({ success: true, ...(result.data as Record<string, any>) })
       await loadStats()
-      alert(`✅ ${(result.data as any)?.totalArchived || 0} colis archivés avec succès!`)
+
+      const data = result.data as any
+      const archived = data?.totalArchived || 0
+      const processed = data?.totalProcessed || 0
+
+      alert(`✅ Archivage terminé!\n\n${archived} colis archivés sur ${processed} colis parcourus (+30j)`)
     } catch (error: any) {
       setAutoArchiveResult({ success: false, error: error.message })
       alert('❌ Erreur: ' + error.message)
