@@ -144,11 +144,11 @@ export default function AgentHeader({
             { key: 'cod',           label: '💰 RETOUR FOND Clients',    onClick: () => setTab('cod'),                                                                                                             hidden: profile?.role === 'aide_agent' },
             { key: 'clientportdu',  label: '🏦 Ports en compte',        onClick: () => setTab('clientportdu'),                                                                                                    hidden: profile?.role !== 'chef_agence' && profile?.role !== 'agentpro' },
             { key: 'portpayecheque', label: '📋 Ports payés chèque',    onClick: () => setTab('portpayecheque'),                                                                                                  hidden: profile?.role !== 'chef_agence' && profile?.role !== 'agentpro' },
-            { key: 'versements',    label: '💸 Versements Admin',       onClick: () => setTab('versements'),                                                                                                      hidden: profile?.role !== 'chef_agence' && profile?.role !== 'agentpro' },
-            { key: 'invoices',      label: '🧾 Factures',               onClick: () => setTab('invoices'),                                                                                                        hidden: profile?.role !== 'chef_agence' && profile?.role !== 'agentpro' },
+            { key: 'versements',    label: '💸 Versements Admin',       onClick: () => setTab('versements'),                                                                                                      hidden: true }, // Caché pour tous les rôles
+            { key: 'invoices',      label: '🧾 Factures',               onClick: () => setTab('invoices'),                                                                                                        hidden: true }, // Caché pour tous les rôles
             { key: 'clients',       label: '👥 Mes clients',            onClick: () => setTab('clients'),                                                                                                         hidden: profile?.role === 'aide_agent' },
-            { key: 'charge',        label: '📋 Feuille de charge',      onClick: () => setTab('charge'),                                                                                                          hidden: profile?.role === 'aide_agent' },
-            { key: 'deliverysheets', label: '📄 Bons de livraison',     onClick: () => setTab('deliverysheets'),                                                                                                  hidden: profile?.role === 'aide_agent' },
+            { key: 'charge',        label: '📋 Feuille de charge',      onClick: () => setTab('charge'),                                                                                                          hidden: true }, // Caché pour tous les rôles
+            { key: 'deliverysheets', label: '📄 Bons de livraison',     onClick: () => setTab('deliverysheets'),                                                                                                  hidden: true }, // Caché pour tous les rôles
             { key: 'secteurs',      label: '🏢 Secteurs',               onClick: () => setTab('secteurs'),                                                                                                        hidden: profile?.role === 'aide_agent' },
             { key: 'arrivage',      label: '🚛 Arrivages',              onClick: () => { setTab('arrivage'); setArrivageTab('nouveau'); setArrivageSuccess(null) },                                               hidden: profile?.role === 'aide_agent' },
             { key: 'retours',       label: '↩️ Retours',                onClick: () => setTab('retours'),                                                                                                         hidden: profile?.role === 'aide_agent' },
@@ -257,12 +257,15 @@ export default function AgentHeader({
                 >
                   📋 Ports payés chèque
                 </button>
-                <button
-                  onClick={() => { setTab('versements'); setMenuOpen(false) }}
-                  className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'versements' ? 'bg-purple-50 text-purple-700' : 'text-gray-600 hover:bg-gray-50'}`}
-                >
-                  💸 Versements Admin
-                </button>
+                {/* CACHÉ: Versements Admin */}
+                {false && (
+                  <button
+                    onClick={() => { setTab('versements'); setMenuOpen(false) }}
+                    className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'versements' ? 'bg-purple-50 text-purple-700' : 'text-gray-600 hover:bg-gray-50'}`}
+                  >
+                    💸 Versements Admin
+                  </button>
+                )}
               </>
             )}
             {profile?.role !== 'aide_agent' && (
@@ -273,7 +276,8 @@ export default function AgentHeader({
                 <Users className="w-4 h-4" /> Mes clients
               </button>
             )}
-            {profile?.role !== 'aide_agent' && (
+            {/* CACHÉ: Feuille de charge */}
+            {false && profile?.role !== 'aide_agent' && (
               <button
                 onClick={() => { setTab('charge'); setMenuOpen(false) }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'charge' ? 'bg-blue-50 text-blue-700' : 'text-gray-600 hover:bg-gray-50'}`}
