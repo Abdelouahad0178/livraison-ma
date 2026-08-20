@@ -133,12 +133,13 @@ export default function AdminHomeTab({
       glow: 'bg-purple-50/80', stat: `${agents + drivers + livreurs} membres actifs`,
       action: () => setMainTab('activity'),
     },
-    {
-      key: 'notes', label: 'Notes agents', desc: 'Évaluations hebdomadaires des agents',
-      icon: Star, grad: 'from-amber-500 via-orange-500 to-red-600',
-      glow: 'bg-amber-50/80', stat: 'Notes par semaine et agence',
-      action: () => setMainTab('notes'),
-    },
+    // CACHÉ: Notes agents
+    // {
+    //   key: 'notes', label: 'Notes agents', desc: 'Évaluations hebdomadaires des agents',
+    //   icon: Star, grad: 'from-amber-500 via-orange-500 to-red-600',
+    //   glow: 'bg-amber-50/80', stat: 'Notes par semaine et agence',
+    //   action: () => setMainTab('notes'),
+    // },
     {
       key: 'clients', label: 'Clients', desc: 'Comptes · Paiements · Remises',
       icon: Contact, grad: 'from-emerald-500 via-green-600 to-green-700',
@@ -209,16 +210,17 @@ export default function AdminHomeTab({
       glow: 'bg-rose-50/80', stat: `${users.filter((u: any) => u.role !== 'admin').length} employé(s)`,
       action: () => setMainTab('employees'),
     },
-    {
-      key: 'banque', label: 'Banque RETOUR FOND', desc: "Versements espèces des chefs d'agence",
-      icon: Building2, grad: 'from-blue-600 via-blue-700 to-indigo-800',
-      glow: 'bg-blue-50/80',
-      stat: `${allBankDeposits.length} versement(s) · ${fmt(allBankDeposits.reduce((s: any, d: any) => s + Number(d.amount || 0), 0))} DH`,
-      badge: allBankDeposits.filter((d: any) => !d.adminConfirmed).length > 0
-        ? `${allBankDeposits.filter((d: any) => !d.adminConfirmed).length} à confirmer`
-        : null,
-      action: () => setMainTab('banque'),
-    },
+    // CACHÉ: Banque RETOUR FOND
+    // {
+    //   key: 'banque', label: 'Banque RETOUR FOND', desc: "Versements espèces des chefs d'agence",
+    //   icon: Building2, grad: 'from-blue-600 via-blue-700 to-indigo-800',
+    //   glow: 'bg-blue-50/80',
+    //   stat: `${allBankDeposits.length} versement(s) · ${fmt(allBankDeposits.reduce((s: any, d: any) => s + Number(d.amount || 0), 0))} DH`,
+    //   badge: allBankDeposits.filter((d: any) => !d.adminConfirmed).length > 0
+    //     ? `${allBankDeposits.filter((d: any) => !d.adminConfirmed).length} à confirmer`
+    //     : null,
+    //   action: () => setMainTab('banque'),
+    // },
     {
       key: 'permissions', label: '🔐 Permissions', desc: 'Contrôler les champs modifiables par rôle',
       icon: ShieldCheck, grad: 'from-violet-500 via-purple-600 to-indigo-700',
