@@ -152,11 +152,11 @@ export default function AgentHeader({
             { key: 'secteurs',      label: '🏢 Secteurs',               onClick: () => setTab('secteurs'),                                                                                                        hidden: profile?.role === 'aide_agent' },
             { key: 'arrivage',      label: '🚛 Arrivages',              onClick: () => { setTab('arrivage'); setArrivageTab('nouveau'); setArrivageSuccess(null) },                                               hidden: profile?.role === 'aide_agent' },
             { key: 'retours',       label: '↩️ Retours',                onClick: () => setTab('retours'),                                                                                                         hidden: profile?.role === 'aide_agent' },
-            { key: 'lostparcels',   label: '🚨 Colis perdus',           onClick: () => setTab('lostparcels'),                                                                                                     hidden: profile?.role === 'aide_agent' },
-            { key: 'modifications', label: '📋 Modif. clients',         onClick: () => setTab('modifications'),                                                                                                   hidden: profile?.role !== 'chef_agence' },
-            { key: 'aideagents',    label: '👤 Aide Agents',            onClick: () => setTab('aideagents'),                                                                                                      hidden: profile?.role !== 'chef_agence' && profile?.role !== 'admin' },
-            { key: 'dashboard',     label: '📊 Dashboard',              onClick: () => setTab('dashboard'),                                                                                                       hidden: profile?.role !== 'chef_agence' },
-            { key: 'notes',         label: '⭐ Notes agents',           onClick: () => setTab('notes'),                                                                                                           hidden: profile?.role !== 'chef_agence' },
+            { key: 'lostparcels',   label: '🚨 Colis perdus',           onClick: () => setTab('lostparcels'),                                                                                                     hidden: true }, // Caché pour tous les rôles
+            { key: 'modifications', label: '📋 Modif. clients',         onClick: () => setTab('modifications'),                                                                                                   hidden: true }, // Caché pour tous les rôles
+            { key: 'aideagents',    label: '👤 Aide Agents',            onClick: () => setTab('aideagents'),                                                                                                      hidden: true }, // Caché pour tous les rôles
+            { key: 'dashboard',     label: '📊 Dashboard',              onClick: () => setTab('dashboard'),                                                                                                       hidden: true }, // Caché pour tous les rôles
+            { key: 'notes',         label: '⭐ Notes agents',           onClick: () => setTab('notes'),                                                                                                           hidden: true }, // Caché pour tous les rôles
           ].filter(t => !t.hidden).map(t => (
             <button key={t.key} onClick={t.onClick}
               className={`shrink-0 whitespace-nowrap px-3 py-1.5 rounded-lg text-sm font-semibold transition relative ${tab === t.key ? 'bg-blue-50 text-blue-600' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-50'}`}
@@ -311,7 +311,8 @@ export default function AgentHeader({
                 ↩️ Retours
               </button>
             )}
-            {profile?.role !== 'aide_agent' && (
+            {/* CACHÉS: Colis perdus, Modif. clients, Aide Agents, Dashboard, Notes agents */}
+            {false && profile?.role !== 'aide_agent' && (
               <button
                 onClick={() => { setTab('lostparcels'); setMenuOpen(false) }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'lostparcels' ? 'bg-red-50 text-red-700' : 'text-gray-600 hover:bg-gray-50'}`}
@@ -322,7 +323,7 @@ export default function AgentHeader({
                 )}
               </button>
             )}
-            {profile?.role === 'chef_agence' && (
+            {false && profile?.role === 'chef_agence' && (
               <button
                 onClick={() => { setTab('modifications'); setMenuOpen(false) }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'modifications' ? 'bg-amber-50 text-amber-700' : 'text-gray-600 hover:bg-gray-50'}`}
@@ -333,7 +334,7 @@ export default function AgentHeader({
                 )}
               </button>
             )}
-            {(profile?.role === 'chef_agence' || profile?.role === 'admin') && (
+            {false && (profile?.role === 'chef_agence' || profile?.role === 'admin') && (
               <button
                 onClick={() => { setTab('aideagents'); setMenuOpen(false) }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'aideagents' ? 'bg-purple-50 text-purple-700' : 'text-gray-600 hover:bg-gray-50'}`}
@@ -344,7 +345,7 @@ export default function AgentHeader({
                 )}
               </button>
             )}
-            {profile?.role === 'chef_agence' && (
+            {false && profile?.role === 'chef_agence' && (
               <button
                 onClick={() => { setTab('dashboard'); setMenuOpen(false) }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'dashboard' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`}
@@ -352,7 +353,7 @@ export default function AgentHeader({
                 <BarChart2 className="w-4 h-4" /> Dashboard
               </button>
             )}
-            {profile?.role === 'chef_agence' && (
+            {false && profile?.role === 'chef_agence' && (
               <button
                 onClick={() => { setTab('notes'); setMenuOpen(false) }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'notes' ? 'bg-amber-50 text-amber-600' : 'text-gray-600 hover:bg-gray-50'}`}

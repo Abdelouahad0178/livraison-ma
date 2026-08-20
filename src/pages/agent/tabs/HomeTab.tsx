@@ -246,7 +246,7 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
             },
             { label: 'Port dû',           sub: 'Versements livreurs', icon: Truck, iconBg: 'bg-orange-100', iconColor: 'text-orange-600', tab: 'drivers' },
             { label: 'Ma Caisse',         sub: 'Mouvements financiers', icon: Wallet, iconBg: 'bg-green-100', iconColor: 'text-green-600', tab: 'caisse' },
-            { label: 'Modif. clients',     sub: `${modRequests.filter((m: any) => m.status === 'pending').length} demande(s) en attente`, icon: MessageCircle, iconBg: 'bg-amber-100', iconColor: 'text-amber-600', tab: 'modifications' },
+            // CACHÉ: { label: 'Modif. clients',     sub: `${modRequests.filter((m: any) => m.status === 'pending').length} demande(s) en attente`, icon: MessageCircle, iconBg: 'bg-amber-100', iconColor: 'text-amber-600', tab: 'modifications' },
           ].map((l, idx) => (
             <button key={l.tab || l.action || idx} onClick={() => {
               if (l.action === 'portPaye') {
