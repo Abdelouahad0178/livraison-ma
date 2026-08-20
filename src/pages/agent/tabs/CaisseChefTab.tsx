@@ -441,12 +441,20 @@ export default function CaisseChefTab() {
       })
 
       // CORRECTION: Double-vérification explicite pour exclure les ports payés ET retournés
-      const portsACollecter = portDuParcels.filter((p: any) =>
-        p.portType === 'port_du' &&  // Vérification explicite : UNIQUEMENT port dû
-        !p.portStatus &&
-        (p.status === 'En cours de livraison' || p.status === 'Livré') &&
-        p.status?.toLowerCase().trim() !== 'retourné'
-      )
+      // Pour "Non assigné", tous les ports dus non collectés sont "À collecter"
+      // Pour les assignés, seulement ceux "En cours de livraison" ou "Livré"
+      const portsACollecter = portDuParcels.filter((p: any) => {
+        const isReturned = p.returnedAt || p.wasReturned || p.status === 'Retourné'
+        const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
+
+        if (isReturned || isCollected) return false
+
+        // Si "Non assigné", tous les ports dus non collectés/retournés sont à collecter
+        if (driver.id === 'unknown') return true
+
+        // Si assigné, seulement les "En cours de livraison" ou "Livré"
+        return p.status === 'En cours de livraison' || p.status === 'Livré'
+      })
 
       // Ports collectés = ceux avec portStatus 'collected' ou 'received'
       const portsCollectes = portDuParcels.filter((p: any) =>
