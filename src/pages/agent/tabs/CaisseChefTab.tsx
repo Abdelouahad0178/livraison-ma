@@ -1578,7 +1578,9 @@ export default function CaisseChefTab() {
                                   </td>
                                   <td className="py-2 px-3 text-center">
                                     <div className="flex items-center justify-center gap-2">
-                                      {isPortDu && (
+                                      {(parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné') ? (
+                                        <span className="text-xs text-gray-500 italic">-</span>
+                                      ) : isPortDu && (
                                         <>
                                           <button
                                             onClick={() => isCollected ? handleUncollectPort(parcel) : handleCollectPort(parcel)}
