@@ -1249,6 +1249,9 @@ export default function AdminPage() {
   const debouncedSearch = fuseDebouncedSearch
   const isSearching = fuseIsSearching || isServerSearching // Recherche locale OU serveur
 
+  // 🗄️ Inclure les archives dans la recherche
+  const [includeArchived, setIncludeArchived] = useState(false)
+
   // ⚡ Détecter si recherche active - MAIS sans charger 2000 colis
   // On garde isSearchActive pour la logique, mais loadLimit reste à 500
   useEffect(() => {
@@ -1270,8 +1273,8 @@ export default function AdminPage() {
     const performServerSearch = async () => {
       setIsServerSearching(true)
       try {
-        console.warn(`🔍 Recherche serveur: "${query}" dans TOUTE la base...`)
-        const results = await searchParcels(query, { limit: 50000 })
+        console.warn(`🔍 Recherche serveur: "${query}" dans TOUTE la base (archives: ${includeArchived})...`)
+        const results = await searchParcels(query, { limit: 50000, includeArchived })
         setServerSearchResults(results)
         setIsServerSearching(false)
         console.warn(`✅ Recherche serveur: ${results.length} résultats trouvés`)
@@ -1283,7 +1286,7 @@ export default function AdminPage() {
     }
 
     performServerSearch()
-  }, [fuseDebouncedSearch])
+  }, [fuseDebouncedSearch, includeArchived])
 
   const filtered = useMemo(() => {
     if (!Array.isArray(periodParcels)) return []
@@ -1735,6 +1738,8 @@ export default function AdminPage() {
               search={search}
               setSearch={setSearch}
               isSearching={isSearching}
+              includeArchived={includeArchived}
+              setIncludeArchived={setIncludeArchived}
               cityFilter={cityFilter}
               setCityFilter={setCityFilter}
               driverFilter={driverFilter}

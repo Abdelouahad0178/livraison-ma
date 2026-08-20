@@ -42,6 +42,8 @@ export default function AdminExpeditionsTab({
   search,
   setSearch,
   isSearching,
+  includeArchived,
+  setIncludeArchived,
   cityFilter,
   setCityFilter,
   driverFilter,
@@ -269,6 +271,22 @@ export default function AdminExpeditionsTab({
               </kbd>
             )}
           </div>
+
+          {/* 🗄️ Checkbox Archives (visible seulement si recherche active) */}
+          {search && (
+            <label className="flex items-center gap-2 px-4 py-2 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer hover:bg-amber-100 transition-colors whitespace-nowrap">
+              <input
+                type="checkbox"
+                checked={includeArchived}
+                onChange={e => setIncludeArchived(e.target.checked)}
+                className="w-4 h-4 text-amber-600 border-amber-300 rounded focus:ring-amber-500 cursor-pointer"
+              />
+              <span className="text-sm font-medium text-amber-900">
+                🗄️ Inclure archives (+30j)
+              </span>
+            </label>
+          )}
+
           <Filter className="w-4 h-4 text-gray-400 shrink-0" />
           <select value={cityFilter} onChange={e => setCityFilter(e.target.value)} className={selectCls}>
             <option value="Toutes">Toutes les villes</option>
