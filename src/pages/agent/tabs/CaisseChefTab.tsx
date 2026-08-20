@@ -156,8 +156,6 @@ export default function CaisseChefTab() {
 
           const unsubscribers: (() => void)[] = []
 
-          alert(`🎯 CRÉATION LISTENER TEMPS RÉEL\n\n${batches.length} batch(es)\nTotal: ${parcelIds.length} parcels surveillés`)
-
           batches.forEach((batch) => {
             const q = query(
               collection(db, 'parcels'),
@@ -169,12 +167,6 @@ export default function CaisseChefTab() {
                 id: doc.id,
                 ...doc.data()
               }))
-
-              // Afficher alert seulement s'il y a des changements
-              if (updatedParcels.length > 0) {
-                const statusInfo = updatedParcels.map(p => `${p.id.slice(-6)}: ${p.portStatus || 'à collecter'}`).join('\n')
-                alert(`🔄 LISTENER TEMPS RÉEL DÉTECTÉ\n\n${updatedParcels.length} changement(s):\n${statusInfo}`)
-              }
 
               // Mettre à jour searchResults avec les nouvelles données
               setSearchResults((prev) => {
@@ -188,15 +180,6 @@ export default function CaisseChefTab() {
 
                 return updated
               })
-
-              // 🔄 Mettre à jour le contexte global pour recalculer les stats
-              updatedParcels.forEach((updatedParcel: any) => {
-                updateParcelOptimistic(updatedParcel.id, updatedParcel)
-              })
-
-              if (updatedParcels.length > 0) {
-                alert(`✅ CONTEXTE MIS À JOUR\n\nLes stats devraient maintenant être rafraîchies`)
-              }
             }, (error) => {
               console.error('❌ Erreur listener temps réel:', error)
             })
@@ -270,28 +253,6 @@ export default function CaisseChefTab() {
 
   // Calcul des statistiques
   const stats = useMemo(() => {
-    // 🔄 Source de données : merge parcels avec searchResults pour stats à jour
-    let dataSource = parcels
-
-    // Si en mode recherche, merger les données de searchResults dans parcels
-    if (searchResults && searchResults.length > 0) {
-      const searchIds = new Set(searchResults.map((p: any) => p.id))
-      // Remplacer les parcels qui sont dans searchResults par leur version à jour
-      dataSource = parcels.map((p: any) => {
-        if (searchIds.has(p.id)) {
-          return searchResults.find((sr: any) => sr.id === p.id) || p
-        }
-        return p
-      })
-
-      // Ajouter les parcels de searchResults qui ne sont pas dans parcels
-      searchResults.forEach((sr: any) => {
-        if (!parcels.find((p: any) => p.id === sr.id)) {
-          dataSource.push(sr)
-        }
-      })
-    }
-
     // Ports à collecter (port_du non encaissés, livrés ou en cours de livraison)
     const portsACollecter = dataSource.filter((p: any) =>
       p.portType === 'port_du' &&
@@ -339,19 +300,44 @@ export default function CaisseChefTab() {
       enRetardCount: enRetard.length,
       soldeAVerser,
     }
-  }, [parcels, searchResults, adminTransfers, profile?.city])
+  }, [dataSource, adminTransfers, profile?.city])
+
+  // 🔄 Source de données fusionnée (parcels + searchResults)
+  const dataSource = useMemo(() => {
+    let source = parcels
+
+    // Si en mode recherche, merger searchResults dans parcels
+    if (searchResults && searchResults.length > 0) {
+      const searchIds = new Set(searchResults.map((p: any) => p.id))
+      source = parcels.map((p: any) => {
+        if (searchIds.has(p.id)) {
+          return searchResults.find((sr: any) => sr.id === p.id) || p
+        }
+        return p
+      })
+
+      // Ajouter les parcels de searchResults qui ne sont pas dans parcels
+      searchResults.forEach((sr: any) => {
+        if (!parcels.find((p: any) => p.id === sr.id)) {
+          source.push(sr)
+        }
+      })
+    }
+
+    return source
+  }, [parcels, searchResults])
 
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
     // DEBUG: Vérifier les données au chargement
-    const withDriver = parcels.filter((p: any) => p.deliveryDriverId).length
-    const inCity = parcels.filter((p: any) => p.destinationCity === profile?.city).length
-    const both = parcels.filter((p: any) =>
+    const withDriver = dataSource.filter((p: any) => p.deliveryDriverId).length
+    const inCity = dataSource.filter((p: any) => p.destinationCity === profile?.city).length
+    const both = dataSource.filter((p: any) =>
       p.deliveryDriverId && p.destinationCity === profile?.city
     ).length
 
     console.error('📊 [CaisseChefTab] CALCUL LIVREURS:', {
-      '1️⃣ Total parcels': parcels.length,
+      '1️⃣ Total parcels': dataSource.length,
       '2️⃣ Ville profil': profile?.city,
       '3️⃣ Avec deliveryDriverId': withDriver,
       '4️⃣ Dans cette ville': inCity,
@@ -360,7 +346,7 @@ export default function CaisseChefTab() {
 
     const driversMap = new Map()
 
-    parcels.forEach((p: any) => {
+    dataSource.forEach((p: any) => {
       if (p.deliveryDriverId && p.destinationCity === profile?.city) {
         if (!driversMap.has(p.deliveryDriverId)) {
           driversMap.set(p.deliveryDriverId, {
@@ -374,7 +360,7 @@ export default function CaisseChefTab() {
     })
 
     // Ajouter les expéditions sans livreur (reçues OU locales, non assignées)
-    const unknownParcels = parcels.filter((p: any) => {
+    const unknownParcels = dataSource.filter((p: any) => {
       return (
         !p.deliveryDriverId &&
         p.destinationCity === profile?.city &&  // Destination = ma ville (inclut locales + reçues)
@@ -471,7 +457,7 @@ export default function CaisseChefTab() {
         enRetardCount: enRetard.length,
       }
     }).sort((a, b) => a.name.localeCompare(b.name))
-  }, [parcels, agentEntries, profile?.city])
+  }, [dataSource, agentEntries, profile?.city])
 
   // Filtrer les livreurs
   const filteredDrivers = useMemo(() => {
@@ -782,8 +768,6 @@ export default function CaisseChefTab() {
       return
     }
 
-    alert(`📦 DÉBUT COLLECTE\n\nID: ${parcel.id}\nStatut avant: ${parcel.portStatus || 'null'}`)
-
     setCollectingPortIds(prev => new Set(prev).add(parcel.id))
     try {
       // Mise à jour optimiste pour affichage instantané
@@ -795,15 +779,11 @@ export default function CaisseChefTab() {
         portDuReceivedMethod: 'especes',
       })
 
-      alert(`🔄 MISE À JOUR OPTIMISTE OK\n\nAppel de collectPortDu...`)
-
       await collectPortDu(
         parcel.id,
         profile?.name || '',
         uid || ''
       )
-
-      alert(`✅ COLLECTE FIREBASE OK\n\nLe listener devrait maintenant détecter le changement`)
     } catch (err: any) {
       console.error('Erreur collecte port:', err)
       alert(`❌ Erreur: ${err.message}`)
