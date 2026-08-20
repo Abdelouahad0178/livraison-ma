@@ -249,11 +249,11 @@ export default function CaisseChefTab() {
 
       switch (statusFilter) {
         case 'a_collecter':
-          return isPortDu && !p.portStatus && isInDelivery
+          return isPortDu && !p.portStatus && isInDelivery && p.status !== 'Retourné'
         case 'collecte':
           return isPortDu && isCollected
         case 'en_retard':
-          return isPortDu && isLate
+          return isPortDu && isLate && p.status !== 'Retourné'
         default:
           return true
       }
@@ -269,11 +269,12 @@ export default function CaisseChefTab() {
 
   // Calcul des statistiques
   const stats = useMemo(() => {
-    // Ports à collecter (port_du non encaissés, livrés ou en cours de livraison)
+    // Ports à collecter (port_du non encaissés, livrés ou en cours de livraison, SAUF retournés)
     const portsACollecter = dataSource.filter((p: any) =>
       p.portType === 'port_du' &&
       !p.portStatus &&
       (p.status === 'En cours de livraison' || p.status === 'Livré') &&
+      p.status !== 'Retourné' &&
       p.destinationCity === profile?.city
     )
 
@@ -441,11 +442,12 @@ export default function CaisseChefTab() {
         return assignedDate >= today
       })
 
-      // CORRECTION: Double-vérification explicite pour exclure les ports payés
+      // CORRECTION: Double-vérification explicite pour exclure les ports payés ET retournés
       const portsACollecter = portDuParcels.filter((p: any) =>
         p.portType === 'port_du' &&  // Vérification explicite : UNIQUEMENT port dû
         !p.portStatus &&
-        (p.status === 'En cours de livraison' || p.status === 'Livré')
+        (p.status === 'En cours de livraison' || p.status === 'Livré') &&
+        p.status !== 'Retourné'
       )
 
       // Ports collectés = ceux avec portStatus 'collected' ou 'received'
@@ -597,11 +599,11 @@ export default function CaisseChefTab() {
 
           switch (statusFilter) {
             case 'a_collecter':
-              return isPortDu && !p.portStatus && isInDelivery
+              return isPortDu && !p.portStatus && isInDelivery && p.status !== 'Retourné'
             case 'collecte':
               return isPortDu && isCollected
             case 'en_retard':
-              return isPortDu && isLate
+              return isPortDu && isLate && p.status !== 'Retourné'
             default:
               return true
           }
@@ -628,7 +630,8 @@ export default function CaisseChefTab() {
         p.portType === 'port_du' &&  // Vérification explicite
         !p.portPayeMethod &&          // Exclure ports payés
         !p.portStatus &&
-        (p.status === 'En cours de livraison' || p.status === 'Livré')
+        (p.status === 'En cours de livraison' || p.status === 'Livré') &&
+        p.status !== 'Retourné'       // Exclure retournés
       )
 
       // Ports collectés = ceux avec portStatus 'collected' ou 'received'
