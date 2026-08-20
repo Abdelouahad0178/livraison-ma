@@ -1260,6 +1260,10 @@ export default function CaisseChefTab() {
                                   <span className="font-mono text-xs font-semibold text-blue-600">
                                     {parcel.senderNic || parcel.sender?.nic || parcel.trackingId}
                                   </span>
+                                  {/* DEBUG: Afficher le statut brut */}
+                                  <span className="text-xs text-red-600 font-mono">
+                                    STATUS: "{parcel.status}"
+                                  </span>
                                   {parcel.isArchived && (
                                     <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded w-fit">
                                       🗄️ Archivé
