@@ -957,12 +957,13 @@ export default function CaisseChefTab() {
 
           {/* Résultats de recherche OU Liste des livreurs */}
           {searchResults !== null ? (
-            <div className="bg-white border border-gray-200 rounded-xl p-4">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-semibold text-gray-900">
-                  🔍 Résultats de recherche
+            <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+              <div className="p-4 border-b border-gray-200 flex items-center justify-between bg-blue-50">
+                <h3 className="font-semibold text-gray-900 flex items-center gap-2">
+                  <Search className="w-5 h-5 text-blue-600" />
+                  Résultats de recherche
                 </h3>
-                <span className="text-sm text-gray-500">
+                <span className="text-sm text-gray-600">
                   {searchResults.length} résultat{searchResults.length > 1 ? 's' : ''}
                   {searchResults.length === 50 && (
                     <span className="ml-2 text-amber-600 font-medium">
@@ -973,60 +974,179 @@ export default function CaisseChefTab() {
               </div>
 
               {searchResults.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
+                <div className="text-center py-12 text-gray-500">
                   <Package className="w-12 h-12 text-gray-300 mx-auto mb-3" />
                   <p>Aucune expédition trouvée</p>
                 </div>
               ) : (
-                <div className="space-y-2 max-h-[600px] overflow-y-auto">
-                  {searchResults.map((parcel: any) => (
-                    <div key={parcel.id} className="border border-gray-200 rounded-lg p-3 hover:bg-gray-50">
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-mono text-sm font-semibold text-gray-900">
-                              {parcel.trackingId || parcel.senderNic}
-                            </span>
-                            {parcel.isArchived && (
-                              <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded">
-                                🗄️ Archivé
-                              </span>
-                            )}
-                          </div>
-                          <p className="text-xs text-gray-600 truncate">
-                            <strong>De:</strong> {parcel.sender?.name || '—'} ({parcel.originCity})
-                          </p>
-                          <p className="text-xs text-gray-600 truncate">
-                            <strong>À:</strong> {parcel.receiver?.name || '—'} ({parcel.destinationCity})
-                          </p>
-                          <div className="flex items-center gap-2 mt-1">
-                            <span className={`px-2 py-0.5 text-xs rounded ${
-                              parcel.status === 'Livré' ? 'bg-green-100 text-green-700' :
-                              parcel.status === 'En cours de livraison' ? 'bg-blue-100 text-blue-700' :
-                              'bg-gray-100 text-gray-700'
-                            }`}>
-                              {parcel.status}
-                            </span>
-                            {parcel.deliveryDriverName && (
-                              <span className="text-xs text-gray-500">
-                                👤 {parcel.deliveryDriverName}
-                              </span>
-                            )}
-                          </div>
-                        </div>
-                        {parcel.price && (
-                          <div className="text-right">
-                            <div className="text-sm font-bold text-gray-900">
-                              {parseFloat(parcel.price).toFixed(2)} DH
-                            </div>
-                            <div className="text-xs text-gray-500">
-                              {parcel.portType === 'port_du' ? 'Port dû' : 'Port payé'}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  ))}
+                <div className="p-4 bg-gray-50">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-gray-200">
+                          <th className="text-left py-2 px-3 font-semibold text-gray-700">N° EXP</th>
+                          <th className="text-left py-2 px-3 font-semibold text-gray-700">Date création</th>
+                          <th className="text-left py-2 px-3 font-semibold text-gray-700">Date livraison</th>
+                          <th className="text-left py-2 px-3 font-semibold text-gray-700">Client</th>
+                          <th className="text-center py-2 px-3 font-semibold text-gray-700">Type</th>
+                          <th className="text-right py-2 px-3 font-semibold text-gray-700">Montant</th>
+                          <th className="text-center py-2 px-3 font-semibold text-gray-700">Status</th>
+                          <th className="text-center py-2 px-3 font-semibold text-gray-700">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {searchResults.map((parcel: any) => {
+                          const isPortDu = parcel.portType === 'port_du' && !parcel.portPayeMethod
+                          const delay = deliveryDelays.find((d: any) =>
+                            d.parcelId === parcel.id && !d.resolvedAt
+                          )
+                          const isLate = (() => {
+                            if (!isPortDu) return false
+                            if (parcel.status !== 'En cours de livraison' || !parcel.deliveryAssignedAt) return false
+                            const assignedDate = parcel.deliveryAssignedAt?.toDate ? parcel.deliveryAssignedAt.toDate() : new Date(parcel.deliveryAssignedAt)
+                            const oneDayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000)
+                            return assignedDate < oneDayAgo
+                          })()
+                          const isCollected = parcel.portStatus === 'collected' || parcel.portStatus === 'received'
+
+                          return (
+                            <tr key={parcel.id} className="border-b border-gray-100 hover:bg-white transition">
+                              <td className="py-2 px-3">
+                                <div className="flex flex-col gap-1">
+                                  <span className="font-mono text-xs font-semibold text-blue-600">
+                                    {parcel.senderNic || parcel.sender?.nic || parcel.trackingId}
+                                  </span>
+                                  {parcel.isArchived && (
+                                    <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded w-fit">
+                                      🗄️ Archivé
+                                    </span>
+                                  )}
+                                  {parcel.deliveryDriverName && (
+                                    <span className="text-xs text-gray-500">
+                                      👤 {parcel.deliveryDriverName}
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-2 px-3 text-sm text-gray-600">
+                                {parcel.createdAt?.toDate ? parcel.createdAt.toDate().toLocaleDateString('fr-FR') : '-'}
+                              </td>
+                              <td className="py-2 px-3 text-sm text-gray-600">
+                                {parcel.status === 'Livré' && parcel.deliveredAt?.toDate
+                                  ? parcel.deliveredAt.toDate().toLocaleDateString('fr-FR')
+                                  : parcel.status === 'Livré' && parcel.deliveredAt
+                                    ? new Date(parcel.deliveredAt).toLocaleDateString('fr-FR')
+                                    : '-'}
+                              </td>
+                              <td className="py-2 px-3">
+                                <div className="text-gray-900">{parcel.receiver?.name || '-'}</div>
+                                <div className="text-xs text-gray-500">{parcel.receiver?.tel || '-'}</div>
+                              </td>
+                              <td className="py-2 px-3 text-center">
+                                {isPortDu ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-orange-100 text-orange-700 text-xs font-medium">
+                                    Port dû
+                                  </span>
+                                ) : parcel.portType === 'port_en_compte_destinataire' ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-100 text-purple-700 text-xs font-medium">
+                                    C/Dest
+                                  </span>
+                                ) : parcel.portType === 'port_en_compte_expediteur' ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-700 text-xs font-medium">
+                                    C/Exp
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-xs font-medium">
+                                    Port payé
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2 px-3 text-right font-semibold text-gray-900">
+                                {fmtAmt(parcel.price)} DH
+                              </td>
+                              <td className="py-2 px-3 text-center">
+                                {!isPortDu && (parcel.portType === 'port_en_compte_destinataire' || parcel.portType === 'port_en_compte_expediteur') ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-semibold">
+                                    <Check className="w-3 h-3" />
+                                    En compte
+                                  </span>
+                                ) : isCollected ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-700 text-xs font-semibold">
+                                    <Check className="w-3 h-3" />
+                                    Collecté
+                                  </span>
+                                ) : isLate ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-semibold">
+                                    <AlertCircle className="w-3 h-3" />
+                                    En retard
+                                  </span>
+                                ) : (
+                                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-blue-100 text-blue-700 text-xs font-semibold">
+                                    <Clock className="w-3 h-3" />
+                                    À collecter
+                                  </span>
+                                )}
+                              </td>
+                              <td className="py-2 px-3 text-center">
+                                <div className="flex items-center justify-center gap-2">
+                                  {isPortDu && (
+                                    <>
+                                      <button
+                                        onClick={() => isCollected ? handleUncollectPort(parcel) : handleCollectPort(parcel)}
+                                        disabled={collectingPortIds.has(parcel.id)}
+                                        className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${
+                                          isCollected
+                                            ? 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                                            : 'bg-green-600 hover:bg-green-700 text-white'
+                                        } disabled:opacity-50`}
+                                      >
+                                        {collectingPortIds.has(parcel.id) ? (
+                                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                        ) : isCollected ? (
+                                          'Annuler'
+                                        ) : (
+                                          'Collecter'
+                                        )}
+                                      </button>
+
+                                      {parcel.status === 'En cours de livraison' && (
+                                        <button
+                                          onClick={() => handleDeliverParcel(parcel)}
+                                          disabled={deliveringParcelIds.has(parcel.id)}
+                                          className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition disabled:opacity-50"
+                                        >
+                                          {deliveringParcelIds.has(parcel.id) ? (
+                                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                          ) : (
+                                            'Livrer'
+                                          )}
+                                        </button>
+                                      )}
+
+                                      {isLate && !delay && (
+                                        <button
+                                          onClick={() => setDelayModal(parcel)}
+                                          className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold transition"
+                                        >
+                                          Retard
+                                        </button>
+                                      )}
+
+                                      {delay && (
+                                        <span className="px-2 py-1 bg-amber-100 text-amber-700 text-xs rounded">
+                                          Retard signalé
+                                        </span>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
             </div>
