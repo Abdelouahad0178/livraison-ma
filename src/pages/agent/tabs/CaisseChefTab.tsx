@@ -128,8 +128,7 @@ export default function CaisseChefTab() {
       setSearching(false)
       setStatusFilter('all')
       setIncludeArchived(false)
-      // Vider le cache après un court délai pour permettre au contexte de se mettre à jour
-      setTimeout(() => setModifiedParcels(new Map()), 1000)
+      // Ne PAS vider le cache ici - il persiste pour l'affichage normal
       return
     }
 
@@ -138,8 +137,12 @@ export default function CaisseChefTab() {
       setSearchResults(null)
       setSearching(false)
       setStatusFilter('all')
+      // Ne PAS vider le cache ici - il persiste pour l'affichage normal
       return
     }
+
+    // Nouvelle recherche déclenchée : vider le cache des modifications précédentes
+    setModifiedParcels(new Map())
 
     let unsubscribeRealtime: (() => void) | null = null
 
