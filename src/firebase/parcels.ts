@@ -1154,8 +1154,8 @@ export function subscribeAgencyParcels(
     }, 50)
   }
 
-  // 📦 OPTIMISATION: Charger seulement 60 jours au lieu de 365 pour alléger le site
-  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(60)
+  // 📦 Chargement 365 jours - Filtre isArchived pour performances
+  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(365)
   const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
 
   // 🗄️ Exclure les colis archivés pour ne charger que les actifs
@@ -1190,8 +1190,8 @@ export async function getMoreAgencyParcels(
   dateFrom?: Date | null,
   dateTo?: Date | null
 ): Promise<{ docs: any[]; lastDocs: any; hasMore: boolean }> {
-  // 📦 OPTIMISATION: Charger seulement 60 jours au lieu de 365
-  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(60)
+  // 📦 Chargement 365 jours - Filtre isArchived pour performances
+  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(365)
   const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
   const results: any[] = []
   let newLastCreatedDoc: any = null
