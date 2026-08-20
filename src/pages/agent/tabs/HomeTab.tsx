@@ -192,6 +192,8 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
         </div>
 
         {/* Équipe - HERO AI STYLE */}
+        {/* CACHÉ: Statistiques Secteurs & Chauffeurs */}
+        {false && (
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
           <button onClick={() => setTab('secteurs')} className={`${HERO_STAT_CARD.container} text-center hover:scale-105 transition-transform`}>
             <div className="flex justify-center">
@@ -212,6 +214,7 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
             <p className="text-sm font-medium text-gray-500 uppercase tracking-wide">Chauffeurs & Livreurs</p>
           </button>
         </div>
+        )}
 
         {/* CACHÉ: Liens rapides - HERO AI STYLE */}
         {false && (
