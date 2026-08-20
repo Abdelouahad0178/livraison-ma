@@ -1471,11 +1471,10 @@ async function runWeeklyArchiving() {
 
     let hasMore = true
     while (hasMore) {
-      // Chercher les colis éligibles (non déjà archivés)
+      // Chercher les colis éligibles
       const query = db.collection('parcels')
         .where('status', '==', status)
         .where('createdAt', '<', cutoffTimestamp)
-        .where('isArchived', '!=', true)
         .limit(BATCH_SIZE)
 
       const snapshot = await query.get()
@@ -1485,12 +1484,17 @@ async function runWeeklyArchiving() {
         break
       }
 
-      // Filtrer les colis avec COD non payé (si Livré)
+      // Filtrer les colis avec COD non payé (si Livré) et déjà archivés
       const batch = db.batch()
       let batchCount = 0
 
       snapshot.docs.forEach(doc => {
         const data = doc.data()
+
+        // Skip si déjà archivé
+        if (data.isArchived) {
+          return
+        }
 
         // Si "Livré" avec COD, vérifier si payé
         if (status === 'Livré' && data.codAmount > 0) {
