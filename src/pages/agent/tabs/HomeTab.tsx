@@ -213,7 +213,8 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
           </button>
         </div>
 
-        {/* Liens rapides - HERO AI STYLE */}
+        {/* CACHÉ: Liens rapides - HERO AI STYLE */}
+        {false && (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           {[
             { label: 'Feuille de charge', sub: 'Planning chauffeurs', icon: Printer, iconBg: 'bg-blue-100', iconColor: 'text-blue-600', tab: 'charge' },
@@ -275,9 +276,10 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
             </button>
           ))}
         </div>
+        )}
 
-        {/* Tableau statuts agence - HERO AI STYLE */}
-        {parcels.length > 0 && (
+        {/* CACHÉ: Tableau statuts agence - HERO AI STYLE */}
+        {false && parcels.length > 0 && (
           <div className={HERO_CARD.base}>
             <div className={HERO_CARD.header}>
               <h3 className="font-bold text-gray-800 text-lg flex items-center gap-2">
@@ -318,8 +320,8 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
           </div>
         )}
 
-        {/* ── MODAL PORTS PAYÉS ── */}
-        {portPayeModal.open && (
+        {/* CACHÉ: MODAL PORTS PAYÉS */}
+        {false && portPayeModal.open && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setPortPayeModal({ open: false, parcels: [] })}>
             <div className="bg-white rounded-2xl w-full max-w-6xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
               {/* Header */}
@@ -417,8 +419,8 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
           </div>
         )}
 
-        {/* ── MODAL CLIENTS EN COMPTE ── */}
-        {enCompteModal.open && (
+        {/* CACHÉ: MODAL CLIENTS EN COMPTE */}
+        {false && enCompteModal.open && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setEnCompteModal({ open: false, clients: [] })}>
             <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
               {/* Header */}
@@ -611,8 +613,8 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
         </button>
       </div>
 
-      {/* Sections réservées au chef d'agence et agent (pas aide_agent) */}
-      {profile?.role !== 'aide_agent' && (
+      {/* CACHÉ: Sections réservées au chef d'agence et agent (pas aide_agent) */}
+      {false && profile?.role !== 'aide_agent' && (
         <>
       {/* Raccourci Ma Caisse */}
       <button onClick={() => setTab('caisse')}
