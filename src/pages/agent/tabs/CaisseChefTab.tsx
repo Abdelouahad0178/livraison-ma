@@ -267,6 +267,39 @@ export default function CaisseChefTab() {
     return (!isNaN(num) && isFinite(num) && num >= 0) ? num : 0
   }
 
+  // 🔄 Source de données fusionnée (parcels + searchResults + cache modifications)
+  const dataSource = useMemo(() => {
+    let source = parcels
+
+    // Appliquer d'abord le cache des modifications locales
+    if (Object.keys(modifiedParcels).length > 0) {
+      source = parcels.map((p: any) => {
+        const modified = modifiedParcels[p.id]
+        return modified ? { ...p, ...modified } : p
+      })
+    }
+
+    // Si en mode recherche, merger searchResults dans parcels
+    if (searchResults && searchResults.length > 0) {
+      const searchIds = new Set(searchResults.map((p: any) => p.id))
+      source = source.map((p: any) => {
+        if (searchIds.has(p.id)) {
+          return searchResults.find((sr: any) => sr.id === p.id) || p
+        }
+        return p
+      })
+
+      // Ajouter les parcels de searchResults qui ne sont pas dans parcels
+      searchResults.forEach((sr: any) => {
+        if (!parcels.find((p: any) => p.id === sr.id)) {
+          source.push(sr)
+        }
+      })
+    }
+
+    return source
+  }, [parcels, searchResults, modifiedParcels])
+
   // Calcul des statistiques
   const stats = useMemo(() => {
     // Ports à collecter (port_du non encaissés, livrés ou en cours de livraison, SAUF retournés)
@@ -318,39 +351,6 @@ export default function CaisseChefTab() {
       soldeAVerser,
     }
   }, [dataSource, adminTransfers, profile?.city])
-
-  // 🔄 Source de données fusionnée (parcels + searchResults + cache modifications)
-  const dataSource = useMemo(() => {
-    let source = parcels
-
-    // Appliquer d'abord le cache des modifications locales
-    if (Object.keys(modifiedParcels).length > 0) {
-      source = parcels.map((p: any) => {
-        const modified = modifiedParcels[p.id]
-        return modified ? { ...p, ...modified } : p
-      })
-    }
-
-    // Si en mode recherche, merger searchResults dans parcels
-    if (searchResults && searchResults.length > 0) {
-      const searchIds = new Set(searchResults.map((p: any) => p.id))
-      source = source.map((p: any) => {
-        if (searchIds.has(p.id)) {
-          return searchResults.find((sr: any) => sr.id === p.id) || p
-        }
-        return p
-      })
-
-      // Ajouter les parcels de searchResults qui ne sont pas dans parcels
-      searchResults.forEach((sr: any) => {
-        if (!parcels.find((p: any) => p.id === sr.id)) {
-          source.push(sr)
-        }
-      })
-    }
-
-    return source
-  }, [parcels, searchResults, modifiedParcels])
 
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
