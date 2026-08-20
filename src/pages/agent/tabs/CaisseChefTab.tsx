@@ -180,6 +180,11 @@ export default function CaisseChefTab() {
 
                 return updated
               })
+
+              // 🔄 Mettre à jour aussi le contexte global pour rafraîchir les stats
+              updatedParcels.forEach((updatedParcel: any) => {
+                updateParcelOptimistic(updatedParcel.id, updatedParcel)
+              })
             }, (error) => {
               console.error('❌ Erreur listener temps réel:', error)
             })
