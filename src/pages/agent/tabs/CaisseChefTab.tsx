@@ -18,6 +18,8 @@ import {
 } from '../../../firebase/delivery'
 import { collectPortDu, uncollectPortDu } from '../../../firebase/cod'
 import { updateParcel, searchParcels } from '../../../firebase/parcels'
+import { collection, query, where, onSnapshot, documentId } from 'firebase/firestore'
+import { db } from '../../../firebase/db'
 
 // Types
 interface DelayReason {
@@ -111,27 +113,82 @@ export default function CaisseChefTab() {
     return () => unsubscribe()
   }, [profile?.city])
 
-  // 🔍 Recherche serveur dans TOUTES les expéditions
+  // 🔍 Recherche serveur dans TOUTES les expéditions + Écoute temps réel
   useEffect(() => {
-    const query = searchQuery.trim()
+    const searchTerm = searchQuery.trim()
 
-    if (!query || query.length < 3) {
+    if (!searchTerm || searchTerm.length < 3) {
       setSearchResults(null)
       setSearching(false)
       return
     }
 
+    let unsubscribeRealtime: (() => void) | null = null
+
     const performSearch = async () => {
       setSearching(true)
       try {
-        console.log(`🔍 Recherche serveur: "${query}" (archives: ${includeArchived})`)
-        const results = await searchParcels(query, { limit: 50, includeArchived })
+        console.log(`🔍 Recherche serveur: "${searchTerm}" (archives: ${includeArchived})`)
+        const results = await searchParcels(searchTerm, { limit: 50, includeArchived })
         // Filtrer par ville si chef d'agence
         const filtered = results.filter((p: any) =>
           p.destinationCity === profile?.city || p.originCity === profile?.city
         )
         setSearchResults(filtered)
         console.log(`✅ ${filtered.length} résultats trouvés`)
+
+        // 🎯 Activer l'écoute temps réel pour ces parcels
+        if (filtered.length > 0) {
+          const parcelIds = filtered.map((p: any) => p.id)
+
+          // Firestore limite à 30 IDs max par requête 'in'
+          // On divise en batches de 30
+          const batchSize = 30
+          const batches: string[][] = []
+          for (let i = 0; i < parcelIds.length; i += batchSize) {
+            batches.push(parcelIds.slice(i, i + batchSize))
+          }
+
+          const unsubscribers: (() => void)[] = []
+
+          batches.forEach((batch) => {
+            const q = query(
+              collection(db, 'parcels'),
+              where(documentId(), 'in', batch)
+            )
+
+            const unsub = onSnapshot(q, (snapshot) => {
+              const updatedParcels = snapshot.docs.map(doc => ({
+                id: doc.id,
+                ...doc.data()
+              }))
+
+              // Mettre à jour searchResults avec les nouvelles données
+              setSearchResults((prev) => {
+                if (!prev) return prev
+
+                // Remplacer les parcels mis à jour
+                const updated = prev.map((p: any) => {
+                  const newData = updatedParcels.find((up: any) => up.id === p.id)
+                  return newData || p
+                })
+
+                return updated
+              })
+            }, (error) => {
+              console.error('❌ Erreur listener temps réel:', error)
+            })
+
+            unsubscribers.push(unsub)
+          })
+
+          // Combiner tous les unsubscribers
+          unsubscribeRealtime = () => {
+            unsubscribers.forEach(unsub => unsub())
+          }
+
+          console.log(`🔄 Écoute temps réel activée pour ${parcelIds.length} parcels`)
+        }
       } catch (error) {
         console.error('❌ Erreur recherche:', error)
         setSearchResults([])
@@ -141,6 +198,14 @@ export default function CaisseChefTab() {
     }
 
     performSearch()
+
+    // Nettoyage: arrêter l'écoute quand la recherche change
+    return () => {
+      if (unsubscribeRealtime) {
+        unsubscribeRealtime()
+        console.log('🔇 Écoute temps réel arrêtée')
+      }
+    }
   }, [searchQuery, includeArchived, profile?.city])
 
   // 🔒 Fonction sécurisée pour parser les montants
