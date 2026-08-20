@@ -385,14 +385,12 @@ export default function CaisseChefTab() {
     })
 
     // Ajouter les expéditions sans livreur (reçues OU locales, non assignées)
+    // TOUTES les expéditions non retournées dans la ville, même celles livrées ou en cours
     const unknownParcels = dataSource.filter((p: any) => {
       return (
         !p.deliveryDriverId &&
         p.destinationCity === profile?.city &&  // Destination = ma ville (inclut locales + reçues)
-        p.status === 'Arrivé en agence' &&  // Uniquement "Arrivé en agence"
-        p.status !== 'En cours de livraison' &&  // Exclusions explicites
-        p.status !== 'Livré' &&
-        p.status?.toLowerCase().trim() !== 'retourné'
+        !(p.returnedAt || p.wasReturned || p.status === 'Retourné')  // Exclure seulement les retournées
       )
     })
 
