@@ -358,7 +358,7 @@ export default function CaisseChefTab() {
       enRetardCount: enRetard.length,
       soldeAVerser,
     }
-  }, [dataSource, adminTransfers, profile?.city])
+  }, [dataSource, adminTransfers, profile?.city, modifiedParcels])
 
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
