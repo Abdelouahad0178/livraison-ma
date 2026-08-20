@@ -71,9 +71,6 @@ export default function CaisseChefTab() {
   // Cache local des modifications faites dans searchResults
   const [modifiedParcels, setModifiedParcels] = useState<Record<string, any>>({})
 
-  // Compteur pour forcer le recalcul des stats
-  const [statsUpdateCounter, setStatsUpdateCounter] = useState(0)
-
   // État livreurs
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set())
   const [delayModal, setDelayModal] = useState<any>(null)
@@ -272,39 +269,58 @@ export default function CaisseChefTab() {
 
   // 🔄 Source de données fusionnée (parcels + searchResults + cache modifications)
   const dataSource = useMemo(() => {
-    let source = parcels
+    console.log('📊 [dataSource] RECALCUL:', {
+      'parcels.length': parcels.length,
+      'searchResults': searchResults?.length || 0,
+      'modifiedParcels': Object.keys(modifiedParcels).length
+    })
+
+    // Commencer avec parcels (qui contient les mises à jour optimistes via updateParcelOptimistic)
+    let source = [...parcels]
 
     // Si en mode recherche, merger searchResults dans parcels
     if (searchResults && searchResults.length > 0) {
+      const parcelIds = new Set(parcels.map((p: any) => p.id))
       const searchIds = new Set(searchResults.map((p: any) => p.id))
-      source = source.map((p: any) => {
+
+      // Merger les parcels existants avec searchResults (searchResults a priorité pour les données brutes)
+      source = parcels.map((p: any) => {
         if (searchIds.has(p.id)) {
-          return searchResults.find((sr: any) => sr.id === p.id) || p
+          const srParcel = searchResults.find((sr: any) => sr.id === p.id)
+          // Merger en gardant les modifications optimistes de parcels
+          return srParcel ? { ...srParcel, ...p } : p
         }
         return p
       })
 
-      // Ajouter les parcels de searchResults qui ne sont pas dans parcels
-      searchResults.forEach((sr: any) => {
-        if (!parcels.find((p: any) => p.id === sr.id)) {
-          source.push(sr)
-        }
-      })
+      // Ajouter les parcels de searchResults qui ne sont pas dans parcels (créer un NOUVEL array)
+      const additionalParcels = searchResults.filter((sr: any) => !parcelIds.has(sr.id))
+      source = [...source, ...additionalParcels]
     }
 
-    // Appliquer le cache des modifications locales à TOUS les parcels (y compris ceux de searchResults)
-    if (Object.keys(modifiedParcels).length > 0) {
-      source = source.map((p: any) => {
-        const modified = modifiedParcels[p.id]
-        return modified ? { ...p, ...modified } : p
-      })
-    }
+    // Appliquer le cache des modifications locales EN DERNIER (priorité absolue)
+    // Cela garantit que les modifications utilisateur sont toujours visibles
+    source = source.map((p: any) => {
+      const modified = modifiedParcels[p.id]
+      return modified ? { ...p, ...modified } : p
+    })
+
+    console.log('✅ [dataSource] RÉSULTAT:', {
+      'source.length': source.length,
+      'parcels avec portStatus collected': source.filter((p: any) => p.portStatus === 'collected').length
+    })
 
     return source
   }, [parcels, searchResults, modifiedParcels])
 
   // Calcul des statistiques
   const stats = useMemo(() => {
+    console.log('📈 [stats] RECALCUL:', {
+      'dataSource.length': dataSource.length,
+      'adminTransfers.length': adminTransfers.length,
+      'profile.city': profile?.city
+    })
+
     // Ports à collecter (port_du non encaissés, livrés ou en cours de livraison, SAUF retournés)
     const portsACollecter = dataSource.filter((p: any) =>
       p.portType === 'port_du' &&
@@ -343,6 +359,14 @@ export default function CaisseChefTab() {
 
     const soldeAVerser = Math.max(0, totalCollecte - totalVerse)
 
+    console.log('✅ [stats] RÉSULTAT:', {
+      'portsACollecter': portsACollecter.length,
+      'portsCollectes': portsCollectes.length,
+      'totalCollecte': totalCollecte,
+      'totalVerse': totalVerse,
+      'soldeAVerser': soldeAVerser
+    })
+
     return {
       portsACollecterCount: portsACollecter.length,
       portsACollecterMontant: portsACollecter.reduce((sum: number, p: any) =>
@@ -353,7 +377,7 @@ export default function CaisseChefTab() {
       enRetardCount: enRetard.length,
       soldeAVerser,
     }
-  }, [dataSource, adminTransfers, profile?.city, modifiedParcels, statsUpdateCounter])
+  }, [dataSource, adminTransfers, profile?.city])
 
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
@@ -799,6 +823,13 @@ export default function CaisseChefTab() {
       return
     }
 
+    console.log('🔵 [handleCollectPort] DÉBUT:', {
+      parcelId: parcel.id,
+      nic: parcel.senderNic || parcel.trackingId,
+      price: parcel.price,
+      currentPortStatus: parcel.portStatus
+    })
+
     setCollectingPortIds(prev => new Set(prev).add(parcel.id))
     try {
       const updatedData = {
@@ -809,33 +840,50 @@ export default function CaisseChefTab() {
         portDuReceivedMethod: 'especes',
       }
 
-      // Mise à jour optimiste pour affichage instantané
+      console.log('🟢 [handleCollectPort] MISE À JOUR avec:', updatedData)
+
+      // SOLUTION SIMPLIFIÉE : Une seule source de vérité via modifiedParcels
+      // Cela garantit que dataSource recalcule immédiatement
+      setModifiedParcels(prev => {
+        const updated = { ...prev, [parcel.id]: updatedData }
+        console.log('🟡 [handleCollectPort] modifiedParcels mis à jour:', {
+          parcelId: parcel.id,
+          totalModified: Object.keys(updated).length
+        })
+        return updated
+      })
+
+      // Mise à jour optimiste pour le contexte (pour d'autres composants)
       updateParcelOptimistic(parcel.id, updatedData)
 
-      // 🔄 Ajouter au cache local des modifications
-      setModifiedParcels(prev => ({ ...prev, [parcel.id]: updatedData }))
-
-      // 🔄 Mise à jour locale de searchResults pour recalcul immédiat des stats
+      // Mise à jour de searchResults si en mode recherche (pour cohérence)
       if (searchResults) {
         setSearchResults(prev =>
           prev ? prev.map(p =>
             p.id === parcel.id ? { ...p, ...updatedData } : p
           ) : prev
         )
+        console.log('🔵 [handleCollectPort] searchResults mis à jour')
       }
 
-      // Forcer le recalcul des stats
-      setStatsUpdateCounter(prev => prev + 1)
-
+      console.log('🟢 [handleCollectPort] Appel Firebase collectPortDu...')
       await collectPortDu(
         parcel.id,
         profile?.name || '',
         uid || ''
       )
+      console.log('✅ [handleCollectPort] Firebase OK')
     } catch (err: any) {
-      console.error('Erreur collecte port:', err)
+      console.error('❌ [handleCollectPort] ERREUR:', err)
       alert(`❌ Erreur: ${err.message}`)
-      // Annuler la mise à jour optimiste en cas d'erreur
+
+      // Annuler TOUTES les mises à jour en cas d'erreur
+      setModifiedParcels(prev => {
+        const updated = { ...prev }
+        delete updated[parcel.id]
+        return updated
+      })
+
       updateParcelOptimistic(parcel.id, {
         portStatus: null,
         portCollectedBy: null,
@@ -843,12 +891,21 @@ export default function CaisseChefTab() {
         portCollectedAt: null,
         portDuReceivedMethod: null,
       })
+
+      if (searchResults) {
+        setSearchResults(prev =>
+          prev ? prev.map(p =>
+            p.id === parcel.id ? { ...p, portStatus: null } : p
+          ) : prev
+        )
+      }
     } finally {
       setCollectingPortIds(prev => {
         const newSet = new Set(prev)
         newSet.delete(parcel.id)
         return newSet
       })
+      console.log('🏁 [handleCollectPort] FIN')
     }
   }
 
@@ -857,6 +914,12 @@ export default function CaisseChefTab() {
     if (!confirm(`Annuler la collecte du port de ${fmtAmt(parcel.price)} DH pour l'expédition ${parcel.senderNic || parcel.trackingId} ?`)) {
       return
     }
+
+    console.log('🔵 [handleUncollectPort] DÉBUT:', {
+      parcelId: parcel.id,
+      nic: parcel.senderNic || parcel.trackingId,
+      currentPortStatus: parcel.portStatus
+    })
 
     setCollectingPortIds(prev => new Set(prev).add(parcel.id))
     try {
@@ -868,42 +931,66 @@ export default function CaisseChefTab() {
         portDuReceivedMethod: null,
       }
 
-      // Mise à jour optimiste pour affichage instantané
+      console.log('🟢 [handleUncollectPort] ANNULATION avec:', updatedData)
+
+      // SOLUTION SIMPLIFIÉE : Supprimer du cache pour revenir à l'état Firebase
+      setModifiedParcels(prev => {
+        const updated = { ...prev }
+        delete updated[parcel.id]
+        console.log('🟡 [handleUncollectPort] modifiedParcels nettoyé:', {
+          parcelId: parcel.id,
+          totalModified: Object.keys(updated).length
+        })
+        return updated
+      })
+
+      // Mise à jour optimiste pour le contexte
       updateParcelOptimistic(parcel.id, updatedData)
 
-      // 🔄 Ajouter au cache local des modifications
-      setModifiedParcels(prev => ({ ...prev, [parcel.id]: updatedData }))
-
-      // 🔄 Mise à jour locale de searchResults pour recalcul immédiat des stats
+      // Mise à jour de searchResults si en mode recherche
       if (searchResults) {
         setSearchResults(prev =>
           prev ? prev.map(p =>
             p.id === parcel.id ? { ...p, ...updatedData } : p
           ) : prev
         )
+        console.log('🔵 [handleUncollectPort] searchResults mis à jour')
       }
 
-      // Forcer le recalcul des stats
-      setStatsUpdateCounter(prev => prev + 1)
-
+      console.log('🟢 [handleUncollectPort] Appel Firebase uncollectPortDu...')
       await uncollectPortDu(parcel.id)
+      console.log('✅ [handleUncollectPort] Firebase OK')
     } catch (err: any) {
-      console.error('Erreur annulation collecte:', err)
+      console.error('❌ [handleUncollectPort] ERREUR:', err)
       alert(`❌ Erreur: ${err.message}`)
+
       // Restaurer l'état en cas d'erreur
-      updateParcelOptimistic(parcel.id, {
+      const restoredData = {
         portStatus: 'collected',
         portCollectedBy: parcel.portCollectedBy,
         portCollectedById: parcel.portCollectedById,
         portCollectedAt: parcel.portCollectedAt,
         portDuReceivedMethod: parcel.portDuReceivedMethod,
-      })
+      }
+
+      setModifiedParcels(prev => ({ ...prev, [parcel.id]: restoredData }))
+
+      updateParcelOptimistic(parcel.id, restoredData)
+
+      if (searchResults) {
+        setSearchResults(prev =>
+          prev ? prev.map(p =>
+            p.id === parcel.id ? { ...p, ...restoredData } : p
+          ) : prev
+        )
+      }
     } finally {
       setCollectingPortIds(prev => {
         const newSet = new Set(prev)
         newSet.delete(parcel.id)
         return newSet
       })
+      console.log('🏁 [handleUncollectPort] FIN')
     }
   }
 
@@ -912,6 +999,12 @@ export default function CaisseChefTab() {
     if (!confirm(`Confirmer la livraison de l'expédition ${parcel.senderNic || parcel.trackingId} ?`)) {
       return
     }
+
+    console.log('🔵 [handleMarkAsDelivered] DÉBUT:', {
+      parcelId: parcel.id,
+      nic: parcel.senderNic || parcel.trackingId,
+      currentStatus: parcel.status
+    })
 
     setDeliveringParcelIds(prev => new Set(prev).add(parcel.id))
     try {
@@ -923,42 +1016,64 @@ export default function CaisseChefTab() {
         deliveredById: uid || '',
       }
 
-      // Mise à jour optimiste pour affichage instantané
-      updateParcelOptimistic(parcel.id, {
-        status: 'Livré',
-        deliveredAt: now,
+      console.log('🟢 [handleMarkAsDelivered] MISE À JOUR avec:', updatedData)
+
+      // SOLUTION SIMPLIFIÉE : Une seule source de vérité via modifiedParcels
+      setModifiedParcels(prev => {
+        const updated = { ...prev, [parcel.id]: updatedData }
+        console.log('🟡 [handleMarkAsDelivered] modifiedParcels mis à jour:', {
+          parcelId: parcel.id,
+          totalModified: Object.keys(updated).length
+        })
+        return updated
       })
 
-      // 🔄 Ajouter au cache local des modifications
-      setModifiedParcels(prev => ({ ...prev, [parcel.id]: updatedData }))
+      // Mise à jour optimiste pour le contexte
+      updateParcelOptimistic(parcel.id, updatedData)
 
-      // 🔄 Mise à jour locale de searchResults pour recalcul immédiat des stats
+      // Mise à jour de searchResults si en mode recherche
       if (searchResults) {
         setSearchResults(prev =>
           prev ? prev.map(p =>
             p.id === parcel.id ? { ...p, ...updatedData } : p
           ) : prev
         )
+        console.log('🔵 [handleMarkAsDelivered] searchResults mis à jour')
       }
 
-      // Mise à jour dans Firestore
+      console.log('🟢 [handleMarkAsDelivered] Appel Firebase updateParcel...')
       await updateParcel(parcel.id, updatedData)
-
-      console.log('✅ Expédition marquée comme livrée:', parcel.id)
+      console.log('✅ [handleMarkAsDelivered] Firebase OK')
     } catch (err: any) {
-      console.error('❌ Erreur livraison:', err)
+      console.error('❌ [handleMarkAsDelivered] ERREUR:', err)
       alert(`❌ Erreur lors de la livraison: ${err.message}`)
-      // Restaurer l'état en cas d'erreur
+
+      // Annuler TOUTES les mises à jour en cas d'erreur
+      setModifiedParcels(prev => {
+        const updated = { ...prev }
+        delete updated[parcel.id]
+        return updated
+      })
+
       updateParcelOptimistic(parcel.id, {
         status: parcel.status,
         deliveredAt: parcel.deliveredAt,
       })
+
+      if (searchResults) {
+        setSearchResults(prev =>
+          prev ? prev.map(p =>
+            p.id === parcel.id ? { ...p, status: parcel.status } : p
+          ) : prev
+        )
+      }
     } finally {
       setDeliveringParcelIds(prev => {
         const newSet = new Set(prev)
         newSet.delete(parcel.id)
         return newSet
       })
+      console.log('🏁 [handleMarkAsDelivered] FIN')
     }
   }
 
@@ -1377,7 +1492,7 @@ export default function CaisseChefTab() {
 
                                       {parcel.status === 'En cours de livraison' && (
                                         <button
-                                          onClick={() => handleDeliverParcel(parcel)}
+                                          onClick={() => handleMarkAsDelivered(parcel)}
                                           disabled={deliveringParcelIds.has(parcel.id)}
                                           className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition disabled:opacity-50"
                                         >
