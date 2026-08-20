@@ -69,7 +69,7 @@ export default function CaisseChefTab() {
   const [searching, setSearching] = useState(false)
 
   // Cache local des modifications faites dans searchResults
-  const [modifiedParcels, setModifiedParcels] = useState<Map<string, any>>(new Map())
+  const [modifiedParcels, setModifiedParcels] = useState<Record<string, any>>({})
 
   // État livreurs
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set())
@@ -142,7 +142,7 @@ export default function CaisseChefTab() {
     }
 
     // Nouvelle recherche déclenchée : vider le cache des modifications précédentes
-    setModifiedParcels(new Map())
+    setModifiedParcels({})
 
     let unsubscribeRealtime: (() => void) | null = null
 
@@ -324,9 +324,9 @@ export default function CaisseChefTab() {
     let source = parcels
 
     // Appliquer d'abord le cache des modifications locales
-    if (modifiedParcels.size > 0) {
+    if (Object.keys(modifiedParcels).length > 0) {
       source = parcels.map((p: any) => {
-        const modified = modifiedParcels.get(p.id)
+        const modified = modifiedParcels[p.id]
         return modified ? { ...p, ...modified } : p
       })
     }
@@ -804,7 +804,7 @@ export default function CaisseChefTab() {
       updateParcelOptimistic(parcel.id, updatedData)
 
       // 🔄 Ajouter au cache local des modifications
-      setModifiedParcels(prev => new Map(prev).set(parcel.id, updatedData))
+      setModifiedParcels(prev => ({ ...prev, [parcel.id]: updatedData }))
 
       // 🔄 Mise à jour locale de searchResults pour recalcul immédiat des stats
       if (searchResults) {
@@ -860,7 +860,7 @@ export default function CaisseChefTab() {
       updateParcelOptimistic(parcel.id, updatedData)
 
       // 🔄 Ajouter au cache local des modifications
-      setModifiedParcels(prev => new Map(prev).set(parcel.id, updatedData))
+      setModifiedParcels(prev => ({ ...prev, [parcel.id]: updatedData }))
 
       // 🔄 Mise à jour locale de searchResults pour recalcul immédiat des stats
       if (searchResults) {
@@ -915,7 +915,7 @@ export default function CaisseChefTab() {
       })
 
       // 🔄 Ajouter au cache local des modifications
-      setModifiedParcels(prev => new Map(prev).set(parcel.id, updatedData))
+      setModifiedParcels(prev => ({ ...prev, [parcel.id]: updatedData }))
 
       // 🔄 Mise à jour locale de searchResults pour recalcul immédiat des stats
       if (searchResults) {
