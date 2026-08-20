@@ -1309,7 +1309,7 @@ export default function CaisseChefTab() {
                                 {fmtAmt(parcel.price)} DH
                               </td>
                               <td className="py-2 px-3 text-center">
-                                {(parcel.returnedAt || parcel.wasReturned) ? (
+                                {(parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné') ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-semibold">
                                     <X className="w-3 h-3" />
                                     Retourné
@@ -1338,7 +1338,7 @@ export default function CaisseChefTab() {
                               </td>
                               <td className="py-2 px-3 text-center">
                                 <div className="flex items-center justify-center gap-2">
-                                  {(parcel.returnedAt || parcel.wasReturned) ? (
+                                  {(parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné') ? (
                                     <span className="text-xs text-gray-500 italic">-</span>
                                   ) : isPortDu && (
                                     <>
