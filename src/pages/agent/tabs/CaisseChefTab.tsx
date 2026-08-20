@@ -180,11 +180,6 @@ export default function CaisseChefTab() {
 
                 return updated
               })
-
-              // 🔄 Mettre à jour aussi le contexte global pour rafraîchir les stats
-              updatedParcels.forEach((updatedParcel: any) => {
-                updateParcelOptimistic(updatedParcel.id, updatedParcel)
-              })
             }, (error) => {
               console.error('❌ Erreur listener temps réel:', error)
             })
@@ -258,8 +253,30 @@ export default function CaisseChefTab() {
 
   // Calcul des statistiques
   const stats = useMemo(() => {
+    // 🔄 Source de données : merge parcels avec searchResults pour stats à jour
+    let dataSource = parcels
+
+    // Si en mode recherche, merger les données de searchResults dans parcels
+    if (searchResults && searchResults.length > 0) {
+      const searchIds = new Set(searchResults.map((p: any) => p.id))
+      // Remplacer les parcels qui sont dans searchResults par leur version à jour
+      dataSource = parcels.map((p: any) => {
+        if (searchIds.has(p.id)) {
+          return searchResults.find((sr: any) => sr.id === p.id) || p
+        }
+        return p
+      })
+
+      // Ajouter les parcels de searchResults qui ne sont pas dans parcels
+      searchResults.forEach((sr: any) => {
+        if (!parcels.find((p: any) => p.id === sr.id)) {
+          dataSource.push(sr)
+        }
+      })
+    }
+
     // Ports à collecter (port_du non encaissés, livrés ou en cours de livraison)
-    const portsACollecter = parcels.filter((p: any) =>
+    const portsACollecter = dataSource.filter((p: any) =>
       p.portType === 'port_du' &&
       !p.portStatus &&
       (p.status === 'En cours de livraison' || p.status === 'Livré') &&
@@ -267,7 +284,7 @@ export default function CaisseChefTab() {
     )
 
     // Ports collectés (ceux avec portStatus 'collected' ou 'received')
-    const portsCollectes = parcels.filter((p: any) =>
+    const portsCollectes = dataSource.filter((p: any) =>
       p.portType === 'port_du' &&
       !p.portPayeMethod &&
       (p.portStatus === 'collected' || p.portStatus === 'received') &&
@@ -277,7 +294,7 @@ export default function CaisseChefTab() {
     // Expéditions en retard (en cours de livraison depuis >24h)
     const now = new Date()
     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-    const enRetard = parcels.filter((p: any) => {
+    const enRetard = dataSource.filter((p: any) => {
       if (p.status !== 'En cours de livraison') return false
       if (!p.deliveryAssignedAt) return false
       const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
@@ -305,7 +322,7 @@ export default function CaisseChefTab() {
       enRetardCount: enRetard.length,
       soldeAVerser,
     }
-  }, [parcels, adminTransfers, profile?.city])
+  }, [parcels, searchResults, adminTransfers, profile?.city])
 
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
