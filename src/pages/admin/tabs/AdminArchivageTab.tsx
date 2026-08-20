@@ -159,7 +159,7 @@ export default function AdminArchivageTab() {
   const [autoArchiveResult, setAutoArchiveResult] = useState<any>(null)
 
   const handleAutoArchiving = async () => {
-    const confirmMessage = `🗄️ ARCHIVAGE AUTOMATIQUE\n\nMarquer comme archivés tous les colis:\n• Livrés, Retournés, Annulés\n• De plus de 30 jours\n• COD payé (pour livrés)\n\nLes colis resteront accessibles via recherche.\n\nContinuer?`
+    const confirmMessage = `🗄️ ARCHIVAGE AUTOMATIQUE\n\nMarquer comme archivés tous les colis:\n• TOUS statuts (Livré, En transit, Arrivé, etc.)\n• De plus de 30 jours\n• COD payé (pour livrés uniquement)\n\nLes colis resteront accessibles via recherche.\n\nContinuer?`
 
     if (!confirm(confirmMessage)) return
 
@@ -379,8 +379,8 @@ export default function AdminArchivageTab() {
             <strong className="text-green-700">Archivage soft:</strong> Marque les vieux colis comme archivés sans les supprimer.
           </p>
           <ul className="text-sm text-gray-600 space-y-1 ml-5 list-disc">
-            <li>Colis <strong>Livrés, Retournés, Annulés</strong> de <strong>+30 jours</strong></li>
-            <li>COD payé vérifié pour les livrés</li>
+            <li><strong>TOUS statuts</strong> (Livré, En transit, Arrivé, Retour, etc.) de <strong>+30 jours</strong></li>
+            <li>COD payé vérifié pour les livrés (protection comptable)</li>
             <li>Accessibles via recherche avec checkbox "Inclure archives"</li>
             <li>⚡ Allège le site de ~70-80%</li>
           </ul>

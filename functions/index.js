@@ -1456,7 +1456,6 @@ exports.deleteArchive = onCall({ maxInstances: 1, timeoutSeconds: 540 }, async (
 async function runWeeklyArchiving() {
   console.log('🗄️  Démarrage archivage automatique...')
 
-  const ARCHIVABLE_STATUSES = ['Livré', 'Retourné', 'Annulé']
   const DAYS_THRESHOLD = 30
   const BATCH_SIZE = 100
 
@@ -1465,73 +1464,71 @@ async function runWeeklyArchiving() {
   const cutoffTimestamp = Timestamp.fromDate(cutoffDate)
 
   let totalArchived = 0
+  let hasMore = true
 
-  for (const status of ARCHIVABLE_STATUSES) {
-    console.log(`📦 Archivage des colis "${status}" de +${DAYS_THRESHOLD} jours...`)
+  console.log(`📦 Archivage de TOUS les colis de +${DAYS_THRESHOLD} jours (tous statuts)...`)
 
-    let hasMore = true
-    while (hasMore) {
-      // Chercher les colis éligibles
-      const query = db.collection('parcels')
-        .where('status', '==', status)
-        .where('createdAt', '<', cutoffTimestamp)
-        .limit(BATCH_SIZE)
+  while (hasMore) {
+    // Chercher tous les colis de +30 jours (TOUS statuts)
+    const query = db.collection('parcels')
+      .where('createdAt', '<', cutoffTimestamp)
+      .orderBy('createdAt')
+      .limit(BATCH_SIZE)
 
-      const snapshot = await query.get()
+    const snapshot = await query.get()
 
-      if (snapshot.empty) {
-        hasMore = false
-        break
+    if (snapshot.empty) {
+      hasMore = false
+      break
+    }
+
+    // Filtrer déjà archivés et COD non payé
+    const batch = db.batch()
+    let batchCount = 0
+
+    snapshot.docs.forEach(doc => {
+      const data = doc.data()
+
+      // Skip si déjà archivé
+      if (data.isArchived) {
+        return
       }
 
-      // Filtrer les colis avec COD non payé (si Livré) et déjà archivés
-      const batch = db.batch()
-      let batchCount = 0
-
-      snapshot.docs.forEach(doc => {
-        const data = doc.data()
-
-        // Skip si déjà archivé
-        if (data.isArchived) {
-          return
+      // Si "Livré" avec COD, vérifier si payé (pour éviter problèmes comptables)
+      if (data.status === 'Livré' && data.codAmount > 0) {
+        const codPaid = data.codStatus === 'settled' || data.codStatus === 'paid'
+        if (!codPaid) {
+          return // Ne pas archiver si COD non payé
         }
+      }
 
-        // Si "Livré" avec COD, vérifier si payé
-        if (status === 'Livré' && data.codAmount > 0) {
-          const codPaid = data.codStatus === 'settled' || data.codStatus === 'paid'
-          if (!codPaid) {
-            return // Ne pas archiver si COD non payé
-          }
-        }
-
-        // Marquer comme archivé
-        batch.update(doc.ref, {
-          isArchived: true,
-          archivedAt: new Date().toISOString(),
-          archivedBy: 'auto-system'
-        })
-        batchCount++
+      // Marquer comme archivé
+      batch.update(doc.ref, {
+        isArchived: true,
+        archivedAt: new Date().toISOString(),
+        archivedBy: 'auto-system'
       })
+      batchCount++
+    })
 
-      if (batchCount > 0) {
-        await batch.commit()
-        totalArchived += batchCount
-        console.log(`✅ ${totalArchived} colis archivés (${status})...`)
-      } else {
-        // Aucun colis archivé dans ce batch = tous déjà archivés, arrêter
-        hasMore = false
-        break
-      }
+    if (batchCount > 0) {
+      await batch.commit()
+      totalArchived += batchCount
+      console.log(`✅ ${totalArchived} colis archivés...`)
+    } else {
+      // Aucun colis archivé dans ce batch = tous déjà archivés, arrêter
+      hasMore = false
+      break
+    }
 
-      // Si batch incomplet, on a fini pour ce statut
-      if (snapshot.size < BATCH_SIZE) {
-        hasMore = false
-      }
+    // Si batch incomplet, on a fini
+    if (snapshot.size < BATCH_SIZE) {
+      hasMore = false
+    }
 
-      // Pause anti-throttling
-      if (snapshot.size === BATCH_SIZE && hasMore) {
-        await new Promise(resolve => setTimeout(resolve, 500))
-      }
+    // Pause anti-throttling
+    if (snapshot.size === BATCH_SIZE && hasMore) {
+      await new Promise(resolve => setTimeout(resolve, 500))
     }
   }
 
@@ -1541,7 +1538,7 @@ async function runWeeklyArchiving() {
   await db.collection('director_logs').add({
     type: 'auto_archiving',
     action: 'Archivage automatique hebdomadaire',
-    details: { totalArchived, daysThreshold: DAYS_THRESHOLD, statuses: ARCHIVABLE_STATUSES },
+    details: { totalArchived, daysThreshold: DAYS_THRESHOLD, allStatuses: true },
     userId: 'system',
     userName: 'Système automatique',
     timestamp: FieldValue.serverTimestamp()
