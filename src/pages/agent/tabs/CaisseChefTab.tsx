@@ -1194,6 +1194,7 @@ export default function CaisseChefTab() {
                 <h3 className="font-semibold text-gray-900 flex items-center gap-2">
                   <Search className="w-5 h-5 text-blue-600" />
                   Résultats de recherche
+                  <span className="text-xs bg-green-500 text-white px-2 py-1 rounded">v2024</span>
                   {statusFilter !== 'all' && (
                     <span className="text-xs px-2 py-1 bg-blue-600 text-white rounded">
                       {statusFilter === 'a_collecter' ? 'À collecter' :
