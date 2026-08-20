@@ -1306,7 +1306,12 @@ export default function CaisseChefTab() {
                                 {fmtAmt(parcel.price)} DH
                               </td>
                               <td className="py-2 px-3 text-center">
-                                {!isPortDu && (parcel.portType === 'port_en_compte_destinataire' || parcel.portType === 'port_en_compte_expediteur') ? (
+                                {parcel.status === 'Retourné' ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-semibold">
+                                    <X className="w-3 h-3" />
+                                    Retourné
+                                  </span>
+                                ) : !isPortDu && (parcel.portType === 'port_en_compte_destinataire' || parcel.portType === 'port_en_compte_expediteur') ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-semibold">
                                     <Check className="w-3 h-3" />
                                     En compte
@@ -1330,7 +1335,9 @@ export default function CaisseChefTab() {
                               </td>
                               <td className="py-2 px-3 text-center">
                                 <div className="flex items-center justify-center gap-2">
-                                  {isPortDu && (
+                                  {parcel.status === 'Retourné' ? (
+                                    <span className="text-xs text-gray-500 italic">-</span>
+                                  ) : isPortDu && (
                                     <>
                                       <button
                                         onClick={() => isCollected ? handleUncollectPort(parcel) : handleCollectPort(parcel)}
@@ -1534,7 +1541,12 @@ export default function CaisseChefTab() {
                                     {fmtAmt(parcel.price)} DH
                                   </td>
                                   <td className="py-2 px-3 text-center">
-                                    {!isPortDu && (parcel.portType === 'port_en_compte_destinataire' || parcel.portType === 'port_en_compte_expediteur') ? (
+                                    {parcel.status === 'Retourné' ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-semibold">
+                                        <X className="w-3 h-3" />
+                                        Retourné
+                                      </span>
+                                    ) : !isPortDu && (parcel.portType === 'port_en_compte_destinataire' || parcel.portType === 'port_en_compte_expediteur') ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-semibold">
                                         <Check className="w-3 h-3" />
                                         En compte
