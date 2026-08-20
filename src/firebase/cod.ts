@@ -198,13 +198,54 @@ export async function fetchAllAgentCodParcels(agentId: string) {
   return [...all.values()].filter(p => parseFloat(p.codAmount) > 0)
 }
 export async function collectPortDu(parcelId: string, agentName: string, agentId: string) {
-  await updateDoc(doc(db, 'parcels', parcelId), {
+  const updates = {
     portStatus:          'collected',
     portCollectedBy:     agentName,
     portCollectedById:   agentId,
     portCollectedAt:     serverTimestamp(),
     portDuReceivedMethod: 'especes', // Par défaut espèces pour cette fonction
-  })
+  }
+
+  await updateDoc(doc(db, 'parcels', parcelId), updates)
+
+  // 🔄 TEMPS RÉEL: Émettre événement pour synchronisation cross-tab
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('parcelUpdated', {
+      detail: {
+        parcelId,
+        updates: { ...updates, portCollectedAt: new Date() }, // Convertir timestamp pour l'événement
+        timestamp: new Date().toISOString(),
+        source: 'database'
+      }
+    }))
+  }
+}
+
+/**
+ * Annuler la collecte d'un port dû
+ */
+export async function uncollectPortDu(parcelId: string) {
+  const updates = {
+    portStatus:          null,
+    portCollectedBy:     null,
+    portCollectedById:   null,
+    portCollectedAt:     null,
+    portDuReceivedMethod: null,
+  }
+
+  await updateDoc(doc(db, 'parcels', parcelId), updates)
+
+  // 🔄 TEMPS RÉEL: Émettre événement pour synchronisation cross-tab
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('parcelUpdated', {
+      detail: {
+        parcelId,
+        updates,
+        timestamp: new Date().toISOString(),
+        source: 'database'
+      }
+    }))
+  }
 }
 
 /**
@@ -238,7 +279,7 @@ export async function collectPortDuCheque(
   }
 
   // Mettre à jour avec les détails du chèque
-  await updateDoc(parcelRef, {
+  const updates = {
     portStatus: 'collected',
     portCollectedBy: collectedBy,
     portCollectedById: collectedById,
@@ -249,7 +290,21 @@ export async function collectPortDuCheque(
     portDuChequeDateEncaissement: details.dateEncaissement,
     portDuChequeFinalizedAt: new Date().toISOString(),
     portDuChequeFinalizedBy: collectedBy,
-  })
+  }
+
+  await updateDoc(parcelRef, updates)
+
+  // 🔄 TEMPS RÉEL: Émettre événement pour synchronisation cross-tab
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('parcelUpdated', {
+      detail: {
+        parcelId,
+        updates: { ...updates, portCollectedAt: new Date() },
+        timestamp: new Date().toISOString(),
+        source: 'database'
+      }
+    }))
+  }
 }
 
 /**

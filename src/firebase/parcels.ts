@@ -454,10 +454,15 @@ export async function updateParcel(parcelId: string, data: Partial<Parcel> & Rec
   await updateDoc(doc(db, 'parcels', parcelId), data)
   await syncParcelSnapshotInArrivages(parcelId, data)
 
-  // Émettre un événement pour synchronisation temps réel entre les pages
+  // 🔄 TEMPS RÉEL: Émettre un événement pour synchronisation immédiate entre les pages/onglets
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('parcelUpdated', {
-      detail: { parcelId, data, timestamp: new Date().toISOString() }
+      detail: {
+        parcelId,
+        updates: data,
+        timestamp: new Date().toISOString(),
+        source: 'database' // Écriture directe dans Firestore
+      }
     }))
   }
 }

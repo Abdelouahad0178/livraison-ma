@@ -16,6 +16,8 @@ import {
   updateDeliveryDelay,
   subscribeDeliveryDelays
 } from '../../../firebase/delivery'
+import { collectPortDu, uncollectPortDu } from '../../../firebase/cod'
+import { updateParcel } from '../../../firebase/parcels'
 
 // Types
 interface DelayReason {
@@ -37,7 +39,15 @@ export default function CaisseChefTab() {
     profile,
     parcels,
     agentEntries,
+    updateParcelOptimistic,
   } = useAgentCtx()
+
+  // DEBUG: Log au chargement du composant
+  console.error('🔍 [CaisseChefTab] DONNÉES AU CHARGEMENT:', {
+    'Nombre parcels': parcels?.length || 0,
+    'Ville': profile?.city,
+    'Rôle': profile?.role
+  })
 
   // État des onglets
   const [activeTab, setActiveTab] = useState<'livreurs' | 'versements' | 'historique'>('livreurs')
@@ -62,6 +72,12 @@ export default function CaisseChefTab() {
   const [sendingVersement, setSendingVersement] = useState(false)
   const [adminTransfers, setAdminTransfers] = useState<any[]>([])
   const [deliveryDelays, setDeliveryDelays] = useState<any[]>([])
+
+  // État collecte ports
+  const [collectingPortIds, setCollectingPortIds] = useState<Set<string>>(new Set())
+
+  // État livraison
+  const [deliveringParcelIds, setDeliveringParcelIds] = useState<Set<string>>(new Set())
 
   // Vérification du rôle
   const isChef = profile?.role === 'chef_agence'
@@ -109,11 +125,12 @@ export default function CaisseChefTab() {
       p.destinationCity === profile?.city
     )
 
-    // Ports collectés (entrées caisse type 'recette' catégorie 'port_du')
-    const portsCollectesEntries = agentEntries.filter((e: any) =>
-      e.type === 'entree' &&
-      e.category === 'port_du' &&
-      e.city === profile?.city
+    // Ports collectés (ceux avec portStatus 'collected' ou 'received')
+    const portsCollectes = parcels.filter((p: any) =>
+      p.portType === 'port_du' &&
+      !p.portPayeMethod &&
+      (p.portStatus === 'collected' || p.portStatus === 'received') &&
+      p.destinationCity === profile?.city
     )
 
     // Expéditions en retard (en cours de livraison depuis >24h)
@@ -127,8 +144,8 @@ export default function CaisseChefTab() {
     })
 
     // Solde à verser (total collecté - total versé)
-    const totalCollecte = portsCollectesEntries.reduce((sum: number, e: any) =>
-      sum + safeParseAmount(e.amount), 0
+    const totalCollecte = portsCollectes.reduce((sum: number, p: any) =>
+      sum + safeParseAmount(p.price), 0
     )
 
     const totalVerse = adminTransfers
@@ -142,15 +159,30 @@ export default function CaisseChefTab() {
       portsACollecterMontant: portsACollecter.reduce((sum: number, p: any) =>
         sum + safeParseAmount(p.price), 0
       ),
-      portsCollectes: portsCollectesEntries.length,
+      portsCollectes: portsCollectes.length,
       portsCollectesMontant: totalCollecte,
       enRetardCount: enRetard.length,
       soldeAVerser,
     }
-  }, [parcels, agentEntries, adminTransfers, profile?.city])
+  }, [parcels, adminTransfers, profile?.city])
 
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
+    // DEBUG: Vérifier les données au chargement
+    const withDriver = parcels.filter((p: any) => p.deliveryDriverId).length
+    const inCity = parcels.filter((p: any) => p.destinationCity === profile?.city).length
+    const both = parcels.filter((p: any) =>
+      p.deliveryDriverId && p.destinationCity === profile?.city
+    ).length
+
+    console.error('📊 [CaisseChefTab] CALCUL LIVREURS:', {
+      '1️⃣ Total parcels': parcels.length,
+      '2️⃣ Ville profil': profile?.city,
+      '3️⃣ Avec deliveryDriverId': withDriver,
+      '4️⃣ Dans cette ville': inCity,
+      '5️⃣ Avec driver ET dans ville': both
+    })
+
     const driversMap = new Map()
 
     parcels.forEach((p: any) => {
@@ -166,14 +198,35 @@ export default function CaisseChefTab() {
       }
     })
 
+    // Ajouter les expéditions sans livreur (reçues OU locales, non assignées)
+    const unknownParcels = parcels.filter((p: any) => {
+      return (
+        !p.deliveryDriverId &&
+        p.destinationCity === profile?.city &&  // Destination = ma ville (inclut locales + reçues)
+        p.status === 'Arrivé en agence' &&  // Uniquement "Arrivé en agence"
+        p.status !== 'En cours de livraison' &&  // Exclusions explicites
+        p.status !== 'Livré' &&
+        p.status !== 'Retourné'
+      )
+    })
+
+    if (unknownParcels.length > 0) {
+      driversMap.set('unknown', {
+        id: 'unknown',
+        name: '📦 Non assigné',
+        parcels: unknownParcels,
+      })
+    }
+
     return Array.from(driversMap.values()).map(driver => {
       // Séparer les ports dû pour les calculs de collecte
       // IMPORTANT: Le livreur livre TOUTES les expéditions (port payé + port dû)
       // mais ne collecte de l'argent QUE pour les ports dû
 
       // LOGIQUE ROBUSTE : Une expédition est PORT DÛ si :
-      // 1. portType === 'port_du' ET
+      // 1. portType === 'port_du' (exclu automatiquement port_en_compte_destinataire) ET
       // 2. portPayeMethod n'est PAS défini (sinon c'est un port payé)
+      // Note: Les clients en compte (port_en_compte_*) sont traités comme port payé
       const portDuParcels = driver.parcels.filter((p: any) =>
         p.portType === 'port_du' && !p.portPayeMethod
       )
@@ -210,10 +263,9 @@ export default function CaisseChefTab() {
         (p.status === 'En cours de livraison' || p.status === 'Livré')
       )
 
-      const portsCollectes = agentEntries.filter((e: any) =>
-        e.type === 'entree' &&
-        e.category === 'port_du' &&
-        portDuParcels.some((p: any) => p.senderNic === e.reference)
+      // Ports collectés = ceux avec portStatus 'collected' ou 'received'
+      const portsCollectes = portDuParcels.filter((p: any) =>
+        p.portStatus === 'collected' || p.portStatus === 'received'
       )
 
       const now = new Date()
@@ -238,8 +290,8 @@ export default function CaisseChefTab() {
           sum + safeParseAmount(p.price), 0
         ),
         portsCollectesCount: portsCollectes.length,
-        portsCollectesMontant: portsCollectes.reduce((sum: number, e: any) =>
-          sum + safeParseAmount(e.amount), 0
+        portsCollectesMontant: portsCollectes.reduce((sum: number, p: any) =>
+          sum + safeParseAmount(p.price), 0
         ),
         enRetardCount: enRetard.length,
       }
@@ -248,6 +300,12 @@ export default function CaisseChefTab() {
 
   // Filtrer les livreurs
   const filteredDrivers = useMemo(() => {
+    console.error('🔍 [filteredDrivers] DÉBUT:', {
+      'Drivers total': drivers.length,
+      'datePreset': datePreset,
+      'Total parcels dans drivers': drivers.reduce((sum, d) => sum + d.parcels.length, 0)
+    })
+
     let result = drivers
 
     // Filtrer les colis de chaque livreur par date d'assignation
@@ -255,6 +313,45 @@ export default function CaisseChefTab() {
       const filteredParcels = driver.parcels.filter((p: any) => {
         // Si le filtre est 'all', montrer TOUS les colis
         if (datePreset === 'all') return true
+
+        // Pour "Non assigné", utiliser la date de création au lieu de la date d'assignation
+        if (driver.id === 'unknown') {
+          // Si le filtre est 'all', inclure TOUS les parcels de "Non assigné"
+          if (datePreset === 'all') return true
+
+          if (!p.createdAt) return false
+          const createdDate = p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt)
+
+          const now = new Date()
+          const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+
+          if (datePreset === 'today') {
+            const tomorrow = new Date(today)
+            tomorrow.setDate(tomorrow.getDate() + 1)
+            return createdDate >= today && createdDate < tomorrow
+          }
+
+          if (datePreset === '7days') {
+            const sevenDaysAgo = new Date(today)
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
+            return createdDate >= sevenDaysAgo && createdDate < new Date(today.getTime() + 24 * 60 * 60 * 1000)
+          }
+
+          if (datePreset === 'thisMonth') {
+            const firstDay = new Date(now.getFullYear(), now.getMonth(), 1)
+            const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59)
+            return createdDate >= firstDay && createdDate <= lastDay
+          }
+
+          if (datePreset === 'custom' && dateFrom && dateTo) {
+            const from = new Date(dateFrom)
+            const to = new Date(dateTo)
+            to.setHours(23, 59, 59, 999)
+            return createdDate >= from && createdDate <= to
+          }
+
+          return true
+        }
 
         // Si pas de date d'assignation, EXCLURE du filtre (ne pas inclure par défaut)
         if (!p.deliveryAssignedAt) return false
@@ -318,10 +415,9 @@ export default function CaisseChefTab() {
         (p.status === 'En cours de livraison' || p.status === 'Livré')
       )
 
-      const portsCollectes = agentEntries.filter((e: any) =>
-        e.type === 'entree' &&
-        e.category === 'port_du' &&
-        filteredPortDuParcels.some((p: any) => p.senderNic === e.reference)
+      // Ports collectés = ceux avec portStatus 'collected' ou 'received'
+      const portsCollectes = filteredPortDuParcels.filter((p: any) =>
+        p.portStatus === 'collected' || p.portStatus === 'received'
       )
 
       const now = new Date()
@@ -344,8 +440,8 @@ export default function CaisseChefTab() {
           sum + safeParseAmount(p.price), 0
         ),
         portsCollectesCount: portsCollectes.length,
-        portsCollectesMontant: portsCollectes.reduce((sum: number, e: any) =>
-          sum + safeParseAmount(e.amount), 0
+        portsCollectesMontant: portsCollectes.reduce((sum: number, p: any) =>
+          sum + safeParseAmount(p.price), 0
         ),
         enRetardCount: enRetard.length,
       }
@@ -363,8 +459,33 @@ export default function CaisseChefTab() {
       )
     }
 
+    console.error('🔍 [filteredDrivers] FIN:', {
+      'Drivers après filtrage': result.length,
+      'Total parcels après': result.reduce((sum, d) => sum + d.parcels.length, 0),
+      'Détail': result.map(d => ({ nom: d.name, parcels: d.parcels.length }))
+    })
+
     return result
   }, [drivers, driverFilter, searchQuery, datePreset, dateFrom, dateTo, agentEntries])
+
+  // Stats filtrées (selon filtres actifs)
+  const filteredStats = useMemo(() => {
+    // Agréger toutes les stats des drivers filtrés
+    const totalACollecter = filteredDrivers.reduce((sum, d) => sum + d.portsACollecterCount, 0)
+    const montantACollecter = filteredDrivers.reduce((sum, d) => sum + d.portsACollecterMontant, 0)
+    const totalCollectes = filteredDrivers.reduce((sum, d) => sum + d.portsCollectesCount, 0)
+    const montantCollectes = filteredDrivers.reduce((sum, d) => sum + d.portsCollectesMontant, 0)
+    const totalEnRetard = filteredDrivers.reduce((sum, d) => sum + d.enRetardCount, 0)
+
+    return {
+      portsACollecterCount: totalACollecter,
+      portsACollecterMontant: montantACollecter,
+      portsCollectes: totalCollectes,
+      portsCollectesMontant: montantCollectes,
+      enRetardCount: totalEnRetard,
+      soldeAVerser: montantCollectes, // Pour les filtres, solde = collecté filtré
+    }
+  }, [filteredDrivers])
 
   // Toggle expansion d'un livreur
   const toggleDriver = (driverId: string) => {
@@ -410,10 +531,10 @@ export default function CaisseChefTab() {
         // Créer un nouveau retard
         await createDeliveryDelay({
           parcelId: delayModal.parcel.id,
-          nic: delayModal.parcel.senderNic || delayModal.parcel.sender?.nic || delayModal.parcel.trackingId,
+          senderNic: delayModal.parcel.senderNic || delayModal.parcel.sender?.nic || delayModal.parcel.trackingId || 'N/A',
           driverId: delayModal.driver.id,
           driverName: delayModal.driver.name,
-          city: profile?.city,
+          city: profile?.city || '',
           reason: delayForm.reason,
           reasonDetail: delayForm.reasonDetail,
           createdBy: profile?.name || '',
@@ -446,6 +567,128 @@ export default function CaisseChefTab() {
     } catch (err: any) {
       console.error('Erreur résolution retard:', err)
       alert(`❌ Erreur: ${err.message}`)
+    }
+  }
+
+  // Collecter un port dû
+  const handleCollectPort = async (parcel: any) => {
+    if (!confirm(`Confirmer la collecte du port de ${fmtAmt(parcel.price)} DH pour l'expédition ${parcel.senderNic || parcel.trackingId} ?`)) {
+      return
+    }
+
+    setCollectingPortIds(prev => new Set(prev).add(parcel.id))
+    try {
+      // Mise à jour optimiste pour affichage instantané
+      updateParcelOptimistic(parcel.id, {
+        portStatus: 'collected',
+        portCollectedBy: profile?.name || '',
+        portCollectedById: uid || '',
+        portCollectedAt: new Date(),
+        portDuReceivedMethod: 'especes',
+      })
+
+      await collectPortDu(
+        parcel.id,
+        profile?.name || '',
+        uid || ''
+      )
+    } catch (err: any) {
+      console.error('Erreur collecte port:', err)
+      alert(`❌ Erreur: ${err.message}`)
+      // Annuler la mise à jour optimiste en cas d'erreur
+      updateParcelOptimistic(parcel.id, {
+        portStatus: null,
+        portCollectedBy: null,
+        portCollectedById: null,
+        portCollectedAt: null,
+        portDuReceivedMethod: null,
+      })
+    } finally {
+      setCollectingPortIds(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(parcel.id)
+        return newSet
+      })
+    }
+  }
+
+  // Annuler la collecte d'un port dû
+  const handleUncollectPort = async (parcel: any) => {
+    if (!confirm(`Annuler la collecte du port de ${fmtAmt(parcel.price)} DH pour l'expédition ${parcel.senderNic || parcel.trackingId} ?`)) {
+      return
+    }
+
+    setCollectingPortIds(prev => new Set(prev).add(parcel.id))
+    try {
+      // Mise à jour optimiste pour affichage instantané
+      updateParcelOptimistic(parcel.id, {
+        portStatus: null,
+        portCollectedBy: null,
+        portCollectedById: null,
+        portCollectedAt: null,
+        portDuReceivedMethod: null,
+      })
+
+      await uncollectPortDu(parcel.id)
+    } catch (err: any) {
+      console.error('Erreur annulation collecte:', err)
+      alert(`❌ Erreur: ${err.message}`)
+      // Restaurer l'état en cas d'erreur
+      updateParcelOptimistic(parcel.id, {
+        portStatus: 'collected',
+        portCollectedBy: parcel.portCollectedBy,
+        portCollectedById: parcel.portCollectedById,
+        portCollectedAt: parcel.portCollectedAt,
+        portDuReceivedMethod: parcel.portDuReceivedMethod,
+      })
+    } finally {
+      setCollectingPortIds(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(parcel.id)
+        return newSet
+      })
+    }
+  }
+
+  // Marquer une expédition comme livrée
+  const handleMarkAsDelivered = async (parcel: any) => {
+    if (!confirm(`Confirmer la livraison de l'expédition ${parcel.senderNic || parcel.trackingId} ?`)) {
+      return
+    }
+
+    setDeliveringParcelIds(prev => new Set(prev).add(parcel.id))
+    try {
+      const now = new Date()
+
+      // Mise à jour optimiste pour affichage instantané
+      updateParcelOptimistic(parcel.id, {
+        status: 'Livré',
+        deliveredAt: now,
+      })
+
+      // Mise à jour dans Firestore
+      await updateParcel(parcel.id, {
+        status: 'Livré',
+        deliveredAt: now,
+        deliveredBy: profile?.name || '',
+        deliveredById: uid || '',
+      })
+
+      console.log('✅ Expédition marquée comme livrée:', parcel.id)
+    } catch (err: any) {
+      console.error('❌ Erreur livraison:', err)
+      alert(`❌ Erreur lors de la livraison: ${err.message}`)
+      // Restaurer l'état en cas d'erreur
+      updateParcelOptimistic(parcel.id, {
+        status: parcel.status,
+        deliveredAt: parcel.deliveredAt,
+      })
+    } finally {
+      setDeliveringParcelIds(prev => {
+        const newSet = new Set(prev)
+        newSet.delete(parcel.id)
+        return newSet
+      })
     }
   }
 
@@ -523,10 +766,10 @@ export default function CaisseChefTab() {
             <span className="text-xs font-semibold text-blue-600">À collecter</span>
           </div>
           <div className="text-2xl font-bold text-blue-900">
-            {stats.portsACollecterCount}
+            {filteredStats.portsACollecterCount}
           </div>
           <div className="text-sm text-blue-700 font-medium mt-1">
-            {fmtAmt(stats.portsACollecterMontant)} DH
+            {fmtAmt(filteredStats.portsACollecterMontant)} DH
           </div>
         </div>
 
@@ -537,10 +780,10 @@ export default function CaisseChefTab() {
             <span className="text-xs font-semibold text-green-600">Collectés</span>
           </div>
           <div className="text-2xl font-bold text-green-900">
-            {stats.portsCollectes}
+            {filteredStats.portsCollectes}
           </div>
           <div className="text-sm text-green-700 font-medium mt-1">
-            {fmtAmt(stats.portsCollectesMontant)} DH
+            {fmtAmt(filteredStats.portsCollectesMontant)} DH
           </div>
         </div>
 
@@ -551,7 +794,7 @@ export default function CaisseChefTab() {
             <span className="text-xs font-semibold text-amber-600">En retard</span>
           </div>
           <div className="text-2xl font-bold text-amber-900">
-            {stats.enRetardCount}
+            {filteredStats.enRetardCount}
           </div>
           <div className="text-sm text-amber-700 font-medium mt-1">
             &gt; 24 heures
@@ -731,6 +974,8 @@ export default function CaisseChefTab() {
                         <thead>
                           <tr className="border-b border-gray-200">
                             <th className="text-left py-2 px-3 font-semibold text-gray-700">N° EXP</th>
+                            <th className="text-left py-2 px-3 font-semibold text-gray-700">Date création</th>
+                            <th className="text-left py-2 px-3 font-semibold text-gray-700">Date livraison</th>
                             <th className="text-left py-2 px-3 font-semibold text-gray-700">Client</th>
                             <th className="text-center py-2 px-3 font-semibold text-gray-700">Type</th>
                             <th className="text-right py-2 px-3 font-semibold text-gray-700">Montant</th>
@@ -761,6 +1006,16 @@ export default function CaisseChefTab() {
                                       {parcel.senderNic || parcel.sender?.nic || parcel.trackingId}
                                     </span>
                                   </td>
+                                  <td className="py-2 px-3 text-sm text-gray-600">
+                                    {parcel.createdAt?.toDate ? parcel.createdAt.toDate().toLocaleDateString('fr-FR') : '-'}
+                                  </td>
+                                  <td className="py-2 px-3 text-sm text-gray-600">
+                                    {parcel.status === 'Livré' && parcel.deliveredAt?.toDate
+                                      ? parcel.deliveredAt.toDate().toLocaleDateString('fr-FR')
+                                      : parcel.status === 'Livré' && parcel.deliveredAt
+                                        ? new Date(parcel.deliveredAt).toLocaleDateString('fr-FR')
+                                        : '-'}
+                                  </td>
                                   <td className="py-2 px-3">
                                     <div className="text-gray-900">{parcel.receiver?.name || '-'}</div>
                                     <div className="text-xs text-gray-500">{parcel.receiver?.tel || '-'}</div>
@@ -769,6 +1024,14 @@ export default function CaisseChefTab() {
                                     {isPortDu ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-orange-100 text-orange-700 text-xs font-medium">
                                         Port dû
+                                      </span>
+                                    ) : parcel.portType === 'port_en_compte_destinataire' ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-purple-100 text-purple-700 text-xs font-medium">
+                                        C/Dest
+                                      </span>
+                                    ) : parcel.portType === 'port_en_compte_expediteur' ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-700 text-xs font-medium">
+                                        C/Exp
                                       </span>
                                     ) : (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-xs font-medium">
@@ -780,7 +1043,12 @@ export default function CaisseChefTab() {
                                     {fmtAmt(parcel.price)} DH
                                   </td>
                                   <td className="py-2 px-3 text-center">
-                                    {!isPortDu ? (
+                                    {!isPortDu && (parcel.portType === 'port_en_compte_destinataire' || parcel.portType === 'port_en_compte_expediteur') ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-semibold">
+                                        <Check className="w-3 h-3" />
+                                        En compte
+                                      </span>
+                                    ) : !isPortDu ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-gray-100 text-gray-600 text-xs font-semibold">
                                         <Check className="w-3 h-3" />
                                         Déjà payé
@@ -803,18 +1071,49 @@ export default function CaisseChefTab() {
                                     )}
                                   </td>
                                   <td className="py-2 px-3 text-center">
-                                    {isPortDu && !isCollected && (
-                                      <button
-                                        onClick={() => openDelayModal(parcel, driver)}
-                                        className={`text-xs px-3 py-1 rounded-lg font-medium transition ${
-                                          delay
-                                            ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                                            : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                                        }`}
-                                      >
-                                        {delay ? 'Modifier retard' : 'Signaler retard'}
-                                      </button>
-                                    )}
+                                    <div className="flex items-center justify-center gap-2">
+                                      {isPortDu && (
+                                        <>
+                                          <button
+                                            onClick={() => isCollected ? handleUncollectPort(parcel) : handleCollectPort(parcel)}
+                                            disabled={collectingPortIds.has(parcel.id)}
+                                            className={`text-xs px-3 py-1 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed ${
+                                              isCollected
+                                                ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                                                : 'bg-green-100 text-green-700 hover:bg-green-200'
+                                            }`}
+                                          >
+                                            {collectingPortIds.has(parcel.id)
+                                              ? '...'
+                                              : isCollected
+                                                ? 'Annuler'
+                                                : 'Collecter'}
+                                          </button>
+                                          {!isCollected && (
+                                            <button
+                                              onClick={() => openDelayModal(parcel, driver)}
+                                              className={`text-xs px-3 py-1 rounded-lg font-medium transition ${
+                                                delay
+                                                  ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                                                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                              }`}
+                                            >
+                                              {delay ? 'Modifier retard' : 'Signaler retard'}
+                                            </button>
+                                          )}
+                                        </>
+                                      )}
+                                      {/* Bouton Livrer pour toutes les expéditions */}
+                                      {parcel.status !== 'Livré' && parcel.status !== 'Retourné' && (
+                                        <button
+                                          onClick={() => handleMarkAsDelivered(parcel)}
+                                          disabled={deliveringParcelIds.has(parcel.id)}
+                                          className="text-xs px-3 py-1 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed bg-blue-100 text-blue-700 hover:bg-blue-200"
+                                        >
+                                          {deliveringParcelIds.has(parcel.id) ? '...' : 'Livrer'}
+                                        </button>
+                                      )}
+                                    </div>
                                   </td>
                                 </tr>
                               )

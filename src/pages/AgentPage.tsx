@@ -673,7 +673,8 @@ export default function AgentPage() {
       codDocumentStatusFilter.length > 0
 
     const hasFilters = hasDateFilter || hasOtherFilters
-    const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
+    // Chef d'agence : toujours charger 1000 parcels pour avoir toutes les stats
+    const effectivePageSize = (hasFilters || profile?.role === 'chef_agence') ? FILTERED_PAGE_SIZE : PAGE_SIZE
 
     console.warn(`📊 CHARGEMENT AgentPage:`, {
       hasFilters,
@@ -852,6 +853,22 @@ export default function AgentPage() {
         profile.city,
         (data: any) => {
           console.log(`✅ [Chef d'agence] ${data.length} colis chargés pour ${profile.city}`)
+
+          // 🔄 TEMPS RÉEL: Les mises à jour Firestore ont TOUJOURS la priorité
+          // Émettre des événements pour chaque parcel mis à jour
+          if (typeof window !== 'undefined') {
+            data.forEach((parcel: any) => {
+              window.dispatchEvent(new CustomEvent('parcelUpdated', {
+                detail: {
+                  parcelId: parcel.id,
+                  updates: parcel,
+                  timestamp: new Date().toISOString(),
+                  source: 'firestore'
+                }
+              }))
+            })
+          }
+
           setLiveParcels(data)
           setParcels(data)
           setLoadingParcels(false)
@@ -2080,6 +2097,58 @@ export default function AgentPage() {
     return () => window.removeEventListener('keydown', handleEsc)
   }, [globalScanModal])
 
+  // 🔄 TEMPS RÉEL: Écouter les événements de mise à jour de parcels
+  useEffect(() => {
+    const handleParcelUpdate = (event: CustomEvent) => {
+      const { parcelId, updates, timestamp, source } = event.detail
+
+      console.log('🔄 [Temps réel] Événement parcelUpdated reçu:', {
+        parcelId,
+        source,
+        timestamp,
+        updates
+      })
+
+      // Les mises à jour depuis Firestore (subscription ou écriture directe) ont priorité absolue
+      if (source === 'firestore' || source === 'database') {
+        setParcels(prev => {
+          const updated = prev.map(p => {
+            if (p.id === parcelId) {
+              // Merge les updates avec le parcel existant, en supprimant le flag optimiste
+              const { _optimisticUpdate, ...cleanUpdates } = updates
+              return { ...p, ...cleanUpdates }
+            }
+            return p
+          })
+          return updated
+        })
+
+        setLiveParcels(prev => {
+          const updated = prev.map(p => {
+            if (p.id === parcelId) {
+              const { _optimisticUpdate, ...cleanUpdates } = updates
+              return { ...p, ...cleanUpdates }
+            }
+            return p
+          })
+          return updated
+        })
+
+        console.log(`✅ [Temps réel] Mise à jour ${source} appliquée pour parcel:`, parcelId)
+      } else if (source === 'optimistic') {
+        // Les mises à jour optimistes sont déjà gérées par updateParcelOptimistic dans ce composant
+        // Mais cet événement permet la sync cross-tab pour d'autres instances ouvertes
+        console.log('⏩ [Temps réel] Mise à jour optimiste cross-tab pour parcel:', parcelId)
+      }
+    }
+
+    window.addEventListener('parcelUpdated', handleParcelUpdate as EventListener)
+
+    return () => {
+      window.removeEventListener('parcelUpdated', handleParcelUpdate as EventListener)
+    }
+  }, [])
+
   // 📄 Charger plus de colis avec filtre de date
   const handleLoadMoreWithDateFilter = async () => {
     if (!lastSnapWithDateFilter || loadingMoreWithDateFilter) return
@@ -2112,6 +2181,22 @@ export default function AgentPage() {
       console.error('Erreur chargement colis supplémentaires:', error)
     } finally {
       setLoadingMoreWithDateFilter(false)
+    }
+  }
+
+  // Mise à jour optimiste d'un parcel (pour affichage instantané)
+  const updateParcelOptimistic = (parcelId: string, updates: Record<string, any>) => {
+    const timestamp = new Date().toISOString()
+
+    // Mise à jour optimiste locale
+    setParcels(prev => prev.map(p => p.id === parcelId ? { ...p, ...updates, _optimisticUpdate: timestamp } : p))
+    setLiveParcels(prev => prev.map(p => p.id === parcelId ? { ...p, ...updates, _optimisticUpdate: timestamp } : p))
+
+    // Émettre un événement pour synchronisation cross-tab/component
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('parcelUpdated', {
+        detail: { parcelId, updates, timestamp, source: 'optimistic' }
+      }))
     }
   }
 
@@ -2156,6 +2241,7 @@ export default function AgentPage() {
 
     // ── Parcels tab
     parcels, setParcels,
+    updateParcelOptimistic,
     extraParcels, setExtraParcels,
     hasMoreParcels, setHasMoreParcels,
     loadingParcels, setLoadingParcels,
