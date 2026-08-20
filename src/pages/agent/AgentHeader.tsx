@@ -140,7 +140,7 @@ export default function AgentHeader({
             { key: 'home',          label: '🏠 Accueil',                onClick: () => { setTab('home'); setCreatedParcel(null) },                                                                                hidden: false },
             { key: 'new',           label: '+ Saisie colis',            onClick: () => { setTab('new'); setCreatedParcel(null); setForm({ ...EMPTY_FORM, senderCity: profile?.city || '' }) },                   hidden: false },
             { key: 'parcels',       label: profile?.role === 'aide_agent' ? '📋 Mes saisies' : '📦 Expéditions', onClick: () => setTab('parcels'),                                                               hidden: false },
-            { key: 'caisse',        label: profile?.role === 'chef_agence' ? '🏛️ Caisse Agence' : '💼 Ma Caisse', onClick: () => setTab('caisse'),                                                              hidden: profile?.role === 'aide_agent' },
+            { key: 'caisse',        label: profile?.role === 'chef_agence' ? '🏛️ Caisse Agence' : '💼 Ma Caisse', onClick: () => setTab('caisse'),                                                              hidden: profile?.role === 'aide_agent' || profile?.role === 'agentpro' },
             { key: 'cod',           label: '💰 RETOUR FOND Clients',    onClick: () => setTab('cod'),                                                                                                             hidden: profile?.role === 'aide_agent' },
             { key: 'clientportdu',  label: '🏦 Ports en compte',        onClick: () => setTab('clientportdu'),                                                                                                    hidden: profile?.role !== 'chef_agence' && profile?.role !== 'agentpro' },
             { key: 'portpayecheque', label: '📋 Ports payés chèque',    onClick: () => setTab('portpayecheque'),                                                                                                  hidden: profile?.role !== 'chef_agence' && profile?.role !== 'agentpro' },
@@ -222,7 +222,7 @@ export default function AgentHeader({
             >
               <Package className="w-4 h-4" /> Expéditions
             </button>
-            {profile?.role !== 'aide_agent' && (
+            {profile?.role !== 'aide_agent' && profile?.role !== 'agentpro' && (
               <button
                 onClick={() => { setTab('caisse'); setMenuOpen(false) }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'caisse' ? 'bg-green-50 text-green-600' : 'text-gray-600 hover:bg-gray-50'}`}
