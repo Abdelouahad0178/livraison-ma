@@ -17,7 +17,7 @@ import {
   subscribeDeliveryDelays
 } from '../../../firebase/delivery'
 import { collectPortDu, uncollectPortDu } from '../../../firebase/cod'
-import { updateParcel, searchParcels, isInReturnCircuit } from '../../../firebase/parcels'
+import { updateParcel, searchParcels } from '../../../firebase/parcels'
 import { collection, query, where, onSnapshot, documentId } from 'firebase/firestore'
 import { db } from '../../../firebase/db'
 
@@ -213,17 +213,12 @@ export default function CaisseChefTab() {
 
   // Filtrer les résultats de recherche par statut de collecte
   const filteredSearchResults = useMemo(() => {
-    if (!searchResults) return searchResults
-
-    // Exclure les expéditions retournées
-    let filtered = searchResults.filter((p: any) => !isInReturnCircuit(p))
-
-    if (statusFilter === 'all') return filtered
+    if (!searchResults || statusFilter === 'all') return searchResults
 
     const now = new Date()
     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
 
-    return filtered.filter((p: any) => {
+    return searchResults.filter((p: any) => {
       const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
       const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
       const isInDelivery = p.status === 'En cours de livraison' || p.status === 'Livré'
@@ -325,9 +320,6 @@ export default function CaisseChefTab() {
     const driversMap = new Map()
 
     parcels.forEach((p: any) => {
-      // Exclure les expéditions retournées
-      if (isInReturnCircuit(p)) return
-
       if (p.deliveryDriverId && p.destinationCity === profile?.city) {
         if (!driversMap.has(p.deliveryDriverId)) {
           driversMap.set(p.deliveryDriverId, {
@@ -348,7 +340,7 @@ export default function CaisseChefTab() {
         p.status === 'Arrivé en agence' &&  // Uniquement "Arrivé en agence"
         p.status !== 'En cours de livraison' &&  // Exclusions explicites
         p.status !== 'Livré' &&
-        !isInReturnCircuit(p)  // Exclure les retours
+        p.status !== 'Retourné'
       )
     })
 
