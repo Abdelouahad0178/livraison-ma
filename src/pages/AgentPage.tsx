@@ -14,6 +14,7 @@ import {
   createReturnParcel, searchParcelByTrackingId, searchParcels, getMoreAgencyParcels, getParcelsPage,
   subscribeAllParcelsWithArchives, loadMoreParcelsWithArchives,
 } from '../firebase/parcels'
+import { shouldTriggerSearch } from '../utils/searchUtils'
 import { markPortDuReceivedByChef, markParcelChefPointed } from '../firebase/finance'
 import { collectPortDu } from '../firebase/cod'
 import { createCentralCodDeposit } from '../firebase/central'
@@ -374,7 +375,7 @@ export default function AgentPage() {
   // Recherche dans TOUTE la base Firestore, pas seulement les colis chargés
   useEffect(() => {
     const query = debouncedSearch.trim()
-    if (!query || query.length < 5) {
+    if (!shouldTriggerSearch(query)) {
       setServerSearchResults(null)
       setIsSearching(false)
       return
