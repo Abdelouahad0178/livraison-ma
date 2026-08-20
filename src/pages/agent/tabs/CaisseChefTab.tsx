@@ -770,14 +770,25 @@ export default function CaisseChefTab() {
 
     setCollectingPortIds(prev => new Set(prev).add(parcel.id))
     try {
-      // Mise à jour optimiste pour affichage instantané
-      updateParcelOptimistic(parcel.id, {
+      const updatedData = {
         portStatus: 'collected',
         portCollectedBy: profile?.name || '',
         portCollectedById: uid || '',
         portCollectedAt: new Date(),
         portDuReceivedMethod: 'especes',
-      })
+      }
+
+      // Mise à jour optimiste pour affichage instantané
+      updateParcelOptimistic(parcel.id, updatedData)
+
+      // 🔄 Mise à jour locale de searchResults pour recalcul immédiat des stats
+      if (searchResults) {
+        setSearchResults(prev =>
+          prev ? prev.map(p =>
+            p.id === parcel.id ? { ...p, ...updatedData } : p
+          ) : prev
+        )
+      }
 
       await collectPortDu(
         parcel.id,
@@ -812,14 +823,25 @@ export default function CaisseChefTab() {
 
     setCollectingPortIds(prev => new Set(prev).add(parcel.id))
     try {
-      // Mise à jour optimiste pour affichage instantané
-      updateParcelOptimistic(parcel.id, {
+      const updatedData = {
         portStatus: null,
         portCollectedBy: null,
         portCollectedById: null,
         portCollectedAt: null,
         portDuReceivedMethod: null,
-      })
+      }
+
+      // Mise à jour optimiste pour affichage instantané
+      updateParcelOptimistic(parcel.id, updatedData)
+
+      // 🔄 Mise à jour locale de searchResults pour recalcul immédiat des stats
+      if (searchResults) {
+        setSearchResults(prev =>
+          prev ? prev.map(p =>
+            p.id === parcel.id ? { ...p, ...updatedData } : p
+          ) : prev
+        )
+      }
 
       await uncollectPortDu(parcel.id)
     } catch (err: any) {
@@ -851,6 +873,12 @@ export default function CaisseChefTab() {
     setDeliveringParcelIds(prev => new Set(prev).add(parcel.id))
     try {
       const now = new Date()
+      const updatedData = {
+        status: 'Livré',
+        deliveredAt: now,
+        deliveredBy: profile?.name || '',
+        deliveredById: uid || '',
+      }
 
       // Mise à jour optimiste pour affichage instantané
       updateParcelOptimistic(parcel.id, {
@@ -858,13 +886,17 @@ export default function CaisseChefTab() {
         deliveredAt: now,
       })
 
+      // 🔄 Mise à jour locale de searchResults pour recalcul immédiat des stats
+      if (searchResults) {
+        setSearchResults(prev =>
+          prev ? prev.map(p =>
+            p.id === parcel.id ? { ...p, ...updatedData } : p
+          ) : prev
+        )
+      }
+
       // Mise à jour dans Firestore
-      await updateParcel(parcel.id, {
-        status: 'Livré',
-        deliveredAt: now,
-        deliveredBy: profile?.name || '',
-        deliveredById: uid || '',
-      })
+      await updateParcel(parcel.id, updatedData)
 
       console.log('✅ Expédition marquée comme livrée:', parcel.id)
     } catch (err: any) {
