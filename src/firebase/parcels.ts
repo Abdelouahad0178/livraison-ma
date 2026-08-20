@@ -1154,27 +1154,31 @@ export function subscribeAgencyParcels(
     }, 50)
   }
 
-  // 📦 Chargement 365 jours - Filtre isArchived pour performances
+  // 📦 Chargement 365 jours - Filtre isArchived côté client
   const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(365)
   const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
 
-  // 🗄️ Exclure les colis archivés pour ne charger que les actifs
   const q1 = dateTo
-    ? query(collection(db, 'parcels'), where('originCity', '==', city), where('isArchived', '!=', true), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('isArchived'), orderBy('createdAt', 'desc'), limit(pageLimit))
-    : query(collection(db, 'parcels'), where('originCity', '==', city), where('isArchived', '!=', true), where('createdAt', '>=', since), orderBy('isArchived'), orderBy('createdAt', 'desc'), limit(pageLimit))
+    ? query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('createdAt', 'desc'), limit(pageLimit))
+    : query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
 
   const q2 = dateTo
-    ? query(collection(db, 'parcels'), where('destinationCity', '==', city), where('isArchived', '!=', true), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('isArchived'), orderBy('createdAt', 'desc'), limit(pageLimit))
-    : query(collection(db, 'parcels'), where('destinationCity', '==', city), where('isArchived', '!=', true), where('createdAt', '>=', since), orderBy('isArchived'), orderBy('createdAt', 'desc'), limit(pageLimit))
+    ? query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('createdAt', 'desc'), limit(pageLimit))
+    : query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
 
   const unsub1 = onSnapshot(q1, snap => {
-    created = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    // 🗄️ Filtrer les archivés côté client
+    created = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(p => !p.isArchived)
     lastCreatedDoc = snap.docs[snap.docs.length - 1] || null
     merge()
   }, onError)
   const unsub2 = onSnapshot(q2, snap => {
-    // Chef d'agence voit TOUS les colis de destination sans filtre restrictif
-    arrived = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    // 🗄️ Filtrer les archivés côté client
+    arrived = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(p => !p.isArchived)
     lastArrivedDoc = snap.docs[snap.docs.length - 1] || null
     merge()
   }, onError)
@@ -1198,16 +1202,14 @@ export async function getMoreAgencyParcels(
   let newLastArrivedDoc: any = null
 
   try {
-    // Query 1: colis créés dans cette ville (exclure archivés)
+    // Query 1: colis créés dans cette ville
     if (lastDocs.lastCreatedDoc) {
       const q1 = dateTo
         ? query(
             collection(db, 'parcels'),
             where('originCity', '==', city),
-            where('isArchived', '!=', true),
             where('createdAt', '>=', since),
             where('createdAt', '<=', until),
-            orderBy('isArchived'),
             orderBy('createdAt', 'desc'),
             startAfter(lastDocs.lastCreatedDoc),
             limit(pageSize)
@@ -1221,7 +1223,10 @@ export async function getMoreAgencyParcels(
             limit(pageSize)
           )
       const snap1 = await getDocs(q1)
-      const created = snap1.docs.map(d => ({ id: d.id, ...d.data() }))
+      // 🗄️ Filtrer les archivés côté client
+      const created = snap1.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(p => !p.isArchived)
       results.push(...created)
       newLastCreatedDoc = snap1.docs[snap1.docs.length - 1] || lastDocs.lastCreatedDoc
     }
@@ -1248,6 +1253,8 @@ export async function getMoreAgencyParcels(
           )
       const snap2 = await getDocs(q2)
       const arrived = (snap2.docs.map(d => ({ id: d.id, ...d.data() })) as any[]).filter((p: any) => {
+        // 🗄️ Exclure les archivés
+        if (p.isArchived) return false
         if (p.wasReturned && (p.returnToCity === city || p.destinationCity === city)) return true
         return isParcelVisibleInDestinationAgency(p)
       })
