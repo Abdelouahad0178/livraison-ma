@@ -61,6 +61,7 @@ export default function CaisseChefTab() {
 
   // Filtres
   const [driverFilter, setDriverFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [includeArchived, setIncludeArchived] = useState(false)
   const [searchResults, setSearchResults] = useState<any[] | null>(null)
@@ -492,13 +493,45 @@ export default function CaisseChefTab() {
         return true
       })
 
+      // Appliquer le filtre de statut de collecte si sélectionné
+      let statusFilteredParcels = filteredParcels
+      if (statusFilter !== 'all') {
+        const now = new Date()
+        const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+
+        statusFilteredParcels = filteredParcels.filter((p: any) => {
+          const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
+          const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
+          const isInDelivery = p.status === 'En cours de livraison' || p.status === 'Livré'
+
+          let isLate = false
+          if (isPortDu && p.status === 'En cours de livraison' && p.deliveryAssignedAt) {
+            const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
+            isLate = assignedDate < oneDayAgo
+          }
+
+          switch (statusFilter) {
+            case 'a_collecter':
+              return isPortDu && !p.portStatus && isInDelivery
+            case 'collecte':
+              return isPortDu && isCollected
+            case 'non_collecte':
+              return isPortDu && !p.portStatus && !isInDelivery
+            case 'en_retard':
+              return isPortDu && isLate
+            default:
+              return true
+          }
+        })
+      }
+
       // Recalculer les statistiques pour les colis filtrés
       // IMPORTANT: Filtrer uniquement les ports dus (même logique que drivers)
-      const filteredPortDuParcels = filteredParcels.filter((p: any) =>
+      const filteredPortDuParcels = statusFilteredParcels.filter((p: any) =>
         p.portType === 'port_du' && !p.portPayeMethod
       )
 
-      const assignedToday = filteredParcels.filter((p: any) => {
+      const assignedToday = statusFilteredParcels.filter((p: any) => {
         // Colis sans date d'assignation = considérés comme assignés aujourd'hui
         if (!p.deliveryAssignedAt) return true
 
@@ -533,7 +566,7 @@ export default function CaisseChefTab() {
 
       return {
         ...driver,
-        parcels: filteredParcels,
+        parcels: statusFilteredParcels,
         assignedTodayCount: assignedToday.length,
         portsACollecterCount: portsACollecter.length,
         portsACollecterMontant: portsACollecter.reduce((sum: number, p: any) =>
@@ -566,7 +599,7 @@ export default function CaisseChefTab() {
     })
 
     return result
-  }, [drivers, driverFilter, searchQuery, datePreset, dateFrom, dateTo, agentEntries])
+  }, [drivers, driverFilter, statusFilter, searchQuery, datePreset, dateFrom, dateTo, agentEntries])
 
   // Stats filtrées (selon filtres actifs)
   const filteredStats = useMemo(() => {
@@ -982,6 +1015,19 @@ export default function CaisseChefTab() {
                 {drivers.map(d => (
                   <option key={d.id} value={d.id}>{d.name}</option>
                 ))}
+              </select>
+
+              {/* Filtre par statut de collecte */}
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
+              >
+                <option value="all">Tous les statuts</option>
+                <option value="a_collecter">📦 À collecter</option>
+                <option value="collecte">✅ Collecté</option>
+                <option value="non_collecte">❌ Non collecté</option>
+                <option value="en_retard">⏰ En retard</option>
               </select>
 
               {/* Recherche */}
