@@ -119,12 +119,19 @@ export default function CaisseChefTab() {
   useEffect(() => {
     const searchTerm = searchQuery.trim()
 
-    // Vérifier si la recherche doit être déclenchée (5 chiffres ou 3 lettres min)
-    if (!shouldTriggerSearch(searchTerm)) {
-      console.log('🔍 Recherche annulée, searchTerm:', searchTerm)
+    // Si champ complètement vide, tout réinitialiser
+    if (searchTerm === '') {
       setSearchResults(null)
       setSearching(false)
-      // Réinitialiser le filtre de statut quand la recherche est vidée
+      setStatusFilter('all')
+      setIncludeArchived(false)
+      return
+    }
+
+    // Vérifier si la recherche doit être déclenchée (5 chiffres ou 3 lettres min)
+    if (!shouldTriggerSearch(searchTerm)) {
+      setSearchResults(null)
+      setSearching(false)
       setStatusFilter('all')
       return
     }
@@ -960,14 +967,6 @@ export default function CaisseChefTab() {
     }
     return filterByDate(adminTransfers, datePreset, dateFrom, dateTo, versementDate)
   }, [adminTransfers, datePreset, dateFrom, dateTo])
-
-  // Debug: état de l'affichage
-  console.log('🖥️ [CaisseChef] Render:', {
-    searchResults: searchResults === null ? 'NULL' : `${searchResults.length} résultats`,
-    filteredDrivers: filteredDrivers.length,
-    searchQuery: `"${searchQuery}"`,
-    statusFilter
-  })
 
   // Rendu conditionnel si pas chef d'agence
   if (!isChef) {
