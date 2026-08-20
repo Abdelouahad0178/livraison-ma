@@ -249,11 +249,11 @@ export default function CaisseChefTab() {
 
       switch (statusFilter) {
         case 'a_collecter':
-          return isPortDu && !p.portStatus && isInDelivery && p.status !== 'Retourné'
+          return isPortDu && !p.portStatus && isInDelivery && p.status?.toLowerCase().trim() !== 'retourné'
         case 'collecte':
           return isPortDu && isCollected
         case 'en_retard':
-          return isPortDu && isLate && p.status !== 'Retourné'
+          return isPortDu && isLate && p.status?.toLowerCase().trim() !== 'retourné'
         default:
           return true
       }
@@ -274,7 +274,7 @@ export default function CaisseChefTab() {
       p.portType === 'port_du' &&
       !p.portStatus &&
       (p.status === 'En cours de livraison' || p.status === 'Livré') &&
-      p.status !== 'Retourné' &&
+      p.status?.toLowerCase().trim() !== 'retourné' &&
       p.destinationCity === profile?.city
     )
 
@@ -392,7 +392,7 @@ export default function CaisseChefTab() {
         p.status === 'Arrivé en agence' &&  // Uniquement "Arrivé en agence"
         p.status !== 'En cours de livraison' &&  // Exclusions explicites
         p.status !== 'Livré' &&
-        p.status !== 'Retourné'
+        p.status?.toLowerCase().trim() !== 'retourné'
       )
     })
 
@@ -447,7 +447,7 @@ export default function CaisseChefTab() {
         p.portType === 'port_du' &&  // Vérification explicite : UNIQUEMENT port dû
         !p.portStatus &&
         (p.status === 'En cours de livraison' || p.status === 'Livré') &&
-        p.status !== 'Retourné'
+        p.status?.toLowerCase().trim() !== 'retourné'
       )
 
       // Ports collectés = ceux avec portStatus 'collected' ou 'received'
@@ -599,11 +599,11 @@ export default function CaisseChefTab() {
 
           switch (statusFilter) {
             case 'a_collecter':
-              return isPortDu && !p.portStatus && isInDelivery && p.status !== 'Retourné'
+              return isPortDu && !p.portStatus && isInDelivery && p.status?.toLowerCase().trim() !== 'retourné'
             case 'collecte':
               return isPortDu && isCollected
             case 'en_retard':
-              return isPortDu && isLate && p.status !== 'Retourné'
+              return isPortDu && isLate && p.status?.toLowerCase().trim() !== 'retourné'
             default:
               return true
           }
@@ -631,7 +631,7 @@ export default function CaisseChefTab() {
         !p.portPayeMethod &&          // Exclure ports payés
         !p.portStatus &&
         (p.status === 'En cours de livraison' || p.status === 'Livré') &&
-        p.status !== 'Retourné'       // Exclure retournés
+        p.status?.toLowerCase().trim() !== 'retourné'       // Exclure retournés
       )
 
       // Ports collectés = ceux avec portStatus 'collected' ou 'received'
@@ -1309,7 +1309,7 @@ export default function CaisseChefTab() {
                                 {fmtAmt(parcel.price)} DH
                               </td>
                               <td className="py-2 px-3 text-center">
-                                {parcel.status === 'Retourné' ? (
+                                {parcel.status?.toLowerCase().trim() === 'retourné' ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-semibold">
                                     <X className="w-3 h-3" />
                                     Retourné
@@ -1338,7 +1338,7 @@ export default function CaisseChefTab() {
                               </td>
                               <td className="py-2 px-3 text-center">
                                 <div className="flex items-center justify-center gap-2">
-                                  {parcel.status === 'Retourné' ? (
+                                  {parcel.status?.toLowerCase().trim() === 'retourné' ? (
                                     <span className="text-xs text-gray-500 italic">-</span>
                                   ) : isPortDu && (
                                     <>
