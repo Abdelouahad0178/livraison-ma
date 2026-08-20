@@ -659,13 +659,18 @@ export default function CaisseChefTab() {
         return assignedDate >= today
       })
 
-      const portsACollecter = filteredPortDuParcels.filter((p: any) =>
-        p.portType === 'port_du' &&  // Vérification explicite
-        !p.portPayeMethod &&          // Exclure ports payés
-        !p.portStatus &&
-        (p.status === 'En cours de livraison' || p.status === 'Livré') &&
-        p.status?.toLowerCase().trim() !== 'retourné'       // Exclure retournés
-      )
+      const portsACollecter = filteredPortDuParcels.filter((p: any) => {
+        const isReturned = p.returnedAt || p.wasReturned || p.status === 'Retourné'
+        const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
+
+        if (isReturned || isCollected) return false
+
+        // Si "Non assigné", tous les ports dus non collectés/retournés sont à collecter
+        if (driver.id === 'unknown') return true
+
+        // Si assigné, seulement les "En cours de livraison" ou "Livré"
+        return p.status === 'En cours de livraison' || p.status === 'Livré'
+      })
 
       // Ports collectés = ceux avec portStatus 'collected' ou 'received'
       const portsCollectes = filteredPortDuParcels.filter((p: any) =>
