@@ -139,11 +139,7 @@ export default function ArchivePage() {
 
     // 🔒 LIMITE: Max 50 résultats pour éviter surcharge
     const MAX_RESULTS = 50
-    if (list.length > MAX_RESULTS) {
-      list = list.slice(0, MAX_RESULTS)
-    }
-
-    return list
+    return list.slice(0, MAX_RESULTS)
   }, [parcels, search, statusFilter, directionFilter, originCityFilter, destCityFilter, dateFrom, dateTo, city])
 
   // Reset page on filter change
