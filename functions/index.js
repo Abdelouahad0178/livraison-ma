@@ -1446,3 +1446,132 @@ exports.deleteArchive = onCall({ maxInstances: 1, timeoutSeconds: 540 }, async (
     throw new Error(`Erreur lors de la suppression: ${error.message}`)
   }
 })
+
+// ── Archivage automatique hebdomadaire ────────────────────────────────────────
+
+/**
+ * Marque les vieux colis comme archivés (soft delete)
+ * Politique AGGRESSIVE: 30 jours pour Livré, Retourné, Annulé
+ */
+async function runWeeklyArchiving() {
+  console.log('🗄️  Démarrage archivage automatique...')
+
+  const ARCHIVABLE_STATUSES = ['Livré', 'Retourné', 'Annulé']
+  const DAYS_THRESHOLD = 30
+  const BATCH_SIZE = 100
+
+  const cutoffDate = new Date()
+  cutoffDate.setDate(cutoffDate.getDate() - DAYS_THRESHOLD)
+  const cutoffTimestamp = Timestamp.fromDate(cutoffDate)
+
+  let totalArchived = 0
+
+  for (const status of ARCHIVABLE_STATUSES) {
+    console.log(`📦 Archivage des colis "${status}" de +${DAYS_THRESHOLD} jours...`)
+
+    let hasMore = true
+    while (hasMore) {
+      // Chercher les colis éligibles (non déjà archivés)
+      const query = db.collection('parcels')
+        .where('status', '==', status)
+        .where('createdAt', '<', cutoffTimestamp)
+        .where('isArchived', '!=', true)
+        .limit(BATCH_SIZE)
+
+      const snapshot = await query.get()
+
+      if (snapshot.empty) {
+        hasMore = false
+        break
+      }
+
+      // Filtrer les colis avec COD non payé (si Livré)
+      const batch = db.batch()
+      let batchCount = 0
+
+      snapshot.docs.forEach(doc => {
+        const data = doc.data()
+
+        // Si "Livré" avec COD, vérifier si payé
+        if (status === 'Livré' && data.codAmount > 0) {
+          const codPaid = data.codStatus === 'settled' || data.codStatus === 'paid'
+          if (!codPaid) {
+            return // Ne pas archiver si COD non payé
+          }
+        }
+
+        // Marquer comme archivé
+        batch.update(doc.ref, {
+          isArchived: true,
+          archivedAt: new Date().toISOString(),
+          archivedBy: 'auto-system'
+        })
+        batchCount++
+      })
+
+      if (batchCount > 0) {
+        await batch.commit()
+        totalArchived += batchCount
+        console.log(`✅ ${totalArchived} colis archivés (${status})...`)
+      }
+
+      // Si batch incomplet, on a fini pour ce statut
+      if (snapshot.size < BATCH_SIZE) {
+        hasMore = false
+      }
+
+      // Pause anti-throttling
+      if (snapshot.size === BATCH_SIZE && hasMore) {
+        await new Promise(resolve => setTimeout(resolve, 500))
+      }
+    }
+  }
+
+  console.log(`🎉 Archivage automatique terminé: ${totalArchived} colis archivés`)
+
+  // Log dans director_logs
+  await db.collection('director_logs').add({
+    type: 'auto_archiving',
+    action: 'Archivage automatique hebdomadaire',
+    details: { totalArchived, daysThreshold: DAYS_THRESHOLD, statuses: ARCHIVABLE_STATUSES },
+    userId: 'system',
+    userName: 'Système automatique',
+    timestamp: FieldValue.serverTimestamp()
+  })
+
+  return { success: true, totalArchived }
+}
+
+// Archivage automatique chaque samedi à 02h00 (heure Casablanca)
+exports.scheduledWeeklyArchiving = onSchedule({
+  schedule:       '0 2 * * 6',  // Samedi à 2h00
+  timeZone:       'Africa/Casablanca',
+  memory:         '512MiB',
+  timeoutSeconds: 540,
+}, async () => {
+  await runWeeklyArchiving()
+})
+
+// Bouton manuel d'archivage dans AdminArchivageTab
+exports.manualArchiving = onCall(async (request) => {
+  // Vérifier authentification
+  if (!request.auth) {
+    throw new Error('Non authentifié')
+  }
+
+  // Vérifier que c'est un admin
+  const userDoc = await db.collection('users').doc(request.auth.uid).get()
+  if (!userDoc.exists || userDoc.data().role !== 'admin') {
+    throw new Error('Permission refusée: admin requis')
+  }
+
+  console.log(`🗄️  Archivage manuel déclenché par ${userDoc.data().name}`)
+
+  try {
+    const result = await runWeeklyArchiving()
+    return result
+  } catch (error) {
+    console.error('❌ Erreur archivage manuel:', error)
+    throw new Error(`Erreur lors de l'archivage: ${error.message}`)
+  }
+})

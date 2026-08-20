@@ -154,6 +154,33 @@ export default function AdminArchivageTab() {
     }
   }
 
+  // 🗄️ Archivage automatique (soft delete - marque isArchived=true)
+  const [autoArchiving, setAutoArchiving] = useState(false)
+  const [autoArchiveResult, setAutoArchiveResult] = useState<any>(null)
+
+  const handleAutoArchiving = async () => {
+    const confirmMessage = `🗄️ ARCHIVAGE AUTOMATIQUE\n\nMarquer comme archivés tous les colis:\n• Livrés, Retournés, Annulés\n• De plus de 30 jours\n• COD payé (pour livrés)\n\nLes colis resteront accessibles via recherche.\n\nContinuer?`
+
+    if (!confirm(confirmMessage)) return
+
+    setAutoArchiving(true)
+    setAutoArchiveResult(null)
+
+    try {
+      const manualArchiving = httpsCallable(functions, 'manualArchiving')
+      const result = await manualArchiving()
+
+      setAutoArchiveResult({ success: true, ...(result.data as Record<string, any>) })
+      await loadStats()
+      alert(`✅ ${(result.data as any)?.totalArchived || 0} colis archivés avec succès!`)
+    } catch (error: any) {
+      setAutoArchiveResult({ success: false, error: error.message })
+      alert('❌ Erreur: ' + error.message)
+    } finally {
+      setAutoArchiving(false)
+    }
+  }
+
   const toggleStatus = (status: string) => {
     setSelectedStatuses(prev =>
       prev.includes(status) ? prev.filter(s => s !== status) : [...prev, status]
@@ -340,10 +367,74 @@ export default function AdminArchivageTab() {
         </div>
       )}
 
+      {/* 🗄️ ARCHIVAGE AUTOMATIQUE (SOFT DELETE) */}
+      <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl border-2 border-green-300 p-6 mb-6">
+        <h2 className="text-xl font-bold text-green-900 mb-3 flex items-center gap-2">
+          <Archive className="w-6 h-6 text-green-600" />
+          🗄️ Archivage Intelligent (Recommandé)
+        </h2>
+
+        <div className="bg-white rounded-lg p-4 mb-4 border border-green-200">
+          <p className="text-sm text-gray-700 mb-2">
+            <strong className="text-green-700">Archivage soft:</strong> Marque les vieux colis comme archivés sans les supprimer.
+          </p>
+          <ul className="text-sm text-gray-600 space-y-1 ml-5 list-disc">
+            <li>Colis <strong>Livrés, Retournés, Annulés</strong> de <strong>+30 jours</strong></li>
+            <li>COD payé vérifié pour les livrés</li>
+            <li>Accessibles via recherche avec checkbox "Inclure archives"</li>
+            <li>⚡ Allège le site de ~70-80%</li>
+          </ul>
+        </div>
+
+        <div className="flex items-center gap-4">
+          <button
+            onClick={handleAutoArchiving}
+            disabled={autoArchiving}
+            className="px-6 py-3 bg-gradient-to-r from-green-600 to-emerald-600 text-white rounded-lg font-semibold hover:from-green-700 hover:to-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2 shadow-lg"
+          >
+            {autoArchiving ? (
+              <>
+                <RotateCcw className="w-5 h-5 animate-spin" />
+                Archivage en cours...
+              </>
+            ) : (
+              <>
+                <Archive className="w-5 h-5" />
+                Archiver maintenant (30+ jours)
+              </>
+            )}
+          </button>
+
+          {autoArchiveResult && (
+            <div className={`flex items-center gap-2 px-4 py-2 rounded-lg ${
+              autoArchiveResult.success
+                ? 'bg-green-100 text-green-800 border border-green-300'
+                : 'bg-red-100 text-red-800 border border-red-300'
+            }`}>
+              {autoArchiveResult.success ? (
+                <>
+                  <CheckCircle className="w-5 h-5" />
+                  {autoArchiveResult.totalArchived} colis archivés
+                </>
+              ) : (
+                <>
+                  <AlertCircle className="w-5 h-5" />
+                  {autoArchiveResult.error}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="mt-4 text-xs text-gray-500 bg-gray-50 rounded p-3 border border-gray-200">
+          ⏰ <strong>Automatique:</strong> Chaque samedi à 2h00 du matin (heure Casablanca)
+        </div>
+      </div>
+
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
         <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
           <Calendar className="w-5 h-5 text-purple-600" />
-          Archivage Manuel
+          Archivage Manuel (Ancien système)
         </h2>
 
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
