@@ -271,14 +271,6 @@ export default function CaisseChefTab() {
   const dataSource = useMemo(() => {
     let source = parcels
 
-    // Appliquer d'abord le cache des modifications locales
-    if (Object.keys(modifiedParcels).length > 0) {
-      source = parcels.map((p: any) => {
-        const modified = modifiedParcels[p.id]
-        return modified ? { ...p, ...modified } : p
-      })
-    }
-
     // Si en mode recherche, merger searchResults dans parcels
     if (searchResults && searchResults.length > 0) {
       const searchIds = new Set(searchResults.map((p: any) => p.id))
@@ -294,6 +286,14 @@ export default function CaisseChefTab() {
         if (!parcels.find((p: any) => p.id === sr.id)) {
           source.push(sr)
         }
+      })
+    }
+
+    // Appliquer le cache des modifications locales à TOUS les parcels (y compris ceux de searchResults)
+    if (Object.keys(modifiedParcels).length > 0) {
+      source = source.map((p: any) => {
+        const modified = modifiedParcels[p.id]
+        return modified ? { ...p, ...modified } : p
       })
     }
 
