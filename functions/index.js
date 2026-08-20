@@ -1517,6 +1517,10 @@ async function runWeeklyArchiving() {
         await batch.commit()
         totalArchived += batchCount
         console.log(`✅ ${totalArchived} colis archivés (${status})...`)
+      } else {
+        // Aucun colis archivé dans ce batch = tous déjà archivés, arrêter
+        hasMore = false
+        break
       }
 
       // Si batch incomplet, on a fini pour ce statut
