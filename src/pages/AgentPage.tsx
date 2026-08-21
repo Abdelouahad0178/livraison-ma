@@ -1773,7 +1773,7 @@ export default function AgentPage() {
     ? `https://wa.me/${createdParcel.sender.tel.replace(/\D/g, '')}?text=${whatsappMsg}`
     : ''
 
-  const inputCls  = "w-full border border-gray-200 rounded-xl p-3 text-sm focus:border-blue-500 focus:outline-none transition bg-white"
+  const inputCls  = "w-full border border-gray-300 rounded-xl p-3 text-sm focus:border-blue-500 focus:outline-none transition bg-white"
   const selectCls = inputCls + " appearance-none cursor-pointer"
 
 
