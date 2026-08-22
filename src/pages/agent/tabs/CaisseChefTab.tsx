@@ -341,8 +341,9 @@ export default function CaisseChefTab() {
     // 🆕 Ports payés ramassés (à recevoir du livreur)
     const portsPayesARecevoir = dataSource.filter((p: any) =>
       p.portType === 'port_paye' &&
-      p.portStatus === 'collected' &&  // Collecté au ramassage mais pas encore versé au chef
-      p.createdByCity === profile?.city  // Créé dans cette agence
+      !p.portPayeMethod &&  // Exclure les ports en compte
+      (p.portStatus === 'collected' || !p.portStatus) &&  // Collecté OU anciennes données sans portStatus
+      (p.createdByCity === profile?.city || p.originCity === profile?.city)  // Créé dans cette agence
     )
 
     // Expéditions en retard (en cours de livraison depuis >24h)
@@ -504,10 +505,10 @@ export default function CaisseChefTab() {
       const portsPayesParcels = driver.parcels.filter((p: any) =>
         p.portType === 'port_paye' &&
         !p.portPayeMethod &&
-        p.createdByCity === profile?.city
+        (p.createdByCity === profile?.city || p.originCity === profile?.city)
       )
       const portsPayesARecevoir = portsPayesParcels.filter((p: any) =>
-        p.portStatus === 'collected'  // Pas encore versé au chef
+        (p.portStatus === 'collected' || !p.portStatus)  // Pas encore versé au chef (ou anciennes données)
       )
 
       const now = new Date()
@@ -1729,8 +1730,11 @@ export default function CaisseChefTab() {
                           {driver.parcels.map((parcel: any) => {
                               // LOGIQUE COHÉRENTE : Port dû seulement si portType='port_du' ET pas de portPayeMethod
                               const isPortDu = parcel.portType === 'port_du' && !parcel.portPayeMethod
-                              // 🆕 Port payé ramassé : port_paye avec portStatus='collected' (pas encore reçu par chef)
-                              const isPortPayeRamasse = parcel.portType === 'port_paye' && parcel.portStatus === 'collected' && parcel.createdByCity === profile?.city
+                              // 🆕 Port payé ramassé : port_paye avec portStatus='collected' OU null (anciennes données) (pas encore reçu par chef)
+                              const isPortPayeRamasse = parcel.portType === 'port_paye' &&
+                                !parcel.portPayeMethod &&
+                                (parcel.portStatus === 'collected' || !parcel.portStatus) &&
+                                (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city)
                               const delay = deliveryDelays.find((d: any) =>
                                 d.parcelId === parcel.id && !d.resolvedAt
                               )
