@@ -439,13 +439,10 @@ export default function CaisseChefTab() {
       sum + safeParseAmount(p.price), 0
     )
 
-    // TOUS les versements confirmés (sans filtre date)
-    const totalVerse = adminTransfers
-      .filter((t: any) => t.status === 'confirmed')
-      .reduce((sum: number, t: any) => sum + safeParseAmount(t.amount), 0)
-
-    return Math.max(0, totalCollecte + montantRecus - totalVerse)
-  }, [parcels, adminTransfers, profile?.city])
+    // 🔄 IGNORE les versements pour repartir sur une base saine
+    // (anciens versements faussaient le calcul)
+    return totalCollecte + montantRecus
+  }, [parcels, profile?.city])
 
   // 💰 Solde d'un livreur spécifique (sans filtre de date)
   const soldeLivreur = useMemo(() => {
