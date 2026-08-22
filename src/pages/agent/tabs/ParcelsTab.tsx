@@ -843,18 +843,6 @@ export default function ParcelsTab() {
                     ))}
                   </div>
 
-                  {/* Encaissement */}
-                  <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
-                    <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Encaiss.</span>
-                    {[{ key: 'all', label: 'Tous', emoji: '' }, ...ALL_SERVICE_TYPES].map(({ key, label, emoji }) => (
-                      <button key={key} onClick={() => setServiceFilter(key)}
-                        className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
-                          serviceFilter === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                        }`}
-                      >{emoji ? `${emoji} ${label}` : label}</button>
-                    ))}
-                  </div>
-
                   {/* Type de port */}
                   <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
                     <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Type port</span>
