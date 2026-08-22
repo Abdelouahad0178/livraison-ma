@@ -11,8 +11,8 @@ import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
 import { addPayment } from './clients'
 
 export const FIRESTORE_PAGE_LIMITS = {
-  adminLiveParcels: 10000,  // ⚡ Augmenté pour supporter les filtres avec beaucoup d'expéditions
-  adminNextParcels: 500,   // ⚡ Pages suivantes augmentées aussi
+  adminLiveParcels: 300,  // ⚡ OPTIMISATION : Réduit de 10000 à 300 pour chargement rapide
+  adminNextParcels: 200,   // ⚡ Pages suivantes réduites aussi
   users: 500,
   clients: 500,
 }
@@ -1073,10 +1073,10 @@ export function subscribeAgentParcels(agentId: any, callback: any, onError: (err
     }, 50)
   }
 
-  // ✅ 180 jours (6 mois) au lieu de 60 pour voir plus d'historique
-  const since = daysAgoTimestamp(180)
-  const q1 = query(collection(db, 'parcels'), where('agentId', '==', agentId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(2000))
-  const q2 = query(collection(db, 'parcels'), where('destinationAgentId', '==', agentId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(2000))
+  // ⚡ OPTIMISATION : Limiter à 30 jours et 200 documents pour chargement rapide
+  const since = daysAgoTimestamp(30)
+  const q1 = query(collection(db, 'parcels'), where('agentId', '==', agentId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
+  const q2 = query(collection(db, 'parcels'), where('destinationAgentId', '==', agentId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
 
   const unsub1 = onSnapshot(q1, snap => { created = snap.docs.map(d => ({ id: d.id, ...d.data() })); merge() }, onError)
   const unsub2 = onSnapshot(q2, snap => { claimed  = snap.docs.map(d => ({ id: d.id, ...d.data() })); merge() }, onError)
@@ -1130,7 +1130,7 @@ export function subscribeAgencyParcels(
   city: any,
   callback: any,
   onError: (err?: any) => void = () => {},
-  pageLimit = 1000,
+  pageLimit = 200, // ⚡ OPTIMISATION : Réduit de 1000 à 200 pour chargement rapide
   callbackWithLastDoc?: (lastDoc: any) => void,
   dateFrom?: Date | null,
   dateTo?: Date | null
@@ -1154,8 +1154,8 @@ export function subscribeAgencyParcels(
     }, 50)
   }
 
-  // 📦 Chargement 365 jours - Filtre isArchived côté client
-  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(365)
+  // ⚡ OPTIMISATION : Chargement 30 jours au lieu de 365 pour performances
+  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(30)
   const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
 
   const q1 = dateTo
@@ -1194,8 +1194,8 @@ export async function getMoreAgencyParcels(
   dateFrom?: Date | null,
   dateTo?: Date | null
 ): Promise<{ docs: any[]; lastDocs: any; hasMore: boolean }> {
-  // 📦 Chargement 365 jours - Filtre isArchived pour performances
-  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(365)
+  // ⚡ OPTIMISATION : Chargement 30 jours au lieu de 365 pour performances
+  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(30)
   const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
   const results: any[] = []
   let newLastCreatedDoc: any = null
