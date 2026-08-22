@@ -447,6 +447,26 @@ export default function CaisseChefTab() {
     return Math.max(0, totalCollecte + montantRecus - totalVerse)
   }, [parcels, adminTransfers, profile?.city])
 
+  // 💰 Solde d'un livreur spécifique (sans filtre de date)
+  const soldeLivreur = useMemo(() => {
+    if (driverFilter === 'all') return 0
+
+    const allParcels = parcels || []
+
+    // Ports dus collectés par CE livreur (TOUS, sans filtre date)
+    const portsCollectes = allParcels.filter((p: any) =>
+      p.portType === 'port_du' &&
+      !p.portPayeMethod &&
+      (p.portStatus === 'collected' || p.portStatus === 'received') &&
+      p.destinationCity === profile?.city &&
+      p.deliveryDriverId === driverFilter
+    )
+
+    return portsCollectes.reduce((sum: number, p: any) =>
+      sum + safeParseAmount(p.price), 0
+    )
+  }, [parcels, driverFilter, profile?.city])
+
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
     // DEBUG: Vérifier les données au chargement
@@ -1440,7 +1460,7 @@ export default function CaisseChefTab() {
             <span className="text-xs font-semibold text-purple-600">À verser</span>
           </div>
           <div className="text-2xl font-bold text-purple-900">
-            {fmtAmt(driverFilter === 'all' ? soldeCaisseGlobal : filteredStats.soldeAVerser)} DH
+            {fmtAmt(driverFilter === 'all' ? soldeCaisseGlobal : soldeLivreur)} DH
           </div>
           <div className="text-sm text-purple-700 font-medium mt-1">
             Solde disponible
