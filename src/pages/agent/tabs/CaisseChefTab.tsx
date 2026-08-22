@@ -500,7 +500,10 @@ export default function CaisseChefTab() {
     const driversMap = new Map()
 
     dataSource.forEach((p: any) => {
-      if (p.deliveryDriverId && p.destinationCity === profile?.city) {
+      // Exclure les expéditions retournées
+      const isReturned = p.returnedAt || p.wasReturned || p.status === 'Retourné'
+
+      if (p.deliveryDriverId && p.destinationCity === profile?.city && !isReturned) {
         if (!driversMap.has(p.deliveryDriverId)) {
           driversMap.set(p.deliveryDriverId, {
             id: p.deliveryDriverId,
