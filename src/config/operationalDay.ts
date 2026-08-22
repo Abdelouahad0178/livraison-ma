@@ -66,9 +66,13 @@ export const OPERATIONAL_DAY_CONFIG = {
  * // → 2026-07-24T08:00:00 (appartient à la journée du 24)
  */
 export function getOperationalDay(date: Date | number): Date {
-  const d = typeof date === 'number' ? new Date(date) : new Date(date)
-  const hour = d.getHours()
-  const minute = d.getMinutes()
+  const sourceDate = typeof date === 'number' ? new Date(date) : new Date(date)
+
+  // ⏰ Convertir en heure de Casablanca
+  const casablancaTime = new Date(sourceDate.toLocaleString('en-US', { timeZone: 'Africa/Casablanca' }))
+
+  const hour = casablancaTime.getHours()
+  const minute = casablancaTime.getMinutes()
 
   // Convertir l'heure actuelle en minutes depuis minuit
   const currentMinutes = hour * 60 + minute
@@ -77,6 +81,7 @@ export function getOperationalDay(date: Date | number): Date {
 
   // Si avant l'heure de fin (ex: 02:00 < 06:01)
   // → On recule d'un jour car ça appartient à la journée précédente
+  const d = new Date(casablancaTime)
   if (currentMinutes < endMinutes) {
     d.setDate(d.getDate() - 1)
   }
