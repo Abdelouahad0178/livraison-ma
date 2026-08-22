@@ -1403,7 +1403,7 @@ export default function CaisseChefTab() {
             <span className="text-xs font-semibold text-purple-600">À verser</span>
           </div>
           <div className="text-2xl font-bold text-purple-900">
-            {fmtAmt(stats.soldeAVerser)} DH
+            {fmtAmt(filteredStats.soldeAVerser)} DH
           </div>
           <div className="text-sm text-purple-700 font-medium mt-1">
             Solde disponible
