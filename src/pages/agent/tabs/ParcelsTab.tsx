@@ -1675,7 +1675,8 @@ export default function ParcelsTab() {
                       <p className="text-xs font-semibold text-green-600">
                         {selectedCount} colis sélectionné(s)
                       </p>
-                      {bulkAssignError && <p className="text-xs font-semibold text-red-600">{bulkAssignError}</p>}
+                      {bulkAssignError && !bulkAssignError.includes('au moins un colis') && <p className="text-xs font-semibold text-red-600">{bulkAssignError}</p>}
+                      {bulkAssignError && bulkAssignError.includes('au moins un colis') && selectedCount === 0 && <p className="text-xs font-semibold text-red-600">{bulkAssignError}</p>}
                       <div className="ml-auto flex items-center gap-2">
                         {/* Bouton Exporter Excel */}
                         <button
