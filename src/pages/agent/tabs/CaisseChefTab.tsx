@@ -1109,7 +1109,7 @@ export default function CaisseChefTab() {
           deliveryDriverName: driver.name,
           deliveryAssignedAt: new Date(),
           deliveryAssignedBy: profile?.name || '',
-          status: 'En cours de livraison'
+          status: 'En cours de ramassage'
         })
       })
 
