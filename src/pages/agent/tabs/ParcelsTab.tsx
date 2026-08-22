@@ -2742,6 +2742,7 @@ export default function ParcelsTab() {
                                     checked={selectedPickupParcelIds.has(parcel.id)}
                                     onChange={e => {
                                       e.stopPropagation()
+                                      setBulkAssignError('')
                                       const checked = e.target.checked
                                       setSelectedPickupParcelIds(prev => {
                                         const newSet = new Set(prev)
