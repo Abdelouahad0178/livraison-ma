@@ -21,7 +21,8 @@ export const OPERATIONAL_DAY_CONFIG = {
    * - 6 = 6h du matin
    * - 8 = 8h du matin (votre cas)
    */
-  START_HOUR: 8,
+  START_HOUR: 6,
+  START_MINUTE: 1,
 
   /**
    * ⏰ Heure de fin de la journée opérationnelle (format 24h, lendemain)
@@ -31,9 +32,10 @@ export const OPERATIONAL_DAY_CONFIG = {
    * Exemples:
    * - 0 = minuit (se termine à 23:59:59 du même jour)
    * - 2 = 2h du matin (lendemain)
-   * - 6 = 6h du matin (votre cas)
+   * - 6h01 = 6h01 du matin (changement automatique)
    */
   END_HOUR: 6,
+  END_MINUTE: 1,
 
   /**
    * 🏷️ Labels pour l'affichage UI
@@ -66,15 +68,21 @@ export const OPERATIONAL_DAY_CONFIG = {
 export function getOperationalDay(date: Date | number): Date {
   const d = typeof date === 'number' ? new Date(date) : new Date(date)
   const hour = d.getHours()
+  const minute = d.getMinutes()
 
-  // Si avant l'heure de fin (ex: 02:00 < 06:00)
+  // Convertir l'heure actuelle en minutes depuis minuit
+  const currentMinutes = hour * 60 + minute
+  // Heure de fin en minutes depuis minuit
+  const endMinutes = OPERATIONAL_DAY_CONFIG.END_HOUR * 60 + OPERATIONAL_DAY_CONFIG.END_MINUTE
+
+  // Si avant l'heure de fin (ex: 02:00 < 06:01)
   // → On recule d'un jour car ça appartient à la journée précédente
-  if (hour < OPERATIONAL_DAY_CONFIG.END_HOUR) {
+  if (currentMinutes < endMinutes) {
     d.setDate(d.getDate() - 1)
   }
 
-  // Définir l'heure de début de journée opérationnelle
-  d.setHours(OPERATIONAL_DAY_CONFIG.START_HOUR, 0, 0, 0)
+  // Définir l'heure de début de journée opérationnelle (6h01)
+  d.setHours(OPERATIONAL_DAY_CONFIG.START_HOUR, OPERATIONAL_DAY_CONFIG.START_MINUTE, 0, 0)
 
   return d
 }
@@ -116,14 +124,14 @@ export function getOperationalDayRange(operationalDate: Date | string): {
       ? new Date(operationalDate)
       : new Date(operationalDate)
 
-  // Début: Jour donné à START_HOUR
+  // Début: Jour donné à START_HOUR:START_MINUTE (ex: 6h01)
   const start = new Date(baseDate)
-  start.setHours(OPERATIONAL_DAY_CONFIG.START_HOUR, 0, 0, 0)
+  start.setHours(OPERATIONAL_DAY_CONFIG.START_HOUR, OPERATIONAL_DAY_CONFIG.START_MINUTE, 0, 0)
 
-  // Fin: Lendemain à END_HOUR - 1 seconde
+  // Fin: Lendemain à END_HOUR:END_MINUTE - 1 seconde (ex: 06:00:59.999)
   const end = new Date(start)
   end.setDate(end.getDate() + 1)
-  end.setHours(OPERATIONAL_DAY_CONFIG.END_HOUR, 0, 0, -1) // -1ms pour avoir 05:59:59.999
+  end.setHours(OPERATIONAL_DAY_CONFIG.END_HOUR, OPERATIONAL_DAY_CONFIG.END_MINUTE, 0, -1) // -1ms pour avoir 06:00:59.999
 
   return { start, end }
 }
@@ -218,9 +226,11 @@ export function formatOperationalDay(
   }
 
   const startHour = String(OPERATIONAL_DAY_CONFIG.START_HOUR).padStart(2, '0')
+  const startMinute = String(OPERATIONAL_DAY_CONFIG.START_MINUTE).padStart(2, '0')
   const endHour = String(OPERATIONAL_DAY_CONFIG.END_HOUR).padStart(2, '0')
+  const endMinute = String(OPERATIONAL_DAY_CONFIG.END_MINUTE).padStart(2, '0')
 
-  return `${OPERATIONAL_DAY_CONFIG.LABELS.fr.operationalDay} ${formatted} (${startHour}:00 → ${endHour}:00 lendemain)`
+  return `${OPERATIONAL_DAY_CONFIG.LABELS.fr.operationalDay} ${formatted} (${startHour}:${startMinute} → ${endHour}:${endMinute} lendemain)`
 }
 
 /**

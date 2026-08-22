@@ -80,7 +80,9 @@ export function OperationalDaySelector({
   const displayText = showTimeRange ? formattedWithTime : formatted
 
   const startHour = String(OPERATIONAL_DAY_CONFIG.START_HOUR).padStart(2, '0')
+  const startMinute = String(OPERATIONAL_DAY_CONFIG.START_MINUTE).padStart(2, '0')
   const endHour = String(OPERATIONAL_DAY_CONFIG.END_HOUR).padStart(2, '0')
+  const endMinute = String(OPERATIONAL_DAY_CONFIG.END_MINUTE).padStart(2, '0')
 
   return (
     <div
@@ -117,7 +119,7 @@ export function OperationalDaySelector({
           <div className="flex items-center gap-1.5 text-xs text-gray-600 dark:text-gray-400 bg-white dark:bg-gray-800 px-3 py-1 rounded-full">
             <Clock className="w-3.5 h-3.5" />
             <span className="font-medium">
-              {startHour}:00 → {endHour}:00
+              {startHour}:{startMinute} → {endHour}:{endMinute}
             </span>
           </div>
         )}
