@@ -785,6 +785,19 @@ export default function CaisseChefTab() {
     const montantPortsPayesRecus = filteredDrivers.reduce((sum, d) => sum + (d.portsPayesRecusMontant || 0), 0)
     const totalEnRetard = filteredDrivers.reduce((sum, d) => sum + d.enRetardCount, 0)
 
+    // 🆕 Calcul du solde à verser :
+    // - Si on filtre par UN livreur : Solde = Collectés + À recevoir (sans soustraire versements admin)
+    // - Si TOUS les livreurs : Solde = Collectés + À recevoir - Versements admin
+    let soldeAVerser = montantCollectes + montantPortsPayesARecevoir
+
+    if (driverFilter === 'all') {
+      // Soustraire les versements confirmés vers l'admin
+      const totalVerse = adminTransfers
+        .filter((t: any) => t.status === 'confirmed')
+        .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0)
+      soldeAVerser = Math.max(0, soldeAVerser - totalVerse)
+    }
+
     return {
       portsACollecterCount: totalACollecter,
       portsACollecterMontant: montantACollecter,
@@ -795,9 +808,9 @@ export default function CaisseChefTab() {
       portsPayesRecusCount: totalPortsPayesRecus,
       portsPayesRecusMontant: montantPortsPayesRecus,
       enRetardCount: totalEnRetard,
-      soldeAVerser: montantCollectes + montantPortsPayesARecevoir, // Collectés + À recevoir
+      soldeAVerser,
     }
-  }, [filteredDrivers])
+  }, [filteredDrivers, driverFilter, adminTransfers])
 
   // Toggle expansion d'un livreur
   const toggleDriver = (driverId: string) => {
