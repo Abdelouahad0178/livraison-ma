@@ -41,7 +41,6 @@ export default function CaisseChefTab() {
     uid,
     profile,
     parcels,
-    allDisplayParcels,
     agentEntries,
     updateParcelOptimistic,
   } = useAgentCtx()
@@ -90,8 +89,31 @@ export default function CaisseChefTab() {
   // État livraison
   const [deliveringParcelIds, setDeliveringParcelIds] = useState<Set<string>>(new Set())
 
+  // 📦 Toutes les expéditions de la ville (sans filtre de date)
+  const [allCityParcels, setAllCityParcels] = useState<any[]>([])
+
   // Vérification du rôle
   const isChef = profile?.role === 'chef_agence'
+
+  // 🔄 Abonnement aux expéditions de la ville (sans filtre de date)
+  useEffect(() => {
+    if (!profile?.city) return
+
+    const q = query(
+      collection(db, 'parcels'),
+      where('destinationCity', '==', profile.city)
+    )
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const parcelsData = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }))
+      setAllCityParcels(parcelsData)
+      console.log('📦 [CaisseChefTab] Expéditions chargées:', parcelsData.length)
+    }, (error) => {
+      console.error('❌ Erreur subscription parcels:', error)
+    })
+
+    return () => unsubscribe()
+  }, [profile?.city])
 
   // Abonnement aux versements admin
   useEffect(() => {
@@ -268,16 +290,16 @@ export default function CaisseChefTab() {
     return (!isNaN(num) && isFinite(num) && num >= 0) ? num : 0
   }
 
-  // 🔄 Source de données fusionnée (allDisplayParcels + searchResults + cache modifications)
+  // 🔄 Source de données fusionnée (allCityParcels + searchResults + cache modifications)
   const dataSource = useMemo(() => {
     console.log('📊 [dataSource] RECALCUL:', {
-      'allDisplayParcels.length': allDisplayParcels?.length || 0,
+      'allCityParcels.length': allCityParcels?.length || 0,
       'searchResults': searchResults?.length || 0,
       'modifiedParcels': Object.keys(modifiedParcels).length
     })
 
-    // Commencer avec allDisplayParcels pour avoir TOUTES les expéditions (sans filtre de date)
-    let source = [...(allDisplayParcels || [])]
+    // Commencer avec allCityParcels pour avoir TOUTES les expéditions de la ville (sans filtre de date)
+    let source = [...(allCityParcels || [])]
 
     // Si en mode recherche, merger searchResults dans allDisplayParcels
     if (searchResults && searchResults.length > 0) {
@@ -311,7 +333,7 @@ export default function CaisseChefTab() {
     })
 
     return source
-  }, [allDisplayParcels, searchResults, modifiedParcels])
+  }, [allCityParcels, searchResults, modifiedParcels])
 
   // Calcul des statistiques
   const stats = useMemo(() => {
@@ -412,8 +434,8 @@ export default function CaisseChefTab() {
 
   // 💰 Solde de caisse global (sans filtre de date)
   const soldeCaisseGlobal = useMemo(() => {
-    // Utiliser allDisplayParcels (toutes les données) au lieu de dataSource (filtré)
-    const allParcels = allDisplayParcels || []
+    // Utiliser allCityParcels (toutes les expéditions de la ville) au lieu de dataSource (filtré)
+    const allParcels = allCityParcels || []
 
     // Ports dus collectés (TOUS, sans filtre date)
     const portsCollectes = allParcels.filter((p: any) =>
@@ -442,13 +464,13 @@ export default function CaisseChefTab() {
     // 🔄 IGNORE les versements pour repartir sur une base saine
     // (anciens versements faussaient le calcul)
     return totalCollecte + montantRecus
-  }, [allDisplayParcels, profile?.city])
+  }, [allCityParcels, profile?.city])
 
   // 💰 Solde d'un livreur spécifique (sans filtre de date)
   const soldeLivreur = useMemo(() => {
     if (driverFilter === 'all') return 0
 
-    const allParcels = allDisplayParcels || []
+    const allParcels = allCityParcels || []
 
     // Ports dus collectés par CE livreur (TOUS, sans filtre date)
     const portsCollectes = allParcels.filter((p: any) =>
@@ -478,7 +500,7 @@ export default function CaisseChefTab() {
 
     // Solde = ce que le livreur a DONNÉ au chef (collectés + reçus)
     return totalCollecte + totalPortsPayesRecus
-  }, [allDisplayParcels, driverFilter, profile?.city])
+  }, [allCityParcels, driverFilter, profile?.city])
 
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
