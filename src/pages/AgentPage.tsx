@@ -1591,12 +1591,19 @@ export default function AgentPage() {
     }
     // ⭐ Filtre par ville de destination / expédition
     if (destinationCityFilter !== 'all') {
-      // Si direction "Reçus", filtrer par ville d'origine (expédition)
-      // Sinon, filtrer par ville de destination
-      const cityToFilter = parcelDirection === 'received'
-        ? (p.originCity || p.sender?.city)
-        : (p.destinationCity || p.receiver?.city)
-      if (cityToFilter !== destinationCityFilter) return false
+      if (parcelDirection === 'all') {
+        // Pour "Tous", chercher dans origine OU destination
+        const matchesOrigin = (p.originCity || p.sender?.city) === destinationCityFilter
+        const matchesDest = (p.destinationCity || p.receiver?.city) === destinationCityFilter
+        if (!matchesOrigin && !matchesDest) return false
+      } else {
+        // Si direction "Reçus", filtrer par ville d'origine (expédition)
+        // Sinon, filtrer par ville de destination
+        const cityToFilter = parcelDirection === 'received'
+          ? (p.originCity || p.sender?.city)
+          : (p.destinationCity || p.receiver?.city)
+        if (cityToFilter !== destinationCityFilter) return false
+      }
     }
     // ⭐ Filtre par livreur/chauffeur
     if (driverFilter !== 'all') {
