@@ -214,6 +214,12 @@ export default function ParcelsTab() {
     serviceType: null
   })
 
+  // ⭐ États pour l'assignation de ramassage
+  const [selectedPickupParcelIds, setSelectedPickupParcelIds] = useState<Set<string>>(new Set())
+  const [assignPickupModal, setAssignPickupModal] = useState(false)
+  const [assigningPickupDriver, setAssigningPickupDriver] = useState('')
+  const [assigningPickupInProgress, setAssigningPickupInProgress] = useState(false)
+
   // Rafraîchissement automatique en arrière-plan quand des données sont modifiées
   useEffect(() => {
     const handleDataUpdate = () => {
@@ -495,6 +501,57 @@ export default function ParcelsTab() {
       setBulkPortDuError(err.message || 'Erreur lors de la transformation')
     } finally {
       setBulkPortDuBusy(false)
+    }
+  }
+
+  // ⭐ Assignation de ramassage à un livreur local
+  const handleAssignPickupToDriver = async () => {
+    if (!assigningPickupDriver) {
+      alert('Veuillez sélectionner un livreur')
+      return
+    }
+
+    if (selectedPickupParcelIds.size === 0) {
+      alert('Aucune expédition sélectionnée')
+      return
+    }
+
+    const driver = agencyDrivers.find((d: any) => d.id === assigningPickupDriver)
+    if (!driver) {
+      alert('Livreur introuvable')
+      return
+    }
+
+    if (!confirm(`Assigner ${selectedPickupParcelIds.size} expédition(s) à ${driver.name} pour ramassage ?`)) {
+      return
+    }
+
+    setAssigningPickupInProgress(true)
+
+    try {
+      const promises = Array.from(selectedPickupParcelIds).map(parcelId => {
+        return updateParcel(parcelId, {
+          deliveryDriverId: assigningPickupDriver,
+          deliveryDriverName: driver.name,
+          deliveryAssignedAt: new Date(),
+          deliveryAssignedBy: profile?.name || '',
+          status: 'En cours de ramassage'
+        })
+      })
+
+      await Promise.all(promises)
+
+      alert(`✅ ${selectedPickupParcelIds.size} expédition(s) assignée(s) à ${driver.name} pour ramassage`)
+
+      // Réinitialiser
+      setSelectedPickupParcelIds(new Set())
+      setAssigningPickupDriver('')
+      setAssignPickupModal(false)
+    } catch (err: any) {
+      console.error('Erreur assignation ramassage:', err)
+      alert('Erreur lors de l\'assignation: ' + (err.message || 'Erreur inconnue'))
+    } finally {
+      setAssigningPickupInProgress(false)
     }
   }
 
@@ -1733,6 +1790,18 @@ export default function ParcelsTab() {
                             : <><User className="w-4 h-4" /> Assigner au livreur</>
                           }
                         </button>
+
+                        {/* Bouton Assigner pour ramassage */}
+                        <button
+                          type="button"
+                          onClick={() => setAssignPickupModal(true)}
+                          disabled={selectedPickupParcelIds.size === 0}
+                          className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 disabled:opacity-40 text-white text-sm font-bold transition"
+                        >
+                          <Package className="w-4 h-4" />
+                          Assigner pour ramassage ({selectedPickupParcelIds.size})
+                        </button>
+
                         {Object.keys(parcelColors).length > 0 && (
                           <button
                             type="button"
@@ -2665,6 +2734,30 @@ export default function ParcelsTab() {
                                     />
                                   )
                                 })()}
+
+                                {/* Checkbox assignation ramassage */}
+                                {isAssignable && isFromMyCity && (
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedPickupParcelIds.has(parcel.id)}
+                                    onChange={e => {
+                                      e.stopPropagation()
+                                      const checked = e.target.checked
+                                      setSelectedPickupParcelIds(prev => {
+                                        const newSet = new Set(prev)
+                                        if (checked) {
+                                          newSet.add(parcel.id)
+                                        } else {
+                                          newSet.delete(parcel.id)
+                                        }
+                                        return newSet
+                                      })
+                                    }}
+                                    tabIndex={0}
+                                    className="w-4 h-4 accent-orange-600 cursor-pointer"
+                                    title="📦 Assigner pour ramassage"
+                                  />
+                                )}
                               </div>
                             </td>
                           )}
@@ -5673,6 +5766,74 @@ export default function ParcelsTab() {
                   {codEditModal.loading ? 'Enregistrement...' : 'Enregistrer'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📦 MODAL ASSIGNATION RAMASSAGE */}
+      {assignPickupModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-bold text-gray-800">Assigner pour ramassage</h3>
+                <p className="text-xs text-orange-600 mt-0.5">
+                  {selectedPickupParcelIds.size} expédition(s) sélectionnée(s)
+                </p>
+              </div>
+              <button
+                onClick={() => setAssignPickupModal(false)}
+                className="p-2 hover:bg-gray-100 rounded-xl transition"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            <div className="space-y-3 mb-4">
+              <div>
+                <label className="block text-xs font-bold text-gray-500 mb-1">
+                  Livreur local *
+                </label>
+                <select
+                  value={assigningPickupDriver}
+                  onChange={e => setAssigningPickupDriver(e.target.value)}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm font-semibold text-gray-800 focus:outline-none focus:border-orange-500"
+                >
+                  <option value="">-- Sélectionner un livreur --</option>
+                  {agencyDrivers.map((d: any) => (
+                    <option key={d.id} value={d.id}>
+                      {d.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <button
+                onClick={() => setAssignPickupModal(false)}
+                className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={handleAssignPickupToDriver}
+                disabled={assigningPickupInProgress || !assigningPickupDriver}
+                className="py-3 rounded-xl bg-orange-600 hover:bg-orange-700 disabled:opacity-60 text-white font-semibold transition flex items-center justify-center gap-2"
+              >
+                {assigningPickupInProgress ? (
+                  <>
+                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    Assignation...
+                  </>
+                ) : (
+                  <>
+                    <Package className="w-4 h-4" />
+                    Assigner
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </div>
