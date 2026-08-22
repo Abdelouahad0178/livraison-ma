@@ -373,11 +373,14 @@ export default function CaisseChefTab() {
       .filter((t: any) => t.status === 'confirmed')
       .reduce((sum: number, t: any) => sum + safeParseAmount(t.amount), 0)
 
-    // 🆕 Solde à verser = Ports dus collectés + Ports payés à recevoir
+    // 🆕 Solde disponible = Ports dus collectés + Ports payés reçus (argent physiquement chez le chef)
     const montantPortsPayesARecevoir = portsPayesARecevoir.reduce((sum: number, p: any) =>
       sum + safeParseAmount(p.price), 0
     )
-    const soldeAVerser = Math.max(0, totalCollecte + montantPortsPayesARecevoir - totalVerse)
+    const montantPortsPayesRecus = portsPayesRecus.reduce((sum: number, p: any) =>
+      sum + safeParseAmount(p.price), 0
+    )
+    const soldeAVerser = Math.max(0, totalCollecte + montantPortsPayesRecus - totalVerse)
 
     console.log('✅ [stats] RÉSULTAT:', {
       'portsACollecter': portsACollecter.length,
@@ -386,8 +389,9 @@ export default function CaisseChefTab() {
       'portsPayesRecus': portsPayesRecus.length,
       'totalCollecte': totalCollecte,
       'montantPortsPayesARecevoir': montantPortsPayesARecevoir,
+      'montantPortsPayesRecus': montantPortsPayesRecus,
       'totalVerse': totalVerse,
-      'soldeAVerser': soldeAVerser
+      'soldeAVerser (Collectés + Reçus - Versé)': soldeAVerser
     })
 
     return {
@@ -400,9 +404,7 @@ export default function CaisseChefTab() {
       portsPayesARecevoirCount: portsPayesARecevoir.length,
       portsPayesARecevoirMontant: montantPortsPayesARecevoir,
       portsPayesRecusCount: portsPayesRecus.length,
-      portsPayesRecusMontant: portsPayesRecus.reduce((sum: number, p: any) =>
-        sum + safeParseAmount(p.price), 0
-      ),
+      portsPayesRecusMontant: montantPortsPayesRecus,
       enRetardCount: enRetard.length,
       soldeAVerser,
     }
@@ -785,10 +787,11 @@ export default function CaisseChefTab() {
     const montantPortsPayesRecus = filteredDrivers.reduce((sum, d) => sum + (d.portsPayesRecusMontant || 0), 0)
     const totalEnRetard = filteredDrivers.reduce((sum, d) => sum + d.enRetardCount, 0)
 
-    // 🆕 Calcul du solde à verser :
-    // - Si on filtre par UN livreur : Solde = Collectés + À recevoir (sans soustraire versements admin)
-    // - Si TOUS les livreurs : Solde = Collectés + À recevoir - Versements admin
-    let soldeAVerser = montantCollectes + montantPortsPayesARecevoir
+    // 🆕 Calcul du solde disponible (argent physiquement chez le chef) :
+    // = Ports dus collectés + Ports payés reçus
+    // - Si TOUS les livreurs : soustraire les versements admin
+    // - Si UN livreur : juste ses collectés (les reçus ne sont pas par livreur)
+    let soldeAVerser = montantCollectes + montantPortsPayesRecus
 
     if (driverFilter === 'all') {
       // Soustraire les versements confirmés vers l'admin
