@@ -1596,9 +1596,12 @@ exports.manualArchiving = onCall(async (request) => {
  */
 
 function getCurrentOperationalDayString() {
-  const now = new Date()
-  const hour = now.getHours()
-  const minute = now.getMinutes()
+  // ⏰ Obtenir l'heure actuelle au Maroc (Africa/Casablanca)
+  const nowUtc = new Date()
+  const casablancaTime = new Date(nowUtc.toLocaleString('en-US', { timeZone: 'Africa/Casablanca' }))
+
+  const hour = casablancaTime.getHours()
+  const minute = casablancaTime.getMinutes()
 
   // Configuration : la journée change à 6h01
   const START_HOUR = 6
@@ -1611,7 +1614,7 @@ function getCurrentOperationalDayString() {
   const endMinutes = END_HOUR * 60 + END_MINUTE
 
   // Si avant 6h01, on est encore dans la journée d'hier
-  const operationalDate = new Date(now)
+  const operationalDate = new Date(casablancaTime)
   if (currentMinutes < endMinutes) {
     operationalDate.setDate(operationalDate.getDate() - 1)
   }

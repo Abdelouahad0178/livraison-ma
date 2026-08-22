@@ -554,8 +554,8 @@ service cloud.firestore {
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ ParamÃ¨tres globaux
     match /settings/{settingId} {
-      // adminSetup lisible publiquement pour la page de login
-      allow read:  if settingId == 'adminSetup' || settingId == 'workingDate' || settingId == 'editPermissions' ? true : signedIn();
+      // adminSetup, workingDate, editPermissions, operationalDay lisibles publiquement
+      allow read:  if settingId == 'adminSetup' || settingId == 'workingDate' || settingId == 'editPermissions' || settingId == 'operationalDay' ? true : signedIn();
       allow write: if settingId == 'tariffs' ? isAdmin() : isStaff();
       // CrÃ©ation du document adminSetup lors de la premiÃ¨re inscription admin
       allow create: if settingId == 'adminSetup'
