@@ -905,6 +905,55 @@ export default function CaisseChefTab() {
     }
   }
 
+  // 🆕 Annuler la réception d'un port payé (pour corriger les erreurs)
+  const handleUncollectPortPaye = async (parcel: any) => {
+    if (!confirm(`Annuler la réception du port payé de ${fmtAmt(parcel.price)} DH pour l'expédition ${parcel.senderNic || parcel.trackingId} ?\n\nLe port sera remis en état "Ramassé" (à recevoir).`)) {
+      return
+    }
+
+    setCollectingPortIds(prev => new Set(prev).add(parcel.id))
+    try {
+      const updatedData = {
+        portStatus: 'collected',  // Remettre en état ramassé
+        portReceivedBy: null,
+        portReceivedById: null,
+        portReceivedAt: null,
+      }
+
+      setModifiedParcels(prev => ({ ...prev, [parcel.id]: updatedData }))
+      updateParcelOptimistic(parcel.id, updatedData)
+
+      if (searchResults) {
+        setSearchResults(prev =>
+          prev ? prev.map(p => p.id === parcel.id ? { ...p, ...updatedData } : p) : prev
+        )
+      }
+
+      await updateParcel(parcel.id, updatedData)
+    } catch (err: any) {
+      console.error('❌ [handleUncollectPortPaye] ERREUR:', err)
+      alert(`❌ Erreur: ${err.message}`)
+
+      setModifiedParcels(prev => {
+        const updated = { ...prev }
+        delete updated[parcel.id]
+        return updated
+      })
+
+      if (searchResults) {
+        setSearchResults(prev =>
+          prev ? prev.map(p => p.id === parcel.id ? parcel : p) : prev
+        )
+      }
+    } finally {
+      setCollectingPortIds(prev => {
+        const updated = new Set(prev)
+        updated.delete(parcel.id)
+        return updated
+      })
+    }
+  }
+
   const handleCollectPort = async (parcel: any) => {
     if (!confirm(`Confirmer la collecte du port de ${fmtAmt(parcel.price)} DH pour l'expédition ${parcel.senderNic || parcel.trackingId} ?`)) {
       return
@@ -1735,6 +1784,11 @@ export default function CaisseChefTab() {
                                 !parcel.portPayeMethod &&
                                 (parcel.portStatus === 'collected' || !parcel.portStatus) &&
                                 (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city)
+                              // 🆕 Port payé reçu : port_paye avec portStatus='received'
+                              const isPortPayeRecu = parcel.portType === 'port_paye' &&
+                                !parcel.portPayeMethod &&
+                                parcel.portStatus === 'received' &&
+                                (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city)
                               const delay = deliveryDelays.find((d: any) =>
                                 d.parcelId === parcel.id && !d.resolvedAt
                               )
@@ -1796,6 +1850,11 @@ export default function CaisseChefTab() {
                                         <X className="w-3 h-3" />
                                         Retourné
                                       </span>
+                                    ) : isPortPayeRecu ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-700 text-xs font-semibold">
+                                        <Check className="w-3 h-3" />
+                                        Reçu
+                                      </span>
                                     ) : isPortPayeRamasse ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-indigo-100 text-indigo-700 text-xs font-semibold">
                                         <Banknote className="w-3 h-3" />
@@ -1832,6 +1891,14 @@ export default function CaisseChefTab() {
                                     <div className="flex items-center justify-center gap-2">
                                       {(parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné') ? (
                                         <span className="text-xs text-gray-500 italic">-</span>
+                                      ) : isPortPayeRecu ? (
+                                        <button
+                                          onClick={() => handleUncollectPortPaye(parcel)}
+                                          disabled={collectingPortIds.has(parcel.id)}
+                                          className="text-xs px-3 py-1 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed bg-red-100 text-red-700 hover:bg-red-200"
+                                        >
+                                          {collectingPortIds.has(parcel.id) ? '...' : 'Annuler'}
+                                        </button>
                                       ) : isPortPayeRamasse ? (
                                         <button
                                           onClick={() => handleReceivePortPaye(parcel)}
