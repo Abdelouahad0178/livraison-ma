@@ -459,16 +459,7 @@ export default function CaisseChefTab() {
       p.deliveryDriverId === driverFilter
     )
 
-    // Ports payés à recevoir ramassés par CE livreur (TOUS, sans filtre date)
-    const portsPayesARecevoir = allParcels.filter((p: any) =>
-      p.portType === 'port_paye' &&
-      !p.portPayeMethod &&
-      (p.portStatus === 'collected' || !p.portStatus) &&
-      (p.createdByCity === profile?.city || p.originCity === profile?.city) &&
-      p.deliveryDriverId === driverFilter
-    )
-
-    // 🆕 Ports payés REÇUS ramassés par CE livreur (TOUS, sans filtre date)
+    // Ports payés REÇUS ramassés par CE livreur (TOUS, sans filtre date)
     const portsPayesRecus = allParcels.filter((p: any) =>
       p.portType === 'port_paye' &&
       !p.portPayeMethod &&
@@ -481,15 +472,12 @@ export default function CaisseChefTab() {
       sum + safeParseAmount(p.price), 0
     )
 
-    const totalPortsPayesARecevoir = portsPayesARecevoir.reduce((sum: number, p: any) =>
-      sum + safeParseAmount(p.price), 0
-    )
-
     const totalPortsPayesRecus = portsPayesRecus.reduce((sum: number, p: any) =>
       sum + safeParseAmount(p.price), 0
     )
 
-    return totalCollecte + totalPortsPayesARecevoir + totalPortsPayesRecus
+    // Solde = ce que le livreur a DONNÉ au chef (collectés + reçus)
+    return totalCollecte + totalPortsPayesRecus
   }, [parcels, driverFilter, profile?.city])
 
   // Liste des livreurs actifs
