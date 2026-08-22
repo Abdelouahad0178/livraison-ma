@@ -788,17 +788,20 @@ export default function CaisseChefTab() {
     const totalEnRetard = filteredDrivers.reduce((sum, d) => sum + d.enRetardCount, 0)
 
     // 🆕 Calcul du solde disponible (argent physiquement chez le chef) :
-    // = Ports dus collectés + Ports payés reçus
-    // - Si TOUS les livreurs : soustraire les versements admin
-    // - Si UN livreur : juste ses collectés (les reçus ne sont pas par livreur)
-    let soldeAVerser = montantCollectes + montantPortsPayesRecus
+    // - Si TOUS les livreurs : (Collectés + Reçus) - Versements admin
+    // - Si UN livreur : SEULEMENT ses collectés (les reçus sont globaux, pas par livreur)
+    let soldeAVerser
 
     if (driverFilter === 'all') {
-      // Soustraire les versements confirmés vers l'admin
+      // Tous les livreurs : collectés + reçus - versements
+      soldeAVerser = montantCollectes + montantPortsPayesRecus
       const totalVerse = adminTransfers
         .filter((t: any) => t.status === 'confirmed')
         .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0)
       soldeAVerser = Math.max(0, soldeAVerser - totalVerse)
+    } else {
+      // Un livreur spécifique : SEULEMENT ses collectés (pas les reçus)
+      soldeAVerser = montantCollectes
     }
 
     return {
