@@ -1586,3 +1586,69 @@ exports.manualArchiving = onCall(async (request) => {
     throw new Error(`Erreur lors de l'archivage: ${error.message}`)
   }
 })
+
+// ── Mise à jour automatique journée opérationnelle ──────────────────────────
+/**
+ * ⏰ Fonction qui s'exécute automatiquement chaque jour à 6h01 (heure Casablanca)
+ * pour mettre à jour la journée opérationnelle dans Firestore.
+ *
+ * Fonctionne même si personne n'ouvre l'application.
+ */
+
+function getCurrentOperationalDayString() {
+  const now = new Date()
+  const hour = now.getHours()
+  const minute = now.getMinutes()
+
+  // Configuration : la journée change à 6h01
+  const START_HOUR = 6
+  const START_MINUTE = 1
+  const END_HOUR = 6
+  const END_MINUTE = 1
+
+  // Convertir en minutes depuis minuit
+  const currentMinutes = hour * 60 + minute
+  const endMinutes = END_HOUR * 60 + END_MINUTE
+
+  // Si avant 6h01, on est encore dans la journée d'hier
+  const operationalDate = new Date(now)
+  if (currentMinutes < endMinutes) {
+    operationalDate.setDate(operationalDate.getDate() - 1)
+  }
+
+  // Retourner au format YYYY-MM-DD
+  const year = operationalDate.getFullYear()
+  const month = String(operationalDate.getMonth() + 1).padStart(2, '0')
+  const day = String(operationalDate.getDate()).padStart(2, '0')
+
+  return `${year}-${month}-${day}`
+}
+
+exports.updateOperationalDay = onSchedule({
+  schedule: '1 6 * * *',           // Chaque jour à 6h01
+  timeZone: 'Africa/Casablanca',   // Fuseau horaire Maroc
+  retryCount: 3,                   // Réessayer 3 fois en cas d'échec
+  memory: '256MiB',
+  timeoutSeconds: 60,
+}, async (event) => {
+  try {
+    const dayString = getCurrentOperationalDayString()
+
+    console.log(`⏰ [${new Date().toISOString()}] Mise à jour automatique journée opérationnelle: ${dayString}`)
+
+    // Mettre à jour dans Firestore
+    await db.collection('settings').doc('operationalDay').set({
+      currentDay: dayString,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: 'auto-scheduler',
+      lastScheduledUpdate: new Date().toISOString(),
+    }, { merge: true })
+
+    console.log(`✅ Journée opérationnelle mise à jour avec succès: ${dayString}`)
+
+    return { success: true, operationalDay: dayString }
+  } catch (error) {
+    console.error('❌ Erreur mise à jour journée opérationnelle:', error)
+    throw error
+  }
+})
