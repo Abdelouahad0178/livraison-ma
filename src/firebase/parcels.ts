@@ -237,6 +237,10 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     codRemisAt:           null,
     codRemisBy:           null,
     portType:             data.portType   || 'port_paye',
+    portStatus:           (data.portType === 'port_paye' || !data.portType) ? 'collected' : null,  // Port payé = déjà collecté au ramassage
+    portCollectedAt:      (data.portType === 'port_paye' || !data.portType) ? historyTs : null,
+    portCollectedBy:      (data.portType === 'port_paye' || !data.portType) ? (data.agentName || '') : null,
+    portCollectedById:    (data.portType === 'port_paye' || !data.portType) ? (data.agentId || null) : null,
     clientId:             data.clientId   || null,
     clientName:           data.clientName || null,
     receiverClientId:     data.receiverClientId || null,

@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import {
   Wallet, TrendingUp, AlertCircle, User, Package, Clock, Check, X,
-  Send, Eye, ChevronDown, ChevronUp, Search, Calendar, Filter
+  Send, Eye, ChevronDown, ChevronUp, Search, Calendar, Filter, Banknote
 } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import DateFilter from '../DateFilter'
@@ -338,6 +338,13 @@ export default function CaisseChefTab() {
       p.destinationCity === profile?.city
     )
 
+    // 🆕 Ports payés ramassés (à recevoir du livreur)
+    const portsPayesARecevoir = dataSource.filter((p: any) =>
+      p.portType === 'port_paye' &&
+      p.portStatus === 'collected' &&  // Collecté au ramassage mais pas encore versé au chef
+      p.createdByCity === profile?.city  // Créé dans cette agence
+    )
+
     // Expéditions en retard (en cours de livraison depuis >24h)
     const now = new Date()
     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
@@ -362,6 +369,7 @@ export default function CaisseChefTab() {
     console.log('✅ [stats] RÉSULTAT:', {
       'portsACollecter': portsACollecter.length,
       'portsCollectes': portsCollectes.length,
+      'portsPayesARecevoir': portsPayesARecevoir.length,
       'totalCollecte': totalCollecte,
       'totalVerse': totalVerse,
       'soldeAVerser': soldeAVerser
@@ -374,6 +382,10 @@ export default function CaisseChefTab() {
       ),
       portsCollectes: portsCollectes.length,
       portsCollectesMontant: totalCollecte,
+      portsPayesARecevoirCount: portsPayesARecevoir.length,
+      portsPayesARecevoirMontant: portsPayesARecevoir.reduce((sum: number, p: any) =>
+        sum + safeParseAmount(p.price), 0
+      ),
       enRetardCount: enRetard.length,
       soldeAVerser,
     }
@@ -488,6 +500,16 @@ export default function CaisseChefTab() {
         p.portStatus === 'collected' || p.portStatus === 'received'
       )
 
+      // 🆕 Ports payés ramassés par ce livreur (à verser au chef)
+      const portsPayesParcels = driver.parcels.filter((p: any) =>
+        p.portType === 'port_paye' &&
+        !p.portPayeMethod &&
+        p.createdByCity === profile?.city
+      )
+      const portsPayesARecevoir = portsPayesParcels.filter((p: any) =>
+        p.portStatus === 'collected'  // Pas encore versé au chef
+      )
+
       const now = new Date()
       const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
       const enRetard = portDuParcels.filter((p: any) => {
@@ -504,6 +526,8 @@ export default function CaisseChefTab() {
         parcels: driver.parcels,
         // Ajouter les ports dû séparément pour référence
         portDuParcels: portDuParcels,
+        // Ajouter les ports payés séparément
+        portsPayesParcels: portsPayesParcels,
         assignedTodayCount: assignedToday.length,
         portsACollecterCount: portsACollecter.length,
         portsACollecterMontant: portsACollecter.reduce((sum: number, p: any) =>
@@ -511,6 +535,10 @@ export default function CaisseChefTab() {
         ),
         portsCollectesCount: portsCollectes.length,
         portsCollectesMontant: portsCollectes.reduce((sum: number, p: any) =>
+          sum + safeParseAmount(p.price), 0
+        ),
+        portsPayesARecevoirCount: portsPayesARecevoir.length,
+        portsPayesARecevoirMontant: portsPayesARecevoir.reduce((sum: number, p: any) =>
           sum + safeParseAmount(p.price), 0
         ),
         enRetardCount: enRetard.length,
@@ -727,6 +755,8 @@ export default function CaisseChefTab() {
     const montantACollecter = filteredDrivers.reduce((sum, d) => sum + d.portsACollecterMontant, 0)
     const totalCollectes = filteredDrivers.reduce((sum, d) => sum + d.portsCollectesCount, 0)
     const montantCollectes = filteredDrivers.reduce((sum, d) => sum + d.portsCollectesMontant, 0)
+    const totalPortsPayesARecevoir = filteredDrivers.reduce((sum, d) => sum + (d.portsPayesARecevoirCount || 0), 0)
+    const montantPortsPayesARecevoir = filteredDrivers.reduce((sum, d) => sum + (d.portsPayesARecevoirMontant || 0), 0)
     const totalEnRetard = filteredDrivers.reduce((sum, d) => sum + d.enRetardCount, 0)
 
     return {
@@ -734,6 +764,8 @@ export default function CaisseChefTab() {
       portsACollecterMontant: montantACollecter,
       portsCollectes: totalCollectes,
       portsCollectesMontant: montantCollectes,
+      portsPayesARecevoirCount: totalPortsPayesARecevoir,
+      portsPayesARecevoirMontant: montantPortsPayesARecevoir,
       enRetardCount: totalEnRetard,
       soldeAVerser: montantCollectes, // Pour les filtres, solde = collecté filtré
     }
@@ -823,6 +855,55 @@ export default function CaisseChefTab() {
   }
 
   // Collecter un port dû
+  // 🆕 Réception des ports payés ramassés par le livreur
+  const handleReceivePortPaye = async (parcel: any) => {
+    if (!confirm(`Confirmer la réception du port payé de ${fmtAmt(parcel.price)} DH ramassé par le livreur pour l'expédition ${parcel.senderNic || parcel.trackingId} ?`)) {
+      return
+    }
+
+    setCollectingPortIds(prev => new Set(prev).add(parcel.id))
+    try {
+      const updatedData = {
+        portStatus: 'received',  // Chef a reçu l'argent du livreur
+        portReceivedBy: profile?.name || '',
+        portReceivedById: uid || '',
+        portReceivedAt: new Date(),
+      }
+
+      setModifiedParcels(prev => ({ ...prev, [parcel.id]: updatedData }))
+      updateParcelOptimistic(parcel.id, updatedData)
+
+      if (searchResults) {
+        setSearchResults(prev =>
+          prev ? prev.map(p => p.id === parcel.id ? { ...p, ...updatedData } : p) : prev
+        )
+      }
+
+      await updateParcel(parcel.id, updatedData)
+    } catch (err: any) {
+      console.error('❌ [handleReceivePortPaye] ERREUR:', err)
+      alert(`❌ Erreur: ${err.message}`)
+
+      setModifiedParcels(prev => {
+        const updated = { ...prev }
+        delete updated[parcel.id]
+        return updated
+      })
+
+      if (searchResults) {
+        setSearchResults(prev =>
+          prev ? prev.map(p => p.id === parcel.id ? parcel : p) : prev
+        )
+      }
+    } finally {
+      setCollectingPortIds(prev => {
+        const updated = new Set(prev)
+        updated.delete(parcel.id)
+        return updated
+      })
+    }
+  }
+
   const handleCollectPort = async (parcel: any) => {
     if (!confirm(`Confirmer la collecte du port de ${fmtAmt(parcel.price)} DH pour l'expédition ${parcel.senderNic || parcel.trackingId} ?`)) {
       return
@@ -1148,7 +1229,7 @@ export default function CaisseChefTab() {
   return (
     <div className="space-y-4">
       {/* En-tête avec statistiques */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
         {/* Ports à collecter */}
         <div className="bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 rounded-xl p-4">
           <div className="flex items-center justify-between mb-2">
@@ -1163,7 +1244,7 @@ export default function CaisseChefTab() {
           </div>
         </div>
 
-        {/* Ports collectés */}
+        {/* Ports collectés (ports dus) */}
         <div className="bg-gradient-to-br from-green-50 to-green-100 border border-green-200 rounded-xl p-4">
           <div className="flex items-center justify-between mb-2">
             <Wallet className="w-5 h-5 text-green-600" />
@@ -1174,6 +1255,20 @@ export default function CaisseChefTab() {
           </div>
           <div className="text-sm text-green-700 font-medium mt-1">
             {fmtAmt(filteredStats.portsCollectesMontant)} DH
+          </div>
+        </div>
+
+        {/* 🆕 Ports payés ramassés (à recevoir) */}
+        <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 border border-indigo-200 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <Banknote className="w-5 h-5 text-indigo-600" />
+            <span className="text-xs font-semibold text-indigo-600">Ramassés</span>
+          </div>
+          <div className="text-2xl font-bold text-indigo-900">
+            {filteredStats.portsPayesARecevoirCount}
+          </div>
+          <div className="text-sm text-indigo-700 font-medium mt-1">
+            {fmtAmt(filteredStats.portsPayesARecevoirMontant)} DH
           </div>
         </div>
 
@@ -1559,7 +1654,7 @@ export default function CaisseChefTab() {
                     <div>
                       <h3 className="font-semibold text-gray-900">{driver.name}</h3>
                       <p className="text-xs text-gray-500">
-                        {driver.parcels.length} expéditions
+                        {driver.portDuParcels.length} ports dus · {driver.portsPayesParcels.length} ramassés
                       </p>
                     </div>
                   </div>
@@ -1575,6 +1670,12 @@ export default function CaisseChefTab() {
                         <div className="text-green-600 font-bold">{driver.portsCollectesCount}</div>
                         <div className="text-xs text-gray-500">Collectés</div>
                       </div>
+                      {driver.portsPayesARecevoirCount > 0 && (
+                        <div className="text-center">
+                          <div className="text-indigo-600 font-bold">{driver.portsPayesARecevoirCount}</div>
+                          <div className="text-xs text-gray-500">Ramassés</div>
+                        </div>
+                      )}
                       {driver.enRetardCount > 0 && (
                         <div className="text-center">
                           <div className="text-amber-600 font-bold">{driver.enRetardCount}</div>
@@ -1591,6 +1692,11 @@ export default function CaisseChefTab() {
                       <div className="text-xs text-green-600">
                         +{fmtAmt(driver.portsCollectesMontant)} DH
                       </div>
+                      {driver.portsPayesARecevoirMontant > 0 && (
+                        <div className="text-xs text-indigo-600">
+                          +{fmtAmt(driver.portsPayesARecevoirMontant)} DH
+                        </div>
+                      )}
                     </div>
 
                     {/* Icône expansion */}
@@ -1623,6 +1729,8 @@ export default function CaisseChefTab() {
                           {driver.parcels.map((parcel: any) => {
                               // LOGIQUE COHÉRENTE : Port dû seulement si portType='port_du' ET pas de portPayeMethod
                               const isPortDu = parcel.portType === 'port_du' && !parcel.portPayeMethod
+                              // 🆕 Port payé ramassé : port_paye avec portStatus='collected' (pas encore reçu par chef)
+                              const isPortPayeRamasse = parcel.portType === 'port_paye' && parcel.portStatus === 'collected' && parcel.createdByCity === profile?.city
                               const delay = deliveryDelays.find((d: any) =>
                                 d.parcelId === parcel.id && !d.resolvedAt
                               )
@@ -1684,6 +1792,11 @@ export default function CaisseChefTab() {
                                         <X className="w-3 h-3" />
                                         Retourné
                                       </span>
+                                    ) : isPortPayeRamasse ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-indigo-100 text-indigo-700 text-xs font-semibold">
+                                        <Banknote className="w-3 h-3" />
+                                        Ramassé
+                                      </span>
                                     ) : !isPortDu && (parcel.portType === 'port_en_compte_destinataire' || parcel.portType === 'port_en_compte_expediteur') ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-semibold">
                                         <Check className="w-3 h-3" />
@@ -1715,6 +1828,14 @@ export default function CaisseChefTab() {
                                     <div className="flex items-center justify-center gap-2">
                                       {(parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné') ? (
                                         <span className="text-xs text-gray-500 italic">-</span>
+                                      ) : isPortPayeRamasse ? (
+                                        <button
+                                          onClick={() => handleReceivePortPaye(parcel)}
+                                          disabled={collectingPortIds.has(parcel.id)}
+                                          className="text-xs px-3 py-1 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
+                                        >
+                                          {collectingPortIds.has(parcel.id) ? '...' : 'Recevoir'}
+                                        </button>
                                       ) : isPortDu && (
                                         <>
                                           <button
