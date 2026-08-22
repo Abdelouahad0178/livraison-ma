@@ -139,18 +139,23 @@ export function getOperationalDayRange(operationalDate: Date | string): {
 /**
  * 📊 Obtient la journée opérationnelle actuelle
  *
+ * ⚠️ IMPORTANT: Recalcule TOUJOURS depuis l'heure système actuelle
+ * Ne jamais mettre en cache cette valeur - elle change automatiquement à 6h01
+ *
  * @returns Date de début de la journée opérationnelle en cours
  *
  * @example
  * // Si maintenant = 24 juillet 2026 à 02:00
  * getCurrentOperationalDay()
- * // → 2026-07-23T08:00:00 (encore dans la journée du 23)
+ * // → 2026-07-23T06:01:00 (encore dans la journée du 23)
  *
  * // Si maintenant = 24 juillet 2026 à 10:00
  * getCurrentOperationalDay()
- * // → 2026-07-24T08:00:00 (nouvelle journée du 24)
+ * // → 2026-07-24T06:01:00 (nouvelle journée du 24)
  */
 export function getCurrentOperationalDay(): Date {
+  // ⚠️ Toujours créer une nouvelle Date() pour avoir l'heure système actuelle
+  // Ne jamais utiliser une date en cache ou pré-calculée
   return getOperationalDay(new Date())
 }
 

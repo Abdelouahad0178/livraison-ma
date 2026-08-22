@@ -37,13 +37,42 @@ export function useOperationalDay() {
         setCurrentDay(newDay)
         setDayString(newDayString)
         console.log('🔄 Changement de journée opérationnelle:', newDayString)
+
+        // 🔔 Notification visuelle du changement
+        if (typeof window !== 'undefined') {
+          localStorage.setItem('lastOperationalDay', newDayString)
+        }
       }
     }
 
-    // Vérifier toutes les minutes
+    // ✅ Vérification immédiate au montage du composant
+    updateDay()
+
+    // 🔄 Vérifier toutes les minutes
     const interval = setInterval(updateDay, 60000)
 
-    return () => clearInterval(interval)
+    // 👁️ Vérifier quand l'onglet redevient actif
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        console.log('📱 Onglet actif - Vérification de la journée opérationnelle')
+        updateDay()
+      }
+    }
+
+    // 🔍 Vérifier au focus de la fenêtre
+    const handleFocus = () => {
+      console.log('🎯 Fenêtre active - Vérification de la journée opérationnelle')
+      updateDay()
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    window.addEventListener('focus', handleFocus)
+
+    return () => {
+      clearInterval(interval)
+      document.removeEventListener('visibilitychange', handleVisibilityChange)
+      window.removeEventListener('focus', handleFocus)
+    }
   }, [dayString])
 
   const range = useMemo(() => getOperationalDayRange(currentDay), [currentDay])

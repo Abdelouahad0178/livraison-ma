@@ -8,6 +8,7 @@ import { ADMIN_SEARCH_CONFIG, SEARCH_PLACEHOLDERS } from '../config/searchConfig
 import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
+import { startAutoSync } from '../firebase/operationalDaySync'
 import {
   subscribeAllParcels, subscribeAllParcelsWithDateFilter, subscribeAllUsers,
   updateParcel, updateParcelStatus, markParcelAsReturned, remitCod, settleCodToSender, batchSettleCods, updateUser, deleteUserDoc,
@@ -555,6 +556,16 @@ export default function AdminPage() {
   const periodLabel = formatPeriod(adminDatePreset, adminDateFrom, adminDateTo, operationalDay)
 
   // ✅ useEffect de recherche déplacés après useFuseSearch hook (ligne ~1090)
+
+  // 🔄 Synchronisation automatique de la journée opérationnelle
+  useEffect(() => {
+    console.log('⏰ Démarrage synchronisation automatique journée opérationnelle')
+    const stopAutoSync = startAutoSync()
+    return () => {
+      console.log('⏹️ Arrêt synchronisation automatique journée opérationnelle')
+      stopAutoSync()
+    }
+  }, [])
 
   // Subscriptions de base � ddémarrent au montage du composant
   useEffect(() => {
