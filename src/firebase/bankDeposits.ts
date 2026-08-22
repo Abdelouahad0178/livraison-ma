@@ -46,10 +46,12 @@ export async function createBankDeposit({ parcelId, trackingId, senderName, rece
 }
 
 export function subscribeBankDepositsByCity(city: any, callback: any, onError: (err?: any) => void = () => {}) {
+  // ⚡ OPTIMISATION : Limiter à 200 derniers versements pour éviter surcharge
   const q = query(
     collection(db, 'bankDeposits'),
     where('city', '==', city),
-    orderBy('createdAt', 'desc')
+    orderBy('createdAt', 'desc'),
+    limit(200)
   )
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }

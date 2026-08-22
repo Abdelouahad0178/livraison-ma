@@ -135,8 +135,9 @@ export function subscribeAgentRemises(agentId: any, callback: any, onError: (err
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 export function subscribeCaisseByCity(city: any, callback: any, onError: (err?: any) => void = () => {}) {
-  const since = daysAgoTimestamp(60)
-  const q = query(collection(db, 'caisseEntries'), where('city', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(300))
+  // ⚡ OPTIMISATION : 30 jours, 500 docs pour équilibre performance/complétude
+  const since = daysAgoTimestamp(30)
+  const q = query(collection(db, 'caisseEntries'), where('city', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(500))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 export function subscribeAllCaisse(callback: any, onError: (err?: any) => void = () => {}) {
