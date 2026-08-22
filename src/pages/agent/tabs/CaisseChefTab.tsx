@@ -346,6 +346,14 @@ export default function CaisseChefTab() {
       (p.createdByCity === profile?.city || p.originCity === profile?.city)  // Créé dans cette agence
     )
 
+    // 🆕 Ports payés reçus par le chef
+    const portsPayesRecus = dataSource.filter((p: any) =>
+      p.portType === 'port_paye' &&
+      !p.portPayeMethod &&
+      p.portStatus === 'received' &&  // Déjà reçu par le chef
+      (p.createdByCity === profile?.city || p.originCity === profile?.city)
+    )
+
     // Expéditions en retard (en cours de livraison depuis >24h)
     const now = new Date()
     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
@@ -365,13 +373,19 @@ export default function CaisseChefTab() {
       .filter((t: any) => t.status === 'confirmed')
       .reduce((sum: number, t: any) => sum + safeParseAmount(t.amount), 0)
 
-    const soldeAVerser = Math.max(0, totalCollecte - totalVerse)
+    // 🆕 Solde à verser = Ports dus collectés + Ports payés à recevoir
+    const montantPortsPayesARecevoir = portsPayesARecevoir.reduce((sum: number, p: any) =>
+      sum + safeParseAmount(p.price), 0
+    )
+    const soldeAVerser = Math.max(0, totalCollecte + montantPortsPayesARecevoir - totalVerse)
 
     console.log('✅ [stats] RÉSULTAT:', {
       'portsACollecter': portsACollecter.length,
       'portsCollectes': portsCollectes.length,
       'portsPayesARecevoir': portsPayesARecevoir.length,
+      'portsPayesRecus': portsPayesRecus.length,
       'totalCollecte': totalCollecte,
+      'montantPortsPayesARecevoir': montantPortsPayesARecevoir,
       'totalVerse': totalVerse,
       'soldeAVerser': soldeAVerser
     })
@@ -384,7 +398,9 @@ export default function CaisseChefTab() {
       portsCollectes: portsCollectes.length,
       portsCollectesMontant: totalCollecte,
       portsPayesARecevoirCount: portsPayesARecevoir.length,
-      portsPayesARecevoirMontant: portsPayesARecevoir.reduce((sum: number, p: any) =>
+      portsPayesARecevoirMontant: montantPortsPayesARecevoir,
+      portsPayesRecusCount: portsPayesRecus.length,
+      portsPayesRecusMontant: portsPayesRecus.reduce((sum: number, p: any) =>
         sum + safeParseAmount(p.price), 0
       ),
       enRetardCount: enRetard.length,
@@ -510,6 +526,9 @@ export default function CaisseChefTab() {
       const portsPayesARecevoir = portsPayesParcels.filter((p: any) =>
         (p.portStatus === 'collected' || !p.portStatus)  // Pas encore versé au chef (ou anciennes données)
       )
+      const portsPayesRecus = portsPayesParcels.filter((p: any) =>
+        p.portStatus === 'received'  // Déjà reçu par le chef
+      )
 
       const now = new Date()
       const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
@@ -540,6 +559,10 @@ export default function CaisseChefTab() {
         ),
         portsPayesARecevoirCount: portsPayesARecevoir.length,
         portsPayesARecevoirMontant: portsPayesARecevoir.reduce((sum: number, p: any) =>
+          sum + safeParseAmount(p.price), 0
+        ),
+        portsPayesRecusCount: portsPayesRecus.length,
+        portsPayesRecusMontant: portsPayesRecus.reduce((sum: number, p: any) =>
           sum + safeParseAmount(p.price), 0
         ),
         enRetardCount: enRetard.length,
@@ -758,6 +781,8 @@ export default function CaisseChefTab() {
     const montantCollectes = filteredDrivers.reduce((sum, d) => sum + d.portsCollectesMontant, 0)
     const totalPortsPayesARecevoir = filteredDrivers.reduce((sum, d) => sum + (d.portsPayesARecevoirCount || 0), 0)
     const montantPortsPayesARecevoir = filteredDrivers.reduce((sum, d) => sum + (d.portsPayesARecevoirMontant || 0), 0)
+    const totalPortsPayesRecus = filteredDrivers.reduce((sum, d) => sum + (d.portsPayesRecusCount || 0), 0)
+    const montantPortsPayesRecus = filteredDrivers.reduce((sum, d) => sum + (d.portsPayesRecusMontant || 0), 0)
     const totalEnRetard = filteredDrivers.reduce((sum, d) => sum + d.enRetardCount, 0)
 
     return {
@@ -767,8 +792,10 @@ export default function CaisseChefTab() {
       portsCollectesMontant: montantCollectes,
       portsPayesARecevoirCount: totalPortsPayesARecevoir,
       portsPayesARecevoirMontant: montantPortsPayesARecevoir,
+      portsPayesRecusCount: totalPortsPayesRecus,
+      portsPayesRecusMontant: montantPortsPayesRecus,
       enRetardCount: totalEnRetard,
-      soldeAVerser: montantCollectes, // Pour les filtres, solde = collecté filtré
+      soldeAVerser: montantCollectes + montantPortsPayesARecevoir, // Collectés + À recevoir
     }
   }, [filteredDrivers])
 
@@ -1279,7 +1306,7 @@ export default function CaisseChefTab() {
   return (
     <div className="space-y-4">
       {/* En-tête avec statistiques */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {/* Ports à collecter */}
         <div className="bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 rounded-xl p-4">
           <div className="flex items-center justify-between mb-2">
@@ -1308,17 +1335,31 @@ export default function CaisseChefTab() {
           </div>
         </div>
 
-        {/* 🆕 Ports payés ramassés (à recevoir) */}
+        {/* 🆕 Ports payés à recevoir */}
         <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 border border-indigo-200 rounded-xl p-4">
           <div className="flex items-center justify-between mb-2">
             <Banknote className="w-5 h-5 text-indigo-600" />
-            <span className="text-xs font-semibold text-indigo-600">Ramassés</span>
+            <span className="text-xs font-semibold text-indigo-600">À recevoir</span>
           </div>
           <div className="text-2xl font-bold text-indigo-900">
             {filteredStats.portsPayesARecevoirCount}
           </div>
           <div className="text-sm text-indigo-700 font-medium mt-1">
             {fmtAmt(filteredStats.portsPayesARecevoirMontant)} DH
+          </div>
+        </div>
+
+        {/* 🆕 Ports payés reçus */}
+        <div className="bg-gradient-to-br from-teal-50 to-teal-100 border border-teal-200 rounded-xl p-4">
+          <div className="flex items-center justify-between mb-2">
+            <Check className="w-5 h-5 text-teal-600" />
+            <span className="text-xs font-semibold text-teal-600">Reçus</span>
+          </div>
+          <div className="text-2xl font-bold text-teal-900">
+            {filteredStats.portsPayesRecusCount}
+          </div>
+          <div className="text-sm text-teal-700 font-medium mt-1">
+            {fmtAmt(filteredStats.portsPayesRecusMontant)} DH
           </div>
         </div>
 
