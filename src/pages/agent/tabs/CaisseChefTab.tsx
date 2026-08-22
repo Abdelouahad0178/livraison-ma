@@ -410,6 +410,43 @@ export default function CaisseChefTab() {
     }
   }, [dataSource, adminTransfers, profile?.city])
 
+  // 💰 Solde de caisse global (sans filtre de date)
+  const soldeCaisseGlobal = useMemo(() => {
+    // Utiliser parcels (toutes les données) au lieu de dataSource (filtré)
+    const allParcels = parcels || []
+
+    // Ports dus collectés (TOUS, sans filtre date)
+    const portsCollectes = allParcels.filter((p: any) =>
+      p.portType === 'port_du' &&
+      !p.portPayeMethod &&
+      (p.portStatus === 'collected' || p.portStatus === 'received') &&
+      p.destinationCity === profile?.city
+    )
+
+    // Ports payés reçus (TOUS, sans filtre date)
+    const portsPayesRecus = allParcels.filter((p: any) =>
+      p.portType === 'port_paye' &&
+      !p.portPayeMethod &&
+      p.portStatus === 'received' &&
+      (p.createdByCity === profile?.city || p.originCity === profile?.city)
+    )
+
+    const totalCollecte = portsCollectes.reduce((sum: number, p: any) =>
+      sum + safeParseAmount(p.price), 0
+    )
+
+    const montantRecus = portsPayesRecus.reduce((sum: number, p: any) =>
+      sum + safeParseAmount(p.price), 0
+    )
+
+    // TOUS les versements confirmés (sans filtre date)
+    const totalVerse = adminTransfers
+      .filter((t: any) => t.status === 'confirmed')
+      .reduce((sum: number, t: any) => sum + safeParseAmount(t.amount), 0)
+
+    return Math.max(0, totalCollecte + montantRecus - totalVerse)
+  }, [parcels, adminTransfers, profile?.city])
+
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
     // DEBUG: Vérifier les données au chargement
@@ -1403,7 +1440,7 @@ export default function CaisseChefTab() {
             <span className="text-xs font-semibold text-purple-600">À verser</span>
           </div>
           <div className="text-2xl font-bold text-purple-900">
-            {fmtAmt(driverFilter === 'all' ? stats.soldeAVerser : filteredStats.soldeAVerser)} DH
+            {fmtAmt(driverFilter === 'all' ? soldeCaisseGlobal : filteredStats.soldeAVerser)} DH
           </div>
           <div className="text-sm text-purple-700 font-medium mt-1">
             Solde disponible
