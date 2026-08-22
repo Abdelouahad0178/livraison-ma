@@ -1652,3 +1652,32 @@ exports.updateOperationalDay = onSchedule({
     throw error
   }
 })
+
+// Fonction manuelle pour forcer la mise à jour immédiate (callable depuis l'app)
+exports.forceUpdateOperationalDay = onCall(async (request) => {
+  try {
+    const dayString = getCurrentOperationalDayString()
+
+    console.log(`🔧 [${new Date().toISOString()}] Mise à jour MANUELLE journée opérationnelle: ${dayString}`)
+
+    // Mettre à jour dans Firestore
+    await db.collection('settings').doc('operationalDay').set({
+      currentDay: dayString,
+      updatedAt: FieldValue.serverTimestamp(),
+      updatedBy: request.auth ? `user-${request.auth.uid}` : 'anonymous',
+      lastManualUpdate: new Date().toISOString(),
+    }, { merge: true })
+
+    console.log(`✅ Journée opérationnelle mise à jour manuellement: ${dayString}`)
+
+    return {
+      success: true,
+      operationalDay: dayString,
+      timestamp: new Date().toISOString(),
+      message: `Journée mise à jour: ${dayString}`
+    }
+  } catch (error) {
+    console.error('❌ Erreur mise à jour manuelle journée opérationnelle:', error)
+    throw new Error(`Erreur: ${error.message}`)
+  }
+})
