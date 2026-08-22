@@ -264,6 +264,17 @@ export default function ParcelsTab() {
     return Array.from(cities).sort()
   })()
 
+  // ⭐ Calculer les villes d'origine (expédition) disponibles
+  const availableOriginCities = (() => {
+    const cities = new Set<string>()
+    const parcels = allDisplayParcels || []
+    parcels.forEach((p: any) => {
+      const originCity = p.originCity || p.sender?.city
+      if (originCity) cities.add(originCity)
+    })
+    return Array.from(cities).sort()
+  })()
+
   // ⭐ Calculer les livreurs/chauffeurs disponibles (ceux qui ont des colis assignés dans la ville de l'agent)
   const availableDrivers = (() => {
     const driverIds = new Set<string>()
@@ -789,16 +800,18 @@ export default function ParcelsTab() {
                     ))}
                   </div>
 
-                  {/* ⭐ Agence de destination */}
-                  {availableDestCities.length > 0 && (
+                  {/* ⭐ Agence de destination / expédition */}
+                  {((parcelDirection === 'received' ? availableOriginCities : availableDestCities).length > 0) && (
                     <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
-                      <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Dest.</span>
+                      <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">
+                        {parcelDirection === 'received' ? 'Expéd.' : 'Dest.'}
+                      </span>
                       <button onClick={() => setDestinationCityFilter('all')}
                         className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
                           destinationCityFilter === 'all' ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                         }`}
                       >Toutes</button>
-                      {availableDestCities.map(city => (
+                      {(parcelDirection === 'received' ? availableOriginCities : availableDestCities).map(city => (
                         <button key={city} onClick={() => setDestinationCityFilter(city)}
                           className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
                             destinationCityFilter === city ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'

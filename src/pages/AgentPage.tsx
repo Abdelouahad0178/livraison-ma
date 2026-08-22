@@ -1589,10 +1589,14 @@ export default function AgentPage() {
         if (!isReceivedInMyCity) return false
       }
     }
-    // ⭐ Filtre par ville de destination
+    // ⭐ Filtre par ville de destination / expédition
     if (destinationCityFilter !== 'all') {
-      const parcelDestCity = p.destinationCity || p.receiver?.city
-      if (parcelDestCity !== destinationCityFilter) return false
+      // Si direction "Reçus", filtrer par ville d'origine (expédition)
+      // Sinon, filtrer par ville de destination
+      const cityToFilter = parcelDirection === 'received'
+        ? (p.originCity || p.sender?.city)
+        : (p.destinationCity || p.receiver?.city)
+      if (cityToFilter !== destinationCityFilter) return false
     }
     // ⭐ Filtre par livreur/chauffeur
     if (driverFilter !== 'all') {
