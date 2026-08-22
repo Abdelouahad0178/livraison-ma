@@ -90,6 +90,12 @@ export default function CaisseChefTab() {
   // État livraison
   const [deliveringParcelIds, setDeliveringParcelIds] = useState<Set<string>>(new Set())
 
+  // État assignation livreur
+  const [selectedParcelIds, setSelectedParcelIds] = useState<Set<string>>(new Set())
+  const [assignDriverModal, setAssignDriverModal] = useState(false)
+  const [assigningDriver, setAssigningDriver] = useState('')
+  const [assigningInProgress, setAssigningInProgress] = useState(false)
+
   // Vérification du rôle
   const isChef = profile?.role === 'chef_agence'
 
@@ -1073,6 +1079,54 @@ export default function CaisseChefTab() {
     }
   }
 
+  // Assigner des expéditions à un livreur
+  const handleAssignToDriver = async () => {
+    if (selectedParcelIds.size === 0) {
+      alert('Veuillez sélectionner au moins une expédition')
+      return
+    }
+
+    if (!assigningDriver) {
+      alert('Veuillez sélectionner un livreur')
+      return
+    }
+
+    const driver = drivers.find(d => d.id === assigningDriver)
+    if (!driver) {
+      alert('Livreur introuvable')
+      return
+    }
+
+    if (!confirm(`Assigner ${selectedParcelIds.size} expédition(s) à ${driver.name} ?`)) {
+      return
+    }
+
+    setAssigningInProgress(true)
+    try {
+      const promises = Array.from(selectedParcelIds).map(parcelId => {
+        return updateParcel(parcelId, {
+          deliveryDriverId: assigningDriver,
+          deliveryDriverName: driver.name,
+          deliveryAssignedAt: new Date(),
+          deliveryAssignedBy: profile?.name || '',
+          status: 'En cours de livraison'
+        })
+      })
+
+      await Promise.all(promises)
+
+      alert(`✅ ${selectedParcelIds.size} expédition(s) assignée(s) à ${driver.name}`)
+      setSelectedParcelIds(new Set())
+      setAssignDriverModal(false)
+      setAssigningDriver('')
+    } catch (err: any) {
+      console.error('Erreur assignation:', err)
+      alert(`❌ Erreur: ${err.message}`)
+    } finally {
+      setAssigningInProgress(false)
+    }
+  }
+
   const handleCollectPort = async (parcel: any) => {
     if (!confirm(`Confirmer la collecte du port de ${fmtAmt(parcel.price)} DH pour l'expédition ${parcel.senderNic || parcel.trackingId} ?`)) {
       return
@@ -1637,10 +1691,40 @@ export default function CaisseChefTab() {
                 </div>
               ) : (
                 <div className="p-4 bg-gray-50">
+                  {/* Bouton Assigner au livreur */}
+                  {selectedParcelIds.size > 0 && (
+                    <div className="mb-4 p-3 bg-blue-50 border border-blue-200 rounded-lg flex items-center justify-between">
+                      <span className="text-sm font-medium text-blue-900">
+                        {selectedParcelIds.size} expédition(s) sélectionnée(s)
+                      </span>
+                      <button
+                        onClick={() => setAssignDriverModal(true)}
+                        className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium rounded-lg transition flex items-center gap-2"
+                      >
+                        <User className="w-4 h-4" />
+                        Assigner au livreur
+                      </button>
+                    </div>
+                  )}
+
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead>
                         <tr className="border-b border-gray-200">
+                          <th className="text-center py-2 px-2 font-semibold text-gray-700">
+                            <input
+                              type="checkbox"
+                              checked={filteredSearchResults!.length > 0 && filteredSearchResults!.every(p => selectedParcelIds.has(p.id))}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedParcelIds(new Set(filteredSearchResults!.map(p => p.id)))
+                                } else {
+                                  setSelectedParcelIds(new Set())
+                                }
+                              }}
+                              className="w-4 h-4 cursor-pointer"
+                            />
+                          </th>
                           <th className="text-left py-2 px-3 font-semibold text-gray-700">N° EXP</th>
                           <th className="text-left py-2 px-3 font-semibold text-gray-700">Date création</th>
                           <th className="text-left py-2 px-3 font-semibold text-gray-700">Date livraison</th>
@@ -1668,6 +1752,22 @@ export default function CaisseChefTab() {
 
                           return (
                             <tr key={parcel.id} className="border-b border-gray-100 hover:bg-white transition">
+                              <td className="py-2 px-2 text-center">
+                                <input
+                                  type="checkbox"
+                                  checked={selectedParcelIds.has(parcel.id)}
+                                  onChange={(e) => {
+                                    const updated = new Set(selectedParcelIds)
+                                    if (e.target.checked) {
+                                      updated.add(parcel.id)
+                                    } else {
+                                      updated.delete(parcel.id)
+                                    }
+                                    setSelectedParcelIds(updated)
+                                  }}
+                                  className="w-4 h-4 cursor-pointer"
+                                />
+                              </td>
                               <td className="py-2 px-3">
                                 <div className="flex flex-col gap-1">
                                   <span className="font-mono text-xs font-semibold text-blue-600">
@@ -2283,6 +2383,87 @@ export default function CaisseChefTab() {
                 </table>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Modal d'assignation au livreur */}
+      {assignDriverModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl max-w-md w-full">
+            <div className="p-6 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-gray-900">
+                Assigner au livreur
+              </h3>
+              <button
+                onClick={() => {
+                  setAssignDriverModal(false)
+                  setAssigningDriver('')
+                }}
+                className="text-gray-400 hover:text-gray-600 transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              <div className="p-3 bg-blue-50 rounded-lg">
+                <p className="text-sm text-blue-900">
+                  <span className="font-semibold">{selectedParcelIds.size}</span> expédition(s) sélectionnée(s)
+                </p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">
+                  Sélectionner un livreur
+                </label>
+                <select
+                  value={assigningDriver}
+                  onChange={(e) => setAssigningDriver(e.target.value)}
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-blue-500"
+                >
+                  <option value="">Choisir un livreur...</option>
+                  {drivers
+                    .filter(d => d.id !== 'unknown')
+                    .map(driver => (
+                      <option key={driver.id} value={driver.id}>
+                        {driver.name}
+                      </option>
+                    ))
+                  }
+                </select>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <button
+                  onClick={() => {
+                    setAssignDriverModal(false)
+                    setAssigningDriver('')
+                  }}
+                  disabled={assigningInProgress}
+                  className="flex-1 px-4 py-2 border border-gray-200 rounded-lg font-medium text-gray-700 hover:bg-gray-50 transition disabled:opacity-50"
+                >
+                  Annuler
+                </button>
+                <button
+                  onClick={handleAssignToDriver}
+                  disabled={assigningInProgress || !assigningDriver}
+                  className="flex-1 px-4 py-2 bg-blue-600 text-white rounded-lg font-medium hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                >
+                  {assigningInProgress ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                      Assignation...
+                    </>
+                  ) : (
+                    <>
+                      <User className="w-4 h-4" />
+                      Assigner
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
