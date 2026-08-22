@@ -41,6 +41,7 @@ export default function CaisseChefTab() {
     uid,
     profile,
     parcels,
+    allDisplayParcels,
     agentEntries,
     updateParcelOptimistic,
   } = useAgentCtx()
@@ -267,33 +268,32 @@ export default function CaisseChefTab() {
     return (!isNaN(num) && isFinite(num) && num >= 0) ? num : 0
   }
 
-  // 🔄 Source de données fusionnée (parcels + searchResults + cache modifications)
+  // 🔄 Source de données fusionnée (allDisplayParcels + searchResults + cache modifications)
   const dataSource = useMemo(() => {
     console.log('📊 [dataSource] RECALCUL:', {
-      'parcels.length': parcels.length,
+      'allDisplayParcels.length': allDisplayParcels?.length || 0,
       'searchResults': searchResults?.length || 0,
       'modifiedParcels': Object.keys(modifiedParcels).length
     })
 
-    // Commencer avec parcels (qui contient les mises à jour optimistes via updateParcelOptimistic)
-    let source = [...parcels]
+    // Commencer avec allDisplayParcels pour avoir TOUTES les expéditions (sans filtre de date)
+    let source = [...(allDisplayParcels || [])]
 
-    // Si en mode recherche, merger searchResults dans parcels
+    // Si en mode recherche, merger searchResults dans allDisplayParcels
     if (searchResults && searchResults.length > 0) {
-      const parcelIds = new Set(parcels.map((p: any) => p.id))
+      const parcelIds = new Set(source.map((p: any) => p.id))
       const searchIds = new Set(searchResults.map((p: any) => p.id))
 
-      // Merger les parcels existants avec searchResults (searchResults a priorité pour les données brutes)
-      source = parcels.map((p: any) => {
+      // Merger les expéditions existantes avec searchResults
+      source = source.map((p: any) => {
         if (searchIds.has(p.id)) {
           const srParcel = searchResults.find((sr: any) => sr.id === p.id)
-          // Merger en gardant les modifications optimistes de parcels
           return srParcel ? { ...srParcel, ...p } : p
         }
         return p
       })
 
-      // Ajouter les parcels de searchResults qui ne sont pas dans parcels (créer un NOUVEL array)
+      // Ajouter les expéditions de searchResults qui ne sont pas dans source
       const additionalParcels = searchResults.filter((sr: any) => !parcelIds.has(sr.id))
       source = [...source, ...additionalParcels]
     }
@@ -311,7 +311,7 @@ export default function CaisseChefTab() {
     })
 
     return source
-  }, [parcels, searchResults, modifiedParcels])
+  }, [allDisplayParcels, searchResults, modifiedParcels])
 
   // Calcul des statistiques
   const stats = useMemo(() => {
@@ -412,8 +412,8 @@ export default function CaisseChefTab() {
 
   // 💰 Solde de caisse global (sans filtre de date)
   const soldeCaisseGlobal = useMemo(() => {
-    // Utiliser parcels (toutes les données) au lieu de dataSource (filtré)
-    const allParcels = parcels || []
+    // Utiliser allDisplayParcels (toutes les données) au lieu de dataSource (filtré)
+    const allParcels = allDisplayParcels || []
 
     // Ports dus collectés (TOUS, sans filtre date)
     const portsCollectes = allParcels.filter((p: any) =>
@@ -442,13 +442,13 @@ export default function CaisseChefTab() {
     // 🔄 IGNORE les versements pour repartir sur une base saine
     // (anciens versements faussaient le calcul)
     return totalCollecte + montantRecus
-  }, [parcels, profile?.city])
+  }, [allDisplayParcels, profile?.city])
 
   // 💰 Solde d'un livreur spécifique (sans filtre de date)
   const soldeLivreur = useMemo(() => {
     if (driverFilter === 'all') return 0
 
-    const allParcels = parcels || []
+    const allParcels = allDisplayParcels || []
 
     // Ports dus collectés par CE livreur (TOUS, sans filtre date)
     const portsCollectes = allParcels.filter((p: any) =>
@@ -478,7 +478,7 @@ export default function CaisseChefTab() {
 
     // Solde = ce que le livreur a DONNÉ au chef (collectés + reçus)
     return totalCollecte + totalPortsPayesRecus
-  }, [parcels, driverFilter, profile?.city])
+  }, [allDisplayParcels, driverFilter, profile?.city])
 
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
