@@ -1,11 +1,12 @@
 import type { TariffConfig } from '../types'
 
 export const CITIES = [
-  'Casablanca', 'Agadir', 'Marrakech', 'Guelmim',
+  'Casablanca', 'Rabat', 'Agadir', 'Marrakech', 'Guelmim',
 ]
 
 export const TARIFS: Record<string, number> = {
   Casablanca: 25,
+  Rabat: 30,
   Agadir: 45,
   Marrakech: 40,
   Guelmim: 55,
