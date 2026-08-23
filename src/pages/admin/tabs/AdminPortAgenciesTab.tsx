@@ -1,9 +1,11 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
-import { Building2, TrendingUp, Package, Printer, Filter, X, Calendar, ChevronDown, Loader2, AlertCircle } from 'lucide-react'
+import { Building2, TrendingUp, Package, Printer, Filter, X, Calendar, ChevronDown, Loader2, AlertCircle, Eye } from 'lucide-react'
 import { CITIES } from '../../../firebase/constants'
 import { collection, query, orderBy, limit, onSnapshot, startAfter, getDocs, where, Timestamp } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
 import { getOperationalDayRange } from '../../../config/operationalDay'
+import { subscribeAdminTransfers } from '../../../firebase/caisse'
+import AdminCaisseView from '../components/AdminCaisseView'
 
 interface Props {
   datePreset: string
@@ -16,9 +18,9 @@ interface Props {
   setOperationalDay: (day: Date | null) => void
 }
 
-// ⚡ Système Option 3 (comme AdminPage)
-const PAGE_SIZE = 50 // Chargement initial réduit
-const FILTERED_PAGE_SIZE = 1000 // Quand filtres actifs
+// ⚡ Chargement optimisé
+const PAGE_SIZE = 2000 // Chargement initial : 2000 premiers colis (sans filtre)
+const FILTERED_PAGE_SIZE = 50000 // Avec filtre de date : charger tout (limite haute pour sécurité)
 
 export default function AdminPortAgenciesTab({
   datePreset,
@@ -36,6 +38,10 @@ export default function AdminPortAgenciesTab({
   const [directionFilter, setDirectionFilter] = useState('all') // all, sent (envoyées), received (reçues)
   const [originCityFilter, setOriginCityFilter] = useState<string>('all') // Filtre ville d'origine (pour mode "Reçues")
   const [showFilters, setShowFilters] = useState(true)
+  const [viewMode, setViewMode] = useState<'theoretical' | 'physical'>('theoretical') // theoretical = tous les ports, physical = argent physique en caisse
+
+  // État pour la modale Caisse Agence
+  const [showCaisseModal, setShowCaisseModal] = useState(false)
 
   // États pour chargement progressif
   const [liveParcels, setLiveParcels] = useState<any[]>([])
@@ -45,6 +51,9 @@ export default function AdminPortAgenciesTab({
   const [hasMore, setHasMore] = useState(true)
   const lastDocRef = useRef<any>(null)
 
+  // État versements admin
+  const [adminTransfers, setAdminTransfers] = useState<any[]>([])
+
   // 🔄 Réinitialiser le filtre ville d'origine quand on quitte le mode "Reçues"
   useEffect(() => {
     if (directionFilter !== 'received') {
@@ -52,9 +61,24 @@ export default function AdminPortAgenciesTab({
     }
   }, [directionFilter])
 
+  // 💰 Charger tous les versements admin
+  useEffect(() => {
+    const unsub = subscribeAdminTransfers(
+      (data: any[]) => {
+        console.log('📊 Versements admin chargés:', data.length, data)
+        setAdminTransfers(data)
+      },
+      (err) => console.error('❌ Erreur chargement versements admin:', err)
+    )
+    return () => unsub()
+  }, [])
+
   // ⚡ Chargement optimisé avec détection de filtres (Option 3)
   useEffect(() => {
-    setLoading(true)
+    // Ne montrer le loading que si c'est le premier chargement (pas de données)
+    if (liveParcels.length === 0) {
+      setLoading(true)
+    }
 
     // 🔍 Détecter si des filtres sont actifs
     const hasDateFilter = datePreset !== 'all'
@@ -252,14 +276,42 @@ export default function AdminPortAgenciesTab({
     })
   }, [liveParcels, datePreset, dateFrom, dateTo, operationalDay])
 
-  // ✅ Calculer les statistiques par agence - 4 TYPES DE PORT SÉPARÉS
+  // 💰 Calculer les versements confirmés par ville
+  const versementsByCity = useMemo(() => {
+    const byCity: Record<string, number> = {}
+
+    // Initialiser toutes les villes à 0
+    CITIES.forEach(city => {
+      byCity[city] = 0
+    })
+
+    // Calculer le total des versements confirmés par ville
+    const confirmedTransfers = adminTransfers.filter((t: any) => t.status === 'confirmed')
+    console.log('💰 Versements confirmés:', confirmedTransfers.length, confirmedTransfers)
+
+    confirmedTransfers.forEach((t: any) => {
+      const city = t.city
+      const amount = parseFloat(t.amount) || 0
+      if (city && byCity[city] !== undefined) {
+        byCity[city] += amount
+        console.log(`  → ${city}: +${amount} DH (total: ${byCity[city]} DH)`)
+      }
+    })
+
+    console.log('💰 Versements par ville:', byCity)
+    return byCity
+  }, [adminTransfers])
+
+  // ✅ Calculer les statistiques par agence
+  // Mode theoretical = tous les ports (actuel)
+  // Mode physical = argent réellement collecté en caisse
   const portStats = useMemo(() => {
     if (!Array.isArray(filteredByDate)) return []
 
     const stats: Record<string, {
       city: string
-      portPaye: number              // ✅ Port Payé (expéditeur)
-      portDu: number                 // 💰 Port Dû (destinataire)
+      portPaye: number              // ✅ Port Payé (expéditeur) OU Ports payés reçus (mode physical)
+      portDu: number                 // 💰 Port Dû (destinataire) OU Ports dû collectés (mode physical)
       enCompteExp: number            // 📤 En Compte Expéditeur
       enCompteDest: number           // 📥 En Compte Destinataire
       totalPort: number
@@ -281,57 +333,76 @@ export default function AdminPortAgenciesTab({
 
     // Parcourir tous les colis filtrés par date
     filteredByDate.forEach((p: any) => {
-      const originCity = p.originCity || p.sender?.city
+      const originCity = p.originCity || p.sender?.city || p.createdByCity
       const destCity = p.destinationCity || p.receiver?.city
 
-      // ✅ NOUVEAUX PORTS : expéditeur et destinataire séparés
-      // 🔄 FALLBACK: Si nouveaux champs absents, utiliser ancien système
-      let senderPort = safeParseFloat(p.sender?.port || p.senderPort || 0)
-      let senderPortType = p.sender?.portType || p.senderPortType || 'port_paye'
+      if (viewMode === 'theoretical') {
+        // 📊 MODE THÉORIQUE : TOUS LES PORTS (actuel)
+        // ✅ NOUVEAUX PORTS : expéditeur et destinataire séparés
+        // 🔄 FALLBACK: Si nouveaux champs absents, utiliser ancien système
+        let senderPort = safeParseFloat(p.sender?.port || p.senderPort || 0)
+        let senderPortType = p.sender?.portType || p.senderPortType || 'port_paye'
 
-      let receiverPort = safeParseFloat(p.receiver?.port || p.receiverPort || 0)
-      let receiverPortType = p.receiver?.portType || p.receiverPortType || 'port_du'
+        let receiverPort = safeParseFloat(p.receiver?.port || p.receiverPort || 0)
+        let receiverPortType = p.receiver?.portType || p.receiverPortType || 'port_du'
 
-      // 🔄 COMPATIBILITÉ: Si pas de nouveaux ports, utiliser l'ancien p.price
-      if (senderPort === 0 && receiverPort === 0 && p.price) {
+        // 🔄 COMPATIBILITÉ: Si pas de nouveaux ports, utiliser l'ancien p.price
+        if (senderPort === 0 && receiverPort === 0 && p.price) {
+          const price = safeParseFloat(p.price)
+          const portType = p.portType || 'port_paye'
+
+          // Ancien système : un seul port, déterminer s'il va à l'expéditeur ou destinataire
+          if (portType === 'port_paye' || portType === 'port_en_compte_expediteur' || portType === 'port_en_compte') {
+            // Port collecté à l'ORIGINE (expéditeur)
+            senderPort = price
+            senderPortType = portType
+          } else if (portType === 'port_du' || portType === 'port_en_compte_destinataire') {
+            // Port collecté à la DESTINATION (destinataire)
+            receiverPort = price
+            receiverPortType = portType
+          }
+        }
+
+        // 📤 PORT EXPÉDITEUR : collecté à l'agence d'ORIGINE (expéditions envoyées)
+        // Ne comptabiliser que si le filtre autorise les envoyées (all ou sent)
+        if (senderPort > 0 && originCity && stats[originCity] && (directionFilter === 'all' || directionFilter === 'sent')) {
+          if (senderPortType === 'port_paye') {
+            stats[originCity].portPaye += senderPort
+          } else if (senderPortType === 'port_en_compte_expediteur' || senderPortType === 'port_en_compte') {
+            stats[originCity].enCompteExp += senderPort
+          }
+        }
+
+        // 📥 PORT DESTINATAIRE : collecté à l'agence de DESTINATION (expéditions reçues)
+        // Ne comptabiliser que si le filtre autorise les reçues (all ou received)
+        // ET si le filtre ville d'origine est respecté (en mode received)
+        const matchesOriginFilter = directionFilter !== 'received' || originCityFilter === 'all' || originCity === originCityFilter
+        if (receiverPort > 0 && destCity && stats[destCity] && (directionFilter === 'all' || directionFilter === 'received') && matchesOriginFilter) {
+          if (receiverPortType === 'port_du') {
+            stats[destCity].portDu += receiverPort
+          } else if (receiverPortType === 'port_en_compte_destinataire' || receiverPortType === 'port_en_compte') {
+            stats[destCity].enCompteDest += receiverPort
+          }
+        }
+      } else {
+        // 💵 MODE SITUATION CAISSE : ARGENT PHYSIQUE COLLECTÉ
         const price = safeParseFloat(p.price)
-        const portType = p.portType || 'port_paye'
+        const portType = p.portType
+        const portStatus = p.portStatus
 
-        // Ancien système : un seul port, déterminer s'il va à l'expéditeur ou destinataire
-        if (portType === 'port_paye' || portType === 'port_en_compte_expediteur' || portType === 'port_en_compte') {
-          // Port collecté à l'ORIGINE (expéditeur)
-          senderPort = price
-          senderPortType = portType
-        } else if (portType === 'port_du' || portType === 'port_en_compte_destinataire') {
-          // Port collecté à la DESTINATION (destinataire)
-          receiverPort = price
-          receiverPortType = portType
+        // 1️⃣ PORTS DÛ COLLECTÉS : portType = 'port_du', portStatus = 'collected' ou 'received'
+        if (portType === 'port_du' && (portStatus === 'collected' || portStatus === 'received') && price > 0 && destCity && stats[destCity]) {
+          stats[destCity].portDu += price
         }
-      }
 
-      // 📤 PORT EXPÉDITEUR : collecté à l'agence d'ORIGINE (expéditions envoyées)
-      // Ne comptabiliser que si le filtre autorise les envoyées (all ou sent)
-      if (senderPort > 0 && originCity && stats[originCity] && (directionFilter === 'all' || directionFilter === 'sent')) {
-        if (senderPortType === 'port_paye') {
-          stats[originCity].portPaye += senderPort
-        } else if (senderPortType === 'port_en_compte_expediteur' || senderPortType === 'port_en_compte') {
-          stats[originCity].enCompteExp += senderPort
-        }
-      }
-
-      // 📥 PORT DESTINATAIRE : collecté à l'agence de DESTINATION (expéditions reçues)
-      // Ne comptabiliser que si le filtre autorise les reçues (all ou received)
-      // ET si le filtre ville d'origine est respecté (en mode received)
-      const matchesOriginFilter = directionFilter !== 'received' || originCityFilter === 'all' || originCity === originCityFilter
-      if (receiverPort > 0 && destCity && stats[destCity] && (directionFilter === 'all' || directionFilter === 'received') && matchesOriginFilter) {
-        if (receiverPortType === 'port_du') {
-          stats[destCity].portDu += receiverPort
-        } else if (receiverPortType === 'port_en_compte_destinataire' || receiverPortType === 'port_en_compte') {
-          stats[destCity].enCompteDest += receiverPort
+        // 2️⃣ PORTS PAYÉS REÇUS LOCALEMENT : portType = 'port_paye', from this city, portStatus = 'received'
+        if (portType === 'port_paye' && !p.portPayeMethod && portStatus === 'received' && price > 0 && originCity && stats[originCity]) {
+          stats[originCity].portPaye += price
         }
       }
 
       // ✅ EXPÉDITIONS : comptées selon la direction
+      const matchesOriginFilter = directionFilter !== 'received' || originCityFilter === 'all' || originCity === originCityFilter
       if (directionFilter === 'all' || directionFilter === 'sent') {
         // Expéditions envoyées : comptées à l'agence d'ORIGINE
         if (originCity && stats[originCity]) {
@@ -347,15 +418,20 @@ export default function AdminPortAgenciesTab({
     })
 
     // Calculer les totaux et arrondir - afficher toutes les agences
-    return Object.values(stats).map(stat => ({
-      ...stat,
-      portPaye: Math.round(stat.portPaye * 100) / 100,
-      portDu: Math.round(stat.portDu * 100) / 100,
-      enCompteExp: Math.round(stat.enCompteExp * 100) / 100,
-      enCompteDest: Math.round(stat.enCompteDest * 100) / 100,
-      totalPort: Math.round((stat.portPaye + stat.portDu + stat.enCompteExp + stat.enCompteDest) * 100) / 100,
-    }))
-  }, [filteredByDate, directionFilter, originCityFilter])
+    return Object.values(stats).map(stat => {
+      // 💰 Total Port = Somme de tous les ports (sans déduire les versements)
+      const totalPort = stat.portPaye + stat.portDu + stat.enCompteExp + stat.enCompteDest
+
+      return {
+        ...stat,
+        portPaye: Math.round(stat.portPaye * 100) / 100,
+        portDu: Math.round(stat.portDu * 100) / 100,
+        enCompteExp: Math.round(stat.enCompteExp * 100) / 100,
+        enCompteDest: Math.round(stat.enCompteDest * 100) / 100,
+        totalPort: Math.round(totalPort * 100) / 100,
+      }
+    })
+  }, [filteredByDate, directionFilter, originCityFilter, viewMode, versementsByCity])
 
   // Appliquer les filtres de ville et type de port
   const filteredStats = useMemo(() => {
@@ -387,19 +463,26 @@ export default function AdminPortAgenciesTab({
       portDu: acc.portDu + stat.portDu,
       enCompteExp: acc.enCompteExp + stat.enCompteExp,
       enCompteDest: acc.enCompteDest + stat.enCompteDest,
-      totalPort: acc.totalPort + stat.totalPort,
       nbExpeditions: acc.nbExpeditions + stat.nbExpeditions,
-    }), { portPaye: 0, portDu: 0, enCompteExp: 0, enCompteDest: 0, totalPort: 0, nbExpeditions: 0 })
+    }), { portPaye: 0, portDu: 0, enCompteExp: 0, enCompteDest: 0, nbExpeditions: 0 })
+
+    // 💰 Calculer le total des versements pour les villes filtrées
+    const totalVersements = filteredStats.reduce((sum, stat) => {
+      return sum + (versementsByCity[stat.city] || 0)
+    }, 0)
+
+    // 💵 Total Port (dans les cartes) = Port Dû + Port Payé - Versements
+    const totalPortCartes = Math.max(0, totaux.portPaye + totaux.portDu - totalVersements)
 
     return {
       portPaye: Math.round(totaux.portPaye * 100) / 100,
       portDu: Math.round(totaux.portDu * 100) / 100,
       enCompteExp: Math.round(totaux.enCompteExp * 100) / 100,
       enCompteDest: Math.round(totaux.enCompteDest * 100) / 100,
-      totalPort: Math.round(totaux.totalPort * 100) / 100,
+      totalPort: Math.round(totalPortCartes * 100) / 100,
       nbExpeditions: totaux.nbExpeditions,
     }
-  }, [filteredStats])
+  }, [filteredStats, versementsByCity])
 
   const hasActiveFilter = selectedCity !== 'all' || portTypeFilter !== 'all' || datePreset !== 'all' || directionFilter !== 'all' || (directionFilter === 'received' && originCityFilter !== 'all')
 
@@ -498,22 +581,63 @@ export default function AdminPortAgenciesTab({
           </div>
 
           {/* En-tête */}
-          <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 rounded-2xl p-6 shadow-xl print:hidden">
-            <div className="flex items-center justify-between gap-3 text-white">
-              <div className="flex items-center gap-3">
-                <Building2 className="w-8 h-8" />
+          <div className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 rounded-2xl p-4 sm:p-6 shadow-xl print:hidden">
+            <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-4 text-white">
+              <div className="flex items-center gap-2 sm:gap-3">
+                <Building2 className="w-6 h-6 sm:w-8 sm:h-8 flex-shrink-0" />
                 <div>
-                  <h2 className="text-2xl font-black">Port par Agence</h2>
-                  <p className="text-blue-100 text-sm mt-1">Port Payé et En Compte (collecté par expéditeur) · Port Dû (collecté à destination)</p>
+                  <h2 className="text-xl sm:text-2xl font-black">Port par Agence</h2>
+                  <p className="text-blue-100 text-xs sm:text-sm mt-1 hidden sm:block">
+                    {viewMode === 'theoretical'
+                      ? 'Port Payé et En Compte (collecté par expéditeur) · Port Dû (collecté à destination)'
+                      : 'Situation physique de la caisse - Argent réellement collecté'}
+                  </p>
                 </div>
               </div>
-              <button
-                onClick={handlePrint}
-                className="flex items-center gap-2 px-4 py-2 bg-white/20 hover:bg-white/30 backdrop-blur-sm rounded-xl transition-colors font-bold print:hidden"
-              >
-                <Printer className="w-5 h-5" />
-                Imprimer
-              </button>
+              <div className="flex flex-wrap items-center gap-2 w-full lg:w-auto">
+                {/* Toggle Vue Théorique / Situation Caisse */}
+                <div className="flex items-center gap-1 sm:gap-2 bg-white/20 backdrop-blur-sm rounded-xl p-1 w-full sm:w-auto">
+                  <button
+                    onClick={() => setViewMode('theoretical')}
+                    className={`flex-1 sm:flex-none px-2 sm:px-4 py-2 rounded-lg transition-all font-bold text-xs sm:text-sm whitespace-nowrap ${
+                      viewMode === 'theoretical'
+                        ? 'bg-white text-purple-600 shadow-lg'
+                        : 'text-white hover:bg-white/10'
+                    }`}
+                  >
+                    <span className="hidden xs:inline">📊 Vue Théorique</span>
+                    <span className="xs:hidden">📊 Théorique</span>
+                  </button>
+                  <button
+                    onClick={() => setViewMode('physical')}
+                    className={`flex-1 sm:flex-none px-2 sm:px-4 py-2 rounded-lg transition-all font-bold text-xs sm:text-sm whitespace-nowrap ${
+                      viewMode === 'physical'
+                        ? 'bg-white text-purple-600 shadow-lg'
+                        : 'text-white hover:bg-white/10'
+                    }`}
+                  >
+                    <span className="hidden xs:inline">💵 Situation Caisse</span>
+                    <span className="xs:hidden">💵 Caisse</span>
+                  </button>
+                </div>
+                {/* Bouton pour ouvrir la fenêtre Caisse Agence */}
+                <button
+                  onClick={() => setShowCaisseModal(true)}
+                  className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 bg-white/20 hover:bg-white/30 backdrop-blur-sm rounded-xl transition-colors font-bold text-white print:hidden text-xs sm:text-sm whitespace-nowrap"
+                  title="Voir Caisse Agence"
+                >
+                  <Eye className="w-4 h-4 sm:w-5 sm:h-5" />
+                  <span className="hidden md:inline">Détails Agences</span>
+                  <span className="md:hidden">Détails</span>
+                </button>
+                <button
+                  onClick={handlePrint}
+                  className="flex items-center gap-1 sm:gap-2 px-2 sm:px-4 py-2 bg-white/20 hover:bg-white/30 backdrop-blur-sm rounded-xl transition-colors font-bold print:hidden text-xs sm:text-sm whitespace-nowrap"
+                >
+                  <Printer className="w-4 h-4 sm:w-5 sm:h-5" />
+                  <span className="hidden md:inline">Imprimer</span>
+                </button>
+              </div>
             </div>
           </div>
 
@@ -598,7 +722,7 @@ export default function AdminPortAgenciesTab({
                         )
                       }
                     }}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold transition ${
+                    className={`px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition whitespace-nowrap ${
                       datePreset === key
                         ? 'bg-purple-600 text-white shadow-md'
                         : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -609,8 +733,8 @@ export default function AdminPortAgenciesTab({
                 ))}
 
                 {datePreset === 'operational' && (
-                  <div className="flex items-center gap-2 ml-2">
-                    <span className="text-xs text-gray-500">Jour d'opération (8H → 6H lendemain)</span>
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:ml-2 w-full sm:w-auto">
+                    <span className="text-xs text-gray-500 whitespace-nowrap">Jour d'opération (8H → 6H lendemain)</span>
                     <input
                       type="date"
                       value={operationalDay ? `${operationalDay.getFullYear()}-${String(operationalDay.getMonth() + 1).padStart(2, '0')}-${String(operationalDay.getDate()).padStart(2, '0')}` : ''}
@@ -621,25 +745,25 @@ export default function AdminPortAgenciesTab({
                         }
                         setOperationalDay(new Date(e.target.value + 'T00:00:00'))
                       }}
-                      className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500 w-full sm:w-auto"
                     />
                   </div>
                 )}
 
                 {datePreset === 'custom' && (
-                  <div className="flex items-center gap-2 ml-2">
+                  <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:ml-2 w-full sm:w-auto">
                     <input
                       type="date"
                       value={dateFrom}
                       onChange={e => setDateFrom(e.target.value)}
-                      className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500 w-full sm:w-auto"
                     />
                     <span className="text-gray-400 text-xs font-bold">→</span>
                     <input
                       type="date"
                       value={dateTo}
                       onChange={e => setDateTo(e.target.value)}
-                      className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500"
+                      className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500 w-full sm:w-auto"
                     />
                   </div>
                 )}
@@ -655,7 +779,7 @@ export default function AdminPortAgenciesTab({
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => setSelectedCity('all')}
-                  className={`px-4 py-2 rounded-xl text-xs font-bold transition ${
+                  className={`px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition whitespace-nowrap ${
                     selectedCity === 'all'
                       ? 'bg-purple-600 text-white shadow-md'
                       : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -667,7 +791,7 @@ export default function AdminPortAgenciesTab({
                   <button
                     key={city}
                     onClick={() => setSelectedCity(city)}
-                    className={`px-4 py-2 rounded-xl text-xs font-bold transition ${
+                    className={`px-3 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition whitespace-nowrap ${
                       selectedCity === city
                         ? 'bg-blue-600 text-white shadow-md'
                         : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
@@ -1042,7 +1166,7 @@ export default function AdminPortAgenciesTab({
                   </td>
                   <td className="px-6 py-5 text-right bg-green-100 print:hidden">
                     <span className="text-green-900 text-2xl font-black">
-                      {totauxFiltres.totalPort.toLocaleString('fr-MA')} DH
+                      {(totauxFiltres.portPaye + totauxFiltres.portDu + totauxFiltres.enCompteExp + totauxFiltres.enCompteDest).toLocaleString('fr-MA')} DH
                     </span>
                   </td>
                 </tr>
@@ -1085,6 +1209,33 @@ export default function AdminPortAgenciesTab({
         </div>
       )}
       </div>
+
+      {/* Modale Caisse Agence en plein écran (90%) */}
+      {showCaisseModal && (
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-2xl shadow-2xl w-[90%] h-[90%] overflow-hidden flex flex-col">
+            {/* En-tête de la modale */}
+            <div className="bg-gradient-to-r from-purple-600 to-pink-600 text-white px-6 py-4 flex items-center justify-between flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <Eye className="w-6 h-6" />
+                <h2 className="text-xl font-bold">Caisse Agence - Détails</h2>
+              </div>
+              <button
+                onClick={() => setShowCaisseModal(false)}
+                className="p-2 hover:bg-white/20 rounded-lg transition-colors"
+                title="Fermer"
+              >
+                <X className="w-6 h-6" />
+              </button>
+            </div>
+
+            {/* Contenu de la modale */}
+            <div className="flex-1 overflow-hidden">
+              <AdminCaisseView onClose={() => setShowCaisseModal(false)} />
+            </div>
+          </div>
+        </div>
+      )}
     </>
   )
 }
