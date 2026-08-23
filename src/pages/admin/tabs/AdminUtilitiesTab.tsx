@@ -429,6 +429,59 @@ export default function AdminUtilitiesTab() {
     }
   }
 
+  const migratePickupFields = async () => {
+    if (!confirm('⚠️ Cette opération va migrer les champs de ramassage pour TOUTES les expéditions en statut "En cours de ramassage".\n\nCela copiera:\n• deliveryDriverId → pickupDriverId\n• deliveryDriverName → pickupDriverName\n• deliveryAssignedAt → pickupAssignedAt\n• deliveryAssignedBy → pickupAssignedBy\n\nContinuer ?')) {
+      return
+    }
+
+    setLoading(true)
+    setResult(null)
+
+    try {
+      // Récupérer toutes les expéditions en "En cours de ramassage"
+      const q = query(
+        collection(db, 'parcels'),
+        where('status', '==', 'En cours de ramassage')
+      )
+
+      const snapshot = await getDocs(q)
+
+      let migratedCount = 0
+      let skippedCount = 0
+
+      for (const docSnapshot of snapshot.docs) {
+        const parcel = docSnapshot.data()
+
+        // Si deliveryDriverId existe et pickupDriverId n'existe pas encore
+        if (parcel.deliveryDriverId && !parcel.pickupDriverId) {
+          await updateDoc(doc(db, 'parcels', docSnapshot.id), {
+            pickupDriverId: parcel.deliveryDriverId,
+            pickupDriverName: parcel.deliveryDriverName || '',
+            pickupAssignedAt: parcel.deliveryAssignedAt || new Date(),
+            pickupAssignedBy: parcel.deliveryAssignedBy || ''
+          })
+          migratedCount++
+        } else {
+          skippedCount++
+        }
+      }
+
+      setResult({
+        type: 'success',
+        message: `✅ Migration terminée!\n\n📊 Total: ${snapshot.size} expéditions en "En cours de ramassage"\n✏️ Migrées: ${migratedCount}\n⏭️ Ignorées (déjà migrées): ${skippedCount}`
+      })
+
+    } catch (error: any) {
+      console.error('Erreur:', error)
+      setResult({
+        type: 'error',
+        message: `❌ Erreur: ${error.message}`
+      })
+    } finally {
+      setLoading(false)
+    }
+  }
+
   return (
     <div className="p-6 max-w-4xl mx-auto">
       <div className="flex items-center gap-3 mb-6">
@@ -569,6 +622,35 @@ export default function AdminUtilitiesTab() {
             className="w-full px-4 py-3 bg-gradient-to-r from-orange-500 to-red-500 text-white font-semibold rounded-lg hover:shadow-lg transition disabled:opacity-50"
           >
             {loading ? 'Correction en cours...' : 'Corriger les modes de paiement COD'}
+          </button>
+        </div>
+
+        {/* Migrer champs de ramassage */}
+        <div className="bg-white rounded-xl border-2 border-teal-200 p-6">
+          <div className="flex items-start justify-between">
+            <div className="flex-1">
+              <h3 className="font-bold text-gray-800 mb-2">
+                📦 Migrer champs de ramassage
+              </h3>
+              <p className="text-sm text-gray-600 mb-4">
+                Copie les informations du livreur vers les nouveaux champs dédiés au ramassage pour toutes les expéditions en "En cours de ramassage".
+                <br />
+                <span className="text-xs text-gray-500 mt-2 block">
+                  • <strong>Nécessaire après mise à jour</strong> : Permet de conserver l'historique du ramassage même après réassignation pour livraison
+                  <br />
+                  • Copie : deliveryDriverId → pickupDriverId, deliveryDriverName → pickupDriverName, etc.
+                  <br />
+                  • Ne modifie que les expéditions qui n'ont pas encore les nouveaux champs
+                </span>
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={migratePickupFields}
+            disabled={loading}
+            className="w-full px-4 py-3 bg-gradient-to-r from-teal-500 to-cyan-500 text-white font-semibold rounded-lg hover:shadow-lg transition disabled:opacity-50"
+          >
+            {loading ? 'Migration en cours...' : 'Migrer les champs de ramassage'}
           </button>
         </div>
 
