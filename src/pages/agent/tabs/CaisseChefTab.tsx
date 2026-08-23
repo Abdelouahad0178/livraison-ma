@@ -338,19 +338,22 @@ export default function CaisseChefTab() {
       p.destinationCity === profile?.city
     )
 
-    // 🆕 Ports payés ramassés (à recevoir du livreur)
+    // 🆕 Ports payés ramassés localement (à recevoir du livreur)
+    // UNIQUEMENT les expéditions en "En cours de ramassage" = ramassage local
     const portsPayesARecevoir = dataSource.filter((p: any) =>
       p.portType === 'port_paye' &&
       !p.portPayeMethod &&  // Exclure les ports en compte
       (p.portStatus === 'collected' || !p.portStatus) &&  // Collecté OU anciennes données sans portStatus
+      p.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local
       (p.createdByCity === profile?.city || p.originCity === profile?.city)  // Créé dans cette agence
     )
 
-    // 🆕 Ports payés reçus par le chef
+    // 🆕 Ports payés reçus par le chef (ramassage local uniquement)
     const portsPayesRecus = dataSource.filter((p: any) =>
       p.portType === 'port_paye' &&
       !p.portPayeMethod &&
       p.portStatus === 'received' &&  // Déjà reçu par le chef
+      p.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local
       (p.createdByCity === profile?.city || p.originCity === profile?.city)
     )
 
@@ -592,17 +595,21 @@ export default function CaisseChefTab() {
         p.portStatus === 'collected' || p.portStatus === 'received'
       )
 
-      // 🆕 Ports payés ramassés par ce livreur (à verser au chef)
+      // 🆕 Ports payés par ce livreur (afficher TOUS, compter uniquement ramassage local)
       const portsPayesParcels = driver.parcels.filter((p: any) =>
         p.portType === 'port_paye' &&
-        !p.portPayeMethod &&
+        !p.portPayeMethod
+      )
+      // Compter uniquement les ramassages locaux pour les statistiques
+      const portsPayesARecevoir = portsPayesParcels.filter((p: any) =>
+        (p.portStatus === 'collected' || !p.portStatus) &&  // Pas encore versé au chef
+        p.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local pour stats
         (p.createdByCity === profile?.city || p.originCity === profile?.city)
       )
-      const portsPayesARecevoir = portsPayesParcels.filter((p: any) =>
-        (p.portStatus === 'collected' || !p.portStatus)  // Pas encore versé au chef (ou anciennes données)
-      )
       const portsPayesRecus = portsPayesParcels.filter((p: any) =>
-        p.portStatus === 'received'  // Déjà reçu par le chef
+        p.portStatus === 'received' &&  // Déjà reçu par le chef
+        p.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local pour stats
+        (p.createdByCity === profile?.city || p.originCity === profile?.city)
       )
 
       const now = new Date()
@@ -1911,15 +1918,17 @@ export default function CaisseChefTab() {
                           {driver.parcels.map((parcel: any) => {
                               // LOGIQUE COHÉRENTE : Port dû seulement si portType='port_du' ET pas de portPayeMethod
                               const isPortDu = parcel.portType === 'port_du' && !parcel.portPayeMethod
-                              // 🆕 Port payé ramassé : port_paye avec portStatus='collected' OU null (anciennes données) (pas encore reçu par chef)
+                              // 🆕 Port payé ramassé localement : UNIQUEMENT statut "En cours de ramassage"
                               const isPortPayeRamasse = parcel.portType === 'port_paye' &&
                                 !parcel.portPayeMethod &&
                                 (parcel.portStatus === 'collected' || !parcel.portStatus) &&
+                                parcel.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local
                                 (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city)
-                              // 🆕 Port payé reçu : port_paye avec portStatus='received'
+                              // 🆕 Port payé reçu (ramassage local uniquement)
                               const isPortPayeRecu = parcel.portType === 'port_paye' &&
                                 !parcel.portPayeMethod &&
                                 parcel.portStatus === 'received' &&
+                                parcel.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local
                                 (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city)
                               const delay = deliveryDelays.find((d: any) =>
                                 d.parcelId === parcel.id && !d.resolvedAt
