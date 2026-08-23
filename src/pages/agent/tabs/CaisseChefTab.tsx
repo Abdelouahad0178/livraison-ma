@@ -426,11 +426,12 @@ export default function CaisseChefTab() {
       p.destinationCity === profile?.city
     )
 
-    // Ports payés reçus (TOUS, sans filtre date)
+    // Ports payés reçus (TOUS, sans filtre date) - UNIQUEMENT ramassage local
     const portsPayesRecus = allParcels.filter((p: any) =>
       p.portType === 'port_paye' &&
       !p.portPayeMethod &&
       p.portStatus === 'received' &&
+      p.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local
       (p.createdByCity === profile?.city || p.originCity === profile?.city)
     )
 
@@ -462,11 +463,12 @@ export default function CaisseChefTab() {
       p.deliveryDriverId === driverFilter
     )
 
-    // Ports payés REÇUS ramassés par CE livreur (TOUS, sans filtre date)
+    // Ports payés REÇUS ramassés par CE livreur (TOUS, sans filtre date) - UNIQUEMENT ramassage local
     const portsPayesRecus = allParcels.filter((p: any) =>
       p.portType === 'port_paye' &&
       !p.portPayeMethod &&
       p.portStatus === 'received' &&
+      p.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local
       (p.createdByCity === profile?.city || p.originCity === profile?.city) &&
       p.deliveryDriverId === driverFilter
     )
@@ -506,7 +508,14 @@ export default function CaisseChefTab() {
       // Exclure les expéditions retournées
       const isReturned = p.returnedAt || p.wasReturned || p.status === 'Retourné'
 
-      if (p.deliveryDriverId && p.destinationCity === profile?.city && !isReturned) {
+      // Inclure dans la liste du livreur si:
+      // 1. Destination = ma ville (livraison) OU
+      // 2. Ramassage local (createdBy/origin = ma ville ET status = "En cours de ramassage")
+      const isInMyCity = p.destinationCity === profile?.city
+      const isLocalPickup = p.status === 'En cours de ramassage' &&
+        (p.createdByCity === profile?.city || p.originCity === profile?.city)
+
+      if (p.deliveryDriverId && (isInMyCity || isLocalPickup) && !isReturned) {
         if (!driversMap.has(p.deliveryDriverId)) {
           driversMap.set(p.deliveryDriverId, {
             id: p.deliveryDriverId,
@@ -521,9 +530,16 @@ export default function CaisseChefTab() {
     // Ajouter les expéditions sans livreur (reçues OU locales, non assignées)
     // TOUTES les expéditions non retournées dans la ville, même celles livrées ou en cours
     const unknownParcels = dataSource.filter((p: any) => {
+      // Inclure si:
+      // 1. Destination = ma ville OU
+      // 2. Ramassage local (createdBy/origin = ma ville ET status = "En cours de ramassage")
+      const isInMyCity = p.destinationCity === profile?.city
+      const isLocalPickup = p.status === 'En cours de ramassage' &&
+        (p.createdByCity === profile?.city || p.originCity === profile?.city)
+
       return (
         !p.deliveryDriverId &&
-        p.destinationCity === profile?.city &&  // Destination = ma ville (inclut locales + reçues)
+        (isInMyCity || isLocalPickup) &&
         !(p.returnedAt || p.wasReturned || p.status === 'Retourné')  // Exclure seulement les retournées
       )
     })
