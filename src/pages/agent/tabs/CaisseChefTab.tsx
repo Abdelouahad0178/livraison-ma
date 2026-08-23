@@ -339,13 +339,13 @@ export default function CaisseChefTab() {
     )
 
     // 🆕 Ports payés ramassés localement (à recevoir du livreur)
-    // UNIQUEMENT les expéditions en "En cours de ramassage" = ramassage local
+    // Ramassés dans cette ville, même si envoyés ailleurs après
     const portsPayesARecevoir = dataSource.filter((p: any) =>
       p.portType === 'port_paye' &&
       !p.portPayeMethod &&  // Exclure les ports en compte
       (p.portStatus === 'collected' || !p.portStatus) &&  // Collecté OU anciennes données sans portStatus
-      p.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local
-      (p.createdByCity === profile?.city || p.originCity === profile?.city)  // Créé dans cette agence
+      (p.createdByCity === profile?.city || p.originCity === profile?.city) &&  // Créé dans cette agence
+      p.pickupDriverId  // 🆕 A été ramassé par un livreur
     )
 
     // 🆕 Ports payés reçus par le chef (ramassage local uniquement)
@@ -353,8 +353,8 @@ export default function CaisseChefTab() {
       p.portType === 'port_paye' &&
       !p.portPayeMethod &&
       p.portStatus === 'received' &&  // Déjà reçu par le chef
-      p.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local
-      (p.createdByCity === profile?.city || p.originCity === profile?.city)
+      (p.createdByCity === profile?.city || p.originCity === profile?.city) &&
+      p.pickupDriverId  // 🆕 A été ramassé par un livreur
     )
 
     // Expéditions en retard (en cours de livraison depuis >24h)
@@ -426,13 +426,14 @@ export default function CaisseChefTab() {
       p.destinationCity === profile?.city
     )
 
-    // Ports payés reçus (TOUS, sans filtre date) - UNIQUEMENT ramassage local
+    // Ports payés reçus (TOUS, sans filtre date) - ramassage local (même si envoyés ailleurs après)
     const portsPayesRecus = allParcels.filter((p: any) =>
       p.portType === 'port_paye' &&
       !p.portPayeMethod &&
       p.portStatus === 'received' &&
-      p.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local
-      (p.createdByCity === profile?.city || p.originCity === profile?.city)
+      // 🆕 Port payé ramassé dans cette ville (peu importe le statut actuel)
+      (p.createdByCity === profile?.city || p.originCity === profile?.city) &&
+      p.pickupDriverId  // A été ramassé par un livreur
     )
 
     const totalCollecte = portsCollectes.reduce((sum: number, p: any) =>
@@ -470,7 +471,7 @@ export default function CaisseChefTab() {
       p.portStatus === 'received' &&
       p.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local
       (p.createdByCity === profile?.city || p.originCity === profile?.city) &&
-      p.deliveryDriverId === driverFilter
+      p.pickupDriverId === driverFilter  // 🆕 Utiliser pickupDriverId pour ramassage
     )
 
     const totalCollecte = portsCollectes.reduce((sum: number, p: any) =>
@@ -508,22 +509,29 @@ export default function CaisseChefTab() {
       // Exclure les expéditions retournées
       const isReturned = p.returnedAt || p.wasReturned || p.status === 'Retourné'
 
+      // Déterminer le livreur selon le type d'opération
+      const isLocalPickup = p.status === 'En cours de ramassage' &&
+        (p.createdByCity === profile?.city || p.originCity === profile?.city)
+
+      // Pour ramassage local : utiliser pickupDriverId
+      // Pour livraison : utiliser deliveryDriverId
+      const driverId = isLocalPickup ? p.pickupDriverId : p.deliveryDriverId
+      const driverName = isLocalPickup ? p.pickupDriverName : p.deliveryDriverName
+
       // Inclure dans la liste du livreur si:
       // 1. Destination = ma ville (livraison) OU
       // 2. Ramassage local (createdBy/origin = ma ville ET status = "En cours de ramassage")
       const isInMyCity = p.destinationCity === profile?.city
-      const isLocalPickup = p.status === 'En cours de ramassage' &&
-        (p.createdByCity === profile?.city || p.originCity === profile?.city)
 
-      if (p.deliveryDriverId && (isInMyCity || isLocalPickup) && !isReturned) {
-        if (!driversMap.has(p.deliveryDriverId)) {
-          driversMap.set(p.deliveryDriverId, {
-            id: p.deliveryDriverId,
-            name: p.deliveryDriverName,
+      if (driverId && (isInMyCity || isLocalPickup) && !isReturned) {
+        if (!driversMap.has(driverId)) {
+          driversMap.set(driverId, {
+            id: driverId,
+            name: driverName,
             parcels: [],
           })
         }
-        driversMap.get(p.deliveryDriverId).parcels.push(p)
+        driversMap.get(driverId).parcels.push(p)
       }
     })
 
@@ -537,8 +545,11 @@ export default function CaisseChefTab() {
       const isLocalPickup = p.status === 'En cours de ramassage' &&
         (p.createdByCity === profile?.city || p.originCity === profile?.city)
 
+      // Vérifier qu'aucun livreur n'est assigné (ni ramassage ni livraison)
+      const hasNoDriver = !p.deliveryDriverId && !p.pickupDriverId
+
       return (
-        !p.deliveryDriverId &&
+        hasNoDriver &&
         (isInMyCity || isLocalPickup) &&
         !(p.returnedAt || p.wasReturned || p.status === 'Retourné')  // Exclure seulement les retournées
       )
@@ -616,16 +627,16 @@ export default function CaisseChefTab() {
         p.portType === 'port_paye' &&
         !p.portPayeMethod
       )
-      // Compter uniquement les ramassages locaux pour les statistiques
+      // Compter uniquement les ramassages locaux pour les statistiques (même si envoyés ailleurs après)
       const portsPayesARecevoir = portsPayesParcels.filter((p: any) =>
         (p.portStatus === 'collected' || !p.portStatus) &&  // Pas encore versé au chef
-        p.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local pour stats
-        (p.createdByCity === profile?.city || p.originCity === profile?.city)
+        (p.createdByCity === profile?.city || p.originCity === profile?.city) &&
+        p.pickupDriverId  // 🆕 A été ramassé par un livreur
       )
       const portsPayesRecus = portsPayesParcels.filter((p: any) =>
         p.portStatus === 'received' &&  // Déjà reçu par le chef
-        p.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local pour stats
-        (p.createdByCity === profile?.city || p.originCity === profile?.city)
+        (p.createdByCity === profile?.city || p.originCity === profile?.city) &&
+        p.pickupDriverId  // 🆕 A été ramassé par un livreur
       )
 
       const now = new Date()
@@ -1676,18 +1687,18 @@ export default function CaisseChefTab() {
                       <tbody>
                         {filteredSearchResults!.map((parcel: any) => {
                           const isPortDu = parcel.portType === 'port_du' && !parcel.portPayeMethod
-                          // 🆕 Port payé ramassé localement : UNIQUEMENT statut "En cours de ramassage"
+                          // 🆕 Port payé ramassé localement (même si envoyé ailleurs après)
                           const isPortPayeRamasse = parcel.portType === 'port_paye' &&
                             !parcel.portPayeMethod &&
                             (parcel.portStatus === 'collected' || !parcel.portStatus) &&
-                            parcel.status === 'En cours de ramassage' &&
-                            (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city)
+                            (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city) &&
+                            parcel.pickupDriverId  // 🆕 A été ramassé par un livreur
                           // 🆕 Port payé reçu (ramassage local uniquement)
                           const isPortPayeRecu = parcel.portType === 'port_paye' &&
                             !parcel.portPayeMethod &&
                             parcel.portStatus === 'received' &&
-                            parcel.status === 'En cours de ramassage' &&
-                            (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city)
+                            (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city) &&
+                            parcel.pickupDriverId  // 🆕 A été ramassé par un livreur
                           const delay = deliveryDelays.find((d: any) =>
                             d.parcelId === parcel.id && !d.resolvedAt
                           )
@@ -1950,18 +1961,18 @@ export default function CaisseChefTab() {
                           {driver.parcels.map((parcel: any) => {
                               // LOGIQUE COHÉRENTE : Port dû seulement si portType='port_du' ET pas de portPayeMethod
                               const isPortDu = parcel.portType === 'port_du' && !parcel.portPayeMethod
-                              // 🆕 Port payé ramassé localement : UNIQUEMENT statut "En cours de ramassage"
+                              // 🆕 Port payé ramassé localement (même si envoyé ailleurs après)
                               const isPortPayeRamasse = parcel.portType === 'port_paye' &&
                                 !parcel.portPayeMethod &&
                                 (parcel.portStatus === 'collected' || !parcel.portStatus) &&
-                                parcel.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local
-                                (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city)
+                                (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city) &&
+                                parcel.pickupDriverId  // 🆕 A été ramassé par un livreur
                               // 🆕 Port payé reçu (ramassage local uniquement)
                               const isPortPayeRecu = parcel.portType === 'port_paye' &&
                                 !parcel.portPayeMethod &&
                                 parcel.portStatus === 'received' &&
-                                parcel.status === 'En cours de ramassage' &&  // UNIQUEMENT ramassage local
-                                (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city)
+                                (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city) &&
+                                parcel.pickupDriverId  // 🆕 A été ramassé par un livreur
                               const delay = deliveryDelays.find((d: any) =>
                                 d.parcelId === parcel.id && !d.resolvedAt
                               )

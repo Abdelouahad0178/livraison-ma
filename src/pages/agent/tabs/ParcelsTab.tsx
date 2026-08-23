@@ -540,10 +540,11 @@ export default function ParcelsTab() {
         // Trouver l'expédition pour vérifier si c'est un port payé
         const parcel = allDisplayParcels.find((p: any) => p.id === parcelId)
         const updates: any = {
-          deliveryDriverId: assigningPickupDriver,
-          deliveryDriverName: driver.name,
-          deliveryAssignedAt: new Date(),
-          deliveryAssignedBy: profile?.name || '',
+          // 🆕 Champs dédiés au ramassage (séparés de la livraison)
+          pickupDriverId: assigningPickupDriver,
+          pickupDriverName: driver.name,
+          pickupAssignedAt: new Date(),
+          pickupAssignedBy: profile?.name || '',
           status: 'En cours de ramassage'
         }
 
