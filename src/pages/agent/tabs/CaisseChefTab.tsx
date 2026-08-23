@@ -1660,6 +1660,18 @@ export default function CaisseChefTab() {
                       <tbody>
                         {filteredSearchResults!.map((parcel: any) => {
                           const isPortDu = parcel.portType === 'port_du' && !parcel.portPayeMethod
+                          // 🆕 Port payé ramassé localement : UNIQUEMENT statut "En cours de ramassage"
+                          const isPortPayeRamasse = parcel.portType === 'port_paye' &&
+                            !parcel.portPayeMethod &&
+                            (parcel.portStatus === 'collected' || !parcel.portStatus) &&
+                            parcel.status === 'En cours de ramassage' &&
+                            (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city)
+                          // 🆕 Port payé reçu (ramassage local uniquement)
+                          const isPortPayeRecu = parcel.portType === 'port_paye' &&
+                            !parcel.portPayeMethod &&
+                            parcel.portStatus === 'received' &&
+                            parcel.status === 'En cours de ramassage' &&
+                            (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city)
                           const delay = deliveryDelays.find((d: any) =>
                             d.parcelId === parcel.id && !d.resolvedAt
                           )
@@ -1717,6 +1729,10 @@ export default function CaisseChefTab() {
                                 ) : parcel.portType === 'port_en_compte_expediteur' ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-700 text-xs font-medium">
                                     C/Exp
+                                  </span>
+                                ) : isPortPayeRamasse || isPortPayeRecu ? (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-100 text-teal-700 text-xs font-medium">
+                                    PP Ramassage
                                   </span>
                                 ) : (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-xs font-medium">
@@ -1975,6 +1991,10 @@ export default function CaisseChefTab() {
                                     ) : parcel.portType === 'port_en_compte_expediteur' ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-indigo-100 text-indigo-700 text-xs font-medium">
                                         C/Exp
+                                      </span>
+                                    ) : isPortPayeRamasse || isPortPayeRecu ? (
+                                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-100 text-teal-700 text-xs font-medium">
+                                        PP Ramassage
                                       </span>
                                     ) : (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-xs font-medium">
