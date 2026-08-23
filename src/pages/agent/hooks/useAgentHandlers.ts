@@ -155,13 +155,23 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     setBulkAssignError('')
     if (!bulkAssignDriverId) {
       setBulkAssignError('Sélectionnez un livreur.')
+      console.log('❌ Pas de livreur sélectionné')
       return
     }
     const selectedParcels = bulkAssignSelectedIds
       .map((id: any) => assignableParcels.find((p: any) => p.id === id))
       .filter(Boolean)
+
+    console.log('🔍 DEBUG handleBulkAssignDriver:', {
+      assignableCount: assignableParcels.length,
+      bulkAssignSelectedIds,
+      selectedParcelsCount: selectedParcels.length,
+      bulkAssignDriverId
+    })
+
     if (selectedParcels.length === 0) {
       setBulkAssignError('Sélectionnez au moins un colis à assigner.')
+      console.log('❌ Aucun colis sélectionné trouvé dans assignableParcels')
       return
     }
     setBulkAssignBusy(true)

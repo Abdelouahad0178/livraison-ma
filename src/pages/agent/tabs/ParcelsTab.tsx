@@ -463,6 +463,13 @@ export default function ParcelsTab() {
 
   // ⭐ Wrapper pour l'assignation qui ajoute les couleurs
   const handleBulkAssignDriverWithColor = async (assignableParcels: any[]) => {
+    console.log('🔍 DEBUG handleBulkAssignDriverWithColor:', {
+      assignableCount: assignableParcels.length,
+      selectedIds: bulkAssignSelectedIds,
+      selectedCount: bulkAssignSelectedIds.length,
+      driverId: bulkAssignDriverId
+    })
+
     // D'abord colorer les colis
     colorSelectedParcels()
 
@@ -530,13 +537,22 @@ export default function ParcelsTab() {
 
     try {
       const promises = Array.from(selectedPickupParcelIds).map(parcelId => {
-        return updateParcel(parcelId, {
+        // Trouver l'expédition pour vérifier si c'est un port payé
+        const parcel = allDisplayParcels.find((p: any) => p.id === parcelId)
+        const updates: any = {
           deliveryDriverId: assigningPickupDriver,
           deliveryDriverName: driver.name,
           deliveryAssignedAt: new Date(),
           deliveryAssignedBy: profile?.name || '',
           status: 'En cours de ramassage'
-        })
+        }
+
+        // Si c'est un port payé, marquer comme collecté par le livreur
+        if (parcel?.portType === 'port_paye' && !parcel?.portPayeMethod) {
+          updates.portStatus = 'collected'
+        }
+
+        return updateParcel(parcelId, updates)
       })
 
       await Promise.all(promises)
