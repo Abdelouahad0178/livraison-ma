@@ -75,10 +75,8 @@ export default function AdminPortAgenciesTab({
 
   // ⚡ Chargement optimisé avec détection de filtres (Option 3)
   useEffect(() => {
-    // Ne montrer le loading que si c'est le premier chargement (pas de données)
-    if (liveParcels.length === 0) {
-      setLoading(true)
-    }
+    // Toujours montrer le loading lors d'un changement de filtre de date
+    setLoading(true)
 
     // 🔍 Détecter si des filtres de DATE sont actifs
     // Note: selectedCity et portTypeFilter sont appliqués côté frontend dans filteredStats
