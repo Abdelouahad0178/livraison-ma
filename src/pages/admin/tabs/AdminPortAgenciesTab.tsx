@@ -46,6 +46,7 @@ export default function AdminPortAgenciesTab({
   // États pour chargement progressif
   const [liveParcels, setLiveParcels] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadingAll, setLoadingAll] = useState(false)
   const [hasMore, setHasMore] = useState(true)
@@ -75,8 +76,14 @@ export default function AdminPortAgenciesTab({
 
   // ⚡ Chargement optimisé avec détection de filtres (Option 3)
   useEffect(() => {
-    // Toujours montrer le loading lors d'un changement de filtre de date
-    setLoading(true)
+    // 🔄 CHARGEMENT INTELLIGENT :
+    // - Première visite (aucune donnée) : masquer tout avec `loading`
+    // - Changement de filtre (données existantes) : garder les données visibles avec `refreshing`
+    if (liveParcels.length === 0) {
+      setLoading(true)
+    } else {
+      setRefreshing(true)
+    }
 
     // 🔍 Détecter si des filtres de DATE sont actifs
     // Note: selectedCity et portTypeFilter sont appliqués côté frontend dans filteredStats
@@ -191,11 +198,13 @@ export default function AdminPortAgenciesTab({
         lastDocRef.current = snap.docs[snap.docs.length - 1] || null
         setHasMore(snap.docs.length >= effectivePageSize)
         setLoading(false)
+        setRefreshing(false)
         console.warn(`✅ Port par Agence: ${data.length} colis chargés`)
       },
       (err) => {
         console.error('Erreur chargement initial:', err)
         setLoading(false)
+        setRefreshing(false)
       }
     )
 
@@ -580,6 +589,21 @@ export default function AdminPortAgenciesTab({
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-12 text-center">
           <Loader2 className="w-12 h-12 text-purple-600 animate-spin mx-auto mb-4" />
           <p className="text-gray-600 font-medium">Chargement des données...</p>
+        </div>
+      )}
+
+      {/* 🔄 Indicateur de rafraîchissement en arrière-plan */}
+      {refreshing && (
+        <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-300 rounded-xl p-3 flex items-center gap-3 shadow-sm print:hidden">
+          <Loader2 className="w-5 h-5 text-blue-600 animate-spin flex-shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-blue-900">
+              🔄 Actualisation des données en cours...
+            </p>
+            <p className="text-xs text-blue-700 mt-0.5">
+              Les données actuelles restent visibles pendant le chargement
+            </p>
+          </div>
         </div>
       )}
 
