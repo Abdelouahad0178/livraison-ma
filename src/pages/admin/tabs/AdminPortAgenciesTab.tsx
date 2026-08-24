@@ -80,18 +80,17 @@ export default function AdminPortAgenciesTab({
       setLoading(true)
     }
 
-    // 🔍 Détecter si des filtres sont actifs
+    // 🔍 Détecter si des filtres de DATE sont actifs
+    // Note: selectedCity et portTypeFilter sont appliqués côté frontend dans filteredStats
     const hasDateFilter = datePreset !== 'all'
-    const hasCityFilter = selectedCity !== 'all'
-    const hasPortTypeFilter = portTypeFilter !== 'all'
-    const hasFilters = hasDateFilter || hasCityFilter || hasPortTypeFilter
+    const hasFilters = hasDateFilter
 
     const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
 
     console.warn(`📊 CHARGEMENT Port par Agence:`, {
       hasFilters,
       effectivePageSize,
-      filters: { datePreset, selectedCity, portTypeFilter }
+      filters: { datePreset }
     })
 
     // 📅 Gérer les différents filtres de date
@@ -203,7 +202,10 @@ export default function AdminPortAgenciesTab({
     )
 
     return () => unsub()
-  }, [datePreset, dateFrom, dateTo, operationalDay, selectedCity, portTypeFilter])
+  }, [datePreset, dateFrom, dateTo, operationalDay])
+  // Note: selectedCity et portTypeFilter sont volontairement exclus car ils sont appliqués
+  // côté frontend dans le useMemo filteredStats. Les inclure ici causerait un rechargement
+  // inutile des données Firestore et créerait un bug nécessitant 2 clics pour filtrer.
 
   // ⚡ Charger TOUS les colis restants en arrière-plan
   const loadAllParcels = async () => {
