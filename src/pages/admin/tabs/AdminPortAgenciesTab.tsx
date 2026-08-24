@@ -96,9 +96,53 @@ export default function AdminPortAgenciesTab({
 
     // 📅 Gérer les différents filtres de date
     let queryConstraints: any[] = []
+    const now = new Date()
 
-    // 🗓️ JOUR D'OPÉRATION : charger avec filtre Firestore
-    if (datePreset === 'operational' && operationalDay) {
+    if (datePreset === 'today') {
+      // 📅 AUJOURD'HUI : depuis 00:00 aujourd'hui
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      const fromTimestamp = Timestamp.fromDate(today)
+
+      console.warn(`📅 Aujourd'hui:`, {
+        from: today.toLocaleString('fr-MA')
+      })
+
+      queryConstraints = [
+        where('createdAt', '>=', fromTimestamp),
+        orderBy('createdAt', 'desc'),
+        limit(effectivePageSize)
+      ]
+    } else if (datePreset === 'week') {
+      // 📅 7 DERNIERS JOURS
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
+      const fromTimestamp = Timestamp.fromDate(weekAgo)
+
+      console.warn(`📅 7 derniers jours:`, {
+        from: weekAgo.toLocaleString('fr-MA')
+      })
+
+      queryConstraints = [
+        where('createdAt', '>=', fromTimestamp),
+        orderBy('createdAt', 'desc'),
+        limit(effectivePageSize)
+      ]
+    } else if (datePreset === 'month') {
+      // 📅 CE MOIS-CI : depuis le 1er du mois
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+      const fromTimestamp = Timestamp.fromDate(monthStart)
+
+      console.warn(`📅 Ce mois-ci:`, {
+        from: monthStart.toLocaleString('fr-MA')
+      })
+
+      queryConstraints = [
+        where('createdAt', '>=', fromTimestamp),
+        orderBy('createdAt', 'desc'),
+        limit(effectivePageSize)
+      ]
+    } else if (datePreset === 'operational' && operationalDay) {
+      // 🗓️ JOUR D'OPÉRATION : charger avec filtre Firestore
       const range = getOperationalDayRange(operationalDay)
       const fromTimestamp = Timestamp.fromDate(range.start)
       const toTimestamp = Timestamp.fromDate(range.end)
@@ -130,10 +174,10 @@ export default function AdminPortAgenciesTab({
         where('createdAt', '>=', fromTimestamp),
         where('createdAt', '<=', toTimestamp),
         orderBy('createdAt', 'desc'),
-        limit(effectivePageSize * 2) // Doubler pour être sûr
+        limit(effectivePageSize)
       ]
     } else {
-      // Chargement normal
+      // Chargement normal (tous)
       queryConstraints = [
         orderBy('createdAt', 'desc'),
         limit(effectivePageSize)
