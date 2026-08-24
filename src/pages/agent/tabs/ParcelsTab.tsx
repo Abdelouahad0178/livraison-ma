@@ -2697,6 +2697,7 @@ export default function ParcelsTab() {
                                 {isAssignable ? (
                                   <input
                                     type="checkbox"
+                                    key={`assign-${parcel.id}-${assignSelected}`}
                                     checked={assignSelected}
                                     onChange={e => {
                                       e.stopPropagation()

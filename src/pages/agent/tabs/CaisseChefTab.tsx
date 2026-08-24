@@ -46,13 +46,6 @@ export default function CaisseChefTab() {
     updateParcelOptimistic,
   } = useAgentCtx()
 
-  // DEBUG: Log au chargement du composant
-  console.error('🔍 [CaisseChefTab] DONNÉES AU CHARGEMENT:', {
-    'Nombre parcels': parcels?.length || 0,
-    'Ville': profile?.city,
-    'Rôle': profile?.role
-  })
-
   // État des onglets
   const [activeTab, setActiveTab] = useState<'livreurs' | 'versements' | 'historique'>('livreurs')
 
@@ -450,10 +443,13 @@ export default function CaisseChefTab() {
       sum + safeParseAmount(p.price), 0
     )
 
-    // 🔄 IGNORE les versements pour repartir sur une base saine
-    // (anciens versements faussaient le calcul)
-    return totalCollecte + montantRecus
-  }, [allDisplayParcels, profile?.city])
+    // ✅ Déduire les versements confirmés du solde
+    const totalVerse = adminTransfers
+      .filter((t: any) => t.status === 'confirmed')
+      .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0)
+
+    return Math.max(0, totalCollecte + montantRecus - totalVerse)
+  }, [allDisplayParcels, profile?.city, adminTransfers])
 
   // 💰 Solde d'un livreur spécifique (sans filtre de date)
   const soldeLivreur = useMemo(() => {
@@ -498,21 +494,6 @@ export default function CaisseChefTab() {
 
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
-    // DEBUG: Vérifier les données au chargement
-    const withDriver = dataSource.filter((p: any) => p.deliveryDriverId).length
-    const inCity = dataSource.filter((p: any) => p.destinationCity === profile?.city).length
-    const both = dataSource.filter((p: any) =>
-      p.deliveryDriverId && p.destinationCity === profile?.city
-    ).length
-
-    console.error('📊 [CaisseChefTab] CALCUL LIVREURS:', {
-      '1️⃣ Total parcels': dataSource.length,
-      '2️⃣ Ville profil': profile?.city,
-      '3️⃣ Avec deliveryDriverId': withDriver,
-      '4️⃣ Dans cette ville': inCity,
-      '5️⃣ Avec driver ET dans ville': both
-    })
-
     const driversMap = new Map()
 
     dataSource.forEach((p: any) => {
@@ -523,17 +504,24 @@ export default function CaisseChefTab() {
       const isLocalPickup = p.status === 'En cours de ramassage' &&
         (p.createdByCity === profile?.city || p.originCity === profile?.city)
 
-      // Pour ramassage local : utiliser pickupDriverId
+      // 🆕 CORRECTION: Inclure aussi les ports payés locaux reçus (peu importe destination)
+      const isLocalPortPayeReceived = p.portType === 'port_paye' &&
+        !p.portPayeMethod &&
+        (p.createdByCity === profile?.city || p.originCity === profile?.city) &&
+        p.portStatus === 'received'
+
+      // Pour ramassage local OU port payé local reçu : utiliser pickupDriverId
       // Pour livraison : utiliser deliveryDriverId
-      const driverId = isLocalPickup ? p.pickupDriverId : p.deliveryDriverId
-      const driverName = isLocalPickup ? p.pickupDriverName : p.deliveryDriverName
+      const driverId = (isLocalPickup || isLocalPortPayeReceived) ? p.pickupDriverId : p.deliveryDriverId
+      const driverName = (isLocalPickup || isLocalPortPayeReceived) ? p.pickupDriverName : p.deliveryDriverName
 
       // Inclure dans la liste du livreur si:
       // 1. Destination = ma ville (livraison) OU
-      // 2. Ramassage local (createdBy/origin = ma ville ET status = "En cours de ramassage")
+      // 2. Ramassage local (createdBy/origin = ma ville ET status = "En cours de ramassage") OU
+      // 3. Port payé local reçu (peu importe destination)
       const isInMyCity = p.destinationCity === profile?.city
 
-      if (driverId && (isInMyCity || isLocalPickup) && !isReturned) {
+      if (driverId && (isInMyCity || isLocalPickup || isLocalPortPayeReceived) && !isReturned) {
         if (!driversMap.has(driverId)) {
           driversMap.set(driverId, {
             id: driverId,
@@ -550,19 +538,27 @@ export default function CaisseChefTab() {
     const unknownParcels = dataSource.filter((p: any) => {
       // Inclure si:
       // 1. Destination = ma ville OU
-      // 2. Ramassage local (createdBy/origin = ma ville ET status = "En cours de ramassage")
+      // 2. Ramassage local (createdBy/origin = ma ville ET status = "En cours de ramassage") OU
+      // 3. Port payé local reçu SANS pickupDriverId (ancien système)
       const isInMyCity = p.destinationCity === profile?.city
       const isLocalPickup = p.status === 'En cours de ramassage' &&
         (p.createdByCity === profile?.city || p.originCity === profile?.city)
+
+      // 🆕 CORRECTION: Inclure les ports payés locaux reçus SANS pickupDriverId
+      // Ces expéditions ont été créées avant la migration et n'ont pas de pickupDriverId
+      const isLocalPortPayeReceivedNoPickup = p.portType === 'port_paye' &&
+        !p.portPayeMethod &&
+        (p.createdByCity === profile?.city || p.originCity === profile?.city) &&
+        p.portStatus === 'received' &&
+        !p.pickupDriverId  // Pas de livreur de ramassage assigné
 
       // Vérifier qu'aucun livreur n'est assigné (ni ramassage ni livraison)
       const hasNoDriver = !p.deliveryDriverId && !p.pickupDriverId
 
       return (
-        hasNoDriver &&
-        (isInMyCity || isLocalPickup) &&
+        (hasNoDriver && (isInMyCity || isLocalPickup)) || isLocalPortPayeReceivedNoPickup
+      ) &&
         !(p.returnedAt || p.wasReturned || p.status === 'Retourné')  // Exclure seulement les retournées
-      )
     })
 
     if (unknownParcels.length > 0) {
@@ -585,20 +581,6 @@ export default function CaisseChefTab() {
       const portDuParcels = driver.parcels.filter((p: any) =>
         p.portType === 'port_du' && !p.portPayeMethod
       )
-
-      // DEBUG: Vérifier les types de port
-      if (driver.parcels.length !== portDuParcels.length) {
-        console.log(`[DEBUG] Livreur ${driver.name}:`, {
-          total: driver.parcels.length,
-          portDu: portDuParcels.length,
-          details: driver.parcels.map((p: any) => ({
-            nic: p.senderNic || p.trackingId,
-            portType: p.portType,
-            portPayeMethod: p.portPayeMethod,
-            isPortDu: p.portType === 'port_du' && !p.portPayeMethod
-          }))
-        })
-      }
 
       // Calculs par livreur - basés uniquement sur les ports dû
       const assignedToday = driver.parcels.filter((p: any) => {
@@ -623,8 +605,8 @@ export default function CaisseChefTab() {
         // Si "Non assigné", tous les ports dus non collectés/retournés sont à collecter
         if (driver.id === 'unknown') return true
 
-        // Si assigné, seulement les "En cours de livraison" ou "Livré"
-        return p.status === 'En cours de livraison' || p.status === 'Livré'
+        // Si assigné, inclure "Arrivé en agence", "En cours de livraison" et "Livré"
+        return p.status === 'Arrivé en agence' || p.status === 'En cours de livraison' || p.status === 'Livré'
       })
 
       // Ports collectés = ceux avec portStatus 'collected' ou 'received'
@@ -846,8 +828,8 @@ export default function CaisseChefTab() {
         // Si "Non assigné", tous les ports dus non collectés/retournés sont à collecter
         if (driver.id === 'unknown') return true
 
-        // Si assigné, seulement les "En cours de livraison" ou "Livré"
-        return p.status === 'En cours de livraison' || p.status === 'Livré'
+        // Si assigné, inclure "Arrivé en agence", "En cours de livraison" et "Livré"
+        return p.status === 'Arrivé en agence' || p.status === 'En cours de livraison' || p.status === 'Livré'
       })
 
       // Ports collectés = ceux avec portStatus 'collected' ou 'received'
