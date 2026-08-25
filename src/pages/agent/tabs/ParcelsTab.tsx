@@ -4174,7 +4174,7 @@ export default function ParcelsTab() {
                 <div className="pt-4 mt-2 border-t border-gray-100 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs text-gray-400">
-                      {filteredParcels.length}{hasMoreParcels ? '+' : ''} expédition{filteredParcels.length > 1 ? 's' : ''}
+                      {parcelMovementCount}{hasMoreParcels ? '+' : ''} expédition{parcelMovementCount > 1 ? 's' : ''}
                     </span>
                     <span className="text-xs text-gray-400">Page {safePage + 1} / {totalPages}</span>
                   </div>
