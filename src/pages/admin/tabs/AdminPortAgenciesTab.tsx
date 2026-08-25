@@ -616,14 +616,17 @@ export default function AdminPortAgenciesTab({
 
       // ✅ EXPÉDITIONS : comptées selon la direction
       const matchesOriginFilter = directionFilter !== 'received' || originCityFilter === 'all' || originCity === originCityFilter
+
+      // Compter les expéditions ENVOYÉES (à l'origine)
       if (directionFilter === 'all' || directionFilter === 'sent') {
-        // Expéditions envoyées : comptées à l'agence d'ORIGINE
         if (originCity && stats[originCity]) {
           stats[originCity].nbExpeditions += 1
         }
-      } else if (directionFilter === 'received') {
-        // Expéditions reçues : comptées à l'agence de DESTINATION
-        // Et filtrées par ville d'origine si spécifié
+      }
+
+      // Compter les expéditions REÇUES (à la destination)
+      // Note: utilisation de IF indépendant (pas ELSE IF) pour que 'all' compte les deux
+      if (directionFilter === 'all' || directionFilter === 'received') {
         if (destCity && stats[destCity] && matchesOriginFilter) {
           stats[destCity].nbExpeditions += 1
         }
