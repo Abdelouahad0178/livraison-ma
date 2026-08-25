@@ -1711,11 +1711,7 @@ export default function AgentPage() {
         if (isReceivedInMyCity) receivedCount++
       })
 
-      const total = sentCount + receivedCount
-
-      alert(`🔢 Calcul mouvements:\n\nEnvoyés: ${sentCount}\nReçus: ${receivedCount}\nTotal: ${total}\n\nNombre colis filtrés: ${filteredParcels.length}\nVille: ${profileCity}`)
-
-      return total
+      return sentCount + receivedCount
     }
 
     // Si showAllCities, pas de notion de direction
