@@ -1693,11 +1693,30 @@ export default function AgentPage() {
 
       filteredParcels.forEach((p: any) => {
         const isSentFromMyCity = p.sender?.city === profileCity || p.originCity === profileCity
-        const isReceivedInMyCity = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
-          && isParcelVisibleInDestinationAgency(p)
+
+        // Pour les colis reçus, vérifier la visibilité
+        let isReceivedInMyCity = false
+        if (p.destinationCity === profileCity || p.receiver?.city === profileCity) {
+          // Vérifier la visibilité selon le statut
+          if (p.status === 'pending' || p.status === 'in_transit' || p.status === 'out_for_delivery') {
+            // Pas encore visible à destination
+            isReceivedInMyCity = false
+          } else {
+            // Visible (arrived, delivered, return_*)
+            isReceivedInMyCity = true
+          }
+        }
 
         if (isSentFromMyCity) sentCount++
         if (isReceivedInMyCity) receivedCount++
+      })
+
+      console.log('🔢 Calcul mouvements:', {
+        sentCount,
+        receivedCount,
+        total: sentCount + receivedCount,
+        filteredCount: filteredParcels.length,
+        profileCity
       })
 
       return sentCount + receivedCount
