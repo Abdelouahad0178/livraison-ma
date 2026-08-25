@@ -205,6 +205,13 @@ export default function AdminPortAgenciesTab({
     } else if (datePreset === 'custom' && dateFrom && dateTo) {
       fromDate = new Date(dateFrom + 'T00:00:00')
       toDate = new Date(dateTo + 'T23:59:59')
+
+      // ⚠️ Validation: dateFrom doit être <= dateTo
+      if (fromDate > toDate) {
+        console.warn('⚠️ Date de début après date de fin - ignoré')
+        fromDate = null
+        toDate = null
+      }
     } else if (datePreset === 'all') {
       // 📅 PÉRIODE PAR DÉFAUT : 10 derniers jours (SANS le jour présent)
       // Cela assure un chargement rapide au démarrage tout en affichant des données récentes
