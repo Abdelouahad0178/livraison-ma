@@ -2442,7 +2442,7 @@ export default function ParcelsTab() {
                   <div className="flex items-center gap-2">
                     <Package className="w-5 h-5 text-orange-600" />
                     <span className="text-sm font-bold text-gray-700">
-                      {tableFilteredParcels.length} expédition{tableFilteredParcels.length > 1 ? 's' : ''}
+                      {parcelMovementCount} expédition{parcelMovementCount > 1 ? 's' : ''}
                     </span>
                     {portTypeFilter !== 'all' && (
                       <span className="ml-2 px-2 py-1 rounded-full text-[10px] font-bold bg-blue-600 text-white">
