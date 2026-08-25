@@ -206,12 +206,13 @@ export default function AdminPortAgenciesTab({
       fromDate = new Date(dateFrom + 'T00:00:00')
       toDate = new Date(dateTo + 'T23:59:59')
     } else if (datePreset === 'all') {
-      // 📅 PÉRIODE PAR DÉFAUT : 30 derniers jours (au lieu de charger toute la base)
+      // 📅 PÉRIODE PAR DÉFAUT : 10 derniers jours (SANS le jour présent)
       // Cela assure un chargement rapide au démarrage tout en affichant des données récentes
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      fromDate = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
-      toDate = new Date(now)
-      console.warn('📅 datePreset="all" → Chargement des 30 derniers jours par défaut')
+      const yesterday = new Date(today.getTime() - 1 * 24 * 60 * 60 * 1000) // Hier à 00:00
+      fromDate = new Date(yesterday.getTime() - 9 * 24 * 60 * 60 * 1000) // 10 jours avant hier
+      toDate = new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1000) // Hier à 23:59:59
+      console.warn('📅 datePreset="all" → Chargement des 10 derniers jours (sans aujourd\'hui) par défaut')
     }
 
     // 📊 VALIDATION DE PÉRIODE et CHARGEMENT PAR BATCHES
@@ -985,7 +986,7 @@ export default function AdminPortAgenciesTab({
               </label>
               <div className="flex flex-wrap gap-2 items-center">
                 {[
-                  { key: 'all', label: '30j' },
+                  { key: 'all', label: '10j' },
                   { key: 'today', label: "Auj." },
                   { key: 'week', label: '7j' },
                   { key: 'month', label: 'Mois' },
