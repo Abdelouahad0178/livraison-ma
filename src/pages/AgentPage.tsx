@@ -1678,6 +1678,109 @@ export default function AgentPage() {
   }, [allDisplayParcels, datePreset, dateFrom, dateTo, dateFilterType, operationalDay, profileCity, profileRole, subTab, uid, serviceFilter,
        parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, codDocumentStatusFilter, debouncedSearch, serverSearchResults, showAllCities])
 
+  // 📊 Calcul du nombre de mouvements (pour "Tous", compte envoyés + reçus séparément)
+  const parcelMovementCount = useMemo(() => {
+    if (parcelDirection !== 'all') {
+      // Pour 'sent' ou 'received', le nombre de mouvements = nombre de colis
+      return filteredParcels.length
+    }
+
+    // Pour 'all': compter les mouvements (entrées + sorties)
+    // Un colis interne (même ville) compte 2 fois (1 envoi + 1 réception)
+    const sourceData = (debouncedSearch && serverSearchResults !== null)
+      ? serverSearchResults
+      : allDisplayParcels
+    const dateExtractor = dateFilterType === 'livraison'
+      ? (p: any) => p.deliveredAt ? new Date(p.deliveredAt) : new Date(0)
+      : parcelDate
+    const dateFilteredData = filterByDate(sourceData, datePreset, dateFrom, dateTo, dateExtractor, operationalDay)
+
+    let sentCount = 0
+    let receivedCount = 0
+
+    dateFilteredData.forEach((p: any) => {
+      // Appliquer tous les filtres (sauf direction)
+      if (!showAllCities && profileCity && (profileRole === 'chef_agence' || profileRole === 'agentpro')) {
+        const isReturnToThisCity = (p.status?.includes('Retour') || p.wasReturned) && p.destinationCity === profileCity
+        const destinationVisible = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
+          && isParcelVisibleInDestinationAgency(p)
+        const cityMatch = p.sender?.city === profileCity || p.originCity === profileCity || destinationVisible || isReturnToThisCity
+        if (!cityMatch) return
+      }
+      if (subTab === 'mine' && p.agentId !== uid && p.destinationAgentId !== uid) return
+      if ((profileRole === 'chef_agence' || profileRole === 'agentpro') && parcelEditorFilter !== 'all') {
+        const isAideEntry = p.agentRole === 'aide_agent'
+        const isChefEntry = p.agentRole === 'chef_agence' || p.agentRole === 'agentpro' || p.agentId === uid
+        if (parcelEditorFilter === 'chef' && !isChefEntry) return
+        if (parcelEditorFilter === 'aide' && !isAideEntry) return
+      }
+      if (serviceFilter !== 'all' && p.serviceType !== serviceFilter) return
+      if (parcelStatusFilter !== 'all' && p.status !== parcelStatusFilter) return
+      if (parcelStatusFilter === 'all' && (p.status?.includes('Retour') || p.wasReturned)) return
+      if (destinationCityFilter !== 'all') {
+        const matchesOrigin = (p.originCity || p.sender?.city) === destinationCityFilter
+        const matchesDest = (p.destinationCity || p.receiver?.city) === destinationCityFilter
+        if (!matchesOrigin && !matchesDest) return
+      }
+      if (driverFilter !== 'all') {
+        if (driverFilter === 'unassigned') {
+          if (p.deliveryDriverId || p.chauffeurId) return
+        } else {
+          const matchesDriver = p.deliveryDriverId === driverFilter || p.chauffeurId === driverFilter
+          if (!matchesDriver) return
+        }
+      }
+      if (portTypeFilter !== 'all' && p.portType !== portTypeFilter) return
+      if (encaissementFilter !== 'all') {
+        if (encaissementFilter === 'simple' && p.codAmount > 0) return
+        if (encaissementFilter === 'especes' && p.serviceType !== 'especes') return
+        if (encaissementFilter === 'cheque' && p.serviceType !== 'cheque') return
+        if (encaissementFilter === 'traite' && p.serviceType !== 'traite') return
+      }
+      if (codDocumentStatusFilter.length > 0) {
+        const hasStatus = p.codDocumentStatus || ((p.serviceType === 'cheque' || p.serviceType === 'traite') ? 'simple' : null)
+        if (!hasStatus || !codDocumentStatusFilter.includes(hasStatus)) return
+      }
+      if (debouncedSearch) {
+        if (serverSearchResults !== null) {
+          // OK, déjà filtré
+        } else {
+          const searchLower = debouncedSearch.toLowerCase()
+          if (searchLower.startsWith('c') && searchLower.length > 1) {
+            const amountStr = searchLower.substring(1).trim()
+            if (/^\d+$/.test(amountStr)) {
+              const isCheckOrTraite = p.serviceType === 'cheque' || p.serviceType === 'traite' || p.serviceType === 'especes'
+              const amountMatch = Math.floor(p.codAmount || 0).toString().includes(amountStr)
+              if (!(isCheckOrTraite && amountMatch)) return
+            }
+          } else {
+            const matches = matchesSearch([
+              p.id, p.trackingId, p.senderNic, p.sender?.nic, p.sender?.name, p.sender?.tel,
+              p.sender?.city, p.receiver?.name, p.receiver?.tel, p.receiver?.city,
+              p.originCity, p.destinationCity,
+            ], searchLower)
+            if (!matches) return
+          }
+        }
+      }
+
+      // Compter les mouvements (envoyés ET/OU reçus)
+      if (!showAllCities && profileCity) {
+        const isSentFromMyCity = p.sender?.city === profileCity || p.originCity === profileCity
+        const isReceivedInMyCity = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
+          && isParcelVisibleInDestinationAgency(p)
+
+        if (isSentFromMyCity) sentCount++
+        if (isReceivedInMyCity) receivedCount++
+      }
+    })
+
+    return sentCount + receivedCount
+  }, [filteredParcels, parcelDirection, allDisplayParcels, datePreset, dateFrom, dateTo, dateFilterType, operationalDay,
+      profileCity, profileRole, subTab, uid, serviceFilter, parcelStatusFilter, parcelEditorFilter,
+      destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, codDocumentStatusFilter,
+      debouncedSearch, serverSearchResults, showAllCities])
+
   // 📜 Scroll automatique vers le haut après filtrage
   const firstRenderRef = useRef(true)
   useEffect(() => {
@@ -2316,6 +2419,7 @@ export default function AgentPage() {
     showFilters, setShowFilters,
     allDisplayParcels,
     filteredParcels,
+    parcelMovementCount,
     aideAgents,
     pointeurUsers,
     allUsers, setAllUsers,

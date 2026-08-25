@@ -46,6 +46,7 @@ export default function ParcelsTab() {
     // Parcel data
     allDisplayParcels,
     filteredParcels,
+    parcelMovementCount,
     loadingParcels,
     hasMoreParcels, setHasMoreParcels,
     hasMoreWithDateFilter,
@@ -1178,7 +1179,7 @@ export default function ParcelsTab() {
           return (
             <div className="space-y-3">
               <div className="flex items-center justify-between px-1 flex-wrap gap-2">
-                <p className="text-xs text-gray-400">{filteredParcels.length} expédition(s)</p>
+                <p className="text-xs text-gray-400">{parcelMovementCount} expédition(s)</p>
                 <div className="flex items-center gap-2 flex-wrap">
                   {/* Toggle vue cartes / tableau */}
                   <div className="flex items-center bg-gray-100 rounded-lg p-0.5 shrink-0">
@@ -1297,7 +1298,7 @@ export default function ParcelsTab() {
                     title={driverFilter !== 'all' ? "Imprimer tous les colis de ce livreur" : "Imprimer tous les colis visibles"}
                   >
                     <Printer className="w-3.5 h-3.5" />
-                    {driverFilter !== 'all' ? `Tout (${filteredParcels.length})` : `Imprimer (${filteredParcels.length})`}
+                    {driverFilter !== 'all' ? `Tout (${parcelMovementCount})` : `Imprimer (${parcelMovementCount})`}
                   </button>
 
                   {/* Toggle orientation impression */}
