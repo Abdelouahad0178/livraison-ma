@@ -205,6 +205,13 @@ export default function AdminPortAgenciesTab({
     } else if (datePreset === 'custom' && dateFrom && dateTo) {
       fromDate = new Date(dateFrom + 'T00:00:00')
       toDate = new Date(dateTo + 'T23:59:59')
+    } else if (datePreset === 'all') {
+      // 📅 PÉRIODE PAR DÉFAUT : 30 derniers jours (au lieu de charger toute la base)
+      // Cela assure un chargement rapide au démarrage tout en affichant des données récentes
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      fromDate = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000)
+      toDate = new Date(now)
+      console.warn('📅 datePreset="all" → Chargement des 30 derniers jours par défaut')
     }
 
     // 📊 VALIDATION DE PÉRIODE et CHARGEMENT PAR BATCHES
@@ -304,6 +311,16 @@ export default function AdminPortAgenciesTab({
         orderBy('createdAt', 'desc'),
         limit(effectivePageSize)
       ]
+    } else if (datePreset === 'all' && fromDate && toDate) {
+      // 📅 Période par défaut (30 derniers jours) pour chargement initial rapide
+      const fromTimestamp = Timestamp.fromDate(fromDate)
+      const toTimestamp = Timestamp.fromDate(toDate)
+      queryConstraints = [
+        where('createdAt', '>=', fromTimestamp),
+        where('createdAt', '<=', toTimestamp),
+        orderBy('createdAt', 'desc'),
+        limit(effectivePageSize)
+      ]
     } else if (datePreset === 'operational' && fromDate && toDate) {
       const fromTimestamp = Timestamp.fromDate(fromDate)
       const toTimestamp = Timestamp.fromDate(toDate)
@@ -323,10 +340,10 @@ export default function AdminPortAgenciesTab({
         limit(effectivePageSize)
       ]
     } else {
-      // Chargement normal (tous)
+      // Chargement de secours (ne devrait normalement pas arriver)
       queryConstraints = [
         orderBy('createdAt', 'desc'),
-        limit(effectivePageSize)
+        limit(PAGE_SIZE) // Limité à 2000 pour éviter surcharge
       ]
     }
 
@@ -773,12 +790,13 @@ export default function AdminPortAgenciesTab({
       )}
 
       {/* 📊 Indicateur période sélectionnée */}
-      {periodDays > 0 && datePreset !== 'all' && (
+      {periodDays > 0 && (
         <div className="bg-gradient-to-r from-green-50 to-teal-50 border border-green-300 rounded-xl p-3 flex items-center gap-3 shadow-sm print:hidden">
           <Calendar className="w-5 h-5 text-green-600 flex-shrink-0" />
           <div className="flex-1">
             <p className="text-sm font-semibold text-green-900">
               📅 Période sélectionnée: {periodDays} jour{periodDays > 1 ? 's' : ''}
+              {datePreset === 'all' && <span className="text-green-600 ml-1">(période par défaut)</span>}
             </p>
             <p className="text-xs text-green-700 mt-0.5">
               {periodDays <= PERIOD_LIMITS.BATCH_THRESHOLD
@@ -967,7 +985,7 @@ export default function AdminPortAgenciesTab({
               </label>
               <div className="flex flex-wrap gap-2 items-center">
                 {[
-                  { key: 'all', label: 'Tous' },
+                  { key: 'all', label: '30j' },
                   { key: 'today', label: "Auj." },
                   { key: 'week', label: '7j' },
                   { key: 'month', label: 'Mois' },
