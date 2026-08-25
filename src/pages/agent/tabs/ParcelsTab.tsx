@@ -3221,7 +3221,7 @@ export default function ParcelsTab() {
                 return (
                   <div className="flex items-center justify-between px-1">
                     <span className="text-xs text-gray-400">
-                      {tableFilteredParcels.length}{hasMoreParcels ? '+' : ''} expédition{tableFilteredParcels.length > 1 ? 's' : ''}
+                      {parcelMovementCount}{hasMoreParcels ? '+' : ''} expédition{parcelMovementCount > 1 ? 's' : ''}
                     </span>
                     <div className="flex items-center gap-1">
                       <button onClick={() => goTo(Math.max(0, safePage - 1))} disabled={safePage === 0}
@@ -3283,7 +3283,7 @@ export default function ParcelsTab() {
                 <div className="flex items-center gap-2">
                   <Package className="w-5 h-5 text-orange-600" />
                   <span className="text-sm font-bold text-gray-700">
-                    {filteredParcels.length} expédition{filteredParcels.length > 1 ? 's' : ''}
+                    {parcelMovementCount} expédition{parcelMovementCount > 1 ? 's' : ''}
                   </span>
                 </div>
                 <div className="flex items-center gap-3 flex-wrap">
@@ -4282,7 +4282,7 @@ export default function ParcelsTab() {
                     </div>
                     {anyActive && (
                       <p className="text-[10px] text-blue-500 font-medium pt-0.5">
-                        {filteredParcels.length} expédition{filteredParcels.length > 1 ? 's' : ''}
+                        {parcelMovementCount} expédition{parcelMovementCount > 1 ? 's' : ''}
                       </p>
                     )}
                   </div>
