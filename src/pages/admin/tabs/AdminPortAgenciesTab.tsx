@@ -22,6 +22,14 @@ interface Props {
 const PAGE_SIZE = 2000 // Chargement initial : 2000 premiers colis (sans filtre)
 const FILTERED_PAGE_SIZE = 50000 // Avec filtre de date : charger tout (limite haute pour sécurité)
 
+// 📊 LIMITES DE PÉRIODE (Système de filtrage robuste)
+const PERIOD_LIMITS = {
+  MAX_DAYS: 45,           // Maximum absolu supporté
+  BATCH_THRESHOLD: 31,    // Seuil pour chargement par batches
+  BATCH_SIZE: 15,         // Taille de chaque batch (jours)
+  MAX_DOCS_DIRECT: 50000  // Limite documents en chargement direct
+}
+
 export default function AdminPortAgenciesTab({
   datePreset,
   setDatePreset,
@@ -52,8 +60,79 @@ export default function AdminPortAgenciesTab({
   const [hasMore, setHasMore] = useState(true)
   const lastDocRef = useRef<any>(null)
 
+  // 📊 États pour système de filtrage robuste
+  const [batchProgress, setBatchProgress] = useState({
+    current: 0,
+    total: 0,
+    percentage: 0
+  })
+  const [periodWarning, setPeriodWarning] = useState<string | null>(null)
+  const [periodDays, setPeriodDays] = useState<number>(0)
+
   // État versements admin
   const [adminTransfers, setAdminTransfers] = useState<any[]>([])
+
+  // 📊 FONCTIONS UTILITAIRES - Système de filtrage robuste
+
+  /**
+   * Valide une période et détermine la stratégie de chargement
+   */
+  const validatePeriod = (dateFrom: Date, dateTo: Date) => {
+    const diffMs = dateTo.getTime() - dateFrom.getTime()
+    const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24))
+
+    const isValid = diffDays <= PERIOD_LIMITS.MAX_DAYS
+    const needsBatch = diffDays > PERIOD_LIMITS.BATCH_THRESHOLD
+
+    // Si dépassement, ajuster à la limite max
+    let adjustedTo = dateTo
+    if (!isValid) {
+      adjustedTo = new Date(dateFrom.getTime() + PERIOD_LIMITS.MAX_DAYS * 24 * 60 * 60 * 1000)
+    }
+
+    return { diffDays, isValid, needsBatch, adjustedTo }
+  }
+
+  /**
+   * Divise une période en batches pour chargement progressif
+   */
+  const splitPeriodIntoBatches = (startDate: Date, endDate: Date, batchSizeDays: number) => {
+    const batches: Array<{ start: Date; end: Date }> = []
+    let currentStart = new Date(startDate)
+
+    while (currentStart < endDate) {
+      const currentEnd = new Date(currentStart.getTime() + batchSizeDays * 24 * 60 * 60 * 1000)
+      const batchEnd = currentEnd > endDate ? endDate : currentEnd
+
+      batches.push({
+        start: new Date(currentStart),
+        end: new Date(batchEnd)
+      })
+
+      currentStart = new Date(batchEnd.getTime() + 1) // +1ms pour éviter duplication
+    }
+
+    return batches
+  }
+
+  /**
+   * Charge un batch spécifique de données depuis Firestore
+   */
+  const loadBatchData = async (startDate: Date, endDate: Date): Promise<any[]> => {
+    const fromTimestamp = Timestamp.fromDate(startDate)
+    const toTimestamp = Timestamp.fromDate(endDate)
+
+    const q = query(
+      collection(db, 'parcels'),
+      where('createdAt', '>=', fromTimestamp),
+      where('createdAt', '<=', toTimestamp),
+      orderBy('createdAt', 'desc'),
+      limit(PERIOD_LIMITS.MAX_DOCS_DIRECT)
+    )
+
+    const snap = await getDocs(q)
+    return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+  }
 
   // 🔄 Réinitialiser le filtre ville d'origine quand on quitte le mode "Reçues"
   useEffect(() => {
@@ -74,7 +153,7 @@ export default function AdminPortAgenciesTab({
     return () => unsub()
   }, [])
 
-  // ⚡ Chargement optimisé avec détection de filtres (Option 3)
+  // ⚡ Chargement optimisé avec VALIDATION DE PÉRIODE et BATCHES
   useEffect(() => {
     // 🔄 CHARGEMENT INTELLIGENT :
     // - Première visite (aucune donnée) : masquer tout avec `loading`
@@ -84,6 +163,10 @@ export default function AdminPortAgenciesTab({
     } else {
       setRefreshing(true)
     }
+
+    // Réinitialiser les avertissements et progression
+    setPeriodWarning(null)
+    setBatchProgress({ current: 0, total: 0, percentage: 0 })
 
     // 🔍 Détecter si des filtres de DATE sont actifs
     // Note: selectedCity et portTypeFilter sont appliqués côté frontend dans filteredStats
@@ -98,82 +181,141 @@ export default function AdminPortAgenciesTab({
       filters: { datePreset }
     })
 
-    // 📅 Gérer les différents filtres de date
-    let queryConstraints: any[] = []
+    // 📅 Gérer les différents filtres de date avec VALIDATION
     const now = new Date()
+    let fromDate: Date | null = null
+    let toDate: Date | null = null
+    let queryConstraints: any[] = []
 
+    // Calculer fromDate et toDate selon le preset
     if (datePreset === 'today') {
-      // 📅 AUJOURD'HUI : depuis 00:00 aujourd'hui
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      const fromTimestamp = Timestamp.fromDate(today)
-
-      console.warn(`📅 Aujourd'hui:`, {
-        from: today.toLocaleString('fr-MA')
-      })
-
-      queryConstraints = [
-        where('createdAt', '>=', fromTimestamp),
-        orderBy('createdAt', 'desc'),
-        limit(effectivePageSize)
-      ]
+      fromDate = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+      toDate = new Date(now)
     } else if (datePreset === 'week') {
-      // 📅 7 DERNIERS JOURS
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
-      const fromTimestamp = Timestamp.fromDate(weekAgo)
-
-      console.warn(`📅 7 derniers jours:`, {
-        from: weekAgo.toLocaleString('fr-MA')
-      })
-
-      queryConstraints = [
-        where('createdAt', '>=', fromTimestamp),
-        orderBy('createdAt', 'desc'),
-        limit(effectivePageSize)
-      ]
+      fromDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
+      toDate = new Date(now)
     } else if (datePreset === 'month') {
-      // 📅 CE MOIS-CI : depuis le 1er du mois
-      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-      const fromTimestamp = Timestamp.fromDate(monthStart)
+      fromDate = new Date(now.getFullYear(), now.getMonth(), 1)
+      toDate = new Date(now)
+    } else if (datePreset === 'operational' && operationalDay) {
+      const range = getOperationalDayRange(operationalDay)
+      fromDate = range.start
+      toDate = range.end
+    } else if (datePreset === 'custom' && dateFrom && dateTo) {
+      fromDate = new Date(dateFrom + 'T00:00:00')
+      toDate = new Date(dateTo + 'T23:59:59')
+    }
 
-      console.warn(`📅 Ce mois-ci:`, {
-        from: monthStart.toLocaleString('fr-MA')
+    // 📊 VALIDATION DE PÉRIODE et CHARGEMENT PAR BATCHES
+    if (fromDate && toDate) {
+      const validation = validatePeriod(fromDate, toDate)
+      setPeriodDays(validation.diffDays)
+
+      console.warn(`📊 Validation période:`, {
+        diffDays: validation.diffDays,
+        isValid: validation.isValid,
+        needsBatch: validation.needsBatch
       })
 
+      // ⚠️ Avertissement si période > 45 jours
+      if (!validation.isValid) {
+        const warningMsg = `⚠️ Période limitée à ${PERIOD_LIMITS.MAX_DAYS} jours (${validation.diffDays} jours demandés)`
+        setPeriodWarning(warningMsg)
+        console.warn(warningMsg)
+        toDate = validation.adjustedTo
+      }
+
+      // 🔄 CHARGEMENT PAR BATCHES si > 31 jours
+      if (validation.needsBatch && validation.isValid) {
+        console.warn(`🔄 Chargement par batches activé (${validation.diffDays} jours)`)
+
+        // Fonction de chargement asynchrone par batches
+        const loadAllBatches = async () => {
+          try {
+            const batches = splitPeriodIntoBatches(fromDate!, toDate!, PERIOD_LIMITS.BATCH_SIZE)
+            console.warn(`📦 ${batches.length} batches à charger`, batches)
+
+            setBatchProgress({ current: 0, total: batches.length, percentage: 0 })
+
+            let allData: any[] = []
+
+            for (let i = 0; i < batches.length; i++) {
+              const batch = batches[i]
+              console.warn(`📦 Chargement batch ${i + 1}/${batches.length}:`, {
+                from: batch.start.toLocaleString('fr-MA'),
+                to: batch.end.toLocaleString('fr-MA')
+              })
+
+              const batchData = await loadBatchData(batch.start, batch.end)
+              allData = [...allData, ...batchData]
+
+              // Mettre à jour la progression
+              setBatchProgress({
+                current: i + 1,
+                total: batches.length,
+                percentage: Math.round(((i + 1) / batches.length) * 100)
+              })
+
+              console.warn(`✅ Batch ${i + 1}/${batches.length}: ${batchData.length} colis (total: ${allData.length})`)
+            }
+
+            // Dédupliquer par ID (au cas où)
+            const uniqueData = Array.from(
+              new Map(allData.map(item => [item.id, item])).values()
+            )
+
+            setLiveParcels(uniqueData)
+            setHasMore(false)
+            setLoading(false)
+            setRefreshing(false)
+            console.warn(`✅ Chargement par batches terminé: ${uniqueData.length} colis`)
+          } catch (err) {
+            console.error('❌ Erreur chargement par batches:', err)
+            setLoading(false)
+            setRefreshing(false)
+          }
+        }
+
+        loadAllBatches()
+        return // Pas de onSnapshot dans ce cas
+      }
+    }
+
+    // 📅 CHARGEMENT DIRECT (≤ 31 jours ou pas de filtre de date)
+    if (datePreset === 'today' && fromDate) {
+      const fromTimestamp = Timestamp.fromDate(fromDate)
       queryConstraints = [
         where('createdAt', '>=', fromTimestamp),
         orderBy('createdAt', 'desc'),
         limit(effectivePageSize)
       ]
-    } else if (datePreset === 'operational' && operationalDay) {
-      // 🗓️ JOUR D'OPÉRATION : charger avec filtre Firestore
-      const range = getOperationalDayRange(operationalDay)
-      const fromTimestamp = Timestamp.fromDate(range.start)
-      const toTimestamp = Timestamp.fromDate(range.end)
-
-      console.warn(`🗓️ Jour d'opération:`, {
-        from: range.start.toLocaleString('fr-MA'),
-        to: range.end.toLocaleString('fr-MA')
-      })
-
+    } else if (datePreset === 'week' && fromDate) {
+      const fromTimestamp = Timestamp.fromDate(fromDate)
+      queryConstraints = [
+        where('createdAt', '>=', fromTimestamp),
+        orderBy('createdAt', 'desc'),
+        limit(effectivePageSize)
+      ]
+    } else if (datePreset === 'month' && fromDate) {
+      const fromTimestamp = Timestamp.fromDate(fromDate)
+      queryConstraints = [
+        where('createdAt', '>=', fromTimestamp),
+        orderBy('createdAt', 'desc'),
+        limit(effectivePageSize)
+      ]
+    } else if (datePreset === 'operational' && fromDate && toDate) {
+      const fromTimestamp = Timestamp.fromDate(fromDate)
+      const toTimestamp = Timestamp.fromDate(toDate)
       queryConstraints = [
         where('createdAt', '>=', fromTimestamp),
         where('createdAt', '<=', toTimestamp),
         orderBy('createdAt', 'desc'),
         limit(effectivePageSize)
       ]
-    } else if (datePreset === 'custom' && dateFrom && dateTo) {
-      // 📅 FILTRE CUSTOM : 00:00 → 23:59
-      const fromDate = new Date(dateFrom + 'T00:00:00')
-      const toDate = new Date(dateTo + 'T23:59:59')
+    } else if (datePreset === 'custom' && fromDate && toDate) {
       const fromTimestamp = Timestamp.fromDate(fromDate)
       const toTimestamp = Timestamp.fromDate(toDate)
-
-      console.warn(`📅 Filtre custom:`, {
-        from: fromDate.toLocaleDateString('fr-MA'),
-        to: toDate.toLocaleDateString('fr-MA')
-      })
-
       queryConstraints = [
         where('createdAt', '>=', fromTimestamp),
         where('createdAt', '<=', toTimestamp),
@@ -589,6 +731,61 @@ export default function AdminPortAgenciesTab({
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-12 text-center">
           <Loader2 className="w-12 h-12 text-purple-600 animate-spin mx-auto mb-4" />
           <p className="text-gray-600 font-medium">Chargement des données...</p>
+        </div>
+      )}
+
+      {/* ⚠️ Avertissement période limitée */}
+      {periodWarning && (
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-orange-400 rounded-xl p-4 flex items-center gap-3 shadow-md print:hidden">
+          <AlertCircle className="w-6 h-6 text-orange-600 flex-shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-bold text-orange-900">{periodWarning}</p>
+            <p className="text-xs text-orange-700 mt-1">
+              Les performances sont optimales pour des périodes de {PERIOD_LIMITS.BATCH_THRESHOLD} jours ou moins.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* 📊 Barre de progression chargement par batches */}
+      {batchProgress.total > 0 && batchProgress.current < batchProgress.total && (
+        <div className="bg-gradient-to-r from-purple-50 to-blue-50 border-2 border-purple-300 rounded-xl p-4 shadow-md print:hidden">
+          <div className="flex items-center gap-3 mb-3">
+            <Loader2 className="w-5 h-5 text-purple-600 animate-spin flex-shrink-0" />
+            <div className="flex-1">
+              <p className="text-sm font-bold text-purple-900">
+                📦 Chargement par batches en cours...
+              </p>
+              <p className="text-xs text-purple-700 mt-0.5">
+                Batch {batchProgress.current} / {batchProgress.total} ({batchProgress.percentage}%)
+              </p>
+            </div>
+          </div>
+          <div className="w-full bg-purple-200 rounded-full h-3 overflow-hidden">
+            <div
+              className="bg-gradient-to-r from-purple-600 to-blue-600 h-full transition-all duration-300 flex items-center justify-center"
+              style={{ width: `${batchProgress.percentage}%` }}
+            >
+              <span className="text-white text-xs font-bold">{batchProgress.percentage}%</span>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 📊 Indicateur période sélectionnée */}
+      {periodDays > 0 && datePreset !== 'all' && (
+        <div className="bg-gradient-to-r from-green-50 to-teal-50 border border-green-300 rounded-xl p-3 flex items-center gap-3 shadow-sm print:hidden">
+          <Calendar className="w-5 h-5 text-green-600 flex-shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-semibold text-green-900">
+              📅 Période sélectionnée: {periodDays} jour{periodDays > 1 ? 's' : ''}
+            </p>
+            <p className="text-xs text-green-700 mt-0.5">
+              {periodDays <= PERIOD_LIMITS.BATCH_THRESHOLD
+                ? '✅ Chargement direct optimisé'
+                : `🔄 Chargement par batches (${Math.ceil(periodDays / PERIOD_LIMITS.BATCH_SIZE)} batches)`}
+            </p>
+          </div>
         </div>
       )}
 
