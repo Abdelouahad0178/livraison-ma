@@ -1577,7 +1577,7 @@ export default function AgentPage() {
     }
     // Filtre de direction (Envoyés/Reçus) - SEULEMENT si "Ma ville uniquement"
     // Avec "Toutes les villes", ce filtre n'a pas de sens (tous les colis sont envoyés de quelque part et reçus quelque part)
-    if (!showAllCities && profileCity && parcelDirection !== 'all') {
+    if (!showAllCities && profileCity) {
       if (parcelDirection === 'sent') {
         // Envoyés : colis créés/envoyés DEPUIS ma ville
         const isSentFromMyCity = p.sender?.city === profileCity || p.originCity === profileCity
@@ -1587,6 +1587,12 @@ export default function AgentPage() {
         const isReceivedInMyCity = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
           && isParcelVisibleInDestinationAgency(p)
         if (!isReceivedInMyCity) return false
+      } else if (parcelDirection === 'all') {
+        // Tous : colis envoyés DE ma ville OU reçus DANS ma ville
+        const isSentFromMyCity = p.sender?.city === profileCity || p.originCity === profileCity
+        const isReceivedInMyCity = (p.destinationCity === profileCity || p.receiver?.city === profileCity)
+          && isParcelVisibleInDestinationAgency(p)
+        if (!isSentFromMyCity && !isReceivedInMyCity) return false
       }
     }
     // ⭐ Filtre par ville de destination / expédition
