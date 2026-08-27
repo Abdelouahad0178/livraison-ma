@@ -68,6 +68,7 @@ export default function AdminPortAgenciesTab({
   })
   const [periodWarning, setPeriodWarning] = useState<string | null>(null)
   const [periodDays, setPeriodDays] = useState<number>(0)
+  const [invalidDatesWarning, setInvalidDatesWarning] = useState(false)
 
   // État versements admin
   const [adminTransfers, setAdminTransfers] = useState<any[]>([])
@@ -167,6 +168,7 @@ export default function AdminPortAgenciesTab({
     // Réinitialiser les avertissements et progression
     setPeriodWarning(null)
     setBatchProgress({ current: 0, total: 0, percentage: 0 })
+    setInvalidDatesWarning(false)
 
     // 🔍 Détecter si des filtres de DATE sont actifs
     // Note: selectedCity et portTypeFilter sont appliqués côté frontend dans filteredStats
@@ -202,15 +204,30 @@ export default function AdminPortAgenciesTab({
       const range = getOperationalDayRange(operationalDay)
       fromDate = range.start
       toDate = range.end
-    } else if (datePreset === 'custom' && dateFrom && dateTo) {
-      fromDate = new Date(dateFrom + 'T00:00:00')
-      toDate = new Date(dateTo + 'T23:59:59')
+    } else if (datePreset === 'custom') {
+      if (dateFrom && dateTo) {
+        const tempFromDate = new Date(dateFrom + 'T00:00:00')
+        const tempToDate = new Date(dateTo + 'T23:59:59')
 
-      // ⚠️ Validation: dateFrom doit être <= dateTo
-      if (fromDate > toDate) {
-        console.warn('⚠️ Date de début après date de fin - ignoré')
-        fromDate = null
-        toDate = null
+        // ⚠️ Validation: dateFrom doit être <= dateTo
+        if (tempFromDate > tempToDate) {
+          console.warn('⚠️ Date de début après date de fin - chargement période par défaut')
+          setInvalidDatesWarning(true)
+          // Charger les 10 derniers jours par défaut quand dates invalides
+          const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+          const yesterday = new Date(today.getTime() - 1 * 24 * 60 * 60 * 1000)
+          fromDate = new Date(yesterday.getTime() - 9 * 24 * 60 * 60 * 1000)
+          toDate = new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1000)
+        } else {
+          fromDate = tempFromDate
+          toDate = tempToDate
+        }
+      } else {
+        // Si une seule date est présente, charger les 10 derniers jours
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+        const yesterday = new Date(today.getTime() - 1 * 24 * 60 * 60 * 1000)
+        fromDate = new Date(yesterday.getTime() - 9 * 24 * 60 * 60 * 1000)
+        toDate = new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1000)
       }
     } else if (datePreset === 'all') {
       // 📅 PÉRIODE PAR DÉFAUT : 10 derniers jours (SANS le jour présent)
@@ -476,6 +493,9 @@ export default function AdminPortAgenciesTab({
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
 
     return liveParcels.filter((p: any) => {
+      // 🗄️ Exclure les colis archivés (comme AgentPage)
+      if (p.isArchived) return false
+
       const pDate = parcelDate(p)
 
       if (datePreset === 'today') return pDate >= today
@@ -490,6 +510,12 @@ export default function AdminPortAgenciesTab({
         // 📅 CORRECTION TIMEZONE: 00:00 → 23:59
         const from = new Date(dateFrom + 'T00:00:00')
         const to = new Date(dateTo + 'T23:59:59')
+
+        // ⚠️ Validation: si dates invalides, ne pas filtrer
+        if (from > to) {
+          return true // Afficher tous les colis si dates invalides
+        }
+
         return pDate >= from && pDate <= to
       }
       return true // 'all'
@@ -553,8 +579,10 @@ export default function AdminPortAgenciesTab({
 
     // Parcourir tous les colis filtrés par date
     filteredByDate.forEach((p: any) => {
-      const originCity = p.originCity || p.sender?.city || p.createdByCity
-      const destCity = p.destinationCity || p.receiver?.city
+      // ✅ Utiliser SEULEMENT originCity et destinationCity (comme dans AgentPage)
+      // Sans fallback sur sender.city ou receiver.city pour cohérence avec les données chargées
+      const originCity = p.originCity
+      const destCity = p.destinationCity
 
       if (viewMode === 'theoretical') {
         // 📊 MODE THÉORIQUE : TOUS LES PORTS (actuel)
@@ -624,18 +652,32 @@ export default function AdminPortAgenciesTab({
       // ✅ EXPÉDITIONS : comptées selon la direction
       const matchesOriginFilter = directionFilter !== 'received' || originCityFilter === 'all' || originCity === originCityFilter
 
-      // Compter les expéditions ENVOYÉES (à l'origine)
-      if (directionFilter === 'all' || directionFilter === 'sent') {
-        if (originCity && stats[originCity]) {
-          stats[originCity].nbExpeditions += 1
-        }
-      }
+      // 🔄 Vérifier si c'est un colis retourné
+      const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
 
-      // Compter les expéditions REÇUES (à la destination)
-      // Note: utilisation de IF indépendant (pas ELSE IF) pour que 'all' compte les deux
-      if (directionFilter === 'all' || directionFilter === 'received') {
-        if (destCity && stats[destCity] && matchesOriginFilter) {
-          stats[destCity].nbExpeditions += 1
+      if (isReturned) {
+        // Pour un retour, compter pour l'agence qui retourne (returnToCity ou createdByCity)
+        const returnCity = p.returnToCity || p.createdByCity
+        if (returnCity && stats[returnCity]) {
+          if (directionFilter === 'all' || directionFilter === 'sent') {
+            stats[returnCity].nbExpeditions += 1
+          }
+        }
+      } else {
+        // Logique normale pour les colis non-retournés
+        // Compter les expéditions ENVOYÉES (à l'origine)
+        if (directionFilter === 'all' || directionFilter === 'sent') {
+          if (originCity && stats[originCity]) {
+            stats[originCity].nbExpeditions += 1
+          }
+        }
+
+        // Compter les expéditions REÇUES (à la destination)
+        // Note: utilisation de IF indépendant (pas ELSE IF) pour que 'all' compte les deux
+        if (directionFilter === 'all' || directionFilter === 'received') {
+          if (destCity && stats[destCity] && matchesOriginFilter) {
+            stats[destCity].nbExpeditions += 1
+          }
         }
       }
     })
@@ -759,6 +801,19 @@ export default function AdminPortAgenciesTab({
         <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-12 text-center">
           <Loader2 className="w-12 h-12 text-purple-600 animate-spin mx-auto mb-4" />
           <p className="text-gray-600 font-medium">Chargement des données...</p>
+        </div>
+      )}
+
+      {/* ⚠️ Avertissement dates invalides */}
+      {invalidDatesWarning && (
+        <div className="bg-gradient-to-r from-red-50 to-rose-50 border-2 border-red-400 rounded-xl p-4 flex items-center gap-3 shadow-md print:hidden">
+          <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0" />
+          <div className="flex-1">
+            <p className="text-sm font-bold text-red-900">⚠️ Dates invalides : la date de début doit être antérieure ou égale à la date de fin</p>
+            <p className="text-xs text-red-700 mt-1">
+              Veuillez corriger les dates pour appliquer le filtre de période personnalisée.
+            </p>
+          </div>
         </div>
       )}
 
