@@ -484,7 +484,7 @@ export async function markParcelAsReturned(parcel: any, extra: any = {}) {
   const returnedByDriverId = parcel.deliveryDriverId || extra.driverId || null
   const returnedByDriverName = parcel.deliveryDriverName || extra.driverName || ''
 
-  await updateDoc(doc(db, 'parcels', parcel.id), {
+  const updates = {
     status:          'Retourné',
     sender:          newSender,
     receiver:        newReceiver,
@@ -515,7 +515,21 @@ export async function markParcelAsReturned(parcel: any, extra: any = {}) {
       timestamp: now,
       ...(extra.note ? { note: extra.note } : {}),
     }),
-  })
+  }
+
+  await updateDoc(doc(db, 'parcels', parcel.id), updates)
+
+  // 🔄 TEMPS RÉEL: Émettre un événement pour synchronisation immédiate
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('parcelUpdated', {
+      detail: {
+        parcelId: parcel.id,
+        updates,
+        timestamp: now,
+        source: 'database'
+      }
+    }))
+  }
 }
 
 // Chargement d'un colis retourné sur camion inter-villes vers la ville de l'expéditeur.
@@ -524,8 +538,7 @@ export async function loadReturnedParcelOnTruck(parcel: any) {
   const now = new Date().toISOString()
   const hasBeenSwapped = !!parcel.returnToCity
 
-  // Modifier le statut pour marquer le colis comme en transit retour
-  await updateDoc(doc(db, 'parcels', parcel.id), {
+  const updates = {
     status: 'Retour en transit',
     returnShippedAt: now,
     history: arrayUnion({
@@ -533,7 +546,22 @@ export async function loadReturnedParcelOnTruck(parcel: any) {
       timestamp: now,
       note: 'Chargé sur camion pour retour vers agence source',
     }),
-  })
+  }
+
+  // Modifier le statut pour marquer le colis comme en transit retour
+  await updateDoc(doc(db, 'parcels', parcel.id), updates)
+
+  // 🔄 TEMPS RÉEL: Émettre un événement pour synchronisation immédiate
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('parcelUpdated', {
+      detail: {
+        parcelId: parcel.id,
+        updates,
+        timestamp: now,
+        source: 'database'
+      }
+    }))
+  }
 }
 
 // Validation d'une saisie aide agent par le chef d'agence
@@ -568,6 +596,18 @@ export async function validateParcelEntry(parcelId: any, chefId: any, chefName: 
   }
 
   await updateDoc(ref, patch)
+
+  // 🔄 TEMPS RÉEL: Émettre un événement pour synchronisation immédiate
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('parcelUpdated', {
+      detail: {
+        parcelId,
+        updates: patch,
+        timestamp: now,
+        source: 'database'
+      }
+    }))
+  }
 
   if (parcel.agentRole === 'client_portal' && parcel.portType === 'port_en_compte_expediteur' && parcel.clientId && (parseFloat(parcel.price) || 0) > 0 && parcel.portalDebitCreated !== true) {
     try {
@@ -619,6 +659,18 @@ export async function validateReturnArrival(parcel: any) {
 
   try {
     await updateDoc(doc(db, 'parcels', parcel.id), updateData)
+
+    // 🔄 TEMPS RÉEL: Émettre un événement pour synchronisation immédiate
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('parcelUpdated', {
+        detail: {
+          parcelId: parcel.id,
+          updates: updateData,
+          timestamp: now,
+          source: 'database'
+        }
+      }))
+    }
   } catch (error: any) {
     console.error('❌ Erreur Firestore:', error)
     console.error('Code:', error.code)
@@ -1286,16 +1338,36 @@ export async function getMoreAgencyParcels(
 }
 
 // Colis retournés pour une agence (à charger, reçus, historique)
-export function subscribeAgencyReturnParcels(city: any, callback: any, onError: (err?: any) => void = () => {}) {
+export function subscribeAgencyReturnParcels(
+  city: any,
+  callback: any,
+  onError: (err?: any) => void = () => {},
+  dateFrom?: Date | null,
+  dateTo?: Date | null
+) {
   let allReturns: any[] = []
 
-  // Requête : tous les colis avec status retour (pour inclure les anciens colis)
-  const q = query(
-    collection(db, 'parcels'),
-    where('status', 'in', ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']),
-    orderBy('createdAt', 'desc'),
-    limit(200)
-  )
+  // 📅 Filtres de date pour la requête Firestore
+  const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(30)
+  const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
+
+  // 🔍 Requête avec filtres de date appliqués dans Firestore
+  const q = dateTo
+    ? query(
+        collection(db, 'parcels'),
+        where('status', 'in', ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']),
+        where('createdAt', '>=', since),
+        where('createdAt', '<=', until),
+        orderBy('createdAt', 'desc'),
+        limit(5000)
+      )
+    : query(
+        collection(db, 'parcels'),
+        where('status', 'in', ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']),
+        where('createdAt', '>=', since),
+        orderBy('createdAt', 'desc'),
+        limit(5000)
+      )
 
   return onSnapshot(q, snap => {
     allReturns = snap.docs.map(d => ({ id: d.id, ...d.data() }))
@@ -1333,6 +1405,19 @@ export async function claimParcel(parcelId: any, agentId: any, agentName: any) {
   const ref = doc(db, 'parcels', parcelId)
   let captured: any = null
 
+  const now = new Date().toISOString()
+  const updates = {
+    destinationAgentId:     agentId,
+    destinationAgentName:   agentName,
+    destinationArrivedAt:   null as any,
+    status:                 'Arrivé en agence',
+    history: arrayUnion({
+      status: 'Arrivé en agence',
+      timestamp: now,
+      note: `Pris en charge par ${agentName}`
+    })
+  }
+
   await runTransaction(db, async transaction => {
     const snap = await transaction.get(ref)
     if (!snap.exists()) throw new Error('Colis introuvable.')
@@ -1343,19 +1428,21 @@ export async function claimParcel(parcelId: any, agentId: any, agentName: any) {
     }
 
     captured = parcel
-    const now = new Date().toISOString()
-    transaction.update(ref, {
-      destinationAgentId:     agentId,
-      destinationAgentName:   agentName,
-      destinationArrivedAt:   parcel.destinationArrivedAt || now,
-      status:                 'Arrivé en agence',
-      history: arrayUnion({
-        status: 'Arrivé en agence',
-        timestamp: now,
-        note: `Pris en charge par ${agentName}`
-      })
-    })
+    updates.destinationArrivedAt = parcel.destinationArrivedAt || now
+    transaction.update(ref, updates)
   })
+
+  // 🔄 TEMPS RÉEL: Émettre un événement pour synchronisation immédiate
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('parcelUpdated', {
+      detail: {
+        parcelId,
+        updates,
+        timestamp: now,
+        source: 'database'
+      }
+    }))
+  }
 
   // Auto-create or update a daily arrivage for this city so pointage is always possible
   if (captured) {

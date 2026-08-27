@@ -117,9 +117,9 @@ const fmtModDate = (ts: any) => {
 }
 
 const parcelDate = (p: any) => {
-  // 📅 Utiliser createdAt (date de création) en priorité
-  if (p.createdAt?.toDate) return p.createdAt.toDate()
+  // 📅 Utiliser workDate (jour d'opération) en priorité pour alignement avec AdminPortAgenciesTab
   if (p.workDate) return new Date(p.workDate + 'T12:00:00')
+  if (p.createdAt?.toDate) return p.createdAt.toDate()
   if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
   return new Date(0)
 }
@@ -292,7 +292,8 @@ export default function AgentPage() {
 
   // ⚡ Système de chargement optimisé (Option 3)
   const PAGE_SIZE = 50 // Chargement initial réduit pour performance
-  const FILTERED_PAGE_SIZE = 1000 // Quand filtres actifs
+  const INITIAL_LOAD_SIZE = 150 // Chargement initial rapide pour chef d'agence (150 par query = ~300 total)
+  const FILTERED_PAGE_SIZE = 1200 // 1200 par query (envoyés + reçus) = ~2400 total avec filtres
   const AGENCY_PAGE_SIZE = PAGE_SIZE // Compatibilité (sera remplacé par effectivePageSize)
   const [liveParcels, setLiveParcels] = useState<any[]>([]) // Premiers 600 en temps réel
   const [moreParcels, setMoreParcels] = useState<any[]>([]) // Chargés progressivement
@@ -675,8 +676,16 @@ export default function AgentPage() {
       codDocumentStatusFilter.length > 0
 
     const hasFilters = hasDateFilter || hasOtherFilters
-    // Chef d'agence : toujours charger 1000 parcels pour avoir toutes les stats
-    const effectivePageSize = (hasFilters || profile?.role === 'chef_agence') ? FILTERED_PAGE_SIZE : PAGE_SIZE
+
+    // ⚡ Chargement progressif pour chef d'agence:
+    // - Sans filtres: 150 par query au démarrage (~300 total) pour affichage rapide
+    // - Avec filtres: 1200 par query (~2400 total) pour avoir toutes les données filtrées
+    let effectivePageSize = PAGE_SIZE
+    if (profile?.role === 'chef_agence' || profile?.role === 'agentpro') {
+      effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : INITIAL_LOAD_SIZE
+    } else if (hasFilters) {
+      effectivePageSize = FILTERED_PAGE_SIZE
+    }
 
     console.warn(`📊 CHARGEMENT AgentPage:`, {
       hasFilters,
@@ -887,11 +896,17 @@ export default function AgentPage() {
         filterDateTo
       )
 
-      // Souscrire aussi aux retours pour cette agence
-      const unsubReturns = subscribeAgencyReturnParcels(profile.city, (data: any) => {
-        console.log(`✅ [Chef d'agence] ${data.length} colis retour chargés pour ${profile.city}`)
-        setReturnParcels(data)
-      }, onError)
+      // Souscrire aussi aux retours pour cette agence (avec même filtre de date)
+      const unsubReturns = subscribeAgencyReturnParcels(
+        profile.city,
+        (data: any) => {
+          console.log(`✅ [Chef d'agence] ${data.length} colis retour chargés pour ${profile.city}`)
+          setReturnParcels(data)
+        },
+        onError,
+        filterDateFrom,
+        filterDateTo
+      )
 
       setPendingAideParcels([]) // Plus de pending
       unsubscribersRef.current.push(unsubAgency, unsubReturns)
@@ -1503,6 +1518,7 @@ export default function AgentPage() {
     const map = new Map()
     // Vérifications de sécurité pour éviter erreurs si undefined
     ;(parcels || []).forEach(p => map.set(p.id, p))
+
     ;(returnParcels || []).forEach(p => map.set(p.id, p))
     ;(extraParcels || []).forEach(p => map.set(p.id, p))
     // Si un livreur est filtré, inclure ses colis (filtrés par date opérationnelle si actif)
@@ -1569,10 +1585,6 @@ export default function AgentPage() {
       return false
     }
     if (parcelStatusFilter !== 'all' && p.status !== parcelStatusFilter) {
-      return false
-    }
-    // ⛔ EXCLURE les retours du comptage (sauf si filtre statut = Retourné explicitement)
-    if (parcelStatusFilter === 'all' && (p.status?.includes('Retour') || p.wasReturned)) {
       return false
     }
     // Filtre de direction (Envoyés/Reçus) - SEULEMENT si "Ma ville uniquement"
@@ -1687,16 +1699,35 @@ export default function AgentPage() {
 
     // Pour 'all': compter les mouvements (entrées + sorties) dans filteredParcels
     // Un colis interne (même ville) compte 2 fois (1 envoi + 1 réception)
+    // ⚠️ Les colis retournés comptent pour l'agence qui les a retournés
     if (!showAllCities && profileCity) {
       let sentCount = 0
       let receivedCount = 0
+      let returnsCount = 0
 
       filteredParcels.forEach((p: any) => {
-        const isSentFromMyCity = p.sender?.city === profileCity || p.originCity === profileCity
-        const isReceivedInMyCity = p.destinationCity === profileCity || p.receiver?.city === profileCity
+        // 🔄 Vérifier si c'est un colis retourné
+        const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
 
-        if (isSentFromMyCity) sentCount++
-        if (isReceivedInMyCity) receivedCount++
+        if (isReturned) {
+          // Pour un retour, compter pour l'agence qui retourne (returnToCity ou createdByCity)
+          const returnCity = p.returnToCity || p.createdByCity
+          if (returnCity === profileCity) {
+            sentCount++ // Compte comme envoyé par l'agence qui retourne
+            returnsCount++
+          }
+        } else {
+          // Logique normale pour les colis non-retournés
+          const isSentFromMyCity = p.originCity === profileCity
+          const isReceivedInMyCity = p.destinationCity === profileCity
+
+          if (isSentFromMyCity) {
+            sentCount++
+          }
+          if (isReceivedInMyCity) {
+            receivedCount++
+          }
+        }
       })
 
       return sentCount + receivedCount
@@ -2145,56 +2176,69 @@ export default function AgentPage() {
   }, [globalScanModal])
 
   // 🔄 TEMPS RÉEL: Écouter les événements de mise à jour de parcels
-  useEffect(() => {
-    const handleParcelUpdate = (event: CustomEvent) => {
-      const { parcelId, updates, timestamp, source } = event.detail
+  // ✅ CORRECTION: Utiliser useCallback pour stabiliser le handler et éviter les re-renders inutiles
+  const handleParcelUpdate = useCallback((event: CustomEvent) => {
+    const { parcelId, updates, timestamp, source } = event.detail
 
-      console.log('🔄 [Temps réel] Événement parcelUpdated reçu:', {
-        parcelId,
-        source,
-        timestamp,
-        updates
+    console.log('🔄 [Temps réel] Événement parcelUpdated reçu:', {
+      parcelId,
+      source,
+      timestamp,
+      updates
+    })
+
+    // Les mises à jour depuis Firestore (subscription ou écriture directe) ont priorité absolue
+    if (source === 'firestore' || source === 'database') {
+      setParcels(prev => {
+        const updated = prev.map(p => {
+          if (p.id === parcelId) {
+            // Merge les updates avec le parcel existant, en supprimant le flag optimiste
+            const { _optimisticUpdate, ...cleanUpdates } = updates
+            return { ...p, ...cleanUpdates }
+          }
+          return p
+        })
+        return updated
       })
 
-      // Les mises à jour depuis Firestore (subscription ou écriture directe) ont priorité absolue
-      if (source === 'firestore' || source === 'database') {
-        setParcels(prev => {
-          const updated = prev.map(p => {
-            if (p.id === parcelId) {
-              // Merge les updates avec le parcel existant, en supprimant le flag optimiste
-              const { _optimisticUpdate, ...cleanUpdates } = updates
-              return { ...p, ...cleanUpdates }
-            }
-            return p
-          })
-          return updated
+      setLiveParcels(prev => {
+        const updated = prev.map(p => {
+          if (p.id === parcelId) {
+            const { _optimisticUpdate, ...cleanUpdates } = updates
+            return { ...p, ...cleanUpdates }
+          }
+          return p
         })
+        return updated
+      })
 
-        setLiveParcels(prev => {
-          const updated = prev.map(p => {
-            if (p.id === parcelId) {
-              const { _optimisticUpdate, ...cleanUpdates } = updates
-              return { ...p, ...cleanUpdates }
-            }
-            return p
-          })
-          return updated
+      // ⭐ Aussi mettre à jour returnParcels si c'est un colis retourné
+      setReturnParcels(prev => {
+        const updated = prev.map(p => {
+          if (p.id === parcelId) {
+            const { _optimisticUpdate, ...cleanUpdates } = updates
+            return { ...p, ...cleanUpdates }
+          }
+          return p
         })
+        return updated
+      })
 
-        console.log(`✅ [Temps réel] Mise à jour ${source} appliquée pour parcel:`, parcelId)
-      } else if (source === 'optimistic') {
-        // Les mises à jour optimistes sont déjà gérées par updateParcelOptimistic dans ce composant
-        // Mais cet événement permet la sync cross-tab pour d'autres instances ouvertes
-        console.log('⏩ [Temps réel] Mise à jour optimiste cross-tab pour parcel:', parcelId)
-      }
+      console.log(`✅ [Temps réel] Mise à jour ${source} appliquée pour parcel:`, parcelId)
+    } else if (source === 'optimistic') {
+      // Les mises à jour optimistes sont déjà gérées par updateParcelOptimistic dans ce composant
+      // Mais cet événement permet la sync cross-tab pour d'autres instances ouvertes
+      console.log('⏩ [Temps réel] Mise à jour optimiste cross-tab pour parcel:', parcelId)
     }
+  }, [setParcels, setLiveParcels, setReturnParcels])
 
+  useEffect(() => {
     window.addEventListener('parcelUpdated', handleParcelUpdate as EventListener)
 
     return () => {
       window.removeEventListener('parcelUpdated', handleParcelUpdate as EventListener)
     }
-  }, [])
+  }, [handleParcelUpdate])
 
   // 📄 Charger plus de colis avec filtre de date
   const handleLoadMoreWithDateFilter = async () => {
