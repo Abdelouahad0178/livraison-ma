@@ -17,6 +17,7 @@ import {
 } from '../../../firebase/constants'
 import { useAgentCtx } from '../AgentCtx'
 import { OperationalDaySelector } from '../../../components/OperationalDaySelector'
+import QuickStatusToggles from '../../../components/QuickStatusToggles'
 
 import { parcelDate, filterByDate } from '../../../utils/dateFilter'
 
@@ -802,6 +803,107 @@ export default function ParcelsTab() {
           </label>
         )}
 
+        {/* 🔍 ZONE RÉSULTATS DE RECHERCHE RAPIDE */}
+        {search && filteredParcels.length > 0 && !isSearching && (
+          <div className="bg-white border-2 border-blue-300 rounded-xl shadow-lg overflow-hidden">
+            <div className="bg-gradient-to-r from-blue-600 to-purple-600 px-4 py-2 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Search className="w-4 h-4 text-white" />
+                <span className="text-sm font-bold text-white">
+                  {filteredParcels.length} résultat{filteredParcels.length > 1 ? 's' : ''} trouvé{filteredParcels.length > 1 ? 's' : ''}
+                </span>
+              </div>
+              <button
+                onClick={() => setSearch('')}
+                className="text-white hover:bg-white/20 rounded-full p-1 transition"
+                title="Fermer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="max-h-[400px] overflow-y-auto divide-y divide-gray-100">
+              {filteredParcels.slice(0, 10).map((parcel: any) => {
+                const sc = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
+                return (
+                  <div
+                    key={parcel.id}
+                    className="p-3 hover:bg-blue-50 transition-colors"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      {/* Infos colis */}
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 mb-1">
+                          <span className="font-mono font-black text-blue-600 text-sm">
+                            {parcel.sender?.nic || parcel.trackingId || '—'}
+                          </span>
+                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-bold ${sc}`}>
+                            <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
+                            {parcel.status || 'Initialisé'}
+                          </span>
+                        </div>
+                        <div className="text-xs text-gray-600 space-y-0.5">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-gray-700">📤 {parcel.sender?.name || '—'}</span>
+                            <span className="text-gray-400">→</span>
+                            <span className="font-semibold text-gray-700">📥 {parcel.receiver?.name || '—'}</span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-xs font-semibold">
+                              {parcel.sender?.city || parcel.originCity || '—'}
+                            </span>
+                            <span className="text-gray-400">→</span>
+                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-pink-100 text-pink-700 rounded text-xs font-semibold">
+                              {parcel.receiver?.city || parcel.destinationCity || '—'}
+                            </span>
+                          </div>
+                          {parcel.receiver?.tel && (
+                            <div className="font-mono text-gray-500">
+                              📞 {parcel.receiver.tel}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Boutons toggle - version compacte */}
+                      {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                        <div className="flex-shrink-0">
+                          <QuickStatusToggles
+                            parcel={parcel}
+                            profile={profile}
+                            compact={true}
+                            onSuccess={() => {
+                              // Événement parcelUpdated déjà émis par le composant
+                            }}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )
+              })}
+              {filteredParcels.length > 10 && (
+                <div className="p-3 bg-gray-50 text-center">
+                  <span className="text-xs font-semibold text-gray-500">
+                    + {filteredParcels.length - 10} autre{filteredParcels.length - 10 > 1 ? 's' : ''} résultat{filteredParcels.length - 10 > 1 ? 's' : ''} (voir le tableau ci-dessous)
+                  </span>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Message si aucun résultat */}
+        {search && filteredParcels.length === 0 && !isSearching && (
+          <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-4 text-center">
+            <div className="text-amber-700 font-semibold mb-1">
+              🔍 Aucun résultat trouvé
+            </div>
+            <div className="text-sm text-amber-600">
+              Essayez avec un autre terme de recherche ou activez l'option "Inclure archives" ci-dessus
+            </div>
+          </div>
+        )}
+
         {/* ── TOGGLE FILTRES ── */}
         {(() => {
           const activeCount = [
@@ -1486,8 +1588,9 @@ export default function ParcelsTab() {
                       <button
                         type="button"
                         onClick={() => {
-                          // Récupérer les expéditions sélectionnées
-                          const selectedParcels = loadableParcels.filter((p: any) => bulkLoadSelectedIds.includes(p.id))
+                          // ✅ CORRECTION: Utiliser allDisplayParcels au lieu de loadableParcels
+                          // pour inclure TOUS les parcels, même ceux filtrés après sélection
+                          const selectedParcels = allDisplayParcels.filter((p: any) => bulkLoadSelectedIds.includes(p.id))
 
                           if (selectedParcels.length === 0) {
                             alert('Aucune expédition sélectionnée à exporter')
@@ -1700,8 +1803,9 @@ export default function ParcelsTab() {
                         <button
                           type="button"
                           onClick={() => {
-                            // Récupérer les expéditions sélectionnées (tous les colis, pas seulement assignables)
-                            const selectedParcels = filteredParcels.filter((p: any) => bulkAssignSelectedIds.includes(p.id))
+                            // ✅ CORRECTION: Utiliser allDisplayParcels au lieu de filteredParcels
+                            // pour inclure TOUS les parcels sélectionnés, même si les filtres ont changé
+                            const selectedParcels = allDisplayParcels.filter((p: any) => bulkAssignSelectedIds.includes(p.id))
 
                             if (selectedParcels.length === 0) {
                               alert('Aucune expédition sélectionnée à exporter')
@@ -3160,43 +3264,59 @@ export default function ParcelsTab() {
                               )}
                             </td>
                           )}
-                          <td className="px-4 py-3 whitespace-nowrap">
-                            <div className="flex items-center justify-center gap-1.5">
+                          <td className="px-4 py-3">
+                            <div className="flex flex-col gap-2">
+                              {/* ⚡ Actions rapides — Toggles de statuts (version compacte tableau) */}
                               {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
-                                <button
-                                  onClick={() => setQuickEditModal({
-                                    open: true,
-                                    parcel,
-                                    price: parcel.price?.toString() || '',
-                                    portType: parcel.portType || '',
-                                    status: parcel.status || '',
-                                    codAmount: parcel.codAmount?.toString() || '',
-                                    serviceType: parcel.serviceType || '',
-                                    nbColis: parcel.nbColis?.toString() || '',
-                                    poids: parcel.poids?.toString() || '',
-                                    contenu: parcel.contenu || '',
-                                    remarque: parcel.remarque || '',
-                                    loading: false,
-                                    error: ''
-                                  })}
-                                  tabIndex={-1}
-                                  className="px-4 py-2 rounded-lg bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-105 flex items-center gap-2"
-                                  title="Édition complète"
-                                >
-                                  <span className="text-lg">🖐️</span>
-                                  <span className="font-semibold text-sm">Éditer</span>
-                                </button>
+                                <QuickStatusToggles
+                                  parcel={parcel}
+                                  profile={profile}
+                                  compact={true}
+                                  onSuccess={() => {
+                                    // Aucune action nécessaire - le composant émet déjà un événement parcelUpdated
+                                    // qui est capturé par les listeners Firestore pour mettre à jour l'UI
+                                  }}
+                                />
                               )}
-                              {isOwn && (
-                                <button
-                                  onClick={() => handleDeleteClick(parcel)}
-                                  tabIndex={-1}
-                                  className="p-2 rounded-lg bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-110"
-                                  title="Supprimer"
-                                >
-                                  <Trash2 className="w-4 h-4" />
-                                </button>
-                              )}
+
+                              {/* Boutons Éditer et Supprimer */}
+                              <div className="flex items-center justify-center gap-1.5">
+                                {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                                  <button
+                                    onClick={() => setQuickEditModal({
+                                      open: true,
+                                      parcel,
+                                      price: parcel.price?.toString() || '',
+                                      portType: parcel.portType || '',
+                                      status: parcel.status || '',
+                                      codAmount: parcel.codAmount?.toString() || '',
+                                      serviceType: parcel.serviceType || '',
+                                      nbColis: parcel.nbColis?.toString() || '',
+                                      poids: parcel.poids?.toString() || '',
+                                      contenu: parcel.contenu || '',
+                                      remarque: parcel.remarque || '',
+                                      loading: false,
+                                      error: ''
+                                    })}
+                                    tabIndex={-1}
+                                    className="px-4 py-2 rounded-lg bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-105 flex items-center gap-2"
+                                    title="Édition complète"
+                                  >
+                                    <span className="text-lg">🖐️</span>
+                                    <span className="font-semibold text-sm">Éditer</span>
+                                  </button>
+                                )}
+                                {isOwn && (
+                                  <button
+                                    onClick={() => handleDeleteClick(parcel)}
+                                    tabIndex={-1}
+                                    className="p-2 rounded-lg bg-gradient-to-r from-red-500 to-red-600 hover:from-red-600 hover:to-red-700 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-110"
+                                    title="Supprimer"
+                                  >
+                                    <Trash2 className="w-4 h-4" />
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           </td>
                         </tr>
@@ -3852,6 +3972,18 @@ export default function ParcelsTab() {
                     <div className="mt-2 inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium border bg-purple-50 text-purple-700 border-purple-200">
                       💼 En compte Expéditeur {parcel.price > 0 ? `${parcel.price} DH` : ''}
                     </div>
+                  )}
+
+                  {/* ⚡ Actions rapides — Toggles de statuts en temps réel */}
+                  {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                    <QuickStatusToggles
+                      parcel={parcel}
+                      profile={profile}
+                      onSuccess={() => {
+                        // Aucune action nécessaire - le composant émet déjà un événement parcelUpdated
+                        // qui est capturé par les listeners Firestore pour mettre à jour l'UI
+                      }}
+                    />
                   )}
 
                   {/* RETOUR FOND collect — destination agent collects RETOUR FOND when client picks up at agency */}
