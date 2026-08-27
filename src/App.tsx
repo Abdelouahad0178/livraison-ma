@@ -49,6 +49,7 @@ const SeedPage         = lazy(() => import('./pages/SeedPage'))
 const ArchivePage      = lazy(() => import('./pages/ArchivePage'))
 const DRFEPage         = lazy(() => import('./pages/DRFEPage'))
 const DRFCPage         = lazy(() => import('./pages/DRFCPage'))
+const InternetStatusDemo = lazy(() => import('./pages/InternetStatusDemo'))
 
 // Auth vérifié UNE SEULE FOIS au niveau App — pas à chaque navigation
 function BlockedScreen({ profile, operationLocks }: any) {
@@ -363,6 +364,9 @@ function AppContent() {
               <FacturierPage />
             </PrivateRoute>
           } />
+
+          {/* Page de démo pour l'indicateur de connexion */}
+          <Route path="/internet-status-demo" element={<InternetStatusDemo />} />
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
