@@ -1436,7 +1436,7 @@ export default function AdminPortAgenciesTab({
                   📋 Port Dû Chèque
                 </th>
                 <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-green-600/30">
-                  💵 Total (Payé + Dû)
+                  💵 Total (Payé + Dû + Chèque)
                 </th>
                 <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-indigo-600/30 print:hidden">
                   📤 En Compte Exp
@@ -1484,7 +1484,7 @@ export default function AdminPortAgenciesTab({
                   </td>
                   <td className="px-6 py-4 text-right font-bold bg-green-50/50">
                     <span className="text-green-700 text-xl">
-                      {(stat.portPaye + stat.portDu).toLocaleString('fr-MA')} DH
+                      {(stat.portPaye + stat.portDu + stat.portDuCheque).toLocaleString('fr-MA')} DH
                     </span>
                   </td>
                   <td className="px-6 py-4 text-right font-bold bg-indigo-50/50 print:hidden">
@@ -1535,7 +1535,7 @@ export default function AdminPortAgenciesTab({
                   </td>
                   <td className="px-6 py-5 text-right bg-green-100">
                     <span className="text-green-900 text-2xl font-black">
-                      {(totauxFiltres.portPaye + totauxFiltres.portDu).toLocaleString('fr-MA')} DH
+                      {(totauxFiltres.portPaye + totauxFiltres.portDu + totauxFiltres.portDuCheque).toLocaleString('fr-MA')} DH
                     </span>
                   </td>
                   <td className="px-6 py-5 text-right bg-indigo-100 print:hidden">
