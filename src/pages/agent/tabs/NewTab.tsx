@@ -1268,10 +1268,11 @@ export default function NewTab() {
           <h3 className="text-xs font-bold text-orange-700 mb-2 flex items-center gap-1.5">
             <span className="text-base">💰</span> Frais de port
           </h3>
-          <div className="grid grid-cols-2 gap-2 mb-2">
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-2">
             {[
               { key: 'port_du',   emoji: '💰', label: 'Port Dû', active: 'bg-orange-500 text-white' },
               { key: 'port_paye', emoji: '💵', label: 'Port Payé', active: 'bg-blue-600 text-white' },
+              { key: 'port_du_cheque', emoji: '📋', label: 'Port Dû Chèque', active: 'bg-purple-700 text-white' },
               { key: 'port_en_compte_expediteur', emoji: '💼', label: 'Compte Exp', active: 'bg-purple-600 text-white' },
               { key: 'port_en_compte_destinataire', emoji: '📥', label: 'Compte Dest', active: 'bg-teal-600 text-white' },
             ].map(pt => (
