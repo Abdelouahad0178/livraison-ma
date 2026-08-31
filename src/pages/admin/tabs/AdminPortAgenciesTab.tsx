@@ -748,8 +748,8 @@ export default function AdminPortAgenciesTab({
       return sum + (versementsByCity[stat.city] || 0)
     }, 0)
 
-    // 💵 Total Port (dans les cartes) = Port Dû + Port Payé - Versements (SANS port dû chèque)
-    const totalPortCartes = Math.max(0, totaux.portPaye + totaux.portDu - totalVersements)
+    // 💵 Total Port (dans les cartes) = Port Dû + Port Payé + Port Dû Chèque - Versements
+    const totalPortCartes = Math.max(0, totaux.portPaye + totaux.portDu + totaux.portDuCheque - totalVersements)
 
     return {
       portPaye: Math.round(totaux.portPaye * 100) / 100,
@@ -1550,7 +1550,7 @@ export default function AdminPortAgenciesTab({
                   </td>
                   <td className="px-6 py-5 text-right bg-green-100 print:hidden">
                     <span className="text-green-900 text-2xl font-black">
-                      {(totauxFiltres.portPaye + totauxFiltres.portDu + totauxFiltres.enCompteExp + totauxFiltres.enCompteDest).toLocaleString('fr-MA')} DH
+                      {(totauxFiltres.portPaye + totauxFiltres.portDu + totauxFiltres.portDuCheque + totauxFiltres.enCompteExp + totauxFiltres.enCompteDest).toLocaleString('fr-MA')} DH
                     </span>
                   </td>
                 </tr>
