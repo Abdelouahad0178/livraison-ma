@@ -103,6 +103,7 @@ const AgentPortsEnCompteTab = lazy(() => import('./agent/tabs/AgentPortsEnCompte
 const AgentVersementsTab = lazy(() => import('./agent/tabs/AgentVersementsTab'))
 const AgentInvoicesTab = lazy(() => import('./agent/tabs/AgentInvoicesTab'))
 const PortPayeChequeTab = lazy(() => import('./agent/tabs/PortPayeChequeTab'))
+const PortDuChequeTab = lazy(() => import('./agent/tabs/PortDuChequeTab'))
 const CaisseChefTab = lazy(() => import('./agent/tabs/CaisseChefTab'))
 
 const MOD_STATUS = {
@@ -2854,6 +2855,16 @@ export default function AgentPage() {
       {tab === 'portpayecheque' && (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
         <Suspense fallback={null}>
           <PortPayeChequeTab
+            agencyCity={profile?.city || ''}
+            profile={profile}
+          />
+        </Suspense>
+      )}
+
+      {/* ── PORTS DÛ CHÈQUE TAB ── */}
+      {tab === 'portducheque' && (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+        <Suspense fallback={null}>
+          <PortDuChequeTab
             agencyCity={profile?.city || ''}
             profile={profile}
           />
