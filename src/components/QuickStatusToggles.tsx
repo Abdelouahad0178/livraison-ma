@@ -6,13 +6,17 @@ import { collectCodAtDestination } from '../firebase/cod'
 interface QuickStatusTogglesProps {
   parcel: any
   profile: any
-  onSuccess?: () => void
+  onSuccess?: (updates: { status?: string; codStatus?: string }) => void
   compact?: boolean
 }
 
 export default function QuickStatusToggles({ parcel, profile, onSuccess, compact = false }: QuickStatusTogglesProps) {
   const [updating, setUpdating] = useState<string | null>(null)
   const [error, setError] = useState('')
+
+  // ⚡ State local pour afficher le statut à jour immédiatement
+  const [localStatus, setLocalStatus] = useState(parcel.status)
+  const [localCodStatus, setLocalCodStatus] = useState(parcel.codStatus)
 
   // Vérifier si l'utilisateur peut modifier ce statut
   const canUpdateStatus = () => {
@@ -29,16 +33,32 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
       return
     }
 
-    const newStatus = parcel.status === 'Livré' ? 'En cours de livraison' : 'Livré'
+    const newStatus = localStatus === 'Livré' ? 'En cours de livraison' : 'Livré'
     setUpdating('delivery')
     setError('')
 
     try {
-      await updateParcelStatus(parcel.id, newStatus, {
+      // ⚡ Mettre à jour l'affichage local IMMÉDIATEMENT
+      setLocalStatus(newStatus)
+      onSuccess?.({ status: newStatus })
+
+      // Préparer les mises à jour
+      const updates: any = {
         updatedBy: profile?.displayName || profile?.email || 'Agent',
         updatedAt: new Date().toISOString()
-      })
-      onSuccess?.()
+      }
+
+      // Si on passe à "Livré", ajouter la date de livraison
+      if (newStatus === 'Livré') {
+        updates.deliveredAt = new Date().toISOString()
+      }
+      // Si on passe à "En cours de livraison", supprimer la date de livraison
+      else if (newStatus === 'En cours de livraison') {
+        const { deleteField } = await import('firebase/firestore')
+        updates.deliveredAt = deleteField()
+      }
+
+      await updateParcelStatus(parcel.id, newStatus, updates)
     } catch (err: any) {
       console.error('Erreur changement statut livraison:', err)
       setError(err.message || 'Erreur lors du changement de statut')
@@ -58,11 +78,16 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
       return
     }
 
-    const isCollected = parcel.codStatus === 'collected'
+    const isCollected = localCodStatus === 'collected'
     setUpdating('cod')
     setError('')
 
     try {
+      // ⚡ Mettre à jour l'affichage local IMMÉDIATEMENT
+      const newCodStatus = isCollected ? 'pending' : 'collected'
+      setLocalCodStatus(newCodStatus)
+      onSuccess?.({ codStatus: newCodStatus })
+
       if (isCollected) {
         // Remettre à "pending"
         await updateParcelStatus(parcel.id, parcel.status, {
@@ -80,7 +105,6 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
           profile?.displayName || profile?.email || 'Agent'
         )
       }
-      onSuccess?.()
     } catch (err: any) {
       console.error('Erreur toggle COD:', err)
       setError(err.message || 'Erreur lors du changement de statut COD')
@@ -95,16 +119,19 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
       return
     }
 
-    const newStatus = parcel.status === 'Arrivé en agence' ? 'En transit' : 'Arrivé en agence'
+    const newStatus = localStatus === 'Arrivé en agence' ? 'En transit' : 'Arrivé en agence'
     setUpdating('transit')
     setError('')
 
     try {
+      // ⚡ Mettre à jour l'affichage local IMMÉDIATEMENT
+      setLocalStatus(newStatus)
+      onSuccess?.({ status: newStatus })
+
       await updateParcelStatus(parcel.id, newStatus, {
         updatedBy: profile?.displayName || profile?.email || 'Agent',
         updatedAt: new Date().toISOString()
       })
-      onSuccess?.()
     } catch (err: any) {
       console.error('Erreur changement statut transit:', err)
       setError(err.message || 'Erreur lors du changement de statut')
@@ -128,12 +155,13 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
     setError('')
 
     try {
+      onSuccess?.({ status: 'Retourné' })
+
       await markParcelAsReturned(parcel, {
         note: 'Retour initié par actions rapides',
         updatedBy: profile?.displayName || profile?.email || 'Agent',
         updatedAt: new Date().toISOString()
       })
-      onSuccess?.()
     } catch (err: any) {
       console.error('Erreur marquage retour:', err)
       setError(err.message || 'Erreur lors du marquage en retour')
@@ -204,7 +232,7 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
                 <div className={`${iconSize} border-2 border-current border-t-transparent rounded-full animate-spin`} />
                 <span>Mise à jour...</span>
               </>
-            ) : parcel.status === 'Livré' ? (
+            ) : localStatus === 'Livré' ? (
               <>
                 <Check className={iconSize} />
                 <span>Livré ✓</span>
@@ -239,7 +267,7 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
                 <div className={`${iconSize} border-2 border-current border-t-transparent rounded-full animate-spin`} />
                 <span>Mise à jour...</span>
               </>
-            ) : parcel.codStatus === 'collected' ? (
+            ) : localCodStatus === 'collected' ? (
               <>
                 <Check className={iconSize} />
                 <span>COD collecté ✓</span>
@@ -274,7 +302,7 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
                 <div className={`${iconSize} border-2 border-current border-t-transparent rounded-full animate-spin`} />
                 <span>Mise à jour...</span>
               </>
-            ) : parcel.status === 'Arrivé en agence' ? (
+            ) : localStatus === 'Arrivé en agence' ? (
               <>
                 <Check className={iconSize} />
                 <span>Arrivé ✓</span>

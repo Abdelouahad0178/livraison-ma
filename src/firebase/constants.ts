@@ -128,9 +128,10 @@ export const COD_STATUS: Record<string, { label: string; bg: string; text: strin
 export const PORT_TYPES = [
   { key: 'port_paye',                      label: 'Port payé',            emoji: '✅' },
   { key: 'port_du',                        label: 'Port dû',              emoji: '💰' },
+  { key: 'port_du_cheque',                 label: 'Port dû chèque',       emoji: '📋' },
   { key: 'port_en_compte_expediteur',      label: 'En compte Exp',        emoji: '📤' },
   { key: 'port_en_compte_destinataire',    label: 'En compte Dest',       emoji: '📥' },
-  { key: 'port_en_compte',                 label: 'En compte (ancien)',   emoji: '📋' },  // Pour compatibilité
+  { key: 'port_en_compte',                 label: 'En compte (ancien)',   emoji: '📊' },  // Pour compatibilité
 ]
 
 export const STATUS_COLORS: Record<string, { bg: string; text: string; dot: string }> = {

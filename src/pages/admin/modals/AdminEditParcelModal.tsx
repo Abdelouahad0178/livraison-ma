@@ -195,7 +195,8 @@ export default function AdminEditParcelModal({
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400 bg-white appearance-none pr-8"
                   >
                     <option value="port_paye">✅ Port payé</option>
-                    <option value="port_du">📮 Port dû</option>
+                    <option value="port_du">💰 Port dû (espèce)</option>
+                    <option value="port_du_cheque">📋 Port dû chèque</option>
                     <option value="port_en_compte_expediteur">📤 En compte Exp</option>
                     <option value="port_en_compte_destinataire">📥 En compte Dest</option>
                     <option value="port_en_compte">💼 En compte</option>

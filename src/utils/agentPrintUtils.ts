@@ -143,6 +143,7 @@ export async function printTable(
   const PORT_TYPE_LABEL = {
     port_paye:     'Port Payé',
     port_du:       'Port Dû',
+    port_du_cheque:'Port Dû Chèque',
     port_en_compte:'En Compte',
   }
   const SERVICE_LABEL = {
@@ -415,7 +416,7 @@ export function printAdminExpeditions(
           <span style="color:#6b7280;font-size:6.5pt">${p.receiver?.city || ''} · ${p.receiver?.tel || ''}</span>
         </td>
         <td style="text-align:center;font-weight:bold">${p.weight || '—'} kg</td>
-        <td style="text-align:right;font-weight:bold;color:${p.portType === 'port_paye' ? '#1d4ed8' : p.portType === 'port_du' ? '#c2410c' : '#7c3aed'}">
+        <td style="text-align:right;font-weight:bold;color:${p.portType === 'port_paye' ? '#1d4ed8' : p.portType === 'port_du' ? '#c2410c' : p.portType === 'port_du_cheque' ? '#9333ea' : '#7c3aed'}">
           ${p.price || 0} DH
         </td>
         <td style="text-align:right;font-weight:bold;color:#c2410c">

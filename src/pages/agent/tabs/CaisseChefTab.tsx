@@ -323,19 +323,21 @@ export default function CaisseChefTab() {
       p.destinationCity === profile?.city
     )
 
-    // Ports collectés (ceux avec portStatus 'collected' ou 'received')
-    const portsCollectes = dataSource.filter((p: any) =>
-      p.portType === 'port_du' &&
-      !p.portPayeMethod &&
-      (p.portStatus === 'collected' || p.portStatus === 'received') &&
-      p.destinationCity === profile?.city
-    )
+    // Ports collectés (ceux avec portStatus 'collected' ou 'received', SAUF retours)
+    const portsCollectes = dataSource.filter((p: any) => {
+      const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
+      return p.portType === 'port_du' &&
+        !p.portPayeMethod &&
+        (p.portStatus === 'collected' || p.portStatus === 'received') &&
+        p.destinationCity === profile?.city &&
+        !isReturned
+    })
 
     // 🆕 Ports payés ramassés localement (à recevoir du livreur)
-    // Ramassés dans cette ville, même si envoyés ailleurs après
+    // ⚠️ UNIQUEMENT les colis CRÉÉS dans cette agence (createdByCity)
     const portsPayesARecevoir = dataSource.filter((p: any) => {
       const isPortPaye = p.portType === 'port_paye' && !p.portPayeMethod
-      const isFromMyCity = p.createdByCity === profile?.city || p.originCity === profile?.city
+      const isFromMyCity = p.originCity === profile?.city // originCity = agence qui crée l'expédition
       const isCollected = p.portStatus === 'collected' || !p.portStatus
 
       // Nouveau système : a pickupDriverId
@@ -346,9 +348,10 @@ export default function CaisseChefTab() {
     })
 
     // 🆕 Ports payés reçus par le chef (ramassage local uniquement)
+    // ⚠️ UNIQUEMENT les colis CRÉÉS dans cette agence (createdByCity)
     const portsPayesRecus = dataSource.filter((p: any) => {
       const isPortPaye = p.portType === 'port_paye' && !p.portPayeMethod
-      const isFromMyCity = p.createdByCity === profile?.city || p.originCity === profile?.city
+      const isFromMyCity = p.originCity === profile?.city // originCity = agence qui crée l'expédition
       const isReceived = p.portStatus === 'received'
 
       // Si reçu : compter tous les ports payés de cette ville (peu importe le statut actuel)
@@ -417,18 +420,21 @@ export default function CaisseChefTab() {
     // Utiliser allDisplayParcels (toutes les données) au lieu de dataSource (filtré)
     const allParcels = allDisplayParcels || []
 
-    // Ports dus collectés (TOUS, sans filtre date)
-    const portsCollectes = allParcels.filter((p: any) =>
-      p.portType === 'port_du' &&
-      !p.portPayeMethod &&
-      (p.portStatus === 'collected' || p.portStatus === 'received') &&
-      p.destinationCity === profile?.city
-    )
+    // Ports dus collectés (TOUS, sans filtre date, SAUF retours)
+    const portsCollectes = allParcels.filter((p: any) => {
+      const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
+      return p.portType === 'port_du' &&
+        !p.portPayeMethod &&
+        (p.portStatus === 'collected' || p.portStatus === 'received') &&
+        p.destinationCity === profile?.city &&
+        !isReturned
+    })
 
     // Ports payés reçus (TOUS, sans filtre date) - ramassage local
+    // ⚠️ UNIQUEMENT les colis CRÉÉS dans cette agence (createdByCity)
     const portsPayesRecus = allParcels.filter((p: any) => {
       const isPortPaye = p.portType === 'port_paye' && !p.portPayeMethod
-      const isFromMyCity = p.createdByCity === profile?.city || p.originCity === profile?.city
+      const isFromMyCity = p.originCity === profile?.city // originCity = agence qui crée l'expédition
       const isReceived = p.portStatus === 'received'
 
       // Si reçu : compter tous les ports payés de cette ville
@@ -457,19 +463,22 @@ export default function CaisseChefTab() {
 
     const allParcels = allDisplayParcels || []
 
-    // Ports dus collectés par CE livreur (TOUS, sans filtre date)
-    const portsCollectes = allParcels.filter((p: any) =>
-      p.portType === 'port_du' &&
-      !p.portPayeMethod &&
-      (p.portStatus === 'collected' || p.portStatus === 'received') &&
-      p.destinationCity === profile?.city &&
-      p.deliveryDriverId === driverFilter
-    )
+    // Ports dus collectés par CE livreur (TOUS, sans filtre date, SAUF retours)
+    const portsCollectes = allParcels.filter((p: any) => {
+      const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
+      return p.portType === 'port_du' &&
+        !p.portPayeMethod &&
+        (p.portStatus === 'collected' || p.portStatus === 'received') &&
+        p.destinationCity === profile?.city &&
+        p.deliveryDriverId === driverFilter &&
+        !isReturned
+    })
 
     // Ports payés REÇUS ramassés par CE livreur (TOUS, sans filtre date)
+    // ⚠️ UNIQUEMENT les colis CRÉÉS dans cette agence (createdByCity)
     const portsPayesRecus = allParcels.filter((p: any) => {
       const isPortPaye = p.portType === 'port_paye' && !p.portPayeMethod
-      const isFromMyCity = p.createdByCity === profile?.city || p.originCity === profile?.city
+      const isFromMyCity = p.originCity === profile?.city // originCity = agence qui crée l'expédition
       const isReceived = p.portStatus === 'received'
 
       // Nouveau système : utiliser pickupDriverId
@@ -609,19 +618,21 @@ export default function CaisseChefTab() {
         return p.status === 'Arrivé en agence' || p.status === 'En cours de livraison' || p.status === 'Livré'
       })
 
-      // Ports collectés = ceux avec portStatus 'collected' ou 'received'
-      const portsCollectes = portDuParcels.filter((p: any) =>
-        p.portStatus === 'collected' || p.portStatus === 'received'
-      )
+      // Ports collectés = ceux avec portStatus 'collected' ou 'received', SAUF retours
+      const portsCollectes = portDuParcels.filter((p: any) => {
+        const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
+        return (p.portStatus === 'collected' || p.portStatus === 'received') && !isReturned
+      })
 
       // 🆕 Ports payés par ce livreur (afficher TOUS, compter uniquement ramassage local)
       const portsPayesParcels = driver.parcels.filter((p: any) =>
         p.portType === 'port_paye' &&
         !p.portPayeMethod
       )
-      // Compter uniquement les ramassages locaux pour les statistiques (même si envoyés ailleurs après)
+      // Compter uniquement les ramassages locaux pour les statistiques
+      // ⚠️ UNIQUEMENT les colis CRÉÉS dans cette agence (createdByCity)
       const portsPayesARecevoir = portsPayesParcels.filter((p: any) => {
-        const isFromMyCity = p.createdByCity === profile?.city || p.originCity === profile?.city
+        const isFromMyCity = p.originCity === profile?.city // originCity = agence qui crée l'expédition
         const isCollected = p.portStatus === 'collected' || !p.portStatus
 
         // Nouveau système : a pickupDriverId
@@ -631,10 +642,10 @@ export default function CaisseChefTab() {
         return isFromMyCity && isCollected && isLocalPickup
       })
       const portsPayesRecus = portsPayesParcels.filter((p: any) => {
-        const isFromMyCity = p.createdByCity === profile?.city || p.originCity === profile?.city
+        const isFromMyCity = p.originCity === profile?.city // originCity = agence qui crée l'expédition
         const isReceived = p.portStatus === 'received'
 
-        // Si reçu : compter tous les ports payés de cette ville
+        // Si reçu : compter tous les ports payés CRÉÉS dans cette ville
         return isFromMyCity && isReceived
       })
 
@@ -832,10 +843,11 @@ export default function CaisseChefTab() {
         return p.status === 'Arrivé en agence' || p.status === 'En cours de livraison' || p.status === 'Livré'
       })
 
-      // Ports collectés = ceux avec portStatus 'collected' ou 'received'
-      const portsCollectes = filteredPortDuParcels.filter((p: any) =>
-        p.portStatus === 'collected' || p.portStatus === 'received'
-      )
+      // Ports collectés = ceux avec portStatus 'collected' ou 'received', SAUF retours
+      const portsCollectes = filteredPortDuParcels.filter((p: any) => {
+        const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
+        return (p.portStatus === 'collected' || p.portStatus === 'received') && !isReturned
+      })
 
       const now = new Date()
       const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)

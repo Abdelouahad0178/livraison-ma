@@ -117,10 +117,14 @@ const fmtModDate = (ts: any) => {
 }
 
 const parcelDate = (p: any) => {
-  // 📅 Utiliser workDate (jour d'opération) en priorité pour alignement avec AdminPortAgenciesTab
-  if (p.workDate) return new Date(p.workDate + 'T12:00:00')
+  // 📅 PRIORITÉ 1: createdAt (cohérent avec AdminPortAgenciesTab)
   if (p.createdAt?.toDate) return p.createdAt.toDate()
   if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
+
+  // 📅 FALLBACK: workDate (pour colis sans createdAt)
+  if (p.workDate) {
+    return new Date(p.workDate + 'T12:00:00')
+  }
   return new Date(0)
 }
 const entryDate = (e: any) => {

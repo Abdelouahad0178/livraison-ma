@@ -558,6 +558,7 @@ export default function AdminPortAgenciesTab({
       city: string
       portPaye: number              // ✅ Port Payé (expéditeur) OU Ports payés reçus (mode physical)
       portDu: number                 // 💰 Port Dû (destinataire) OU Ports dû collectés (mode physical)
+      portDuCheque: number           // 📋 Port Dû Chèque
       enCompteExp: number            // 📤 En Compte Expéditeur
       enCompteDest: number           // 📥 En Compte Destinataire
       totalPort: number
@@ -570,6 +571,7 @@ export default function AdminPortAgenciesTab({
         city,
         portPaye: 0,
         portDu: 0,
+        portDuCheque: 0,
         enCompteExp: 0,
         enCompteDest: 0,
         totalPort: 0,
@@ -604,7 +606,7 @@ export default function AdminPortAgenciesTab({
             // Port collecté à l'ORIGINE (expéditeur)
             senderPort = price
             senderPortType = portType
-          } else if (portType === 'port_du' || portType === 'port_en_compte_destinataire') {
+          } else if (portType === 'port_du' || portType === 'port_du_cheque' || portType === 'port_en_compte_destinataire') {
             // Port collecté à la DESTINATION (destinataire)
             receiverPort = price
             receiverPortType = portType
@@ -628,6 +630,8 @@ export default function AdminPortAgenciesTab({
         if (receiverPort > 0 && destCity && stats[destCity] && (directionFilter === 'all' || directionFilter === 'received') && matchesOriginFilter) {
           if (receiverPortType === 'port_du') {
             stats[destCity].portDu += receiverPort
+          } else if (receiverPortType === 'port_du_cheque') {
+            stats[destCity].portDuCheque += receiverPort
           } else if (receiverPortType === 'port_en_compte_destinataire' || receiverPortType === 'port_en_compte') {
             stats[destCity].enCompteDest += receiverPort
           }
@@ -641,6 +645,11 @@ export default function AdminPortAgenciesTab({
         // 1️⃣ PORTS DÛ COLLECTÉS : portType = 'port_du', portStatus = 'collected' ou 'received'
         if (portType === 'port_du' && (portStatus === 'collected' || portStatus === 'received') && price > 0 && destCity && stats[destCity]) {
           stats[destCity].portDu += price
+        }
+
+        // 1️⃣ bis PORTS DÛ CHÈQUE COLLECTÉS : portType = 'port_du_cheque', portStatus = 'collected' ou 'received'
+        if (portType === 'port_du_cheque' && (portStatus === 'collected' || portStatus === 'received') && price > 0 && destCity && stats[destCity]) {
+          stats[destCity].portDuCheque += price
         }
 
         // 2️⃣ PORTS PAYÉS REÇUS LOCALEMENT : portType = 'port_paye', from this city, portStatus = 'received'
@@ -685,12 +694,13 @@ export default function AdminPortAgenciesTab({
     // Calculer les totaux et arrondir - afficher toutes les agences
     return Object.values(stats).map(stat => {
       // 💰 Total Port = Somme de tous les ports (sans déduire les versements)
-      const totalPort = stat.portPaye + stat.portDu + stat.enCompteExp + stat.enCompteDest
+      const totalPort = stat.portPaye + stat.portDu + stat.portDuCheque + stat.enCompteExp + stat.enCompteDest
 
       return {
         ...stat,
         portPaye: Math.round(stat.portPaye * 100) / 100,
         portDu: Math.round(stat.portDu * 100) / 100,
+        portDuCheque: Math.round(stat.portDuCheque * 100) / 100,
         enCompteExp: Math.round(stat.enCompteExp * 100) / 100,
         enCompteDest: Math.round(stat.enCompteDest * 100) / 100,
         totalPort: Math.round(totalPort * 100) / 100,
@@ -707,11 +717,12 @@ export default function AdminPortAgenciesTab({
       filtered = filtered.filter(stat => stat.city === selectedCity)
     }
 
-    // Filtre par type de port - 4 TYPES SÉPARÉS
+    // Filtre par type de port - 5 TYPES SÉPARÉS
     if (portTypeFilter !== 'all') {
       filtered = filtered.filter(stat => {
         if (portTypeFilter === 'port_paye') return stat.portPaye > 0
         if (portTypeFilter === 'port_du') return stat.portDu > 0
+        if (portTypeFilter === 'port_du_cheque') return stat.portDuCheque > 0
         if (portTypeFilter === 'port_en_compte_expediteur') return stat.enCompteExp > 0
         if (portTypeFilter === 'port_en_compte_destinataire') return stat.enCompteDest > 0
         return true
@@ -726,22 +737,24 @@ export default function AdminPortAgenciesTab({
     const totaux = filteredStats.reduce((acc, stat) => ({
       portPaye: acc.portPaye + stat.portPaye,
       portDu: acc.portDu + stat.portDu,
+      portDuCheque: acc.portDuCheque + stat.portDuCheque,
       enCompteExp: acc.enCompteExp + stat.enCompteExp,
       enCompteDest: acc.enCompteDest + stat.enCompteDest,
       nbExpeditions: acc.nbExpeditions + stat.nbExpeditions,
-    }), { portPaye: 0, portDu: 0, enCompteExp: 0, enCompteDest: 0, nbExpeditions: 0 })
+    }), { portPaye: 0, portDu: 0, portDuCheque: 0, enCompteExp: 0, enCompteDest: 0, nbExpeditions: 0 })
 
     // 💰 Calculer le total des versements pour les villes filtrées
     const totalVersements = filteredStats.reduce((sum, stat) => {
       return sum + (versementsByCity[stat.city] || 0)
     }, 0)
 
-    // 💵 Total Port (dans les cartes) = Port Dû + Port Payé - Versements
+    // 💵 Total Port (dans les cartes) = Port Dû + Port Payé - Versements (SANS port dû chèque)
     const totalPortCartes = Math.max(0, totaux.portPaye + totaux.portDu - totalVersements)
 
     return {
       portPaye: Math.round(totaux.portPaye * 100) / 100,
       portDu: Math.round(totaux.portDu * 100) / 100,
+      portDuCheque: Math.round(totaux.portDuCheque * 100) / 100,
       enCompteExp: Math.round(totaux.enCompteExp * 100) / 100,
       enCompteDest: Math.round(totaux.enCompteDest * 100) / 100,
       totalPort: Math.round(totalPortCartes * 100) / 100,
@@ -1166,6 +1179,7 @@ export default function AdminPortAgenciesTab({
                 <option value="all">Tous les types</option>
                 <option value="port_paye">✅ Port Payé uniquement</option>
                 <option value="port_du">📮 Port Dû uniquement</option>
+                <option value="port_du_cheque">📋 Port Dû Chèque uniquement</option>
                 <option value="port_en_compte_expediteur">📤 En Compte Exp uniquement</option>
                 <option value="port_en_compte_destinataire">📥 En Compte Dest uniquement</option>
               </select>
@@ -1280,6 +1294,7 @@ export default function AdminPortAgenciesTab({
                     <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-green-100 text-green-700 rounded-lg text-xs font-bold">
                       {portTypeFilter === 'port_paye' && '✅ Port Payé'}
                       {portTypeFilter === 'port_du' && '📮 Port Dû'}
+                      {portTypeFilter === 'port_du_cheque' && '📋 Port Dû Chèque'}
                       {portTypeFilter === 'port_en_compte_expediteur' && '📤 En Compte Exp'}
                       {portTypeFilter === 'port_en_compte_destinataire' && '📥 En Compte Dest'}
                       <button
@@ -1368,8 +1383,15 @@ export default function AdminPortAgenciesTab({
           <div className="flex items-center gap-3">
             <div className="w-3 h-3 rounded-full bg-purple-500"></div>
             <div>
+              <div className="text-xs text-gray-600 font-medium">📋 Port Dû Chèque</div>
+              <div className="text-xl font-black text-purple-700">{totauxFiltres.portDuCheque.toLocaleString('fr-MA')} DH</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="w-3 h-3 rounded-full bg-indigo-500"></div>
+            <div>
               <div className="text-xs text-gray-600 font-medium">📤 En Compte Exp</div>
-              <div className="text-xl font-black text-purple-700">{totauxFiltres.enCompteExp.toLocaleString('fr-MA')} DH</div>
+              <div className="text-xl font-black text-indigo-700">{totauxFiltres.enCompteExp.toLocaleString('fr-MA')} DH</div>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -1410,10 +1432,13 @@ export default function AdminPortAgenciesTab({
                 <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-orange-600/30">
                   💰 Port Dû
                 </th>
+                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-purple-600/30">
+                  📋 Port Dû Chèque
+                </th>
                 <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-green-600/30">
                   💵 Total (Payé + Dû)
                 </th>
-                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-purple-600/30 print:hidden">
+                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-indigo-600/30 print:hidden">
                   📤 En Compte Exp
                 </th>
                 <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-pink-600/30 print:hidden">
@@ -1452,13 +1477,18 @@ export default function AdminPortAgenciesTab({
                       {stat.portDu.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
+                  <td className="px-6 py-4 text-right font-bold bg-purple-50/50">
+                    <span className="text-purple-700 text-lg">
+                      {stat.portDuCheque.toLocaleString('fr-MA')} DH
+                    </span>
+                  </td>
                   <td className="px-6 py-4 text-right font-bold bg-green-50/50">
                     <span className="text-green-700 text-xl">
                       {(stat.portPaye + stat.portDu).toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-right font-bold bg-purple-50/50 print:hidden">
-                    <span className="text-purple-700 text-lg">
+                  <td className="px-6 py-4 text-right font-bold bg-indigo-50/50 print:hidden">
+                    <span className="text-indigo-700 text-lg">
                       {stat.enCompteExp.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
@@ -1498,13 +1528,18 @@ export default function AdminPortAgenciesTab({
                       {totauxFiltres.portDu.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
+                  <td className="px-6 py-5 text-right bg-purple-100">
+                    <span className="text-purple-900 text-xl font-black">
+                      {totauxFiltres.portDuCheque.toLocaleString('fr-MA')} DH
+                    </span>
+                  </td>
                   <td className="px-6 py-5 text-right bg-green-100">
                     <span className="text-green-900 text-2xl font-black">
                       {(totauxFiltres.portPaye + totauxFiltres.portDu).toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-5 text-right bg-purple-100 print:hidden">
-                    <span className="text-purple-900 text-xl font-black">
+                  <td className="px-6 py-5 text-right bg-indigo-100 print:hidden">
+                    <span className="text-indigo-900 text-xl font-black">
                       {totauxFiltres.enCompteExp.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
