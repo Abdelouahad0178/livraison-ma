@@ -1065,6 +1065,7 @@ export default function ParcelsTab() {
           </div>
         )}
 
+        {!search && (<>
         {/* ── TOGGLE FILTRES ── */}
         {(() => {
           const activeCount = [
@@ -2641,6 +2642,7 @@ export default function ParcelsTab() {
             </div>
           )
         })()}
+        </>)}
 
         {(loadingParcels ? (
           <div className="flex justify-center py-12">
