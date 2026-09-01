@@ -3351,12 +3351,16 @@ export default function ParcelsTab() {
                                 <span className="inline-flex items-center gap-1 px-2 py-1 bg-orange-100 text-orange-700 rounded-lg text-xs font-bold">
                                   📮 Dû
                                 </span>
+                              ) : parcel.portType === 'port_du_cheque' ? (
+                                <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-xs font-bold">
+                                  📋 Dû Chèque
+                                </span>
                               ) : parcel.portType === 'port_en_compte_destinataire' ? (
                                 <span className="inline-flex items-center gap-1 px-2 py-1 bg-pink-100 text-pink-700 rounded-lg text-xs font-bold">
                                   🖐️ C/Dest
                                 </span>
                               ) : (parcel.portType === 'port_en_compte' || parcel.portType === 'port_en_compte_expediteur') ? (
-                                <span className="inline-flex items-center gap-1 px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-xs font-bold">
+                                <span className="inline-flex items-center gap-1 px-2 py-1 bg-teal-100 text-teal-700 rounded-lg text-xs font-bold">
                                   💼 C/Exp
                                 </span>
                               ) : (
@@ -4907,6 +4911,7 @@ export default function ParcelsTab() {
                       {[
                         { key: 'port_paye', label: 'Port Payé', emoji: '✅' },
                         { key: 'port_du', label: 'Port Dû', emoji: '📮' },
+                        { key: 'port_du_cheque', label: 'Port Dû Chèque', emoji: '📋' },
                         { key: 'port_en_compte_expediteur', label: 'En compte Exp', emoji: '📤' },
                         { key: 'port_en_compte_destinataire', label: 'En compte Dest', emoji: '📥' },
                         { key: 'port_en_compte', label: 'En compte', emoji: '💼' },
