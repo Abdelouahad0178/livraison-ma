@@ -14,9 +14,9 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
   const [updating, setUpdating] = useState<string | null>(null)
   const [error, setError] = useState('')
 
-  // ⚡ State local pour afficher le statut à jour immédiatement
-  const [localStatus, setLocalStatus] = useState(parcel.status)
-  const [localCodStatus, setLocalCodStatus] = useState(parcel.codStatus)
+  // ⚡ Utiliser directement les valeurs du parcel (qui contient déjà les mises à jour fusionnées)
+  const localStatus = parcel.status
+  const localCodStatus = parcel.codStatus
 
   // Vérifier si l'utilisateur peut modifier ce statut
   const canUpdateStatus = () => {
@@ -38,8 +38,7 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
     setError('')
 
     try {
-      // ⚡ Mettre à jour l'affichage local IMMÉDIATEMENT
-      setLocalStatus(newStatus)
+      // ⚡ Notifier le parent pour mise à jour immédiate
       onSuccess?.({ status: newStatus })
 
       // Préparer les mises à jour
@@ -83,9 +82,8 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
     setError('')
 
     try {
-      // ⚡ Mettre à jour l'affichage local IMMÉDIATEMENT
+      // ⚡ Notifier le parent pour mise à jour immédiate
       const newCodStatus = isCollected ? 'pending' : 'collected'
-      setLocalCodStatus(newCodStatus)
       onSuccess?.({ codStatus: newCodStatus })
 
       if (isCollected) {
@@ -124,8 +122,7 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
     setError('')
 
     try {
-      // ⚡ Mettre à jour l'affichage local IMMÉDIATEMENT
-      setLocalStatus(newStatus)
+      // ⚡ Notifier le parent pour mise à jour immédiate
       onSuccess?.({ status: newStatus })
 
       await updateParcelStatus(parcel.id, newStatus, {

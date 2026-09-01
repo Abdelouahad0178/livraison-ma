@@ -222,6 +222,14 @@ export default function ParcelsTab() {
   const [assigningPickupDriver, setAssigningPickupDriver] = useState('')
   const [assigningPickupInProgress, setAssigningPickupInProgress] = useState(false)
 
+  // 🛒 Panier d'export Excel pour résultats de recherche
+  const [selectedSearchResults, setSelectedSearchResults] = useState<string[]>([])
+  const [selectedSearchParcels, setSelectedSearchParcels] = useState<any[]>([])
+
+  // ⚡ Système de mise à jour en temps réel
+  const [localParcelUpdates, setLocalParcelUpdates] = useState<Record<string, any>>({})
+  const [forceUpdateCounter, setForceUpdateCounter] = useState(0)
+
   // Rafraîchissement automatique en arrière-plan quand des données sont modifiées
   useEffect(() => {
     const handleDataUpdate = () => {
@@ -803,6 +811,115 @@ export default function ParcelsTab() {
           </label>
         )}
 
+        {/* 🛒 PANIER D'EXPORT EXCEL */}
+        {selectedSearchResults.length > 0 && (
+          <div className="bg-gradient-to-r from-green-50 to-emerald-50 border-2 border-green-300 rounded-xl p-3 md:p-4 shadow-md">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 mb-3">
+              <div className="flex items-center gap-2">
+                <span className="text-lg">🛒</span>
+                <h3 className="font-bold text-green-800 text-sm md:text-base">
+                  Panier d'export: {selectedSearchResults.length} expédition{selectedSearchResults.length > 1 ? 's' : ''}
+                </h3>
+              </div>
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <button
+                  onClick={() => {
+                    if (selectedSearchParcels.length === 0) {
+                      alert('Aucune expédition sélectionnée à exporter')
+                      return
+                    }
+
+                    const today = new Date().toLocaleDateString('fr-FR')
+                    const timeNow = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
+
+                    const data: any[] = []
+                    data.push(['', '', '', '', '', '', ''])
+                    data.push(['', '', '', '', '', '', ''])
+                    data.push(['', '', '', '', '', '', ''])
+                    data.push([`Date: ${today} ${timeNow}`, '', '', '', '', '', ''])
+                    data.push([`Total: ${selectedSearchParcels.length} expédition(s)`, '', '', '', '', '', ''])
+                    data.push(['', '', '', '', '', '', ''])
+                    data.push(['N° EXP (NIC)', 'Expéditeur', 'Destinataire', 'Ville Exp.', 'Ville Dest.', 'Date Exp.', 'Prix'])
+
+                    selectedSearchParcels.forEach((p: any) => {
+                      let codText = ''
+                      const amount = parseFloat(p.codAmount)
+                      if (!isNaN(amount) && amount > 0) {
+                        codText = String(amount).replace('.', ',')
+                      }
+                      const expeditionDate = p.expeditionDate || (p.createdAt?.toDate ? p.createdAt.toDate().toLocaleDateString('fr-FR') : '')
+
+                      data.push([
+                        p.sender?.nic || '',
+                        p.sender?.name || '',
+                        p.receiver?.name || '',
+                        p.sender?.city || p.originCity || '',
+                        p.destinationCity || p.receiver?.city || '',
+                        expeditionDate,
+                        codText
+                      ])
+                    })
+
+                    const wb = XLSX.utils.book_new()
+                    const ws = XLSX.utils.aoa_to_sheet(data)
+                    ws['!cols'] = [
+                      { wch: 15 },
+                      { wch: 20 },
+                      { wch: 20 },
+                      { wch: 18 },
+                      { wch: 18 },
+                      { wch: 12 },
+                      { wch: 12 }
+                    ]
+                    XLSX.utils.book_append_sheet(wb, ws, 'Expéditions')
+                    XLSX.writeFile(wb, `Panier_Expeditions_${today.replace(/\//g, '-')}_${timeNow.replace(/:/g, 'h')}.xlsx`)
+
+                    setSelectedSearchResults([])
+                    setSelectedSearchParcels([])
+                  }}
+                  className="flex items-center justify-center gap-1 sm:gap-2 px-3 sm:px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg text-xs sm:text-sm font-bold transition shadow-lg flex-1 sm:flex-none"
+                >
+                  <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  <span className="hidden sm:inline">Exporter en Excel</span>
+                  <span className="sm:hidden">Excel</span>
+                </button>
+                <button
+                  onClick={() => {
+                    setSelectedSearchResults([])
+                    setSelectedSearchParcels([])
+                  }}
+                  className="flex items-center justify-center gap-1 sm:gap-2 px-3 sm:px-4 py-2 bg-red-500 hover:bg-red-600 text-white rounded-lg text-xs sm:text-sm font-bold transition flex-1 sm:flex-none"
+                >
+                  <X className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+                  Vider
+                </button>
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {selectedSearchParcels.map(parcel => (
+                <div
+                  key={parcel.id}
+                  className="flex items-center gap-2 px-3 py-2 bg-white border-2 border-green-300 rounded-lg shadow-sm"
+                >
+                  <span className="font-mono font-bold text-green-700 text-xs">
+                    {parcel.sender?.nic || parcel.trackingId}
+                  </span>
+                  <button
+                    onClick={() => {
+                      setSelectedSearchResults(prev => prev.filter(id => id !== parcel.id))
+                      setSelectedSearchParcels(prev => prev.filter(p => p.id !== parcel.id))
+                    }}
+                    className="text-red-500 hover:text-red-700 transition"
+                    title="Retirer du panier"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* 🔍 ZONE RÉSULTATS DE RECHERCHE RAPIDE */}
         {search && filteredParcels.length > 0 && !isSearching && (
           <div className="bg-white border-2 border-blue-300 rounded-xl shadow-lg overflow-hidden">
@@ -822,7 +939,15 @@ export default function ParcelsTab() {
               </button>
             </div>
             <div className="max-h-[400px] overflow-y-auto divide-y divide-gray-100">
-              {filteredParcels.slice(0, 10).map((parcel: any) => {
+              {(() => {
+                // ⚡ Créer une version fusionnée des résultats de recherche
+                const mergedFilteredParcels = filteredParcels.map((p: any) => ({
+                  ...p,
+                  ...(localParcelUpdates[p.id] || {})
+                }))
+
+                return mergedFilteredParcels.slice(0, 10).map((parcel: any) => {
+                  // Les données sont déjà fusionnées
                 const sc = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
                 return (
                   <div
@@ -830,6 +955,24 @@ export default function ParcelsTab() {
                     className="p-3 hover:bg-blue-50 transition-colors"
                   >
                     <div className="flex items-start justify-between gap-3">
+                      {/* ✅ Checkbox pour sélection */}
+                      <div className="flex-shrink-0 pt-1">
+                        <input
+                          type="checkbox"
+                          checked={selectedSearchResults.includes(parcel.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedSearchResults(prev => [...prev, parcel.id])
+                              setSelectedSearchParcels(prev => [...prev, parcel])
+                            } else {
+                              setSelectedSearchResults(prev => prev.filter(id => id !== parcel.id))
+                              setSelectedSearchParcels(prev => prev.filter(p => p.id !== parcel.id))
+                            }
+                          }}
+                          className="w-5 h-5 text-blue-600 bg-white border-2 border-blue-400 rounded cursor-pointer focus:ring-2 focus:ring-blue-500"
+                        />
+                      </div>
+
                       {/* Infos colis */}
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 mb-1">
@@ -871,8 +1014,13 @@ export default function ParcelsTab() {
                             parcel={parcel}
                             profile={profile}
                             compact={true}
-                            onSuccess={() => {
-                              // Événement parcelUpdated déjà émis par le composant
+                            onSuccess={(updates) => {
+                              // ⚡ Mise à jour locale immédiate pour affichage temps réel
+                              setLocalParcelUpdates(prev => ({
+                                ...prev,
+                                [parcel.id]: { ...prev[parcel.id], ...updates }
+                              }))
+                              setForceUpdateCounter(c => c + 1)
                             }}
                           />
                         </div>
@@ -880,7 +1028,8 @@ export default function ParcelsTab() {
                     </div>
                   </div>
                 )
-              })}
+              })
+              })()}
               {filteredParcels.length > 10 && (
                 <div className="p-3 bg-gray-50 text-center">
                   <span className="text-xs font-semibold text-gray-500">
@@ -2491,12 +2640,25 @@ export default function ParcelsTab() {
             <p className="text-sm">Aucune expédition trouvée</p>
           </div>
         ) : (() => {
-          // ⭐ Appliquer le filtre de recherche du tableau sur TOUS les parcels
-          const tableFilteredParcels = getTableFilteredParcels(filteredParcels)
+          // ⚡ D'abord fusionner filteredParcels avec les mises à jour locales
+          const mergedFilteredParcels = filteredParcels.map((p: any) => ({
+            ...p,
+            ...(localParcelUpdates[p.id] || {})
+          }))
+
+          // ⭐ Appliquer le filtre de recherche du tableau sur TOUS les parcels fusionnés
+          const tableFilteredParcels = getTableFilteredParcels(mergedFilteredParcels)
 
           const totalPages = Math.max(1, Math.ceil(tableFilteredParcels.length / PAGE_SIZE))
           const safePage = Math.min(parcelPage, totalPages - 1)
           const pagedParcels = tableFilteredParcels.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE)
+
+          // ⚡ Créer une version fusionnée avec les mises à jour locales
+          const mergedPagedParcels = pagedParcels.map((p: any) => ({
+            ...p,
+            ...(localParcelUpdates[p.id] || {})
+          }))
+
           const isLastPage = safePage >= totalPages - 1
 
           // Calcul des totaux (sur TOUS les colis filtrés par la recherche, pas seulement la page)
@@ -3042,6 +3204,13 @@ export default function ParcelsTab() {
                                           await updateDoc(doc(db, 'parcels', parcel.id), {
                                             deliveredAt: deleteField()
                                           })
+
+                                          // ⚡ Mise à jour locale pour affichage temps réel
+                                          setLocalParcelUpdates(prev => ({
+                                            ...prev,
+                                            [parcel.id]: { ...prev[parcel.id], status: previousStatus, deliveredAt: null }
+                                          }))
+                                          setForceUpdateCounter(c => c + 1)
                                         } catch (err: any) {
                                           console.error('Erreur annulation livraison:', err)
                                         }
@@ -3049,9 +3218,17 @@ export default function ParcelsTab() {
                                         // Marquer comme livré directement
                                         try {
                                           const { updateParcelStatus } = await import('../../../firebase/parcels')
+                                          const deliveredAt = new Date().toISOString()
                                           await updateParcelStatus(parcel.id, 'Livré', {
-                                            deliveredAt: new Date().toISOString(),
+                                            deliveredAt,
                                           })
+
+                                          // ⚡ Mise à jour locale pour affichage temps réel
+                                          setLocalParcelUpdates(prev => ({
+                                            ...prev,
+                                            [parcel.id]: { ...prev[parcel.id], status: 'Livré', deliveredAt }
+                                          }))
+                                          setForceUpdateCounter(c => c + 1)
                                         } catch (err: any) {
                                           console.error('Erreur changement statut:', err)
                                         }
@@ -3272,9 +3449,13 @@ export default function ParcelsTab() {
                                   parcel={parcel}
                                   profile={profile}
                                   compact={true}
-                                  onSuccess={() => {
-                                    // Aucune action nécessaire - le composant émet déjà un événement parcelUpdated
-                                    // qui est capturé par les listeners Firestore pour mettre à jour l'UI
+                                  onSuccess={(updates) => {
+                                    // ⚡ Mise à jour locale immédiate pour affichage temps réel
+                                    setLocalParcelUpdates(prev => ({
+                                      ...prev,
+                                      [parcel.id]: { ...prev[parcel.id], ...updates }
+                                    }))
+                                    setForceUpdateCounter(c => c + 1)
                                   }}
                                 />
                               )}
@@ -3464,10 +3645,12 @@ export default function ParcelsTab() {
               </div>
             </div>
 
-            <div className="space-y-2">
+            <div className="space-y-2" key={`parcels-${forceUpdateCounter}`}>
             {(() => {
               let checkboxIndex = 0 // Compteur pour les checkboxes disponibles
-              return pagedParcels.map((parcel: any, idx: number) => {
+              return mergedPagedParcels.map((parcel: any, idx: number) => {
+                // ⚡ Les données sont déjà fusionnées dans mergedPagedParcels
+
                 const isOwn = canActAsParcelOwner(parcel)
                 const isAideManagedByChef = !isParcelCreator(parcel) && isChefAgencyAideParcel(parcel)
                 const sc    = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
@@ -3979,9 +4162,13 @@ export default function ParcelsTab() {
                     <QuickStatusToggles
                       parcel={parcel}
                       profile={profile}
-                      onSuccess={() => {
-                        // Aucune action nécessaire - le composant émet déjà un événement parcelUpdated
-                        // qui est capturé par les listeners Firestore pour mettre à jour l'UI
+                      onSuccess={(updates) => {
+                        // ⚡ Mise à jour locale immédiate pour affichage temps réel
+                        setLocalParcelUpdates(prev => ({
+                          ...prev,
+                          [parcel.id]: { ...prev[parcel.id], ...updates }
+                        }))
+                        setForceUpdateCounter(c => c + 1)
                       }}
                     />
                   )}
@@ -5500,6 +5687,7 @@ export default function ParcelsTab() {
                   <option value="">-- Sélectionner --</option>
                   <option value="port_paye">✅ Port Payé</option>
                   <option value="port_du">📮 Port Dû</option>
+                  <option value="port_du_cheque">📋 Port Dû Chèque</option>
                   <option value="port_en_compte_expediteur">💼 Compte Expéditeur</option>
                   <option value="port_en_compte_destinataire">🖐️ Compte Destinataire</option>
                   <option value="port_en_compte">💼 Compte (ancien)</option>
@@ -5694,6 +5882,13 @@ export default function ParcelsTab() {
                     // Mettre à jour le colis
                     await updateParcel(parcel.id, updates)
 
+                    // ⚡ Mise à jour locale pour affichage temps réel
+                    setLocalParcelUpdates(prev => ({
+                      ...prev,
+                      [parcel.id]: { ...prev[parcel.id], ...updates }
+                    }))
+                    setForceUpdateCounter(c => c + 1)
+
                     // Fermer le modal
                     setQuickEditModal({
                       open: false,
@@ -5768,6 +5963,14 @@ export default function ParcelsTab() {
                   onClick={async () => {
                     try {
                       await updateParcel(codDocumentModal.parcelId!, { codDocumentStatus: key })
+
+                      // ⚡ Mise à jour locale pour affichage temps réel
+                      setLocalParcelUpdates(prev => ({
+                        ...prev,
+                        [codDocumentModal.parcelId!]: { ...prev[codDocumentModal.parcelId!], codDocumentStatus: key }
+                      }))
+                      setForceUpdateCounter(c => c + 1)
+
                       setCodDocumentModal({ open: false, parcelId: null, currentStatus: null, serviceType: null })
                     } catch (err) {
                       console.error('Erreur mise à jour statut document:', err)
@@ -5791,6 +5994,14 @@ export default function ParcelsTab() {
                 onClick={async () => {
                   try {
                     await updateParcel(codDocumentModal.parcelId!, { codDocumentStatus: deleteField() })
+
+                    // ⚡ Mise à jour locale pour affichage temps réel
+                    setLocalParcelUpdates(prev => ({
+                      ...prev,
+                      [codDocumentModal.parcelId!]: { ...prev[codDocumentModal.parcelId!], codDocumentStatus: null }
+                    }))
+                    setForceUpdateCounter(c => c + 1)
+
                     setCodDocumentModal({ open: false, parcelId: null, currentStatus: null, serviceType: null })
                   } catch (err) {
                     console.error('Erreur suppression statut:', err)
@@ -5912,7 +6123,19 @@ export default function ParcelsTab() {
                   Annuler
                 </button>
                 <button
-                  onClick={handleSaveCodAmount}
+                  onClick={async () => {
+                    await handleSaveCodAmount()
+
+                    // ⚡ Mise à jour locale pour affichage temps réel
+                    if (codEditModal?.parcel?.id) {
+                      const newAmount = parseFloat(codEditModal.value)
+                      setLocalParcelUpdates(prev => ({
+                        ...prev,
+                        [codEditModal.parcel.id]: { ...prev[codEditModal.parcel.id], codAmount: newAmount }
+                      }))
+                      setForceUpdateCounter(c => c + 1)
+                    }
+                  }}
                   disabled={codEditModal.loading}
                   className="flex-1 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition disabled:opacity-50"
                 >

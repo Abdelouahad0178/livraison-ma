@@ -305,11 +305,21 @@ export async function updateParcelStatus(parcelId: string, status: string, extra
   const parcelRef = doc(db, 'parcels', parcelId)
 
   // Créer historyEntry avant la transaction pour qu'il soit accessible après
-  const historyEntry = {
+  // ⚠️ IMPORTANT: Filtrer deleteField() car il ne peut pas être dans arrayUnion()
+  const historyEntry: Record<string, any> = {
     status,
     timestamp: new Date().toISOString(),
-    ...extra
   }
+  // Copier seulement les valeurs qui ne sont pas deleteField()
+  Object.keys(extra).forEach(key => {
+    const value = extra[key]
+    // deleteField() retourne un objet spécial, pas une valeur normale
+    if (value && typeof value === 'object' && '_methodName' in value) {
+      // C'est un deleteField(), on ne l'ajoute PAS à l'historique
+      return
+    }
+    historyEntry[key] = value
+  })
 
   // 🔒 Transaction pour éviter race conditions sur circuit retour
   await runTransaction(db, async tx => {

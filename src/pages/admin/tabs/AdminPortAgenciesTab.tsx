@@ -748,8 +748,8 @@ export default function AdminPortAgenciesTab({
       return sum + (versementsByCity[stat.city] || 0)
     }, 0)
 
-    // 💵 Total Port (dans les cartes) = Port Dû + Port Payé + Port Dû Chèque - Versements
-    const totalPortCartes = Math.max(0, totaux.portPaye + totaux.portDu + totaux.portDuCheque - totalVersements)
+    // 💵 Total Port (dans les cartes) = Port Dû + Port Payé + Port Dû Chèque
+    const totalPortCartes = totaux.portPaye + totaux.portDu + totaux.portDuCheque
 
     return {
       portPaye: Math.round(totaux.portPaye * 100) / 100,
