@@ -712,7 +712,7 @@ export default function AdminPortAgenciesTab({
       totalPort: Math.round(totalPortCartes * 100) / 100,
       nbExpeditions: totaux.nbExpeditions,
     }
-  }, [filteredStats, versementsByCity])
+  }, [filteredStats])
 
   const hasActiveFilter = selectedCity !== 'all' || portTypeFilter !== 'all' || datePreset !== 'all' || directionFilter !== 'all' || (directionFilter === 'received' && originCityFilter !== 'all')
 
