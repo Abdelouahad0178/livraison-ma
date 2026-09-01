@@ -1004,6 +1004,18 @@ export default function ParcelsTab() {
                               📞 {parcel.receiver.tel}
                             </div>
                           )}
+                          <div className="flex items-center gap-2 mt-1">
+                            {parcel.codAmount > 0 && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-xs font-bold">
+                                💰 COD: {parcel.codAmount} DH
+                              </span>
+                            )}
+                            {parcel.price > 0 && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-orange-100 text-orange-700 rounded text-xs font-bold">
+                                📮 Port: {parcel.price} DH
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </div>
 
