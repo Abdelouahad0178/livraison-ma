@@ -4,7 +4,6 @@ import { CITIES } from '../../../firebase/constants'
 import { collection, query, orderBy, limit, onSnapshot, startAfter, getDocs, where, Timestamp } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
 import { getOperationalDayRange } from '../../../config/operationalDay'
-import { subscribeAdminTransfers } from '../../../firebase/caisse'
 import AdminCaisseView from '../components/AdminCaisseView'
 
 interface Props {
@@ -69,9 +68,6 @@ export default function AdminPortAgenciesTab({
   const [periodWarning, setPeriodWarning] = useState<string | null>(null)
   const [periodDays, setPeriodDays] = useState<number>(0)
   const [invalidDatesWarning, setInvalidDatesWarning] = useState(false)
-
-  // État versements admin
-  const [adminTransfers, setAdminTransfers] = useState<any[]>([])
 
   // 📊 FONCTIONS UTILITAIRES - Système de filtrage robuste
 
@@ -141,18 +137,6 @@ export default function AdminPortAgenciesTab({
       setOriginCityFilter('all')
     }
   }, [directionFilter])
-
-  // 💰 Charger tous les versements admin
-  useEffect(() => {
-    const unsub = subscribeAdminTransfers(
-      (data: any[]) => {
-        console.log('📊 Versements admin chargés:', data.length, data)
-        setAdminTransfers(data)
-      },
-      (err) => console.error('❌ Erreur chargement versements admin:', err)
-    )
-    return () => unsub()
-  }, [])
 
   // ⚡ Chargement optimisé avec VALIDATION DE PÉRIODE et BATCHES
   useEffect(() => {
@@ -230,13 +214,12 @@ export default function AdminPortAgenciesTab({
         toDate = new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1000)
       }
     } else if (datePreset === 'all') {
-      // 📅 PÉRIODE PAR DÉFAUT : 10 derniers jours (SANS le jour présent)
-      // Cela assure un chargement rapide au démarrage tout en affichant des données récentes
+      // 📅 PÉRIODE PAR DÉFAUT : 10 derniers jours, EN INCLUANT aujourd'hui
+      // Cela assure un chargement rapide au démarrage tout en affichant les données du jour
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      const yesterday = new Date(today.getTime() - 1 * 24 * 60 * 60 * 1000) // Hier à 00:00
-      fromDate = new Date(yesterday.getTime() - 9 * 24 * 60 * 60 * 1000) // 10 jours avant hier
-      toDate = new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1000) // Hier à 23:59:59
-      console.warn('📅 datePreset="all" → Chargement des 10 derniers jours (sans aujourd\'hui) par défaut')
+      fromDate = new Date(today.getTime() - 9 * 24 * 60 * 60 * 1000) // 10 jours avant aujourd'hui (inclus)
+      toDate = new Date(now) // Maintenant (inclut les colis créés aujourd'hui)
+      console.warn('📅 datePreset="all" → Chargement des 10 derniers jours (aujourd\'hui inclus) par défaut')
     }
 
     // 📊 VALIDATION DE PÉRIODE et CHARGEMENT PAR BATCHES
@@ -522,32 +505,6 @@ export default function AdminPortAgenciesTab({
     })
   }, [liveParcels, datePreset, dateFrom, dateTo, operationalDay])
 
-  // 💰 Calculer les versements confirmés par ville
-  const versementsByCity = useMemo(() => {
-    const byCity: Record<string, number> = {}
-
-    // Initialiser toutes les villes à 0
-    CITIES.forEach(city => {
-      byCity[city] = 0
-    })
-
-    // Calculer le total des versements confirmés par ville
-    const confirmedTransfers = adminTransfers.filter((t: any) => t.status === 'confirmed')
-    console.log('💰 Versements confirmés:', confirmedTransfers.length, confirmedTransfers)
-
-    confirmedTransfers.forEach((t: any) => {
-      const city = t.city
-      const amount = parseFloat(t.amount) || 0
-      if (city && byCity[city] !== undefined) {
-        byCity[city] += amount
-        console.log(`  → ${city}: +${amount} DH (total: ${byCity[city]} DH)`)
-      }
-    })
-
-    console.log('💰 Versements par ville:', byCity)
-    return byCity
-  }, [adminTransfers])
-
   // ✅ Calculer les statistiques par agence
   // Mode theoretical = tous les ports (actuel)
   // Mode physical = argent réellement collecté en caisse
@@ -706,7 +663,7 @@ export default function AdminPortAgenciesTab({
         totalPort: Math.round(totalPort * 100) / 100,
       }
     })
-  }, [filteredByDate, directionFilter, originCityFilter, viewMode, versementsByCity])
+  }, [filteredByDate, directionFilter, originCityFilter, viewMode])
 
   // Appliquer les filtres de ville et type de port
   const filteredStats = useMemo(() => {
@@ -742,11 +699,6 @@ export default function AdminPortAgenciesTab({
       enCompteDest: acc.enCompteDest + stat.enCompteDest,
       nbExpeditions: acc.nbExpeditions + stat.nbExpeditions,
     }), { portPaye: 0, portDu: 0, portDuCheque: 0, enCompteExp: 0, enCompteDest: 0, nbExpeditions: 0 })
-
-    // 💰 Calculer le total des versements pour les villes filtrées
-    const totalVersements = filteredStats.reduce((sum, stat) => {
-      return sum + (versementsByCity[stat.city] || 0)
-    }, 0)
 
     // 💵 Total Port (dans les cartes) = Port Dû + Port Payé + Port Dû Chèque
     const totalPortCartes = totaux.portPaye + totaux.portDu + totaux.portDuCheque
@@ -1579,8 +1531,10 @@ export default function AdminPortAgenciesTab({
           {hasActiveFilter && (
             <button
               onClick={() => {
-                setSearchCity('')
+                setSelectedCity('all')
                 setPortTypeFilter('all')
+                setDirectionFilter('all')
+                setOriginCityFilter('all')
                 setDatePreset('all')
               }}
               className="mt-4 px-4 py-2 bg-purple-600 hover:bg-purple-700 text-white rounded-lg font-medium transition-colors"
