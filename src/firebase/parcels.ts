@@ -1754,7 +1754,53 @@ export async function searchParcels(
         }
       }
 
-      // Test 4: Nom (expéditeur ou destinataire) - seulement si contient des lettres
+      // Test 4: Chèque ou Traite (C/c + montant ou T/t + montant)
+      if (/^[ct]/i.test(searchTerm)) {
+        const firstChar = searchTerm[0].toUpperCase()
+        const amount = searchTerm.substring(1).trim()
+
+        if (/^\d+(\.\d+)?$/.test(amount)) {
+          const numAmount = parseFloat(amount)
+
+          try {
+            // Pour chèque: serviceType = 'cheque' ET codAmount = numAmount
+            if (firstChar === 'C') {
+              const qCheque = query(
+                parcelsCol,
+                where('serviceType', '==', 'cheque'),
+                where('codAmount', '==', numAmount)
+              )
+              const snapCheque = await getDocs(qCheque)
+              for (const d of snapCheque.docs) {
+                if (!uniqueIds.has(d.id)) {
+                  uniqueIds.add(d.id)
+                  results.push({ id: d.id, ...d.data(), isArchived })
+                }
+              }
+            }
+
+            // Pour traite: serviceType = 'traite' ET codAmount = numAmount
+            if (firstChar === 'T') {
+              const qTraite = query(
+                parcelsCol,
+                where('serviceType', '==', 'traite'),
+                where('codAmount', '==', numAmount)
+              )
+              const snapTraite = await getDocs(qTraite)
+              for (const d of snapTraite.docs) {
+                if (!uniqueIds.has(d.id)) {
+                  uniqueIds.add(d.id)
+                  results.push({ id: d.id, ...d.data(), isArchived })
+                }
+              }
+            }
+          } catch (e) {
+            console.error('Erreur requête chèque/traite:', e)
+          }
+        }
+      }
+
+      // Test 5: Nom (expéditeur ou destinataire) - seulement si contient des lettres
       const nameLower = searchTerm.toLowerCase().trim()
       if (/[a-zA-Zà-ÿ]/.test(searchTerm)) {
         try {

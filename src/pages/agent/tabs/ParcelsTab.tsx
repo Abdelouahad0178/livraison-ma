@@ -768,7 +768,7 @@ export default function ParcelsTab() {
         {<div className="relative">
           <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-blue-500" />
           <input
-            placeholder="🔍 Rechercher par N° EXP, Nom, Téléphone, Ville | c+montant pour chèques (ex: c150)"
+            placeholder="🔍 Rechercher par N° EXP, Nom, Téléphone | C4500 (chèque) | T3000 (traite)"
             value={search}
             onChange={e => setSearch(e.target.value)}
             onKeyDown={e => {
