@@ -29,6 +29,14 @@ const PERIOD_LIMITS = {
   MAX_DOCS_DIRECT: 50000  // Limite documents en chargement direct
 }
 
+// ⚠️ IMPORTANT: le filtrage final (filteredByDate) se base sur `workDate` (jour d'opération,
+// 8H → 6H du lendemain) alors que la requête Firestore filtre sur `createdAt`. Un colis créé
+// à 2H du matin peut avoir un workDate = veille, donc un `createdAt` légèrement en dehors de la
+// plage demandée. On élargit donc la plage de requête Firestore d'une marge de sécurité pour
+// ne jamais perdre de colis à cause de ce décalage, tout en gardant la plage exacte pour
+// l'affichage (periodDays) et pour le filtrage précis côté frontend.
+const DATE_QUERY_BUFFER_MS = 24 * 60 * 60 * 1000 // 1 jour de marge de chaque côté
+
 export default function AdminPortAgenciesTab({
   datePreset,
   setDatePreset,
@@ -248,7 +256,10 @@ export default function AdminPortAgenciesTab({
         // Fonction de chargement asynchrone par batches
         const loadAllBatches = async () => {
           try {
-            const batches = splitPeriodIntoBatches(fromDate!, toDate!, PERIOD_LIMITS.BATCH_SIZE)
+            // 🛡️ Marge de sécurité pour compenser le décalage workDate vs createdAt
+            const bufferedFrom = new Date(fromDate!.getTime() - DATE_QUERY_BUFFER_MS)
+            const bufferedTo = new Date(toDate!.getTime() + DATE_QUERY_BUFFER_MS)
+            const batches = splitPeriodIntoBatches(bufferedFrom, bufferedTo, PERIOD_LIMITS.BATCH_SIZE)
             console.warn(`📦 ${batches.length} batches à charger`, batches)
 
             setBatchProgress({ current: 0, total: batches.length, percentage: 0 })
@@ -298,31 +309,33 @@ export default function AdminPortAgenciesTab({
     }
 
     // 📅 CHARGEMENT DIRECT (≤ 31 jours ou pas de filtre de date)
+    // 🛡️ Marge de sécurité (DATE_QUERY_BUFFER_MS) appliquée sur createdAt pour compenser
+    // le décalage possible avec workDate (le filtrage exact se fait ensuite dans filteredByDate)
     if (datePreset === 'today' && fromDate) {
-      const fromTimestamp = Timestamp.fromDate(fromDate)
+      const fromTimestamp = Timestamp.fromDate(new Date(fromDate.getTime() - DATE_QUERY_BUFFER_MS))
       queryConstraints = [
         where('createdAt', '>=', fromTimestamp),
         orderBy('createdAt', 'desc'),
         limit(effectivePageSize)
       ]
     } else if (datePreset === 'week' && fromDate) {
-      const fromTimestamp = Timestamp.fromDate(fromDate)
+      const fromTimestamp = Timestamp.fromDate(new Date(fromDate.getTime() - DATE_QUERY_BUFFER_MS))
       queryConstraints = [
         where('createdAt', '>=', fromTimestamp),
         orderBy('createdAt', 'desc'),
         limit(effectivePageSize)
       ]
     } else if (datePreset === 'month' && fromDate) {
-      const fromTimestamp = Timestamp.fromDate(fromDate)
+      const fromTimestamp = Timestamp.fromDate(new Date(fromDate.getTime() - DATE_QUERY_BUFFER_MS))
       queryConstraints = [
         where('createdAt', '>=', fromTimestamp),
         orderBy('createdAt', 'desc'),
         limit(effectivePageSize)
       ]
     } else if (datePreset === 'all' && fromDate && toDate) {
-      // 📅 Période par défaut (30 derniers jours) pour chargement initial rapide
-      const fromTimestamp = Timestamp.fromDate(fromDate)
-      const toTimestamp = Timestamp.fromDate(toDate)
+      // 📅 Période par défaut (10 derniers jours) pour chargement initial rapide
+      const fromTimestamp = Timestamp.fromDate(new Date(fromDate.getTime() - DATE_QUERY_BUFFER_MS))
+      const toTimestamp = Timestamp.fromDate(new Date(toDate.getTime() + DATE_QUERY_BUFFER_MS))
       queryConstraints = [
         where('createdAt', '>=', fromTimestamp),
         where('createdAt', '<=', toTimestamp),
@@ -330,8 +343,8 @@ export default function AdminPortAgenciesTab({
         limit(effectivePageSize)
       ]
     } else if (datePreset === 'operational' && fromDate && toDate) {
-      const fromTimestamp = Timestamp.fromDate(fromDate)
-      const toTimestamp = Timestamp.fromDate(toDate)
+      const fromTimestamp = Timestamp.fromDate(new Date(fromDate.getTime() - DATE_QUERY_BUFFER_MS))
+      const toTimestamp = Timestamp.fromDate(new Date(toDate.getTime() + DATE_QUERY_BUFFER_MS))
       queryConstraints = [
         where('createdAt', '>=', fromTimestamp),
         where('createdAt', '<=', toTimestamp),
@@ -339,8 +352,8 @@ export default function AdminPortAgenciesTab({
         limit(effectivePageSize)
       ]
     } else if (datePreset === 'custom' && fromDate && toDate) {
-      const fromTimestamp = Timestamp.fromDate(fromDate)
-      const toTimestamp = Timestamp.fromDate(toDate)
+      const fromTimestamp = Timestamp.fromDate(new Date(fromDate.getTime() - DATE_QUERY_BUFFER_MS))
+      const toTimestamp = Timestamp.fromDate(new Date(toDate.getTime() + DATE_QUERY_BUFFER_MS))
       queryConstraints = [
         where('createdAt', '>=', fromTimestamp),
         where('createdAt', '<=', toTimestamp),
@@ -494,9 +507,14 @@ export default function AdminPortAgenciesTab({
         const from = new Date(dateFrom + 'T00:00:00')
         const to = new Date(dateTo + 'T23:59:59')
 
-        // ⚠️ Validation: si dates invalides, ne pas filtrer
+        // ⚠️ Dates invalides (début > fin): repli sur les 10 derniers jours,
+        // exactement comme le fait le chargement Firestore dans ce cas, pour
+        // rester cohérent entre les données chargées et les données affichées.
         if (from > to) {
-          return true // Afficher tous les colis si dates invalides
+          const yesterday = new Date(today.getTime() - 1 * 24 * 60 * 60 * 1000)
+          const fallbackFrom = new Date(yesterday.getTime() - 9 * 24 * 60 * 60 * 1000)
+          const fallbackTo = new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1000)
+          return pDate >= fallbackFrom && pDate <= fallbackTo
         }
 
         return pDate >= from && pDate <= to
