@@ -194,6 +194,9 @@ export default function ParcelsTab() {
   // État pour afficher les expéditions livrées par d'autres agences
   const [showDeliveredByOthers, setShowDeliveredByOthers] = useState(false)
 
+  // 🔍 Filtre local par adresse
+  const [addressFilter, setAddressFilter] = useState('')
+
   // État pour gérer les colonnes visibles
   const [visibleColumns, setVisibleColumns] = useState({
     nexp: true, date: true, dateLivraison: true, statut: true, expediteur: true, telExp: true, villeExp: true,
@@ -428,19 +431,31 @@ export default function ParcelsTab() {
     }
 
     // Puis filtrer par recherche texte
-    if (!tableSearch) return filtered
-    const searchLower = tableSearch.toLowerCase()
-    return filtered.filter((p: any) => (
-      p.sender?.nic?.toLowerCase().includes(searchLower) ||
-      p.trackingId?.toLowerCase().includes(searchLower) ||
-      p.sender?.name?.toLowerCase().includes(searchLower) ||
-      p.receiver?.name?.toLowerCase().includes(searchLower) ||
-      p.sender?.tel?.toLowerCase().includes(searchLower) ||
-      p.receiver?.tel?.toLowerCase().includes(searchLower) ||
-      p.sender?.city?.toLowerCase().includes(searchLower) ||
-      p.receiver?.city?.toLowerCase().includes(searchLower) ||
-      p.receiver?.address?.toLowerCase().includes(searchLower)
-    ))
+    if (tableSearch) {
+      const searchLower = tableSearch.toLowerCase()
+      filtered = filtered.filter((p: any) => (
+        p.sender?.nic?.toLowerCase().includes(searchLower) ||
+        p.trackingId?.toLowerCase().includes(searchLower) ||
+        p.sender?.name?.toLowerCase().includes(searchLower) ||
+        p.receiver?.name?.toLowerCase().includes(searchLower) ||
+        p.sender?.tel?.toLowerCase().includes(searchLower) ||
+        p.receiver?.tel?.toLowerCase().includes(searchLower) ||
+        p.sender?.city?.toLowerCase().includes(searchLower) ||
+        p.receiver?.city?.toLowerCase().includes(searchLower) ||
+        p.receiver?.address?.toLowerCase().includes(searchLower)
+      ))
+    }
+
+    // 🔍 Filtre spécifique par adresse
+    if (addressFilter && addressFilter.trim() !== '') {
+      const addressLower = addressFilter.toLowerCase().trim()
+      filtered = filtered.filter((p: any) => {
+        const address = p.receiver?.address || ''
+        return address.toLowerCase().includes(addressLower)
+      })
+    }
+
+    return filtered
   }
 
   // ⭐ Fonctions de gestion des couleurs
@@ -2898,7 +2913,21 @@ export default function ParcelsTab() {
                       )}
                       {visibleColumns.telDest && <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Tél Dest.</th>}
                       {visibleColumns.villeDest && <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Ville Dest.</th>}
-                      {visibleColumns.adresse && <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">Adresse</th>}
+                      {visibleColumns.adresse && (
+                        <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-pink-400/30 bg-pink-600/30">
+                          <div className="flex flex-col gap-1">
+                            <span>Adresse</span>
+                            <input
+                              type="text"
+                              placeholder="Filtrer..."
+                              value={addressFilter}
+                              onChange={e => setAddressFilter(e.target.value)}
+                              onClick={e => e.stopPropagation()}
+                              className="px-2 py-1 text-xs border border-pink-300 rounded bg-white text-gray-900 placeholder-gray-500 focus:ring-1 focus:ring-pink-500 focus:border-pink-500"
+                            />
+                          </div>
+                        </th>
+                      )}
                       {visibleColumns.service && <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30">Service</th>}
                       {visibleColumns.nbColis && <th className="px-4 py-4 text-center font-bold whitespace-nowrap border-r border-purple-400/30">Nb Colis</th>}
                       {visibleColumns.poids && <th className="px-4 py-4 text-center font-bold whitespace-nowrap border-r border-purple-400/30">Poids</th>}
