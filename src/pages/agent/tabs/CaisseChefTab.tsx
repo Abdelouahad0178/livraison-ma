@@ -29,6 +29,30 @@ interface DelayReason {
   label: string
 }
 
+// 🗓️ Conversion robuste vers Date (Timestamp Firestore, Date, string, number)
+const toDate = (v: any): Date | null => {
+  if (v === null || v === undefined || v === '') return null
+  if (typeof v?.toDate === 'function') return v.toDate()
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v
+  if (typeof v?.seconds === 'number') return new Date(v.seconds * 1000)
+  if (typeof v === 'number') return new Date(v)
+  if (typeof v === 'string') {
+    // workDate est au format 'YYYY-MM-DD' : on le place à midi LOCAL pour
+    // éviter le décalage UTC qui ferait basculer la date d'un jour.
+    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return new Date(v + 'T12:00:00')
+    const d = new Date(v)
+    return isNaN(d.getTime()) ? null : d
+  }
+  return null
+}
+
+// 🗓️ Date de référence UNIQUE utilisée pour TOUS les filtres de date de cet onglet
+// (dataSource ET filteredDrivers doivent utiliser exactement la même logique).
+// Priorité : deliveryAssignedAt → workDate → createdAt
+// Les expéditions NON assignées sont donc incluses via workDate/createdAt.
+const parcelFilterDate = (p: any): Date | null =>
+  toDate(p?.deliveryAssignedAt) ?? toDate(p?.workDate) ?? toDate(p?.createdAt)
+
 const DELAY_REASONS: DelayReason[] = [
   { key: 'client_absent', label: 'Client absent' },
   { key: 'adresse_incorrecte', label: 'Adresse incorrecte' },
@@ -297,6 +321,20 @@ export default function CaisseChefTab() {
     return (!isNaN(num) && isFinite(num) && num >= 0) ? num : 0
   }
 
+  // 🗓️ Prédicat de filtrage de date PARTAGÉ (dataSource + filteredDrivers)
+  // Presets supportés (identiques à DateFilter.tsx) :
+  // 'all' | 'today' | 'week' | 'month' | 'day' | 'custom'
+  const passesDateFilter = useMemo(() => {
+    return (p: any): boolean => {
+      if (!datePreset || datePreset === 'all') return true
+      const d = parcelFilterDate(p)
+      // Aucune date exploitable → on inclut par défaut (ne pas masquer l'expédition)
+      if (!d) return true
+      // On délègue à filterByDate pour garantir une logique 100% identique
+      return filterByDate([d], datePreset, dateFrom, dateTo, (x) => x).length > 0
+    }
+  }, [datePreset, dateFrom, dateTo])
+
   // 🔄 Source de données fusionnée (allDisplayParcels + searchResults + cache modifications)
   const dataSource = useMemo(() => {
     console.log('📊 [dataSource] RECALCUL:', {
@@ -316,15 +354,8 @@ export default function CaisseChefTab() {
     // 🗓️ Appliquer le filtre de date (sauf en mode recherche)
     // ⚠️ IMPORTANT: Si datePreset === 'all', ne PAS filtrer pour afficher TOUTES les données disponibles
     if (searchResults === null && datePreset !== 'all') {
-      const parcelDate = (p: any) => {
-        // Utiliser workDate si disponible, sinon createdAt
-        if (p.workDate?.toDate) return p.workDate.toDate()
-        if (p.workDate) return new Date(p.workDate)
-        if (p.createdAt?.toDate) return p.createdAt.toDate()
-        if (p.createdAt) return new Date(p.createdAt)
-        return new Date(0)
-      }
-      source = filterByDate(source, datePreset, dateFrom, dateTo, parcelDate)
+      // ✅ Même prédicat que filteredDrivers (deliveryAssignedAt → workDate → createdAt)
+      source = source.filter(passesDateFilter)
       console.log(`🗓️ Après filtre de date '${datePreset}': ${source.length} expéditions`)
     }
 
@@ -341,7 +372,7 @@ export default function CaisseChefTab() {
     })
 
     return source
-  }, [allDisplayParcels, searchResults, modifiedParcels, datePreset, dateFrom, dateTo])
+  }, [allDisplayParcels, searchResults, modifiedParcels, datePreset, dateFrom, dateTo, passesDateFilter])
 
   // Calcul des statistiques
   const stats = useMemo(() => {
@@ -798,100 +829,11 @@ export default function CaisseChefTab() {
         // 🔍 En mode recherche, montrer TOUS les résultats sans filtre de date
         if (inSearchMode) return true
 
-        // Si le filtre est 'all', montrer TOUS les colis
-        if (datePreset === 'all') return true
-
-        // Pour "Non assigné", utiliser la date de création au lieu de la date d'assignation
-        if (driver.id === 'unknown') {
-          // Si le filtre est 'all', inclure TOUS les parcels de "Non assigné"
-          if (datePreset === 'all') return true
-
-          if (!p.createdAt) return false
-          const createdDate = p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt)
-
-          const now = new Date()
-          const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-
-          if (datePreset === 'today') {
-            const tomorrow = new Date(today)
-            tomorrow.setDate(tomorrow.getDate() + 1)
-            return createdDate >= today && createdDate < tomorrow
-          }
-
-          if (datePreset === 'week') {
-            const sevenDaysAgo = new Date(today)
-            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
-            return createdDate >= sevenDaysAgo && createdDate < new Date(today.getTime() + 24 * 60 * 60 * 1000)
-          }
-
-          if (datePreset === 'month') {
-            const firstDay = new Date(now.getFullYear(), now.getMonth(), 1)
-            const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59)
-            return createdDate >= firstDay && createdDate <= lastDay
-          }
-
-          if (datePreset === 'custom' && dateFrom && dateTo) {
-            const from = new Date(dateFrom)
-            const to = new Date(dateTo)
-            to.setHours(23, 59, 59, 999)
-            return createdDate >= from && createdDate <= to
-          }
-
-          return true
-        }
-
-        // 🔧 AMÉLIORATION: Utiliser deliveryAssignedAt si disponible, sinon workDate/createdAt
-        // Cela permet d'inclure les expéditions non encore assignées
-        let filterDate: Date
-        if (p.deliveryAssignedAt) {
-          filterDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
-        } else if (p.workDate) {
-          filterDate = p.workDate?.toDate ? p.workDate.toDate() : new Date(p.workDate)
-        } else if (p.createdAt) {
-          filterDate = p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt)
-        } else {
-          // Si aucune date disponible, inclure par défaut
-          return true
-        }
-
-        // Logique de filtrage directe selon le preset
-        const now = new Date()
-        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-
-        if (datePreset === 'today') {
-          const tomorrow = new Date(today)
-          tomorrow.setDate(tomorrow.getDate() + 1)
-          return filterDate >= today && filterDate < tomorrow
-        }
-
-        if (datePreset === 'week') {
-          const sevenDaysAgo = new Date(today)
-          sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
-          return filterDate >= sevenDaysAgo && filterDate < new Date(today.getTime() + 24 * 60 * 60 * 1000)
-        }
-
-        if (datePreset === 'month') {
-          const firstDay = new Date(now.getFullYear(), now.getMonth(), 1)
-          const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59)
-          return filterDate >= firstDay && filterDate <= lastDay
-        }
-
-        if (datePreset === 'custom' && dateFrom && dateTo) {
-          const from = new Date(dateFrom)
-          const to = new Date(dateTo)
-          to.setHours(23, 59, 59, 999)
-          return filterDate >= from && filterDate <= to
-        }
-
-        if (datePreset === 'day' && dateFrom) {
-          const selectedDay = new Date(dateFrom)
-          const nextDay = new Date(selectedDay)
-          nextDay.setDate(nextDay.getDate() + 1)
-          return filterDate >= selectedDay && filterDate < nextDay
-        }
-
-        // Par défaut, inclure si aucun filtre spécifique
-        return true
+        // ✅ EXACTEMENT le même prédicat que dataSource :
+        // deliveryAssignedAt → workDate → createdAt, presets 'all'/'today'/
+        // 'week'/'month'/'day'/'custom'. Les expéditions non assignées
+        // (livreur "Non assigné") passent donc par workDate/createdAt.
+        return passesDateFilter(p)
       })
 
       // Appliquer le filtre de statut de collecte
@@ -1002,7 +944,7 @@ export default function CaisseChefTab() {
     })
 
     return result
-  }, [drivers, driverFilter, statusFilter, searchQuery, searchResults, datePreset, dateFrom, dateTo, agentEntries])
+  }, [drivers, driverFilter, statusFilter, searchQuery, searchResults, datePreset, dateFrom, dateTo, passesDateFilter, agentEntries])
 
   // Stats filtrées (selon filtres actifs)
   const filteredStats = useMemo(() => {
