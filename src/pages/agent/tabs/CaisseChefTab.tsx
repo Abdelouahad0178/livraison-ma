@@ -456,6 +456,14 @@ export default function CaisseChefTab() {
       return modified ? { ...p, ...modified } : p
     })
 
+    alert(
+      '🔍 DEBUG MERGE\n\n' +
+      `allDisplayParcels: ${base.length}\n` +
+      `extraCollectedParcels: ${extra.length}\n` +
+      `Total merged: ${merged.length}\n` +
+      `Après modif: ${allParcels.length}`
+    )
+
     // Ports dus collectés (TOUS, sans filtre date, SAUF retours)
     const portsCollectes = allParcels.filter((p: any) => {
       const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
