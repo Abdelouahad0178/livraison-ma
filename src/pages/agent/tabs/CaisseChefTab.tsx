@@ -314,7 +314,8 @@ export default function CaisseChefTab() {
       : [...(allDisplayParcels || [])]
 
     // 🗓️ Appliquer le filtre de date (sauf en mode recherche)
-    if (searchResults === null) {
+    // ⚠️ IMPORTANT: Si datePreset === 'all', ne PAS filtrer pour afficher TOUTES les données disponibles
+    if (searchResults === null && datePreset !== 'all') {
       const parcelDate = (p: any) => {
         // Utiliser workDate si disponible, sinon createdAt
         if (p.workDate?.toDate) return p.workDate.toDate()
@@ -324,6 +325,7 @@ export default function CaisseChefTab() {
         return new Date(0)
       }
       source = filterByDate(source, datePreset, dateFrom, dateTo, parcelDate)
+      console.log(`🗓️ Après filtre de date '${datePreset}': ${source.length} expéditions`)
     }
 
     // Appliquer le cache des modifications locales EN DERNIER (priorité absolue)
