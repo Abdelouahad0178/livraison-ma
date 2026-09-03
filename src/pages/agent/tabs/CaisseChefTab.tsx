@@ -1624,18 +1624,7 @@ export default function CaisseChefTab() {
       return isPortDu && isCollected && !isReturned && !isAlreadyTransferred
     })
 
-    // 2. À collecter
-    const aCollecter = driver.parcels.filter((p: any) => {
-      const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
-      const isReturned = p.returnedAt || p.wasReturned || p.status === 'Retourné'
-      const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
-      if (!isPortDu || isReturned || isCollected) return false
-
-      // En cours de livraison ou livré mais pas encore collecté
-      return p.status === 'Arrivé en agence' || p.status === 'En cours de livraison' || p.status === 'Livré'
-    })
-
-    // 3. En retard
+    // 3. En retard (calculer en premier pour exclure de "à collecter")
     const enRetard = driver.parcels.filter((p: any) => {
       const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
       if (!isPortDu) return false
@@ -1645,6 +1634,23 @@ export default function CaisseChefTab() {
 
       const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
       return assignedDate < oneDayAgo
+    })
+
+    // Créer un Set des IDs en retard pour exclure rapidement
+    const enRetardIds = new Set(enRetard.map(p => p.id))
+
+    // 2. À collecter (EXCLURE les expéditions en retard)
+    const aCollecter = driver.parcels.filter((p: any) => {
+      // Exclure si déjà dans "en retard"
+      if (enRetardIds.has(p.id)) return false
+
+      const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
+      const isReturned = p.returnedAt || p.wasReturned || p.status === 'Retourné'
+      const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
+      if (!isPortDu || isReturned || isCollected) return false
+
+      // En cours de livraison ou livré mais pas encore collecté
+      return p.status === 'Arrivé en agence' || p.status === 'En cours de livraison' || p.status === 'Livré'
     })
 
     // Appeler la fonction d'impression

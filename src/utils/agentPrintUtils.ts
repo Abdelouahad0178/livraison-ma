@@ -1077,10 +1077,7 @@ export function printVersementParcels(
   }
 }
 
-
-// ?????????????????????????????????????????????????????????????????????????????
-// IMPRESSION DES EXPÉDITIONS PAR LIVREUR (Simple - Tableau avec titre)
-// ?????????????????????????????????????????????????????????????????????????????
+// IMPRESSION DES EXPEDITIONS PAR LIVREUR (Simple - Tableau avec titre)
 
 export function printDriverParcels(
   driverName: string,
@@ -1102,7 +1099,7 @@ export function printDriverParcels(
   const montantGeneral = montantCollectes + montantACollecter + montantEnRetard
 
   const formatDate = (timestamp: any) => {
-    if (!timestamp) return '—'
+    if (!timestamp) return 'â€”'
     const date = timestamp?.toDate ? timestamp.toDate() : new Date(timestamp)
     return date.toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: 'numeric' })
   }
@@ -1114,14 +1111,14 @@ export function printDriverParcels(
       return `
         <tr style="background-color: ${rowBg}">
           <td style="text-align:center;font-weight:bold;color:#555;padding:4px">${startIndex + i + 1}</td>
-          <td style="font-family:monospace;font-weight:bold;color:#1e40af;font-size:8pt;padding:4px">${p.trackingId || p.sender?.nic || '—'}</td>
+          <td style="font-family:monospace;font-weight:bold;color:#1e40af;font-size:8pt;padding:4px">${p.trackingId || p.sender?.nic || 'â€”'}</td>
           <td style="font-size:7.5pt;color:#6b7280;padding:4px">${formatDate(p.createdAt)}</td>
-          <td style="font-size:7.5pt;font-weight:bold;padding:4px">${p.sender?.nic || '—'}</td>
+          <td style="font-size:7.5pt;font-weight:bold;padding:4px">${p.sender?.nic || 'â€”'}</td>
           <td style="font-size:8pt;padding:4px">
-            <strong>${p.receiver?.name || '—'}</strong>
+            <strong>${p.receiver?.name || 'â€”'}</strong>
             <div style="color:#9ca3af;font-size:7pt">${p.receiver?.tel || ''}</div>
           </td>
-          <td style="font-size:8pt;color:#6b7280;padding:4px">${p.receiver?.city || '—'}</td>
+          <td style="font-size:8pt;color:#6b7280;padding:4px">${p.receiver?.city || 'â€”'}</td>
           <td style="text-align:right;font-weight:bold;color:#111;font-size:8pt;padding:4px">${price.toFixed(2)} DH</td>
           <td style="text-align:center;font-size:7.5pt;padding:4px">${p.status || 'En cours'}</td>
         </tr>
@@ -1133,7 +1130,8 @@ export function printDriverParcels(
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Expéditions - ${driverName}</title>
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <title>Expeditions - ${driverName}</title>
   <style>
     @page { margin: 15mm; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -1188,26 +1186,26 @@ export function printDriverParcels(
   </style>
 </head>
 <body>
-  <h1>Expéditions - ${driverName}</h1>
+  <h1>Expeditions - ${driverName}</h1>
 
   <table>
     <thead>
       <tr>
-        <th style="width:30px">N°</th>
-        <th>N° EXP</th>
-        <th style="width:70px">Date</th>
-        <th style="width:60px">Client</th>
-        <th>Destinataire</th>
-        <th style="width:80px">Ville</th>
-        <th style="width:70px">Montant</th>
-        <th style="width:80px">Statut</th>
+        <th style="width:30px">NÂ°</th>
+        <th>NÂ° EXP</th>
+        <th style="width:70px">DATE</th>
+        <th style="width:60px">CLIENT</th>
+        <th>DESTINATAIRE</th>
+        <th style="width:80px">VILLE</th>
+        <th style="width:70px">MONTANT</th>
+        <th style="width:80px">STATUT</th>
       </tr>
     </thead>
     <tbody>
       ${totalCollectes > 0 ? `
         <tr>
           <td colspan="8" class="section-header collectes">
-            ? PORTS COLLECTÉS (${totalCollectes}) - ${montantCollectes.toFixed(2)} DH
+            [OK] PORTS COLLECTES (${totalCollectes}) - ${montantCollectes.toFixed(2)} DH
           </td>
         </tr>
         ${generateRows(collectes, 0)}
@@ -1215,7 +1213,7 @@ export function printDriverParcels(
       ${totalACollecter > 0 ? `
         <tr>
           <td colspan="8" class="section-header acollecter">
-            ?? À COLLECTER (${totalACollecter}) - ${montantACollecter.toFixed(2)} DH
+            [ ] A COLLECTER (${totalACollecter}) - ${montantACollecter.toFixed(2)} DH
           </td>
         </tr>
         ${generateRows(aCollecter, totalCollectes)}
@@ -1223,13 +1221,13 @@ export function printDriverParcels(
       ${totalEnRetard > 0 ? `
         <tr>
           <td colspan="8" class="section-header retard">
-            ?? EN RETARD (${totalEnRetard}) - ${montantEnRetard.toFixed(2)} DH
+            [!] EN RETARD (${totalEnRetard}) - ${montantEnRetard.toFixed(2)} DH
           </td>
         </tr>
         ${generateRows(enRetard, totalCollectes + totalACollecter)}
       ` : ''}
       <tr class="total-row">
-        <td colspan="6" style="text-align:right;padding:8px">TOTAL GÉNÉRAL</td>
+        <td colspan="6" style="text-align:right;padding:8px">TOTAL GENERAL</td>
         <td style="padding:8px">${montantGeneral.toFixed(2)} DH</td>
         <td style="padding:8px">${totalGeneral} exp.</td>
       </tr>
