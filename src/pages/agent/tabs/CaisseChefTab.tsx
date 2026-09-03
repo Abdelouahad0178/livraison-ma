@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect } from 'react'
 import {
   Wallet, TrendingUp, AlertCircle, User, Package, Clock, Check, X,
-  Send, Eye, ChevronDown, ChevronUp, Search, Calendar, Filter, Banknote
+  Send, Eye, ChevronDown, ChevronUp, Search, Calendar, Filter, Banknote, Printer
 } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import DateFilter from '../DateFilter'
@@ -21,6 +21,7 @@ import { updateParcel, searchParcels } from '../../../firebase/parcels'
 import { collection, query, where, onSnapshot, documentId } from 'firebase/firestore'
 import { db } from '../../../firebase/db'
 import { shouldTriggerSearch } from '../../../utils/searchUtils'
+import { printPortsCollectes } from '../../../utils/agentPrintUtils'
 
 // Types
 interface DelayReason {
@@ -541,6 +542,27 @@ export default function CaisseChefTab() {
     // Solde = ce que le livreur a DONNÉ au chef (collectés + reçus)
     return totalCollecte + totalPortsPayesRecus
   }, [allDisplayParcels, driverFilter, profile?.city, modifiedParcels, extraCollectedParcels])
+
+  // Liste des ports collectés pour impression
+  const portsCollectesForPrint = useMemo(() => {
+    const base = allDisplayParcels || []
+    const extra = Object.values(extraCollectedParcels)
+    const merged = [...base, ...extra]
+
+    const allParcels = merged.map((p: any) => {
+      const modified = modifiedParcels[p.id]
+      return modified ? { ...p, ...modified } : p
+    })
+
+    return allParcels.filter((p: any) => {
+      const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
+      return p.portType === 'port_du' &&
+        !p.portPayeMethod &&
+        (p.portStatus === 'collected' || p.portStatus === 'received') &&
+        p.destinationCity === profile?.city &&
+        !isReturned
+    })
+  }, [allDisplayParcels, profile?.city, modifiedParcels, extraCollectedParcels])
 
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
@@ -1643,6 +1665,19 @@ export default function CaisseChefTab() {
           </div>
         </div>
       </div>
+
+      {/* Bouton d'impression des ports collectés */}
+      {portsCollectesForPrint.length > 0 && (
+        <div className="flex justify-end mb-3">
+          <button
+            onClick={() => printPortsCollectes(portsCollectesForPrint, profile)}
+            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-semibold text-sm shadow-md"
+          >
+            <Printer className="w-4 h-4" />
+            Imprimer Ports Collectés ({portsCollectesForPrint.length})
+          </button>
+        </div>
+      )}
 
       {/* Onglets */}
       <div className="bg-white border border-gray-200 rounded-xl p-1 flex gap-1">
