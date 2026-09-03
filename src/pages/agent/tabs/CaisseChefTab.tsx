@@ -492,6 +492,18 @@ export default function CaisseChefTab() {
       .filter((t: any) => t.status === 'confirmed')
       .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0)
 
+    console.log('💰 [soldeCaisseGlobal] Calcul:', {
+      portsCollectes: portsCollectes.length,
+      totalCollecte,
+      portsPayesRecus: portsPayesRecus.length,
+      montantRecus,
+      adminTransfers: adminTransfers.length,
+      versementsConfirmes: adminTransfers.filter((t: any) => t.status === 'confirmed').length,
+      totalVerse,
+      soldeCalcule: totalCollecte + montantRecus - totalVerse,
+      soldeFinal: Math.max(0, totalCollecte + montantRecus - totalVerse)
+    })
+
     return Math.max(0, totalCollecte + montantRecus - totalVerse)
   }, [allDisplayParcels, profile?.city, adminTransfers, modifiedParcels, extraCollectedParcels])
 
