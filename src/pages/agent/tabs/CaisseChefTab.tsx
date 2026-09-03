@@ -818,13 +818,13 @@ export default function CaisseChefTab() {
             return createdDate >= today && createdDate < tomorrow
           }
 
-          if (datePreset === '7days') {
+          if (datePreset === 'week') {
             const sevenDaysAgo = new Date(today)
             sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
             return createdDate >= sevenDaysAgo && createdDate < new Date(today.getTime() + 24 * 60 * 60 * 1000)
           }
 
-          if (datePreset === 'thisMonth') {
+          if (datePreset === 'month') {
             const firstDay = new Date(now.getFullYear(), now.getMonth(), 1)
             const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59)
             return createdDate >= firstDay && createdDate <= lastDay
@@ -864,13 +864,13 @@ export default function CaisseChefTab() {
           return filterDate >= today && filterDate < tomorrow
         }
 
-        if (datePreset === '7days') {
+        if (datePreset === 'week') {
           const sevenDaysAgo = new Date(today)
           sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
           return filterDate >= sevenDaysAgo && filterDate < new Date(today.getTime() + 24 * 60 * 60 * 1000)
         }
 
-        if (datePreset === 'thisMonth') {
+        if (datePreset === 'month') {
           const firstDay = new Date(now.getFullYear(), now.getMonth(), 1)
           const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59)
           return filterDate >= firstDay && filterDate <= lastDay
