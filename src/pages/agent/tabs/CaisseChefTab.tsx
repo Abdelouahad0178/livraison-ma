@@ -1025,6 +1025,18 @@ export default function CaisseChefTab() {
       soldeAVerser = montantCollectes
     }
 
+    console.log('📊 [filteredStats] Calcul:', {
+      inSearchMode,
+      driverFilter,
+      filteredDriversCount: filteredDrivers.length,
+      totalCollectes,
+      montantCollectes,
+      montantPortsPayesRecus,
+      adminTransfers: adminTransfers.length,
+      versementsConfirmes: inSearchMode ? 'N/A (mode recherche)' : adminTransfers.filter((t: any) => t.status === 'confirmed').length,
+      soldeAVerser
+    })
+
     return {
       portsACollecterCount: totalACollecter,
       portsACollecterMontant: montantACollecter,
