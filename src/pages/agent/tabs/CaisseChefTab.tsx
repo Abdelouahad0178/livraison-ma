@@ -328,6 +328,15 @@ export default function CaisseChefTab() {
   const passesDateFilter = useMemo(() => {
     return (p: any): boolean => {
       if (!datePreset || datePreset === 'all') return true
+
+      // 🚨 EXCEPTION: Les ports dûs NON COLLECTÉS sont TOUJOURS affichés (peu importe leur date)
+      // Cela permet de voir les expéditions anciennes qui attendent encore d'être collectées
+      const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
+      const isNotCollected = !p.portStatus // portStatus est défini quand le port est collecté
+      if (isPortDu && isNotCollected) {
+        return true // Toujours afficher les ports dûs non collectés
+      }
+
       const d = parcelFilterDate(p)
       // Aucune date exploitable → on inclut par défaut (ne pas masquer l'expédition)
       if (!d) return true
