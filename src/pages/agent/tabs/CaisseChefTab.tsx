@@ -492,19 +492,23 @@ export default function CaisseChefTab() {
       .filter((t: any) => t.status === 'confirmed')
       .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0)
 
-    console.log('💰 [soldeCaisseGlobal] Calcul:', {
-      portsCollectes: portsCollectes.length,
-      totalCollecte,
-      portsPayesRecus: portsPayesRecus.length,
-      montantRecus,
-      adminTransfers: adminTransfers.length,
-      versementsConfirmes: adminTransfers.filter((t: any) => t.status === 'confirmed').length,
-      totalVerse,
-      soldeCalcule: totalCollecte + montantRecus - totalVerse,
-      soldeFinal: Math.max(0, totalCollecte + montantRecus - totalVerse)
-    })
+    const soldeCalcule = totalCollecte + montantRecus - totalVerse
+    const soldeFinal = Math.max(0, soldeCalcule)
 
-    return Math.max(0, totalCollecte + montantRecus - totalVerse)
+    alert(
+      '💰 SOLDE GLOBAL:\n\n' +
+      `Ports collectés: ${portsCollectes.length}\n` +
+      `Total collecté: ${totalCollecte.toFixed(2)} DH\n\n` +
+      `Ports payés reçus: ${portsPayesRecus.length}\n` +
+      `Montant reçu: ${montantRecus.toFixed(2)} DH\n\n` +
+      `Versements confirmés: ${adminTransfers.filter((t: any) => t.status === 'confirmed').length}\n` +
+      `Total versé: ${totalVerse.toFixed(2)} DH\n\n` +
+      `CALCUL: ${totalCollecte.toFixed(2)} + ${montantRecus.toFixed(2)} - ${totalVerse.toFixed(2)}\n` +
+      `= ${soldeCalcule.toFixed(2)} DH\n\n` +
+      `SOLDE FINAL: ${soldeFinal.toFixed(2)} DH`
+    )
+
+    return soldeFinal
   }, [allDisplayParcels, profile?.city, adminTransfers, modifiedParcels, extraCollectedParcels])
 
   // 💰 Solde d'un livreur spécifique (sans filtre de date)
@@ -1025,17 +1029,20 @@ export default function CaisseChefTab() {
       soldeAVerser = montantCollectes
     }
 
-    console.log('📊 [filteredStats] Calcul:', {
-      inSearchMode,
-      driverFilter,
-      filteredDriversCount: filteredDrivers.length,
-      totalCollectes,
-      montantCollectes,
-      montantPortsPayesRecus,
-      adminTransfers: adminTransfers.length,
-      versementsConfirmes: inSearchMode ? 'N/A (mode recherche)' : adminTransfers.filter((t: any) => t.status === 'confirmed').length,
-      soldeAVerser
-    })
+    alert(
+      '📊 FILTERED STATS:\n\n' +
+      `Mode: ${inSearchMode ? 'RECHERCHE' : 'NORMAL'}\n` +
+      `Filtre livreur: ${driverFilter === 'all' ? 'TOUS' : driverFilter}\n` +
+      `Drivers filtrés: ${filteredDrivers.length}\n\n` +
+      `Ports collectés: ${totalCollectes}\n` +
+      `Montant collecté: ${montantCollectes.toFixed(2)} DH\n\n` +
+      `Ports payés reçus: ${totalPortsPayesRecus}\n` +
+      `Montant reçu: ${montantPortsPayesRecus.toFixed(2)} DH\n\n` +
+      (inSearchMode
+        ? 'Versements: NON DÉDUITS (mode recherche)\n'
+        : `Versements confirmés: ${adminTransfers.filter((t: any) => t.status === 'confirmed').length}\n`) +
+      `\nSOLDE À VERSER: ${soldeAVerser.toFixed(2)} DH`
+    )
 
     return {
       portsACollecterCount: totalACollecter,
