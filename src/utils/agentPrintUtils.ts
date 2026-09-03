@@ -1108,17 +1108,21 @@ export function printDriverParcels(
     return parcels.map((p, i) => {
       const rowBg = (startIndex + i) % 2 === 0 ? '#ffffff' : '#f9fafb'
       const price = parseFloat(p.price) || 0
+      const codAmount = parseFloat(p.codAmount) || 0
+      const nbColis = p.nbColis || 1
       return `
         <tr style="background-color: ${rowBg}">
           <td style="text-align:center;font-weight:bold;color:#555;padding:4px">${startIndex + i + 1}</td>
-          <td style="font-family:monospace;font-weight:bold;color:#1e40af;font-size:8pt;padding:4px">${p.trackingId || p.sender?.nic || '—'}</td>
+          <td style="font-family:monospace;font-weight:bold;color:#1e40af;font-size:7.5pt;padding:4px">${p.sender?.nic || '—'}</td>
           <td style="font-size:7.5pt;color:#6b7280;padding:4px">${formatDate(p.createdAt)}</td>
-          <td style="font-size:7.5pt;font-weight:bold;padding:4px">${p.sender?.nic || '—'}</td>
+          <td style="font-size:8pt;font-weight:bold;padding:4px">${p.sender?.name || '—'}</td>
           <td style="font-size:8pt;padding:4px">
             <strong>${p.receiver?.name || '—'}</strong>
             <div style="color:#9ca3af;font-size:7pt">${p.receiver?.tel || ''}</div>
           </td>
           <td style="font-size:8pt;color:#6b7280;padding:4px">${p.receiver?.city || '—'}</td>
+          <td style="text-align:center;font-weight:bold;color:#111;font-size:8pt;padding:4px">${nbColis}</td>
+          <td style="text-align:right;font-weight:bold;color:#059669;font-size:8pt;padding:4px">${codAmount > 0 ? codAmount.toFixed(2) + ' DH' : '—'}</td>
           <td style="text-align:right;font-weight:bold;color:#111;font-size:8pt;padding:4px">${price.toFixed(2)} DH</td>
           <td style="text-align:center;font-size:7.5pt;padding:4px">${p.status || 'En cours'}</td>
         </tr>
@@ -1192,19 +1196,21 @@ export function printDriverParcels(
     <thead>
       <tr>
         <th style="width:30px">N°</th>
-        <th>N° EXP</th>
+        <th style="width:60px">NIC</th>
         <th style="width:70px">DATE</th>
-        <th style="width:60px">CLIENT</th>
+        <th>CLIENT</th>
         <th>DESTINATAIRE</th>
         <th style="width:80px">VILLE</th>
-        <th style="width:70px">MONTANT</th>
+        <th style="width:40px">COLIS</th>
+        <th style="width:70px">COD</th>
+        <th style="width:70px">PORT</th>
         <th style="width:80px">STATUT</th>
       </tr>
     </thead>
     <tbody>
       ${totalCollectes > 0 ? `
         <tr>
-          <td colspan="8" class="section-header collectes">
+          <td colspan="10" class="section-header collectes">
             [OK] PORTS COLLECTES (${totalCollectes}) - ${montantCollectes.toFixed(2)} DH
           </td>
         </tr>
@@ -1212,7 +1218,7 @@ export function printDriverParcels(
       ` : ''}
       ${totalACollecter > 0 ? `
         <tr>
-          <td colspan="8" class="section-header acollecter">
+          <td colspan="10" class="section-header acollecter">
             [ ] A COLLECTER (${totalACollecter}) - ${montantACollecter.toFixed(2)} DH
           </td>
         </tr>
@@ -1220,14 +1226,14 @@ export function printDriverParcels(
       ` : ''}
       ${totalEnRetard > 0 ? `
         <tr>
-          <td colspan="8" class="section-header retard">
+          <td colspan="10" class="section-header retard">
             [!] EN RETARD (${totalEnRetard}) - ${montantEnRetard.toFixed(2)} DH
           </td>
         </tr>
         ${generateRows(enRetard, totalCollectes + totalACollecter)}
       ` : ''}
       <tr class="total-row">
-        <td colspan="6" style="text-align:right;padding:8px">TOTAL GENERAL</td>
+        <td colspan="8" style="text-align:right;padding:8px">TOTAL GENERAL</td>
         <td style="padding:8px">${montantGeneral.toFixed(2)} DH</td>
         <td style="padding:8px">${totalGeneral} exp.</td>
       </tr>
