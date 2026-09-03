@@ -1281,16 +1281,23 @@ export async function createAdminTransferFromAgent(data: any) {
     createdAt: serverTimestamp(),
   })
 
-  // Marquer les COD inclus dans ce transfert pour éviter double versement
+  // Marquer les parcels (COD + Ports dûs collectés) inclus dans ce transfert
   if (codParcelIds.length > 0) {
     const batch = writeBatch(db)
     codParcelIds.forEach((id: string) => {
       batch.update(doc(db, 'parcels', id), {
+        // Pour COD: adminTransferred (ancien système)
         adminTransferred: true,
         adminTransferId: transferRef.id,
         adminTransferAt: now,
         adminTransferBy: data.fromName || '',
         adminTransferById: data.fromId || null,
+        // Pour Ports dûs collectés: portAdminTransferred (nouveau système)
+        portAdminTransferred: true,
+        portAdminTransferId: transferRef.id,
+        portAdminTransferAt: now,
+        portAdminTransferBy: data.fromName || '',
+        portAdminTransferById: data.fromId || null,
       })
     })
     await batch.commit()

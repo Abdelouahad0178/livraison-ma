@@ -456,22 +456,16 @@ export default function CaisseChefTab() {
       return modified ? { ...p, ...modified } : p
     })
 
-    alert(
-      '🔍 DEBUG MERGE\n\n' +
-      `allDisplayParcels: ${base.length}\n` +
-      `extraCollectedParcels: ${extra.length}\n` +
-      `Total merged: ${merged.length}\n` +
-      `Après modif: ${allParcels.length}`
-    )
-
-    // Ports dus collectés (TOUS, sans filtre date, SAUF retours)
+    // Ports dus collectés (TOUS, sans filtre date, SAUF retours et SAUF déjà versés)
     const portsCollectes = allParcels.filter((p: any) => {
       const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
+      const isAlreadyTransferred = p.portAdminTransferred || p.adminTransferred // Déjà versé à l'admin
       const passes = p.portType === 'port_du' &&
         !p.portPayeMethod &&
         (p.portStatus === 'collected' || p.portStatus === 'received') &&
         p.destinationCity === profile?.city &&
-        !isReturned
+        !isReturned &&
+        !isAlreadyTransferred // 🆕 Exclure les ports déjà versés
 
       return passes
     })
@@ -500,19 +494,7 @@ export default function CaisseChefTab() {
       .filter((t: any) => t.status === 'confirmed')
       .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0)
 
-    const soldeCalcule = totalCollecte + montantRecus - totalVerse
-    const soldeFinal = Math.max(0, soldeCalcule)
-
-    alert(
-      '💰 SOLDE GLOBAL\n\n' +
-      `Collectés: ${portsCollectes.length} (${totalCollecte} DH)\n` +
-      `Reçus: ${portsPayesRecus.length} (${montantRecus} DH)\n` +
-      `Versés: ${adminTransfers.filter((t: any) => t.status === 'confirmed').length} (${totalVerse} DH)\n\n` +
-      `${totalCollecte} + ${montantRecus} - ${totalVerse} = ${soldeCalcule}\n\n` +
-      `SOLDE: ${soldeFinal} DH`
-    )
-
-    return soldeFinal
+    return Math.max(0, totalCollecte + montantRecus - totalVerse)
   }, [allDisplayParcels, profile?.city, adminTransfers, modifiedParcels, extraCollectedParcels])
 
   // 💰 Solde d'un livreur spécifique (sans filtre de date)
@@ -581,11 +563,13 @@ export default function CaisseChefTab() {
 
     return allParcels.filter((p: any) => {
       const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
+      const isAlreadyTransferred = p.portAdminTransferred || p.adminTransferred
       return p.portType === 'port_du' &&
         !p.portPayeMethod &&
         (p.portStatus === 'collected' || p.portStatus === 'received') &&
         p.destinationCity === profile?.city &&
-        !isReturned
+        !isReturned &&
+        !isAlreadyTransferred // 🆕 Exclure les ports déjà versés
     })
   }, [allDisplayParcels, profile?.city, modifiedParcels, extraCollectedParcels])
 
@@ -716,10 +700,11 @@ export default function CaisseChefTab() {
         return p.status === 'Arrivé en agence' || p.status === 'En cours de livraison' || p.status === 'Livré'
       })
 
-      // Ports collectés = ceux avec portStatus 'collected' ou 'received', SAUF retours
+      // Ports collectés = ceux avec portStatus 'collected' ou 'received', SAUF retours et déjà versés
       const portsCollectes = portDuParcels.filter((p: any) => {
         const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
-        return (p.portStatus === 'collected' || p.portStatus === 'received') && !isReturned
+        const isAlreadyTransferred = p.portAdminTransferred || p.adminTransferred
+        return (p.portStatus === 'collected' || p.portStatus === 'received') && !isReturned && !isAlreadyTransferred
       })
 
       // 🆕 Ports payés par ce livreur (afficher TOUS, compter uniquement ramassage local)
@@ -948,10 +933,11 @@ export default function CaisseChefTab() {
         return p.status === 'Arrivé en agence' || p.status === 'En cours de livraison' || p.status === 'Livré'
       })
 
-      // Ports collectés = ceux avec portStatus 'collected' ou 'received', SAUF retours
+      // Ports collectés = ceux avec portStatus 'collected' ou 'received', SAUF retours et déjà versés
       const portsCollectes = filteredPortDuParcels.filter((p: any) => {
         const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
-        return (p.portStatus === 'collected' || p.portStatus === 'received') && !isReturned
+        const isAlreadyTransferred = p.portAdminTransferred || p.adminTransferred
+        return (p.portStatus === 'collected' || p.portStatus === 'received') && !isReturned && !isAlreadyTransferred
       })
 
       const now = new Date()
@@ -1032,16 +1018,6 @@ export default function CaisseChefTab() {
       // Un livreur spécifique : SEULEMENT ses collectés (pas les reçus)
       soldeAVerser = montantCollectes
     }
-
-    alert(
-      '📊 STATS AFFICHÉES\n\n' +
-      `Mode: ${inSearchMode ? 'RECHERCHE' : 'NORMAL'}\n` +
-      `Livreur: ${driverFilter === 'all' ? 'TOUS' : 'UN'}\n\n` +
-      `Collectés: ${totalCollectes} (${montantCollectes} DH)\n` +
-      `Reçus: ${totalPortsPayesRecus} (${montantPortsPayesRecus} DH)\n` +
-      (inSearchMode ? 'Versements: NON DÉDUITS\n' : '') +
-      `\nSOLDE: ${soldeAVerser} DH`
-    )
 
     return {
       portsACollecterCount: totalACollecter,
@@ -1559,7 +1535,12 @@ export default function CaisseChefTab() {
       return
     }
 
-    if (!confirm(`Créer un versement de ${fmtAmt(amount)} DH vers l'admin ?`)) {
+    // 🆕 Récupérer les IDs des ports collectés non encore versés
+    const portsCollectesIds = portsCollectesForPrint
+      .filter((p: any) => !p.portAdminTransferred && !p.adminTransferred)
+      .map((p: any) => p.id)
+
+    if (!confirm(`Créer un versement de ${fmtAmt(amount)} DH vers l'admin ?\n\n${portsCollectesIds.length} port(s) collecté(s) seront marqués comme versés.`)) {
       return
     }
 
@@ -1571,7 +1552,7 @@ export default function CaisseChefTab() {
         city: profile?.city,
         amount,
         note: versementForm.note || 'Versement caisse chef d\'agence',
-        codParcelIds: [], // Pas de COD pour les versements de port dû
+        codParcelIds: portsCollectesIds, // IDs des ports collectés à marquer comme versés
       })
 
       setVersementForm({ amount: '', note: '' })
