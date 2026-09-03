@@ -1731,8 +1731,9 @@ export default function CaisseChefTab() {
             <Printer className="w-4 h-4" />
             Imprimer Ports Collectés{' '}
             {datePreset === 'today' && 'Aujourd\'hui '}
-            {datePreset === 'week' && 'Cette Semaine '}
+            {datePreset === 'week' && '(7 jours) '}
             {datePreset === 'month' && 'Ce Mois '}
+            {datePreset === 'day' && dateFrom && `(${dateFrom}) `}
             {datePreset === 'custom' && dateFrom && dateTo && `(${dateFrom} → ${dateTo}) `}
             ({portsCollectesForPrint.length})
           </button>
