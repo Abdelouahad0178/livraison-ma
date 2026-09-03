@@ -395,23 +395,15 @@ export default function CaisseChefTab() {
       sum + safeParseAmount(p.price), 0
     )
 
-    const totalVerse = adminTransfers
-      .filter((t: any) => t.status === 'confirmed')
-      .reduce((sum: number, t: any) => sum + safeParseAmount(t.amount), 0)
-
     // 🆕 Solde disponible = Ports dus collectés + Ports payés reçus (argent physiquement chez le chef)
+    // ⚠️ PAS besoin de déduire totalVerse car les ports versés sont DÉJÀ EXCLUS de portsCollectes
     const montantPortsPayesARecevoir = portsPayesARecevoir.reduce((sum: number, p: any) =>
       sum + safeParseAmount(p.price), 0
     )
     const montantPortsPayesRecus = portsPayesRecus.reduce((sum: number, p: any) =>
       sum + safeParseAmount(p.price), 0
     )
-    // 🔍 En mode recherche, ne PAS déduire les versements admin (ils ne
-    // correspondent pas forcément aux colis recherchés) : on montre
-    // uniquement l'argent collecté/reçu des résultats de recherche.
-    const soldeAVerser = searchResults !== null
-      ? Math.max(0, totalCollecte + montantPortsPayesRecus)
-      : Math.max(0, totalCollecte + montantPortsPayesRecus - totalVerse)
+    const soldeAVerser = Math.max(0, totalCollecte + montantPortsPayesRecus)
 
     console.log('✅ [stats] RÉSULTAT:', {
       'portsACollecter': portsACollecter.length,
@@ -421,8 +413,7 @@ export default function CaisseChefTab() {
       'totalCollecte': totalCollecte,
       'montantPortsPayesARecevoir': montantPortsPayesARecevoir,
       'montantPortsPayesRecus': montantPortsPayesRecus,
-      'totalVerse': totalVerse,
-      'soldeAVerser (Collectés + Reçus - Versé)': soldeAVerser
+      'soldeAVerser (Collectés + Reçus)': soldeAVerser
     })
 
     return {
@@ -1005,18 +996,12 @@ export default function CaisseChefTab() {
     let soldeAVerser
 
     if (driverFilter === 'all') {
-      // Tous les livreurs : collectés + reçus [- versements si hors recherche]
-      soldeAVerser = montantCollectes + montantPortsPayesRecus
-      if (!inSearchMode) {
-        const totalVerse = adminTransfers
-          .filter((t: any) => t.status === 'confirmed')
-          .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0)
-        soldeAVerser = soldeAVerser - totalVerse
-      }
-      soldeAVerser = Math.max(0, soldeAVerser)
+      // Tous les livreurs : collectés + reçus
+      // ⚠️ PAS besoin de déduire totalVerse car les ports versés sont DÉJÀ EXCLUS du calcul
+      soldeAVerser = Math.max(0, montantCollectes + montantPortsPayesRecus)
     } else {
       // Un livreur spécifique : SEULEMENT ses collectés (pas les reçus)
-      soldeAVerser = montantCollectes
+      soldeAVerser = Math.max(0, montantCollectes)
     }
 
     return {
