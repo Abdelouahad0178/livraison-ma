@@ -21,7 +21,7 @@ import { updateParcel, searchParcels } from '../../../firebase/parcels'
 import { collection, query, where, onSnapshot, documentId } from 'firebase/firestore'
 import { db } from '../../../firebase/db'
 import { shouldTriggerSearch } from '../../../utils/searchUtils'
-import { printPortsCollectes } from '../../../utils/agentPrintUtils'
+import { printPortsCollectes, printVersementParcels } from '../../../utils/agentPrintUtils'
 
 // Types
 interface DelayReason {
@@ -1565,6 +1565,47 @@ export default function CaisseChefTab() {
     }
   }
 
+  // Imprimer les expéditions d'un versement
+  const handlePrintVersement = async (transfer: any) => {
+    if (!transfer.codParcelIds || transfer.codParcelIds.length === 0) {
+      alert('⚠️ Aucune expédition associée à ce versement')
+      return
+    }
+
+    try {
+      // Récupérer les expéditions depuis Firestore
+      const parcelIds = transfer.codParcelIds
+      const parcels: any[] = []
+
+      // Firestore limite à 30 éléments par requête "in", donc on divise en chunks
+      const chunkSize = 30
+      for (let i = 0; i < parcelIds.length; i += chunkSize) {
+        const chunk = parcelIds.slice(i, i + chunkSize)
+        const q = query(collection(db, 'parcels'), where(documentId(), 'in', chunk))
+        const snapshot = await new Promise<any>((resolve) => {
+          const unsubscribe = onSnapshot(q, (snap) => {
+            unsubscribe()
+            resolve(snap)
+          })
+        })
+        snapshot.forEach((doc: any) => {
+          parcels.push({ id: doc.id, ...doc.data() })
+        })
+      }
+
+      if (parcels.length === 0) {
+        alert('⚠️ Aucune expédition trouvée')
+        return
+      }
+
+      // Imprimer les expéditions
+      printVersementParcels(parcels, transfer, profile)
+    } catch (err: any) {
+      console.error('Erreur récupération expéditions:', err)
+      alert(`❌ Erreur: ${err.message}`)
+    }
+  }
+
   // Versements filtrés par date
   const filteredVersements = useMemo(() => {
     const versementDate = (v: any) => {
@@ -2510,6 +2551,7 @@ export default function CaisseChefTab() {
                       <th className="text-left py-3 px-4 font-semibold text-gray-700">Note</th>
                       <th className="text-center py-3 px-4 font-semibold text-gray-700">Status</th>
                       <th className="text-left py-3 px-4 font-semibold text-gray-700">Validé par</th>
+                      <th className="text-center py-3 px-4 font-semibold text-gray-700">Actions</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2544,6 +2586,16 @@ export default function CaisseChefTab() {
                           </td>
                           <td className="py-3 px-4 text-gray-600">
                             {transfer.confirmedBy || '-'}
+                          </td>
+                          <td className="py-3 px-4 text-center">
+                            <button
+                              onClick={() => handlePrintVersement(transfer)}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-xs font-semibold"
+                              title="Imprimer les expéditions de ce versement"
+                            >
+                              <Printer className="w-3.5 h-3.5" />
+                              Imprimer
+                            </button>
                           </td>
                         </tr>
                       )

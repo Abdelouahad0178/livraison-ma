@@ -819,3 +819,260 @@ export function printPortsCollectes(
     win.document.close()
   }
 }
+
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+// IMPRESSION DES EXPÉDITIONS D'UN VERSEMENT
+// ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+export function printVersementParcels(
+  parcels: any[],
+  transfer: any,
+  profileData?: any
+): void {
+  if (!parcels.length) {
+    alert('Aucune expédition à imprimer pour ce versement')
+    return
+  }
+
+  const logoUrl = window.location.origin + '/LOGO.jpg'
+  const printDate = new Date().toLocaleDateString('fr-MA', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  })
+
+  const transferDate = transfer.createdAt?.toDate ?
+    transfer.createdAt.toDate().toLocaleDateString('fr-MA', {
+      day: '2-digit',
+      month: 'long',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+    }) : printDate
+
+  const totalParcels = parcels.length
+  const totalMontant = parcels.reduce((sum, p) => sum + (parseFloat(p.price) || 0), 0)
+
+  // Format functions for date and time
+  const formatDate = (timestamp: any) => {
+    if (!timestamp) return '—'
+    const date = timestamp?.toDate ? timestamp.toDate() : new Date(timestamp)
+    return date.toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: 'numeric' })
+  }
+
+  const formatTime = (timestamp: any) => {
+    if (!timestamp) return ''
+    const date = timestamp?.toDate ? timestamp.toDate() : new Date(timestamp)
+    return date.toLocaleTimeString('fr-MA', { hour: '2-digit', minute: '2-digit' })
+  }
+
+  // Generate table rows
+  const rows = parcels.map((p, i) => {
+    const rowBg = i % 2 === 0 ? '#ffffff' : '#eff6ff'
+    const price = parseFloat(p.price) || 0
+
+    return `
+      <tr style="background-color: ${rowBg}">
+        <td style="text-align:center;font-weight:bold;color:#555">${i + 1}</td>
+        <td style="font-family:monospace;font-weight:bold;color:#1d4ed8;font-size:7.5pt">${p.trackingId || p.sender?.nic || '—'}</td>
+        <td style="font-size:7pt;color:#6b7280">${formatDate(p.createdAt)}</td>
+        <td>
+          <strong style="font-size:8pt">${p.sender?.name || '—'}</strong><br>
+          <span style="color:#6b7280;font-size:6.5pt">${p.sender?.city || ''}</span>
+        </td>
+        <td>
+          <strong style="font-size:8pt">${p.receiver?.name || '—'}</strong><br>
+          <span style="color:#6b7280;font-size:6.5pt">${p.receiver?.city || ''} · ${p.receiver?.tel || ''}</span>
+        </td>
+        <td style="text-align:center;font-size:7.5pt">${p.deliveryDriverName || '—'}</td>
+        <td style="text-align:right;font-weight:bold;color:#1d4ed8;font-size:8pt">
+          ${price.toFixed(2)} DH
+        </td>
+        <td style="text-align:center;font-size:6.5pt;color:#6b7280">
+          ${p.portCollectedBy || '—'}<br>
+          <span style="font-size:6pt">${formatDate(p.portCollectedAt)} ${formatTime(p.portCollectedAt)}</span>
+        </td>
+        <td style="text-align:center">
+          <span style="background:#dbeafe;color:#1d4ed8;padding:2px 6px;border-radius:4px;font-size:7pt;font-weight:bold">
+            ✓ Versé
+          </span>
+        </td>
+      </tr>
+    `
+  }).join('')
+
+  // HTML with totals at top and bottom in blue theme
+  const html = `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Versement-${transfer.id?.substring(0, 8) || 'N/A'}-${printDate.replace(/ /g, '-')}</title>
+  <style>
+    @page { size: A4 landscape; margin: 12mm; }
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-sizing: border-box; }
+    body { font-family: Arial, sans-serif; font-size: 8pt; color: #111; margin: 0; padding: 0; }
+
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 16px;
+      border: 2px solid #1e40af;
+      margin-bottom: 12px;
+      background: linear-gradient(to bottom, #ffffff, #eff6ff);
+    }
+    .header-left img { height: 38px; object-fit: contain; margin-bottom: 4px; }
+    .header-left .company { font-size: 10pt; font-weight: bold; color: #1e40af; letter-spacing: 0.5px; }
+    .header-left .contact { font-size: 7pt; color: #374151; margin-top: 2px; }
+    .header-center { text-align: center; }
+    .header-center .title { font-size: 16pt; font-weight: bold; color: #1e40af; letter-spacing: 1px; }
+    .header-center .subtitle { font-size: 8.5pt; color: #374151; margin-top: 4px; }
+    .header-right { text-align: right; font-size: 8.5pt; }
+    .header-right div { margin: 2px 0; }
+
+    .versement-info {
+      display: flex;
+      justify-content: space-between;
+      padding: 10px 16px;
+      background: #f0f9ff;
+      border: 2px solid #1e40af;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      font-size: 9pt;
+    }
+    .versement-info .left { color: #374151; }
+    .versement-info .right { text-align: right; }
+    .versement-info strong { color: #1e40af; font-weight: bold; }
+
+    .summary-top {
+      display: flex;
+      justify-content: space-around;
+      padding: 10px;
+      background: #dbeafe;
+      border: 2px solid #1e40af;
+      border-radius: 8px;
+      margin-bottom: 12px;
+      font-weight: bold;
+      color: #1e40af;
+      font-size: 11pt;
+    }
+
+    table { border-collapse: collapse; width: 100%; margin-bottom: 12px; }
+    th {
+      border: 1px solid #1e40af;
+      padding: 5px 6px;
+      background-color: #1e40af;
+      color: #fff;
+      font-weight: bold;
+      font-size: 7.5pt;
+      text-align: left;
+      white-space: nowrap;
+    }
+    td {
+      border: 1px solid #d1d5db;
+      padding: 4px 6px;
+      vertical-align: middle;
+      font-size: 7.5pt;
+    }
+
+    .totals-row {
+      background-color: #dbeafe !important;
+      font-weight: bold;
+      border-top: 2px solid #1e40af;
+    }
+
+    .summary-bottom {
+      display: flex;
+      justify-content: space-around;
+      padding: 10px;
+      background: #dbeafe;
+      border: 2px solid #1e40af;
+      border-radius: 8px;
+      margin-top: 12px;
+      font-weight: bold;
+      color: #1e40af;
+      font-size: 11pt;
+    }
+
+    @media print { button { display: none; } }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="header-left">
+      <img src="${logoUrl}" onerror="this.style.display='none'">
+      <div class="company">BG EXPRESS</div>
+      <div class="contact">N°19, Rue 5, Hay Tissir2 – Casablanca</div>
+      <div class="contact">☎ 0522 62 92 89 | 📱 0661 97 86 12</div>
+      <div class="contact">✉ bgexpress2019@gmail.com</div>
+    </div>
+    <div class="header-center">
+      <div class="title">DÉTAIL DU VERSEMENT</div>
+      <div class="subtitle">Expéditions incluses dans le transfert admin</div>
+    </div>
+    <div class="header-right">
+      <div><strong>Imprimé le :</strong> ${printDate}</div>
+      <div><strong>Agent :</strong> ${profileData?.name || '—'}</div>
+      <div><strong>Agence :</strong> ${profileData?.city || '—'}</div>
+    </div>
+  </div>
+
+  <div class="versement-info">
+    <div class="left">
+      <div><strong>Date versement :</strong> ${transferDate}</div>
+      <div><strong>Note :</strong> ${transfer.note || '—'}</div>
+    </div>
+    <div class="right">
+      <div><strong>Montant versé :</strong> ${(transfer.amount || 0).toFixed(2)} DH</div>
+      <div><strong>Statut :</strong> ${transfer.status === 'confirmed' ? '✓ Validé' : transfer.status === 'rejected' ? '✗ Rejeté' : '⏳ En attente'}</div>
+    </div>
+  </div>
+
+  <div class="summary-top">
+    <div>📦 Total Expéditions : ${totalParcels}</div>
+    <div>💰 Montant Total Ports : ${totalMontant.toFixed(2)} DH</div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:24px;text-align:center">N°</th>
+        <th style="width:90px">N° Tracking</th>
+        <th style="width:60px">Date Création</th>
+        <th style="width:110px">Expéditeur</th>
+        <th style="width:130px">Destinataire</th>
+        <th style="width:90px;text-align:center">Livreur</th>
+        <th style="width:70px;text-align:right">Port Dû</th>
+        <th style="width:100px;text-align:center">Collecté Par</th>
+        <th style="width:70px;text-align:center">Statut</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows}
+      <tr class="totals-row">
+        <td colspan="6" style="text-align:right;padding:8px;color:#1e40af;font-size:9pt">
+          TOTAL — ${totalParcels} expédition${totalParcels > 1 ? 's' : ''}
+        </td>
+        <td style="text-align:right;color:#1e40af;font-size:9pt;font-weight:bold">
+          ${totalMontant.toFixed(2)} DH
+        </td>
+        <td colspan="2"></td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="summary-bottom">
+    <div>📦 Total : ${totalParcels} expédition${totalParcels > 1 ? 's' : ''}</div>
+    <div>💰 Montant Total : ${totalMontant.toFixed(2)} DH</div>
+  </div>
+
+  <script>window.onload = function(){ window.print(); }<\/script>
+</body>
+</html>`
+
+  const win = window.open('', '_blank', 'width=1200,height=800')
+  if (win) {
+    win.document.write(html)
+    win.document.close()
+  }
+}
