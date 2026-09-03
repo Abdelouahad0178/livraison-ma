@@ -480,12 +480,8 @@ export default function CaisseChefTab() {
       sum + safeParseAmount(p.price), 0
     )
 
-    // ✅ Déduire les versements confirmés du solde
-    const totalVerse = adminTransfers
-      .filter((t: any) => t.status === 'confirmed')
-      .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0)
-
-    return Math.max(0, totalCollecte + montantRecus - totalVerse)
+    // ⚠️ PAS besoin de déduire totalVerse car les ports versés sont DÉJÀ EXCLUS de portsCollectes
+    return Math.max(0, totalCollecte + montantRecus)
   }, [allDisplayParcels, profile?.city, adminTransfers, modifiedParcels, extraCollectedParcels])
 
   // 💰 Solde d'un livreur spécifique (sans filtre de date)
@@ -503,15 +499,17 @@ export default function CaisseChefTab() {
       return modified ? { ...p, ...modified } : p
     })
 
-    // Ports dus collectés par CE livreur (TOUS, sans filtre date, SAUF retours)
+    // Ports dus collectés par CE livreur (TOUS, sans filtre date, SAUF retours et SAUF déjà versés)
     const portsCollectes = allParcels.filter((p: any) => {
       const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
+      const isAlreadyTransferred = p.portAdminTransferred || p.adminTransferred
       return p.portType === 'port_du' &&
         !p.portPayeMethod &&
         (p.portStatus === 'collected' || p.portStatus === 'received') &&
         p.destinationCity === profile?.city &&
         p.deliveryDriverId === driverFilter &&
-        !isReturned
+        !isReturned &&
+        !isAlreadyTransferred
     })
 
     // Ports payés REÇUS ramassés par CE livreur (TOUS, sans filtre date)
