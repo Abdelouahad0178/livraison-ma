@@ -1729,7 +1729,12 @@ export default function CaisseChefTab() {
             className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-semibold text-sm shadow-md"
           >
             <Printer className="w-4 h-4" />
-            Imprimer Ports Collectés ({portsCollectesForPrint.length})
+            Imprimer Ports Collectés{' '}
+            {datePreset === 'today' && 'Aujourd\'hui '}
+            {datePreset === 'week' && 'Cette Semaine '}
+            {datePreset === 'month' && 'Ce Mois '}
+            {datePreset === 'custom' && dateFrom && dateTo && `(${dateFrom} → ${dateTo}) `}
+            ({portsCollectesForPrint.length})
           </button>
         </div>
       )}
