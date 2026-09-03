@@ -553,9 +553,10 @@ export default function CaisseChefTab() {
     return totalCollecte + totalPortsPayesRecus
   }, [allDisplayParcels, driverFilter, profile?.city, modifiedParcels, extraCollectedParcels])
 
-  // Liste des ports collectés pour impression
+  // Liste des ports collectés pour impression (RESPECTE LES FILTRES DE DATE)
   const portsCollectesForPrint = useMemo(() => {
-    const base = allDisplayParcels || []
+    // ⚠️ Utiliser dataSource qui contient déjà les filtres de date appliqués
+    const base = dataSource || []
     const extra = Object.values(extraCollectedParcels)
     const merged = [...base, ...extra]
 
@@ -574,7 +575,7 @@ export default function CaisseChefTab() {
         !isReturned &&
         !isAlreadyTransferred // 🆕 Exclure les ports déjà versés
     })
-  }, [allDisplayParcels, profile?.city, modifiedParcels, extraCollectedParcels])
+  }, [dataSource, profile?.city, modifiedParcels, extraCollectedParcels])
 
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
