@@ -840,11 +840,19 @@ export default function CaisseChefTab() {
           return true
         }
 
-        // Si pas de date d'assignation, EXCLURE du filtre (ne pas inclure par défaut)
-        if (!p.deliveryAssignedAt) return false
-
-        // Convertir la date Firestore en Date JS
-        const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
+        // 🔧 AMÉLIORATION: Utiliser deliveryAssignedAt si disponible, sinon workDate/createdAt
+        // Cela permet d'inclure les expéditions non encore assignées
+        let filterDate: Date
+        if (p.deliveryAssignedAt) {
+          filterDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
+        } else if (p.workDate) {
+          filterDate = p.workDate?.toDate ? p.workDate.toDate() : new Date(p.workDate)
+        } else if (p.createdAt) {
+          filterDate = p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt)
+        } else {
+          // Si aucune date disponible, inclure par défaut
+          return true
+        }
 
         // Logique de filtrage directe selon le preset
         const now = new Date()
@@ -853,26 +861,33 @@ export default function CaisseChefTab() {
         if (datePreset === 'today') {
           const tomorrow = new Date(today)
           tomorrow.setDate(tomorrow.getDate() + 1)
-          return assignedDate >= today && assignedDate < tomorrow
+          return filterDate >= today && filterDate < tomorrow
         }
 
         if (datePreset === '7days') {
           const sevenDaysAgo = new Date(today)
           sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 6)
-          return assignedDate >= sevenDaysAgo && assignedDate < new Date(today.getTime() + 24 * 60 * 60 * 1000)
+          return filterDate >= sevenDaysAgo && filterDate < new Date(today.getTime() + 24 * 60 * 60 * 1000)
         }
 
         if (datePreset === 'thisMonth') {
           const firstDay = new Date(now.getFullYear(), now.getMonth(), 1)
           const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59)
-          return assignedDate >= firstDay && assignedDate <= lastDay
+          return filterDate >= firstDay && filterDate <= lastDay
         }
 
         if (datePreset === 'custom' && dateFrom && dateTo) {
           const from = new Date(dateFrom)
           const to = new Date(dateTo)
           to.setHours(23, 59, 59, 999)
-          return assignedDate >= from && assignedDate <= to
+          return filterDate >= from && filterDate <= to
+        }
+
+        if (datePreset === 'day' && dateFrom) {
+          const selectedDay = new Date(dateFrom)
+          const nextDay = new Date(selectedDay)
+          nextDay.setDate(nextDay.getDate() + 1)
+          return filterDate >= selectedDay && filterDate < nextDay
         }
 
         // Par défaut, inclure si aucun filtre spécifique
