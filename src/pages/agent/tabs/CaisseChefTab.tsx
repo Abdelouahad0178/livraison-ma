@@ -65,6 +65,9 @@ export default function CaisseChefTab() {
   // Cache local des modifications faites dans searchResults
   const [modifiedParcels, setModifiedParcels] = useState<Record<string, any>>({})
 
+  // 🗄️ Colis collectés en mode recherche qui ne sont pas dans allDisplayParcels (vieux colis > 30j)
+  const [extraCollectedParcels, setExtraCollectedParcels] = useState<Record<string, any>>({})
+
   // État livreurs
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set())
   const [delayModal, setDelayModal] = useState<any>(null)
@@ -244,12 +247,20 @@ export default function CaisseChefTab() {
 
   // Filtrer les résultats de recherche par statut de collecte
   const filteredSearchResults = useMemo(() => {
-    if (!searchResults || statusFilter === 'all') return searchResults
+    if (!searchResults) return searchResults
+
+    // 🔧 Appliquer modifiedParcels avant de filtrer
+    const resultsWithModifications = searchResults.map((p: any) => {
+      const modified = modifiedParcels[p.id]
+      return modified ? { ...p, ...modified } : p
+    })
+
+    if (statusFilter === 'all') return resultsWithModifications
 
     const now = new Date()
     const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
 
-    return searchResults.filter((p: any) => {
+    return resultsWithModifications.filter((p: any) => {
       const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
       const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
       const isInDelivery = p.status === 'En cours de livraison' || p.status === 'Livré'
@@ -271,7 +282,7 @@ export default function CaisseChefTab() {
           return true
       }
     })
-  }, [searchResults, statusFilter])
+  }, [searchResults, statusFilter, modifiedParcels])
 
   // 🔒 Fonction sécurisée pour parser les montants
   const safeParseAmount = (value: any): number => {
@@ -288,27 +299,12 @@ export default function CaisseChefTab() {
       'modifiedParcels': Object.keys(modifiedParcels).length
     })
 
-    // Commencer avec allDisplayParcels pour avoir TOUTES les expéditions (sans filtre de date)
-    let source = [...(allDisplayParcels || [])]
-
-    // Si en mode recherche, merger searchResults dans allDisplayParcels
-    if (searchResults && searchResults.length > 0) {
-      const parcelIds = new Set(source.map((p: any) => p.id))
-      const searchIds = new Set(searchResults.map((p: any) => p.id))
-
-      // Merger les expéditions existantes avec searchResults
-      source = source.map((p: any) => {
-        if (searchIds.has(p.id)) {
-          const srParcel = searchResults.find((sr: any) => sr.id === p.id)
-          return srParcel ? { ...srParcel, ...p } : p
-        }
-        return p
-      })
-
-      // Ajouter les expéditions de searchResults qui ne sont pas dans source
-      const additionalParcels = searchResults.filter((sr: any) => !parcelIds.has(sr.id))
-      source = [...source, ...additionalParcels]
-    }
+    // 🔍 En mode recherche, utiliser UNIQUEMENT searchResults (même si vide,
+    // pour ne pas retomber sur allDisplayParcels et fausser les stats)
+    // Sinon, utiliser allDisplayParcels
+    let source = searchResults !== null
+      ? [...searchResults]
+      : [...(allDisplayParcels || [])]
 
     // Appliquer le cache des modifications locales EN DERNIER (priorité absolue)
     // Cela garantit que les modifications utilisateur sont toujours visibles
@@ -404,7 +400,12 @@ export default function CaisseChefTab() {
     const montantPortsPayesRecus = portsPayesRecus.reduce((sum: number, p: any) =>
       sum + safeParseAmount(p.price), 0
     )
-    const soldeAVerser = Math.max(0, totalCollecte + montantPortsPayesRecus - totalVerse)
+    // 🔍 En mode recherche, ne PAS déduire les versements admin (ils ne
+    // correspondent pas forcément aux colis recherchés) : on montre
+    // uniquement l'argent collecté/reçu des résultats de recherche.
+    const soldeAVerser = searchResults !== null
+      ? Math.max(0, totalCollecte + montantPortsPayesRecus)
+      : Math.max(0, totalCollecte + montantPortsPayesRecus - totalVerse)
 
     console.log('✅ [stats] RÉSULTAT:', {
       'portsACollecter': portsACollecter.length,
@@ -432,21 +433,33 @@ export default function CaisseChefTab() {
       enRetardCount: enRetard.length,
       soldeAVerser,
     }
-  }, [dataSource, adminTransfers, profile?.city])
+  }, [dataSource, adminTransfers, profile?.city, searchResults])
 
   // 💰 Solde de caisse global (sans filtre de date)
   const soldeCaisseGlobal = useMemo(() => {
     // Utiliser allDisplayParcels (toutes les données) au lieu de dataSource (filtré)
-    const allParcels = allDisplayParcels || []
+    // ⚠️ APPLIQUER modifiedParcels pour refléter les collectes en temps réel
+    // ⚠️ FUSIONNER extraCollectedParcels (vieux colis collectés en mode recherche)
+    const base = allDisplayParcels || []
+    const extra = Object.values(extraCollectedParcels)
+    const merged = [...base, ...extra]
+
+
+    const allParcels = merged.map((p: any) => {
+      const modified = modifiedParcels[p.id]
+      return modified ? { ...p, ...modified } : p
+    })
 
     // Ports dus collectés (TOUS, sans filtre date, SAUF retours)
     const portsCollectes = allParcels.filter((p: any) => {
       const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
-      return p.portType === 'port_du' &&
+      const passes = p.portType === 'port_du' &&
         !p.portPayeMethod &&
         (p.portStatus === 'collected' || p.portStatus === 'received') &&
         p.destinationCity === profile?.city &&
         !isReturned
+
+      return passes
     })
 
     // Ports payés reçus (TOUS, sans filtre date) - ramassage local
@@ -474,13 +487,22 @@ export default function CaisseChefTab() {
       .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0)
 
     return Math.max(0, totalCollecte + montantRecus - totalVerse)
-  }, [allDisplayParcels, profile?.city, adminTransfers])
+  }, [allDisplayParcels, profile?.city, adminTransfers, modifiedParcels, extraCollectedParcels])
 
   // 💰 Solde d'un livreur spécifique (sans filtre de date)
   const soldeLivreur = useMemo(() => {
     if (driverFilter === 'all') return 0
 
-    const allParcels = allDisplayParcels || []
+    // ⚠️ APPLIQUER modifiedParcels pour refléter les collectes en temps réel
+    // ⚠️ FUSIONNER extraCollectedParcels (vieux colis collectés en mode recherche)
+    const base = allDisplayParcels || []
+    const extra = Object.values(extraCollectedParcels)
+    const merged = [...base, ...extra]
+
+    const allParcels = merged.map((p: any) => {
+      const modified = modifiedParcels[p.id]
+      return modified ? { ...p, ...modified } : p
+    })
 
     // Ports dus collectés par CE livreur (TOUS, sans filtre date, SAUF retours)
     const portsCollectes = allParcels.filter((p: any) => {
@@ -518,13 +540,17 @@ export default function CaisseChefTab() {
 
     // Solde = ce que le livreur a DONNÉ au chef (collectés + reçus)
     return totalCollecte + totalPortsPayesRecus
-  }, [allDisplayParcels, driverFilter, profile?.city])
+  }, [allDisplayParcels, driverFilter, profile?.city, modifiedParcels, extraCollectedParcels])
 
   // Liste des livreurs actifs
   const drivers = useMemo(() => {
+    // 🔧 Merger extraCollectedParcels avec dataSource pour inclure les colis collectés en mode recherche
+    const extraParcels = Object.values(extraCollectedParcels)
+    const allParcels = [...dataSource, ...extraParcels]
+
     const driversMap = new Map()
 
-    dataSource.forEach((p: any) => {
+    allParcels.forEach((p: any) => {
       // Exclure les expéditions retournées
       const isReturned = p.returnedAt || p.wasReturned || p.status === 'Retourné'
 
@@ -563,7 +589,7 @@ export default function CaisseChefTab() {
 
     // Ajouter les expéditions sans livreur (reçues OU locales, non assignées)
     // TOUTES les expéditions non retournées dans la ville, même celles livrées ou en cours
-    const unknownParcels = dataSource.filter((p: any) => {
+    const unknownParcels = allParcels.filter((p: any) => {
       // Inclure si:
       // 1. Destination = ma ville OU
       // 2. Ramassage local (createdBy/origin = ma ville ET status = "En cours de ramassage") OU
@@ -598,6 +624,12 @@ export default function CaisseChefTab() {
     }
 
     return Array.from(driversMap.values()).map(driver => {
+      // 🔧 Appliquer modifiedParcels pour refléter les changements optimistes
+      const parcelsWithModifications = driver.parcels.map((p: any) => {
+        const modified = modifiedParcels[p.id]
+        return modified ? { ...p, ...modified } : p
+      })
+
       // Séparer les ports dû pour les calculs de collecte
       // IMPORTANT: Le livreur livre TOUTES les expéditions (port payé + port dû)
       // mais ne collecte de l'argent QUE pour les ports dû
@@ -606,12 +638,12 @@ export default function CaisseChefTab() {
       // 1. portType === 'port_du' (exclu automatiquement port_en_compte_destinataire) ET
       // 2. portPayeMethod n'est PAS défini (sinon c'est un port payé)
       // Note: Les clients en compte (port_en_compte_*) sont traités comme port payé
-      const portDuParcels = driver.parcels.filter((p: any) =>
+      const portDuParcels = parcelsWithModifications.filter((p: any) =>
         p.portType === 'port_du' && !p.portPayeMethod
       )
 
       // Calculs par livreur - basés uniquement sur les ports dû
-      const assignedToday = driver.parcels.filter((p: any) => {
+      const assignedToday = parcelsWithModifications.filter((p: any) => {
         // Colis sans date d'assignation = considérés comme assignés aujourd'hui
         if (!p.deliveryAssignedAt) return true
 
@@ -644,7 +676,7 @@ export default function CaisseChefTab() {
       })
 
       // 🆕 Ports payés par ce livreur (afficher TOUS, compter uniquement ramassage local)
-      const portsPayesParcels = driver.parcels.filter((p: any) =>
+      const portsPayesParcels = parcelsWithModifications.filter((p: any) =>
         p.portType === 'port_paye' &&
         !p.portPayeMethod
       )
@@ -680,8 +712,8 @@ export default function CaisseChefTab() {
 
       return {
         ...driver,
-        // Garder TOUTES les expéditions (port payé + port dû)
-        parcels: driver.parcels,
+        // Garder TOUTES les expéditions (port payé + port dû) avec modifications optimistes
+        parcels: parcelsWithModifications,
         // Ajouter les ports dû séparément pour référence
         portDuParcels: portDuParcels,
         // Ajouter les ports payés séparément
@@ -706,21 +738,28 @@ export default function CaisseChefTab() {
         enRetardCount: enRetard.length,
       }
     }).sort((a, b) => a.name.localeCompare(b.name))
-  }, [dataSource, agentEntries, profile?.city])
+  }, [dataSource, agentEntries, profile?.city, extraCollectedParcels, modifiedParcels])
 
   // Filtrer les livreurs
   const filteredDrivers = useMemo(() => {
     console.error('🔍 [filteredDrivers] DÉBUT:', {
       'Drivers total': drivers.length,
       'datePreset': datePreset,
+      'searchResults': searchResults ? searchResults.length : 'null',
       'Total parcels dans drivers': drivers.reduce((sum, d) => sum + d.parcels.length, 0)
     })
 
     let result = drivers
 
+    // 🔍 En mode recherche, NE PAS filtrer par date - montrer tous les résultats
+    const inSearchMode = searchResults !== null
+
     // Filtrer les colis de chaque livreur par date d'assignation
     result = result.map(driver => {
       const filteredParcels = driver.parcels.filter((p: any) => {
+        // 🔍 En mode recherche, montrer TOUS les résultats sans filtre de date
+        if (inSearchMode) return true
+
         // Si le filtre est 'all', montrer TOUS les colis
         if (datePreset === 'all') return true
 
@@ -802,10 +841,10 @@ export default function CaisseChefTab() {
         return true
       })
 
-      // Appliquer le filtre de statut de collecte UNIQUEMENT si on n'est PAS en mode recherche
-      // (en mode recherche, le filtre s'applique aux résultats de recherche)
+      // Appliquer le filtre de statut de collecte
+      // ✅ En mode normal ET en mode recherche, le filtre s'applique
       let statusFilteredParcels = filteredParcels
-      if (statusFilter !== 'all' && !searchQuery.trim()) {
+      if (statusFilter !== 'all') {
         const now = new Date()
         const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
 
@@ -909,7 +948,7 @@ export default function CaisseChefTab() {
     })
 
     return result
-  }, [drivers, driverFilter, statusFilter, searchQuery, datePreset, dateFrom, dateTo, agentEntries])
+  }, [drivers, driverFilter, statusFilter, searchQuery, searchResults, datePreset, dateFrom, dateTo, agentEntries])
 
   // Stats filtrées (selon filtres actifs)
   const filteredStats = useMemo(() => {
@@ -927,15 +966,21 @@ export default function CaisseChefTab() {
     // 🆕 Calcul du solde disponible (argent physiquement chez le chef) :
     // - Si TOUS les livreurs : (Collectés + Reçus) - Versements admin
     // - Si UN livreur : SEULEMENT ses collectés (les reçus sont globaux, pas par livreur)
+    // 🔍 En mode recherche, ne PAS déduire les versements admin (ils ne
+    // correspondent pas forcément aux colis recherchés)
+    const inSearchMode = searchResults !== null
     let soldeAVerser
 
     if (driverFilter === 'all') {
-      // Tous les livreurs : collectés + reçus - versements
+      // Tous les livreurs : collectés + reçus [- versements si hors recherche]
       soldeAVerser = montantCollectes + montantPortsPayesRecus
-      const totalVerse = adminTransfers
-        .filter((t: any) => t.status === 'confirmed')
-        .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0)
-      soldeAVerser = Math.max(0, soldeAVerser - totalVerse)
+      if (!inSearchMode) {
+        const totalVerse = adminTransfers
+          .filter((t: any) => t.status === 'confirmed')
+          .reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0)
+        soldeAVerser = soldeAVerser - totalVerse
+      }
+      soldeAVerser = Math.max(0, soldeAVerser)
     } else {
       // Un livreur spécifique : SEULEMENT ses collectés (pas les reçus)
       soldeAVerser = montantCollectes
@@ -953,7 +998,7 @@ export default function CaisseChefTab() {
       enRetardCount: totalEnRetard,
       soldeAVerser,
     }
-  }, [filteredDrivers, driverFilter, adminTransfers])
+  }, [filteredDrivers, driverFilter, adminTransfers, searchResults])
 
   // Toggle expansion d'un livreur
   const toggleDriver = (driverId: string) => {
@@ -1141,19 +1186,36 @@ export default function CaisseChefTab() {
       return
     }
 
+    // ⚠️ Garde-fou : sans uid/nom d'agent valides, la mise à jour Firestore
+    // sera rejetée par les règles de sécurité (portCollectedById doit être
+    // l'uid de l'utilisateur connecté). On bloque AVANT toute mise à jour
+    // optimiste pour ne pas afficher un état "Collecté" qui ne sera jamais
+    // persisté côté serveur.
+    if (!uid || !profile?.name) {
+      console.error('❌ [handleCollectPort] Paramètres manquants, annulation:', {
+        uid,
+        profileName: profile?.name,
+        parcelId: parcel.id
+      })
+      alert("❌ Erreur: impossible d'identifier l'agent connecté (uid ou nom manquant). Reconnectez-vous et réessayez.")
+      return
+    }
+
     console.log('🔵 [handleCollectPort] DÉBUT:', {
       parcelId: parcel.id,
       nic: parcel.senderNic || parcel.trackingId,
       price: parcel.price,
-      currentPortStatus: parcel.portStatus
+      currentPortStatus: parcel.portStatus,
+      uid,
+      agentName: profile.name
     })
 
     setCollectingPortIds(prev => new Set(prev).add(parcel.id))
     try {
       const updatedData = {
         portStatus: 'collected',
-        portCollectedBy: profile?.name || '',
-        portCollectedById: uid || '',
+        portCollectedBy: profile.name,
+        portCollectedById: uid,
         portCollectedAt: new Date(),
         portDuReceivedMethod: 'especes',
       }
@@ -1184,16 +1246,40 @@ export default function CaisseChefTab() {
         console.log('🔵 [handleCollectPort] searchResults mis à jour')
       }
 
-      console.log('🟢 [handleCollectPort] Appel Firebase collectPortDu...')
+      console.error('🟢 [handleCollectPort] AVANT appel Firebase collectPortDu:', {
+        parcelId: parcel.id,
+        agentName: profile.name,
+        uid
+      })
       await collectPortDu(
         parcel.id,
-        profile?.name || '',
-        uid || ''
+        profile.name,
+        uid,
+        !!parcel.isArchived
       )
-      console.log('✅ [handleCollectPort] Firebase OK')
+      console.error('✅ [handleCollectPort] APRÈS appel Firebase collectPortDu: écriture confirmée par le SDK')
+
+      // 🗄️ Si le colis collecté n'est pas dans allDisplayParcels (vieux colis > 30j),
+      // le stocker dans extraCollectedParcels pour qu'il apparaisse dans les statistiques
+      const isInAllParcels = (allDisplayParcels || []).some((p: any) => p.id === parcel.id)
+      if (!isInAllParcels && searchResults) {
+        setExtraCollectedParcels(prev => ({
+          ...prev,
+          [parcel.id]: { ...parcel, ...updatedData }
+        }))
+      }
     } catch (err: any) {
-      console.error('❌ [handleCollectPort] ERREUR:', err)
-      alert(`❌ Erreur: ${err.message}`)
+      // ⚠️ Erreur capturée explicitement (ex: permission-denied si les règles
+      // Firestore ne sont pas déployées, document verrouillé, etc.)
+      console.error('❌ [handleCollectPort] ERREUR Firebase collectPortDu:', {
+        code: err?.code,
+        message: err?.message,
+        parcelId: parcel.id,
+        uid,
+        agentName: profile?.name,
+        err
+      })
+      alert(`❌ Erreur lors de la collecte du port: ${err?.code || ''} ${err?.message || err}`)
 
       // Annuler TOUTES les mises à jour en cas d'erreur
       setModifiedParcels(prev => {
@@ -1217,6 +1303,13 @@ export default function CaisseChefTab() {
           ) : prev
         )
       }
+
+      // Annuler aussi extraCollectedParcels
+      setExtraCollectedParcels(prev => {
+        const updated = { ...prev }
+        delete updated[parcel.id]
+        return updated
+      })
     } finally {
       setCollectingPortIds(prev => {
         const newSet = new Set(prev)
@@ -1276,7 +1369,7 @@ export default function CaisseChefTab() {
       }
 
       console.log('🟢 [handleUncollectPort] Appel Firebase uncollectPortDu...')
-      await uncollectPortDu(parcel.id)
+      await uncollectPortDu(parcel.id, !!parcel.isArchived)
       console.log('✅ [handleUncollectPort] Firebase OK')
     } catch (err: any) {
       console.error('❌ [handleUncollectPort] ERREUR:', err)
@@ -1539,7 +1632,11 @@ export default function CaisseChefTab() {
             <span className="text-xs font-semibold text-purple-600">À verser</span>
           </div>
           <div className="text-2xl font-bold text-purple-900">
-            {fmtAmt(driverFilter === 'all' ? soldeCaisseGlobal : soldeLivreur)} DH
+            {fmtAmt(
+              searchResults !== null
+                ? filteredStats.soldeAVerser
+                : (driverFilter === 'all' ? soldeCaisseGlobal : soldeLivreur)
+            )} DH
           </div>
           <div className="text-sm text-purple-700 font-medium mt-1">
             Solde disponible
@@ -1831,53 +1928,57 @@ export default function CaisseChefTab() {
                                 <div className="flex items-center justify-center gap-2">
                                   {(parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné') ? (
                                     <span className="text-xs text-gray-500 italic">-</span>
-                                  ) : isPortDu && (
+                                  ) : (
                                     <>
-                                      <button
-                                        onClick={() => isCollected ? handleUncollectPort(parcel) : handleCollectPort(parcel)}
-                                        disabled={collectingPortIds.has(parcel.id)}
-                                        className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${
-                                          isCollected
-                                            ? 'bg-gray-200 hover:bg-gray-300 text-gray-700'
-                                            : 'bg-green-600 hover:bg-green-700 text-white'
-                                        } disabled:opacity-50`}
-                                      >
-                                        {collectingPortIds.has(parcel.id) ? (
-                                          <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                        ) : isCollected ? (
-                                          'Annuler'
-                                        ) : (
-                                          'Collecter'
-                                        )}
-                                      </button>
+                                      {isPortDu && (
+                                        <>
+                                          <button
+                                            onClick={() => isCollected ? handleUncollectPort(parcel) : handleCollectPort(parcel)}
+                                            disabled={collectingPortIds.has(parcel.id)}
+                                            className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${
+                                              isCollected
+                                                ? 'bg-gray-200 hover:bg-gray-300 text-gray-700'
+                                                : 'bg-green-600 hover:bg-green-700 text-white'
+                                            } disabled:opacity-50`}
+                                          >
+                                            {collectingPortIds.has(parcel.id) ? (
+                                              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                            ) : isCollected ? (
+                                              'Annuler'
+                                            ) : (
+                                              'Collecter'
+                                            )}
+                                          </button>
 
-                                      {parcel.status === 'En cours de livraison' && (
-                                        <button
-                                          onClick={() => handleMarkAsDelivered(parcel)}
-                                          disabled={deliveringParcelIds.has(parcel.id)}
-                                          className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition disabled:opacity-50"
-                                        >
-                                          {deliveringParcelIds.has(parcel.id) ? (
-                                            <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                                          ) : (
-                                            'Livrer'
+                                          {parcel.status === 'En cours de livraison' && (
+                                            <button
+                                              onClick={() => handleMarkAsDelivered(parcel)}
+                                              disabled={deliveringParcelIds.has(parcel.id)}
+                                              className="px-3 py-1 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold transition disabled:opacity-50"
+                                            >
+                                              {deliveringParcelIds.has(parcel.id) ? (
+                                                <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                              ) : (
+                                                'Livrer'
+                                              )}
+                                            </button>
                                           )}
-                                        </button>
-                                      )}
 
-                                      {isLate && !delay && (
-                                        <button
-                                          onClick={() => setDelayModal(parcel)}
-                                          className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold transition"
-                                        >
-                                          Retard
-                                        </button>
-                                      )}
+                                          {isLate && !delay && (
+                                            <button
+                                              onClick={() => setDelayModal(parcel)}
+                                              className="px-3 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-semibold transition"
+                                            >
+                                              Retard
+                                            </button>
+                                          )}
 
-                                      {delay && (
-                                        <span className="px-2 py-1 bg-amber-100 text-amber-700 text-xs rounded">
-                                          Retard signalé
-                                        </span>
+                                          {delay && (
+                                            <span className="px-2 py-1 bg-amber-100 text-amber-700 text-xs rounded">
+                                              Retard signalé
+                                            </span>
+                                          )}
+                                        </>
                                       )}
 
                                       <button
@@ -2122,62 +2223,81 @@ export default function CaisseChefTab() {
                                     <div className="flex items-center justify-center gap-2">
                                       {(parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné') ? (
                                         <span className="text-xs text-gray-500 italic">-</span>
-                                      ) : isPortPayeRecu ? (
-                                        <button
-                                          onClick={() => handleUncollectPortPaye(parcel)}
-                                          disabled={collectingPortIds.has(parcel.id)}
-                                          className="text-xs px-3 py-1 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed bg-red-100 text-red-700 hover:bg-red-200"
-                                        >
-                                          {collectingPortIds.has(parcel.id) ? '...' : 'Annuler'}
-                                        </button>
-                                      ) : isPortPayeRamasse ? (
-                                        <button
-                                          onClick={() => handleReceivePortPaye(parcel)}
-                                          disabled={collectingPortIds.has(parcel.id)}
-                                          className="text-xs px-3 py-1 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
-                                        >
-                                          {collectingPortIds.has(parcel.id) ? '...' : 'Recevoir'}
-                                        </button>
-                                      ) : isPortDu && (
+                                      ) : (
                                         <>
-                                          <button
-                                            onClick={() => isCollected ? handleUncollectPort(parcel) : handleCollectPort(parcel)}
-                                            disabled={collectingPortIds.has(parcel.id)}
-                                            className={`text-xs px-3 py-1 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed ${
-                                              isCollected
-                                                ? 'bg-red-100 text-red-700 hover:bg-red-200'
-                                                : 'bg-green-100 text-green-700 hover:bg-green-200'
-                                            }`}
-                                          >
-                                            {collectingPortIds.has(parcel.id)
-                                              ? '...'
-                                              : isCollected
-                                                ? 'Annuler'
-                                                : 'Collecter'}
-                                          </button>
-                                          {!isCollected && (
+                                          {isPortPayeRecu ? (
                                             <button
-                                              onClick={() => openDelayModal(parcel, driver)}
-                                              className={`text-xs px-3 py-1 rounded-lg font-medium transition ${
-                                                delay
-                                                  ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                                                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                                              }`}
+                                              onClick={() => handleUncollectPortPaye(parcel)}
+                                              disabled={collectingPortIds.has(parcel.id)}
+                                              className="text-xs px-3 py-1 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed bg-red-100 text-red-700 hover:bg-red-200"
                                             >
-                                              {delay ? 'Modifier retard' : 'Signaler retard'}
+                                              {collectingPortIds.has(parcel.id) ? '...' : 'Annuler'}
+                                            </button>
+                                          ) : isPortPayeRamasse ? (
+                                            <button
+                                              onClick={() => handleReceivePortPaye(parcel)}
+                                              disabled={collectingPortIds.has(parcel.id)}
+                                              className="text-xs px-3 py-1 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed bg-indigo-100 text-indigo-700 hover:bg-indigo-200"
+                                            >
+                                              {collectingPortIds.has(parcel.id) ? '...' : 'Recevoir'}
+                                            </button>
+                                          ) : isPortDu && (
+                                            <>
+                                              <button
+                                                onClick={() => isCollected ? handleUncollectPort(parcel) : handleCollectPort(parcel)}
+                                                disabled={collectingPortIds.has(parcel.id)}
+                                                className={`text-xs px-3 py-1 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed ${
+                                                  isCollected
+                                                    ? 'bg-red-100 text-red-700 hover:bg-red-200'
+                                                    : 'bg-green-100 text-green-700 hover:bg-green-200'
+                                                }`}
+                                              >
+                                                {collectingPortIds.has(parcel.id)
+                                                  ? '...'
+                                                  : isCollected
+                                                    ? 'Annuler'
+                                                    : 'Collecter'}
+                                              </button>
+                                              {!isCollected && (
+                                                <button
+                                                  onClick={() => openDelayModal(parcel, driver)}
+                                                  className={`text-xs px-3 py-1 rounded-lg font-medium transition ${
+                                                    delay
+                                                      ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                                                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                                  }`}
+                                                >
+                                                  {delay ? 'Modifier retard' : 'Signaler retard'}
+                                                </button>
+                                              )}
+                                            </>
+                                          )}
+                                          {/* Bouton Livrer pour toutes les expéditions */}
+                                          {parcel.status !== 'Livré' && parcel.status !== 'Retourné' && (
+                                            <button
+                                              onClick={() => handleMarkAsDelivered(parcel)}
+                                              disabled={deliveringParcelIds.has(parcel.id)}
+                                              className="text-xs px-3 py-1 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed bg-blue-100 text-blue-700 hover:bg-blue-200"
+                                            >
+                                              {deliveringParcelIds.has(parcel.id) ? '...' : 'Livrer'}
                                             </button>
                                           )}
+                                          {/* Bouton Éditer pour TOUTES les expéditions */}
+                                          <button
+                                            onClick={() => setQuickEditModal({
+                                              open: true,
+                                              parcel: parcel,
+                                              price: String(parcel.price || ''),
+                                              portType: parcel.portType || '',
+                                              codAmount: String(parcel.codAmount || ''),
+                                              loading: false,
+                                              error: ''
+                                            })}
+                                            className="text-xs px-3 py-1 rounded-lg font-medium transition bg-purple-100 text-purple-700 hover:bg-purple-200 flex items-center gap-1"
+                                          >
+                                            🖐️ Éditer
+                                          </button>
                                         </>
-                                      )}
-                                      {/* Bouton Livrer pour toutes les expéditions */}
-                                      {parcel.status !== 'Livré' && parcel.status !== 'Retourné' && (
-                                        <button
-                                          onClick={() => handleMarkAsDelivered(parcel)}
-                                          disabled={deliveringParcelIds.has(parcel.id)}
-                                          className="text-xs px-3 py-1 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed bg-blue-100 text-blue-700 hover:bg-blue-200"
-                                        >
-                                          {deliveringParcelIds.has(parcel.id) ? '...' : 'Livrer'}
-                                        </button>
                                       )}
                                     </div>
                                   </td>
@@ -2598,8 +2718,16 @@ export default function CaisseChefTab() {
 
                     await updateParcel(quickEditModal.parcel.id, updates)
 
-                    // Mettre à jour localement
+                    // ✅ Mettre à jour le cache local ET le contexte pour recalculer les stats
+                    setModifiedParcels(prev => ({ ...prev, [quickEditModal.parcel.id]: updates }))
                     updateParcelOptimistic(quickEditModal.parcel.id, updates)
+
+                    // ✅ Mettre à jour searchResults si en mode recherche
+                    if (searchResults) {
+                      setSearchResults(prev =>
+                        prev ? prev.map(p => p.id === quickEditModal.parcel.id ? { ...p, ...updates } : p) : prev
+                      )
+                    }
 
                     // Fermer le modal
                     setQuickEditModal({
