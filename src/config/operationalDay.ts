@@ -19,10 +19,10 @@ export const OPERATIONAL_DAY_CONFIG = {
    * Exemples:
    * - 0 = minuit (journée calendaire standard)
    * - 6 = 6h du matin
-   * - 8 = 8h du matin (votre cas)
+   * - 8 = 8h du matin (configuration actuelle)
    */
-  START_HOUR: 6,
-  START_MINUTE: 1,
+  START_HOUR: 8,
+  START_MINUTE: 0,
 
   /**
    * ⏰ Heure de fin de la journée opérationnelle (format 24h, lendemain)
@@ -32,10 +32,10 @@ export const OPERATIONAL_DAY_CONFIG = {
    * Exemples:
    * - 0 = minuit (se termine à 23:59:59 du même jour)
    * - 2 = 2h du matin (lendemain)
-   * - 6h01 = 6h01 du matin (changement automatique)
+   * - 6 = 6h du matin (configuration actuelle)
    */
   END_HOUR: 6,
-  END_MINUTE: 1,
+  END_MINUTE: 0,
 
   /**
    * 🏷️ Labels pour l'affichage UI

@@ -63,7 +63,12 @@ export const filterByDate = <T>(
   let start: Date | null = null
   let end: Date = endOfToday
   if (preset === 'today') {
-    start = new Date(); start.setHours(0, 0, 0, 0)
+    // 🕐 Utiliser le jour opérationnel (8h → 6h lendemain) au lieu du jour calendaire
+    const { getCurrentOperationalDay } = require('../config/operationalDay')
+    const opDay = getCurrentOperationalDay()
+    const range = getOperationalDayRange(opDay)
+    start = range.start
+    end = range.end
   } else if (preset === 'week') {
     start = new Date(); start.setDate(now.getDate() - 6); start.setHours(0, 0, 0, 0)
   } else if (preset === 'month') {

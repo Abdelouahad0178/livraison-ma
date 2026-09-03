@@ -22,6 +22,7 @@ import { collection, query, where, onSnapshot, documentId } from 'firebase/fires
 import { db } from '../../../firebase/db'
 import { shouldTriggerSearch } from '../../../utils/searchUtils'
 import { printPortsCollectes, printVersementParcels, printDriverParcels } from '../../../utils/agentPrintUtils'
+import { getOperationalDay, isInOperationalDay, getCurrentOperationalDay } from '../../../config/operationalDay'
 
 // Types
 interface DelayReason {
