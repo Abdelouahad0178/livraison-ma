@@ -496,16 +496,12 @@ export default function CaisseChefTab() {
     const soldeFinal = Math.max(0, soldeCalcule)
 
     alert(
-      '💰 SOLDE GLOBAL:\n\n' +
-      `Ports collectés: ${portsCollectes.length}\n` +
-      `Total collecté: ${totalCollecte.toFixed(2)} DH\n\n` +
-      `Ports payés reçus: ${portsPayesRecus.length}\n` +
-      `Montant reçu: ${montantRecus.toFixed(2)} DH\n\n` +
-      `Versements confirmés: ${adminTransfers.filter((t: any) => t.status === 'confirmed').length}\n` +
-      `Total versé: ${totalVerse.toFixed(2)} DH\n\n` +
-      `CALCUL: ${totalCollecte.toFixed(2)} + ${montantRecus.toFixed(2)} - ${totalVerse.toFixed(2)}\n` +
-      `= ${soldeCalcule.toFixed(2)} DH\n\n` +
-      `SOLDE FINAL: ${soldeFinal.toFixed(2)} DH`
+      '💰 SOLDE GLOBAL\n\n' +
+      `Collectés: ${portsCollectes.length} (${totalCollecte} DH)\n` +
+      `Reçus: ${portsPayesRecus.length} (${montantRecus} DH)\n` +
+      `Versés: ${adminTransfers.filter((t: any) => t.status === 'confirmed').length} (${totalVerse} DH)\n\n` +
+      `${totalCollecte} + ${montantRecus} - ${totalVerse} = ${soldeCalcule}\n\n` +
+      `SOLDE: ${soldeFinal} DH`
     )
 
     return soldeFinal
@@ -1030,18 +1026,13 @@ export default function CaisseChefTab() {
     }
 
     alert(
-      '📊 FILTERED STATS:\n\n' +
+      '📊 STATS AFFICHÉES\n\n' +
       `Mode: ${inSearchMode ? 'RECHERCHE' : 'NORMAL'}\n` +
-      `Filtre livreur: ${driverFilter === 'all' ? 'TOUS' : driverFilter}\n` +
-      `Drivers filtrés: ${filteredDrivers.length}\n\n` +
-      `Ports collectés: ${totalCollectes}\n` +
-      `Montant collecté: ${montantCollectes.toFixed(2)} DH\n\n` +
-      `Ports payés reçus: ${totalPortsPayesRecus}\n` +
-      `Montant reçu: ${montantPortsPayesRecus.toFixed(2)} DH\n\n` +
-      (inSearchMode
-        ? 'Versements: NON DÉDUITS (mode recherche)\n'
-        : `Versements confirmés: ${adminTransfers.filter((t: any) => t.status === 'confirmed').length}\n`) +
-      `\nSOLDE À VERSER: ${soldeAVerser.toFixed(2)} DH`
+      `Livreur: ${driverFilter === 'all' ? 'TOUS' : 'UN'}\n\n` +
+      `Collectés: ${totalCollectes} (${montantCollectes} DH)\n` +
+      `Reçus: ${totalPortsPayesRecus} (${montantPortsPayesRecus} DH)\n` +
+      (inSearchMode ? 'Versements: NON DÉDUITS\n' : '') +
+      `\nSOLDE: ${soldeAVerser} DH`
     )
 
     return {
