@@ -83,6 +83,25 @@ export default function CaisseChefTab() {
   // État livraison
   const [deliveringParcelIds, setDeliveringParcelIds] = useState<Set<string>>(new Set())
 
+  // État édition rapide
+  const [quickEditModal, setQuickEditModal] = useState<{
+    open: boolean
+    parcel: any
+    price: string
+    portType: string
+    codAmount: string
+    loading: boolean
+    error: string
+  }>({
+    open: false,
+    parcel: null,
+    price: '',
+    portType: '',
+    codAmount: '',
+    loading: false,
+    error: ''
+  })
+
   // Vérification du rôle
   const isChef = profile?.role === 'chef_agence'
 
@@ -1860,6 +1879,21 @@ export default function CaisseChefTab() {
                                           Retard signalé
                                         </span>
                                       )}
+
+                                      <button
+                                        onClick={() => setQuickEditModal({
+                                          open: true,
+                                          parcel: parcel,
+                                          price: String(parcel.price || ''),
+                                          portType: parcel.portType || '',
+                                          codAmount: String(parcel.codAmount || ''),
+                                          loading: false,
+                                          error: ''
+                                        })}
+                                        className="px-3 py-1 bg-purple-600 hover:bg-purple-700 text-white rounded-lg text-xs font-semibold transition flex items-center gap-1"
+                                      >
+                                        🖐️ Éditer
+                                      </button>
                                     </>
                                   )}
                                 </div>
@@ -2437,6 +2471,156 @@ export default function CaisseChefTab() {
                   {savingDelay ? 'Enregistrement...' : 'Enregistrer'}
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 🖐️ Modal Édition Rapide */}
+      {quickEditModal.open && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                  <span className="text-lg">🖐️</span>
+                  Édition rapide
+                </h3>
+                <p className="text-xs font-mono text-blue-600 mt-0.5">
+                  {quickEditModal.parcel?.senderNic || quickEditModal.parcel?.trackingId}
+                </p>
+              </div>
+              <button
+                onClick={() => setQuickEditModal({
+                  open: false,
+                  parcel: null,
+                  price: '',
+                  portType: '',
+                  codAmount: '',
+                  loading: false,
+                  error: ''
+                })}
+                className="p-2 hover:bg-gray-100 rounded-xl transition"
+              >
+                <X className="w-5 h-5 text-gray-500" />
+              </button>
+            </div>
+
+            {quickEditModal.error && (
+              <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm mb-4">
+                ⚠️ {quickEditModal.error}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 gap-4 mb-6">
+              {/* Prix du port */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-2">💰 Prix du port (DH)</label>
+                <input
+                  type="number"
+                  value={quickEditModal.price}
+                  onChange={e => setQuickEditModal(m => ({ ...m, price: e.target.value, error: '' }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-green-500"
+                  placeholder="Ex: 35"
+                />
+              </div>
+
+              {/* Type de port */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-2">📋 Type de port</label>
+                <select
+                  value={quickEditModal.portType}
+                  onChange={e => setQuickEditModal(m => ({ ...m, portType: e.target.value, error: '' }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500"
+                >
+                  <option value="">-- Sélectionner --</option>
+                  <option value="port_paye">✅ Port Payé</option>
+                  <option value="port_du">📮 Port Dû</option>
+                  <option value="port_du_cheque">📋 Port Dû Chèque</option>
+                  <option value="port_en_compte_expediteur">💼 Compte Expéditeur</option>
+                  <option value="port_en_compte_destinataire">🖐️ Compte Destinataire</option>
+                </select>
+              </div>
+
+              {/* Montant COD */}
+              <div>
+                <label className="block text-xs font-bold text-gray-700 mb-2">💵 Montant COD (DH)</label>
+                <input
+                  type="number"
+                  value={quickEditModal.codAmount}
+                  onChange={e => setQuickEditModal(m => ({ ...m, codAmount: e.target.value, error: '' }))}
+                  className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-green-500"
+                  placeholder="Ex: 150"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3">
+              <button
+                onClick={() => setQuickEditModal({
+                  open: false,
+                  parcel: null,
+                  price: '',
+                  portType: '',
+                  codAmount: '',
+                  loading: false,
+                  error: ''
+                })}
+                className="flex-1 px-4 py-2 border border-gray-200 rounded-lg font-medium text-gray-700 hover:bg-gray-50 transition"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={async () => {
+                  if (!quickEditModal.parcel) return
+
+                  setQuickEditModal(m => ({ ...m, loading: true, error: '' }))
+
+                  try {
+                    const updates: any = {}
+
+                    if (quickEditModal.price !== String(quickEditModal.parcel.price || '')) {
+                      updates.price = parseFloat(quickEditModal.price) || 0
+                    }
+
+                    if (quickEditModal.portType && quickEditModal.portType !== quickEditModal.parcel.portType) {
+                      updates.portType = quickEditModal.portType
+                    }
+
+                    if (quickEditModal.codAmount !== String(quickEditModal.parcel.codAmount || '')) {
+                      updates.codAmount = parseFloat(quickEditModal.codAmount) || 0
+                    }
+
+                    if (Object.keys(updates).length === 0) {
+                      setQuickEditModal(m => ({ ...m, error: 'Aucune modification détectée' }))
+                      return
+                    }
+
+                    await updateParcel(quickEditModal.parcel.id, updates)
+
+                    // Mettre à jour localement
+                    updateParcelOptimistic(quickEditModal.parcel.id, updates)
+
+                    // Fermer le modal
+                    setQuickEditModal({
+                      open: false,
+                      parcel: null,
+                      price: '',
+                      portType: '',
+                      codAmount: '',
+                      loading: false,
+                      error: ''
+                    })
+                  } catch (err: any) {
+                    console.error('Erreur édition:', err)
+                    setQuickEditModal(m => ({ ...m, loading: false, error: err.message || 'Erreur lors de la sauvegarde' }))
+                  }
+                }}
+                disabled={quickEditModal.loading}
+                className="flex-1 px-4 py-2 bg-purple-600 text-white rounded-lg font-medium hover:bg-purple-700 transition disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {quickEditModal.loading ? 'Enregistrement...' : '💾 Enregistrer'}
+              </button>
             </div>
           </div>
         </div>
