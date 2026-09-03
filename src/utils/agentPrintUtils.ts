@@ -1076,3 +1076,242 @@ export function printVersementParcels(
     win.document.close()
   }
 }
+
+// ?????????????????????????????????????????????????????????????????????????????
+// IMPRESSION DES EXPÉDITIONS PAR LIVREUR (Collectés, À Collecter, En Retard)
+// ?????????????????????????????????????????????????????????????????????????????
+
+export function printDriverParcels(
+  driverName: string,
+  collectes: any[],
+  aCollecter: any[],
+  enRetard: any[],
+  profileData?: any
+): void {
+  const logoUrl = window.location.origin + '/LOGO.jpg'
+  const printDate = new Date().toLocaleDateString('fr-MA', {
+    day: '2-digit',
+    month: 'long',
+    year: 'numeric',
+  })
+
+  // Calculer les totaux
+  const totalCollectes = collectes.length
+  const montantCollectes = collectes.reduce((sum, p) => sum + (parseFloat(p.price) || 0), 0)
+  
+  const totalACollecter = aCollecter.length
+  const montantACollecter = aCollecter.reduce((sum, p) => sum + (parseFloat(p.price) || 0), 0)
+  
+  const totalEnRetard = enRetard.length
+  const montantEnRetard = enRetard.reduce((sum, p) => sum + (parseFloat(p.price) || 0), 0)
+  
+  const totalGeneral = totalCollectes + totalACollecter + totalEnRetard
+  const montantGeneral = montantCollectes + montantACollecter + montantEnRetard
+
+  // Fonction pour formater une date
+  const formatDate = (timestamp: any) => {
+    if (!timestamp) return '—'
+    const date = timestamp?.toDate ? timestamp.toDate() : new Date(timestamp)
+    return date.toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: 'numeric' })
+  }
+
+  // Fonction pour générer les lignes d'une section
+  const generateRows = (parcels: any[], startIndex: number, color: string) => {
+    return parcels.map((p, i) => {
+      const rowBg = (startIndex + i) % 2 === 0 ? '#ffffff' : '#f9fafb'
+      const price = parseFloat(p.price) || 0
+      
+      return `
+        <tr style="background-color: ${rowBg}">
+          <td style="text-align:center;font-weight:bold;color:#555">${startIndex + i + 1}</td>
+          <td style="font-family:monospace;font-weight:bold;color:${color};font-size:7.5pt">${p.trackingId || p.sender?.nic || '—'}</td>
+          <td style="font-size:7pt;color:#6b7280">${formatDate(p.createdAt)}</td>
+          <td style="font-size:7pt;font-weight:bold">${p.sender?.nic || '—'}</td>
+          <td style="font-size:7.5pt">
+            <strong>${p.receiver?.name || '—'}</strong>
+            <div style="color:#9ca3af;font-size:6.5pt">${p.receiver?.tel || ''}</div>
+          </td>
+          <td style="font-size:7.5pt;color:#6b7280">${p.receiver?.city || '—'}</td>
+          <td style="text-align:right;font-weight:bold;color:#111;font-size:8pt">${price.toFixed(2)}</td>
+          <td style="text-align:center;font-size:7pt">
+            <span style="padding:2px 6px;border-radius:4px;background:${
+              p.status === 'Livré' ? '#d1fae5;color:#065f46' :
+              p.status === 'Sortie livraison' ? '#dbeafe;color:#1e40af' :
+              p.status === 'En attente' ? '#fef3c7;color:#92400e' :
+              '#f3f4f6;color:#374151'
+            }">${p.status || 'En cours'}</span>
+          </td>
+        </tr>
+      `
+    }).join('')
+  }
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Expéditions ${driverName}</title>
+  <style>
+    @page { margin: 12mm; }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      font-size: 8pt;
+      line-height: 1.3;
+      color: #111;
+    }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { padding: 4px 6px; border-bottom: 1px solid #e5e7eb; }
+    th {
+      background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+      color: white;
+      font-size: 7pt;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .section-title {
+      background: #f3f4f6;
+      padding: 6px 8px;
+      margin-top: 12px;
+      margin-bottom: 4px;
+      font-weight: bold;
+      font-size: 8.5pt;
+      border-left: 4px solid;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .section-collectes { border-left-color: #10b981; color: #065f46; }
+    .section-acollecter { border-left-color: #3b82f6; color: #1e40af; }
+    .section-retard { border-left-color: #f59e0b; color: #92400e; }
+    
+    .totals-section {
+      margin-top: 4px;
+      padding: 4px 8px;
+      font-size: 7.5pt;
+      font-weight: bold;
+      display: flex;
+      justify-content: space-between;
+      background: #f9fafb;
+      border-top: 2px solid #e5e7eb;
+    }
+    .totals-general {
+      margin-top: 12px;
+      padding: 8px;
+      background: linear-gradient(135deg, #1e40af 0%, #3b82f6 100%);
+      color: white;
+      font-size: 9pt;
+      font-weight: bold;
+      text-align: center;
+      border-radius: 6px;
+    }
+    @media print {
+      body { print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+    }
+  </style>
+</head>
+<body>
+  <!-- En-tête -->
+  <table style="margin-bottom:12px;border:2px solid #1e40af">
+    <tr>
+      <td style="padding:8px;width:35%;vertical-align:middle">
+        <img src="${logoUrl}" style="height:32px;object-fit:contain;margin-bottom:4px" onerror="this.style.display='none'">
+        <div style="font-size:9pt;font-weight:bold;color:#1e40af;letter-spacing:0.5px">BG EXPRESS</div>
+        <div style="font-size:7pt;color:#374151">Agence de <strong>${profileData?.city || '—'}</strong></div>
+      </td>
+      <td style="padding:8px;text-align:center;vertical-align:middle;border-left:2px solid #1e40af;border-right:2px solid #1e40af;width:30%">
+        <div style="font-size:13pt;font-weight:bold;color:#1e40af;letter-spacing:1px">EXPÉDITIONS LIVREUR</div>
+        <div style="font-size:9pt;color:#374151;margin-top:2px;font-weight:bold">${driverName}</div>
+      </td>
+      <td style="padding:8px;text-align:right;vertical-align:middle;width:35%;font-size:8pt">
+        <div><strong>Date :</strong> ${printDate}</div>
+        <div><strong>Agent :</strong> ${profileData?.name || '—'}</div>
+        <div style="margin-top:4px;color:#1e40af;font-weight:bold">
+          ${totalGeneral} expédition${totalGeneral > 1 ? 's' : ''}
+        </div>
+      </td>
+    </tr>
+  </table>
+
+  <!-- Résumé en haut -->
+  <div style="display:flex;gap:8px;margin-bottom:12px;justify-content:center">
+    <div style="flex:1;text-align:center;padding:6px;background:#d1fae5;border-radius:6px">
+      <div style="font-size:7pt;color:#065f46">Collectés</div>
+      <div style="font-size:10pt;font-weight:bold;color:#065f46">${totalCollectes}</div>
+      <div style="font-size:7pt;color:#065f46">${montantCollectes.toFixed(2)} DH</div>
+    </div>
+    <div style="flex:1;text-align:center;padding:6px;background:#dbeafe;border-radius:6px">
+      <div style="font-size:7pt;color:#1e40af">À Collecter</div>
+      <div style="font-size:10pt;font-weight:bold;color:#1e40af">${totalACollecter}</div>
+      <div style="font-size:7pt;color:#1e40af">${montantACollecter.toFixed(2)} DH</div>
+    </div>
+    <div style="flex:1;text-align:center;padding:6px;background:#fef3c7;border-radius:6px">
+      <div style="font-size:7pt;color:#92400e">En Retard</div>
+      <div style="font-size:10pt;font-weight:bold;color:#92400e">${totalEnRetard}</div>
+      <div style="font-size:7pt;color:#92400e">${montantEnRetard.toFixed(2)} DH</div>
+    </div>
+  </div>
+
+  <!-- Tableau unique avec toutes les sections -->
+  <table>
+    <thead>
+      <tr>
+        <th style="width:24px">N°</th>
+        <th>N° EXP</th>
+        <th style="width:60px">Date</th>
+        <th style="width:50px">Client</th>
+        <th>Destinataire</th>
+        <th style="width:80px">Ville</th>
+        <th style="width:60px;text-align:right">Montant</th>
+        <th style="width:70px;text-align:center">Statut</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${totalCollectes > 0 ? `
+        <tr>
+          <td colspan="8" class="section-title section-collectes">
+            <span>? PORTS COLLECTÉS</span>
+            <span>${totalCollectes} · ${montantCollectes.toFixed(2)} DH</span>
+          </td>
+        </tr>
+        ${generateRows(collectes, 0, '#10b981')}
+      ` : ''}
+      
+      ${totalACollecter > 0 ? `
+        <tr>
+          <td colspan="8" class="section-title section-acollecter">
+            <span>?? À COLLECTER</span>
+            <span>${totalACollecter} · ${montantACollecter.toFixed(2)} DH</span>
+          </td>
+        </tr>
+        ${generateRows(aCollecter, totalCollectes, '#3b82f6')}
+      ` : ''}
+      
+      ${totalEnRetard > 0 ? `
+        <tr>
+          <td colspan="8" class="section-title section-retard">
+            <span>?? EN RETARD</span>
+            <span>${totalEnRetard} · ${montantEnRetard.toFixed(2)} DH</span>
+          </td>
+        </tr>
+        ${generateRows(enRetard, totalCollectes + totalACollecter, '#f59e0b')}
+      ` : ''}
+    </tbody>
+  </table>
+
+  <!-- Total général en bas -->
+  <div class="totals-general">
+    TOTAL GÉNÉRAL : ${totalGeneral} expédition${totalGeneral > 1 ? 's' : ''} · ${montantGeneral.toFixed(2)} DH
+  </div>
+
+  <script>window.onload = function(){ window.print(); }<\/script>
+</body>
+</html>`
+
+  const win = window.open('', '_blank', 'width=1200,height=800')
+  if (win) {
+    win.document.write(html)
+    win.document.close()
+  }
+}

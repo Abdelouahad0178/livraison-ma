@@ -21,7 +21,7 @@ import { updateParcel, searchParcels } from '../../../firebase/parcels'
 import { collection, query, where, onSnapshot, documentId } from 'firebase/firestore'
 import { db } from '../../../firebase/db'
 import { shouldTriggerSearch } from '../../../utils/searchUtils'
-import { printPortsCollectes, printVersementParcels } from '../../../utils/agentPrintUtils'
+import { printPortsCollectes, printVersementParcels, printDriverParcels } from '../../../utils/agentPrintUtils'
 
 // Types
 interface DelayReason {
@@ -1604,6 +1604,53 @@ export default function CaisseChefTab() {
     }
   }
 
+  // Imprimer les expéditions d'un livreur spécifique
+  const handlePrintDriver = (driver: any) => {
+    if (!driver || !driver.parcels || driver.parcels.length === 0) {
+      alert('⚠️ Aucune expédition pour ce livreur')
+      return
+    }
+
+    // Organiser les expéditions par catégorie
+    const now = new Date()
+    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
+
+    // 1. Ports collectés
+    const collectes = driver.parcels.filter((p: any) => {
+      const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
+      const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
+      const isAlreadyTransferred = p.portAdminTransferred || p.adminTransferred
+      const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
+      return isPortDu && isCollected && !isReturned && !isAlreadyTransferred
+    })
+
+    // 2. À collecter
+    const aCollecter = driver.parcels.filter((p: any) => {
+      const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
+      const isReturned = p.returnedAt || p.wasReturned || p.status === 'Retourné'
+      const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
+      if (!isPortDu || isReturned || isCollected) return false
+
+      // En cours de livraison ou livré mais pas encore collecté
+      return p.status === 'Arrivé en agence' || p.status === 'En cours de livraison' || p.status === 'Livré'
+    })
+
+    // 3. En retard
+    const enRetard = driver.parcels.filter((p: any) => {
+      const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
+      if (!isPortDu) return false
+      if (p.portPayeMethod) return false
+      if (p.status !== 'En cours de livraison') return false
+      if (!p.deliveryAssignedAt) return false
+
+      const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
+      return assignedDate < oneDayAgo
+    })
+
+    // Appeler la fonction d'impression
+    printDriverParcels(driver.name, collectes, aCollecter, enRetard, profile)
+  }
+
   // Versements filtrés par date
   const filteredVersements = useMemo(() => {
     const versementDate = (v: any) => {
@@ -2171,6 +2218,19 @@ export default function CaisseChefTab() {
                         </div>
                       )}
                     </div>
+
+                    {/* Bouton impression */}
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation()
+                        handlePrintDriver(driver)
+                      }}
+                      className="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition text-xs font-semibold flex items-center gap-1.5 shadow-sm"
+                      title="Imprimer les expéditions de ce livreur"
+                    >
+                      <Printer className="w-3.5 h-3.5" />
+                      Imprimer
+                    </button>
 
                     {/* Icône expansion */}
                     {expandedDrivers.has(driver.id) ? (
