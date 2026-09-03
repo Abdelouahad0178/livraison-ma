@@ -1139,8 +1139,8 @@ export function subscribeAgentParcels(agentId: any, callback: any, onError: (err
     }, 50)
   }
 
-  // ⚡ OPTIMISATION : Limiter à 45 jours et 200 documents pour chargement rapide
-  const since = daysAgoTimestamp(45)
+  // ⚡ OPTIMISATION : Limiter à 90 jours et 200 documents pour chargement rapide
+  const since = daysAgoTimestamp(90)
   const q1 = query(collection(db, 'parcels'), where('agentId', '==', agentId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
   const q2 = query(collection(db, 'parcels'), where('destinationAgentId', '==', agentId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
 
