@@ -302,7 +302,8 @@ export default function CaisseChefTab() {
     console.log('📊 [dataSource] RECALCUL:', {
       'allDisplayParcels.length': allDisplayParcels?.length || 0,
       'searchResults': searchResults?.length || 0,
-      'modifiedParcels': Object.keys(modifiedParcels).length
+      'modifiedParcels': Object.keys(modifiedParcels).length,
+      'dateFilter': datePreset
     })
 
     // 🔍 En mode recherche, utiliser UNIQUEMENT searchResults (même si vide,
@@ -311,6 +312,19 @@ export default function CaisseChefTab() {
     let source = searchResults !== null
       ? [...searchResults]
       : [...(allDisplayParcels || [])]
+
+    // 🗓️ Appliquer le filtre de date (sauf en mode recherche)
+    if (searchResults === null) {
+      const parcelDate = (p: any) => {
+        // Utiliser workDate si disponible, sinon createdAt
+        if (p.workDate?.toDate) return p.workDate.toDate()
+        if (p.workDate) return new Date(p.workDate)
+        if (p.createdAt?.toDate) return p.createdAt.toDate()
+        if (p.createdAt) return new Date(p.createdAt)
+        return new Date(0)
+      }
+      source = filterByDate(source, datePreset, dateFrom, dateTo, parcelDate)
+    }
 
     // Appliquer le cache des modifications locales EN DERNIER (priorité absolue)
     // Cela garantit que les modifications utilisateur sont toujours visibles
@@ -325,7 +339,7 @@ export default function CaisseChefTab() {
     })
 
     return source
-  }, [allDisplayParcels, searchResults, modifiedParcels])
+  }, [allDisplayParcels, searchResults, modifiedParcels, datePreset, dateFrom, dateTo])
 
   // Calcul des statistiques
   const stats = useMemo(() => {
