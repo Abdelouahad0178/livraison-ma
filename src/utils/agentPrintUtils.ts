@@ -644,7 +644,7 @@ export function printPortsCollectes(
     return `
       <tr style="background-color: ${rowBg}">
         <td style="text-align:center;font-weight:bold;color:#555">${i + 1}</td>
-        <td style="font-family:monospace;font-weight:bold;color:#1d4ed8;font-size:7.5pt">${p.trackingId || p.sender?.nic || '—'}</td>
+        <td style="font-family:monospace;font-weight:bold;color:#1d4ed8;font-size:7.5pt">${p.sender?.nic || '—'}</td>
         <td style="font-size:7pt;color:#6b7280">${formatDate(p.createdAt)}</td>
         <td>
           <strong style="font-size:8pt">${p.sender?.name || '—'}</strong><br>
@@ -780,7 +780,7 @@ export function printPortsCollectes(
     <thead>
       <tr>
         <th style="width:24px;text-align:center">N°</th>
-        <th style="width:90px">N° Tracking</th>
+        <th style="width:90px">NIC</th>
         <th style="width:60px">Date Création</th>
         <th style="width:110px">Expéditeur</th>
         <th style="width:130px">Destinataire</th>
@@ -874,7 +874,7 @@ export function printVersementParcels(
     return `
       <tr style="background-color: ${rowBg}">
         <td style="text-align:center;font-weight:bold;color:#555">${i + 1}</td>
-        <td style="font-family:monospace;font-weight:bold;color:#1d4ed8;font-size:7.5pt">${p.trackingId || p.sender?.nic || '—'}</td>
+        <td style="font-family:monospace;font-weight:bold;color:#1d4ed8;font-size:7.5pt">${p.sender?.nic || '—'}</td>
         <td style="font-size:7pt;color:#6b7280">${formatDate(p.createdAt)}</td>
         <td>
           <strong style="font-size:8pt">${p.sender?.name || '—'}</strong><br>
