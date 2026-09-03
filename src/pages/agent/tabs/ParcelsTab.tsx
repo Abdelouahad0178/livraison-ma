@@ -2923,7 +2923,7 @@ export default function ParcelsTab() {
                               value={addressFilter}
                               onChange={e => setAddressFilter(e.target.value)}
                               onClick={e => e.stopPropagation()}
-                              className="px-2 py-1 text-xs border border-pink-300 rounded bg-white text-gray-900 placeholder-gray-500 focus:ring-1 focus:ring-pink-500 focus:border-pink-500"
+                              className="w-20 px-2 py-1 text-xs border border-pink-300 rounded bg-white text-gray-900 placeholder-gray-500 focus:ring-1 focus:ring-pink-500 focus:border-pink-500"
                             />
                           </div>
                         </th>

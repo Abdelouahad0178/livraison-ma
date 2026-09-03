@@ -197,7 +197,7 @@ export async function fetchAllAgentCodParcels(agentId: string) {
   ;[...s1.docs, ...s2.docs].forEach(d => all.set(d.id, rowFromDoc(d)))
   return [...all.values()].filter(p => parseFloat(p.codAmount) > 0)
 }
-export async function collectPortDu(parcelId: string, agentName: string, agentId: string) {
+export async function collectPortDu(parcelId: string, agentName: string, agentId: string, isArchived: boolean = false) {
   const updates = {
     portStatus:          'collected',
     portCollectedBy:     agentName,
@@ -206,7 +206,31 @@ export async function collectPortDu(parcelId: string, agentName: string, agentId
     portDuReceivedMethod: 'especes', // Par défaut espèces pour cette fonction
   }
 
-  await updateDoc(doc(db, 'parcels', parcelId), updates)
+  // 🗄️ Les résultats de recherche peuvent provenir de la collection d'archives
+  // (parcels_archive) : il faut cibler la BONNE collection, sinon updateDoc
+  // échoue silencieusement en mode recherche pour ces colis (not-found /
+  // permission-denied selon les règles).
+  try {
+    await runTransaction(db, async (transaction) => {
+      const ref = doc(db, isArchived ? 'parcels_archive' : 'parcels', parcelId)
+      const snap = await transaction.get(ref)
+
+      if (!snap.exists()) {
+        throw new Error(`Colis ${parcelId} introuvable dans ${isArchived ? 'parcels_archive' : 'parcels'}`)
+      }
+
+      transaction.update(ref, updates)
+    })
+  } catch (error: any) {
+    console.error('❌ [collectPortDu] ERREUR:', {
+      code: error?.code,
+      message: error?.message,
+      parcelId,
+      isArchived,
+      error
+    })
+    throw error
+  }
 
   // 🔄 TEMPS RÉEL: Émettre événement pour synchronisation cross-tab
   if (typeof window !== 'undefined') {
@@ -224,7 +248,7 @@ export async function collectPortDu(parcelId: string, agentName: string, agentId
 /**
  * Annuler la collecte d'un port dû
  */
-export async function uncollectPortDu(parcelId: string) {
+export async function uncollectPortDu(parcelId: string, isArchived: boolean = false) {
   const updates = {
     portStatus:          null,
     portCollectedBy:     null,
@@ -233,7 +257,7 @@ export async function uncollectPortDu(parcelId: string) {
     portDuReceivedMethod: null,
   }
 
-  await updateDoc(doc(db, 'parcels', parcelId), updates)
+  await updateDoc(doc(db, isArchived ? 'parcels_archive' : 'parcels', parcelId), updates)
 
   // 🔄 TEMPS RÉEL: Émettre événement pour synchronisation cross-tab
   if (typeof window !== 'undefined') {

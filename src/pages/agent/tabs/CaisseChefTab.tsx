@@ -250,8 +250,13 @@ export default function CaisseChefTab() {
   const filteredSearchResults = useMemo(() => {
     if (!searchResults) return searchResults
 
-    // 🔧 Appliquer modifiedParcels avant de filtrer
-    const resultsWithModifications = searchResults.map((p: any) => {
+    // 🔧 Merger extraCollectedParcels avec searchResults (éviter doublons)
+    const extraParcels = Object.values(extraCollectedParcels).filter(
+      (extra: any) => !searchResults.some((sr: any) => sr.id === extra.id)
+    )
+    const mergedResults = [...searchResults, ...extraParcels]
+
+    const resultsWithModifications = mergedResults.map((p: any) => {
       const modified = modifiedParcels[p.id]
       return modified ? { ...p, ...modified } : p
     })
@@ -276,7 +281,7 @@ export default function CaisseChefTab() {
         case 'a_collecter':
           return isPortDu && !p.portStatus && isInDelivery && p.status?.toLowerCase().trim() !== 'retourné'
         case 'collecte':
-          return isPortDu && isCollected
+          return isPortDu && isCollected && p.status?.toLowerCase().trim() !== 'retourné'
         case 'en_retard':
           return isPortDu && isLate && p.status?.toLowerCase().trim() !== 'retourné'
         default:

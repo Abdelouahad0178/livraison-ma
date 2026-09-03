@@ -244,6 +244,21 @@ service cloud.firestore {
       // Sans vérifier le statut de livraison ni le verrouillage
       allow update: if isCentralCollector();
 
+      // 🖐️ RÈGLE : Chef d'agence peut modifier price, portType, codAmount (édition rapide)
+      allow update: if isChefAgence()
+        && keepsDeliveredStatus()
+        && !isParcelLocked()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['price', 'portType', 'codAmount']);
+
+      // 💰 RÈGLE : Chef d'agence peut collecter/décollecterports (Port dû et Port payé)
+      allow update: if isChefAgence()
+        && keepsDeliveredStatus()
+        && !isParcelLocked()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'portStatus', 'portCollectedBy', 'portCollectedById', 'portCollectedAt', 'portDuReceivedMethod',
+          'portReceivedBy', 'portReceivedById', 'portReceivedAt'
+        ]);
+
       // ✅ RÈGLE : Aide-agent peut modifier ses propres colis non validés et non verrouillés
       allow update: if isAideAgent()
         && isParcelCreator()
