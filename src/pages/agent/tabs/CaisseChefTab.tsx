@@ -2618,6 +2618,14 @@ export default function CaisseChefTab() {
               <table className="w-full text-sm">
                 <thead className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white">
                   <tr>
+                    <th colSpan={7} className="px-4 py-4 text-center border-b border-blue-500">
+                      <div className="flex items-center justify-center gap-2">
+                        <Calendar className="w-5 h-5" />
+                        <span className="text-lg font-bold">Période: {periodLabel}</span>
+                      </div>
+                    </th>
+                  </tr>
+                  <tr>
                     <th className="px-4 py-3 text-left font-semibold">Livreur</th>
                     <th className="px-4 py-3 text-center font-semibold">Assignés</th>
                     <th className="px-4 py-3 text-center font-semibold">Livrés</th>
@@ -2789,6 +2797,14 @@ export default function CaisseChefTab() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gradient-to-r from-orange-600 to-red-600 text-white">
+                  <tr>
+                    <th colSpan={7} className="px-4 py-4 text-center border-b border-orange-500">
+                      <div className="flex items-center justify-center gap-2">
+                        <Calendar className="w-5 h-5" />
+                        <span className="text-lg font-bold">Période: {periodLabel}</span>
+                      </div>
+                    </th>
+                  </tr>
                   <tr>
                     <th className="px-4 py-3 text-left font-semibold">Âge</th>
                     <th className="px-4 py-3 text-left font-semibold">N° EXP</th>
