@@ -1,5 +1,5 @@
 import type { DateFilterPreset } from '../types'
-import { getOperationalDayRange } from '../config/operationalDay'
+import { getOperationalDayRange, getCurrentOperationalDay } from '../config/operationalDay'
 
 // ── Date string helpers ───────────────────────────────────────────────────────
 
@@ -64,7 +64,6 @@ export const filterByDate = <T>(
   let end: Date = endOfToday
   if (preset === 'today') {
     // 🕐 Utiliser le jour opérationnel (8h → 6h lendemain) au lieu du jour calendaire
-    const { getCurrentOperationalDay } = require('../config/operationalDay')
     const opDay = getCurrentOperationalDay()
     const range = getOperationalDayRange(opDay)
     start = range.start
