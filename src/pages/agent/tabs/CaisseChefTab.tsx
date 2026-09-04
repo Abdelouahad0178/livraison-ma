@@ -21,7 +21,7 @@ import { updateParcel, searchParcels } from '../../../firebase/parcels'
 import { collection, query, where, onSnapshot, documentId } from 'firebase/firestore'
 import { db } from '../../../firebase/db'
 import { shouldTriggerSearch } from '../../../utils/searchUtils'
-import { printPortsCollectes, printVersementParcels, printDriverParcels } from '../../../utils/agentPrintUtils'
+import { printPortsCollectes, printVersementParcels, printDriverParcels, printBilanJournee, printInstancesRetards } from '../../../utils/agentPrintUtils'
 import { getOperationalDay, isInOperationalDay, getCurrentOperationalDay, getOperationalDayString } from '../../../config/operationalDay'
 
 // Types
@@ -1043,9 +1043,10 @@ export default function CaisseChefTab() {
       const ageJours = ref ? Math.floor((now - ref.getTime()) / 86400000) : 0
       const delay = deliveryDelays.find((d: any) => d.parcelId === p.id && !d.resolvedAt)
       const bucket = ageJours >= 30 ? '30j+' : ageJours >= 7 ? '7-30j' : ageJours >= 1 ? '1-7j' : '<24h'
-      return { parcel: p, ageJours, delay, bucket }
+      const driver = drivers.find(d => d.id === p.deliveryDriverId)
+      return { parcel: p, ageJours, delay, bucket, driverName: driver?.name || '—' }
     }).sort((a, b) => b.ageJours - a.ageJours) // Plus ancien en premier
-  }, [dataSource, deliveryDelays, profile?.city])
+  }, [dataSource, deliveryDelays, profile?.city, drivers])
 
   // 📊 Ventilation des collectes par jour opérationnel (14 derniers jours)
   const collectesParJour = useMemo(() => {
@@ -2571,13 +2572,35 @@ export default function CaisseChefTab() {
         <div className="space-y-4">
           {/* En-tête */}
           <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-2 flex items-center gap-2">
-              <TrendingUp className="w-6 h-6 text-blue-600" />
-              Bilan de Journée — Suivi Quotidien par Livreur
-            </h2>
-            <p className="text-sm text-gray-600">
-              Revue de fin d'après-midi: état de livraison et collecte des ports dûs
-            </p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900 mb-2 flex items-center gap-2">
+                  <TrendingUp className="w-6 h-6 text-blue-600" />
+                  Bilan de Journée — Suivi Quotidien par Livreur
+                </h2>
+                <p className="text-sm text-gray-600">
+                  Revue de fin d'après-midi: état de livraison et collecte des ports dûs
+                </p>
+              </div>
+              {bilanJournee.length > 0 && (
+                <button
+                  onClick={() => {
+                    const dateLabel = datePreset === 'today' ? "Aujourd'hui" :
+                                     datePreset === 'week' ? '7 derniers jours' :
+                                     datePreset === 'month' ? 'Ce mois' :
+                                     datePreset === 'day' && dateFrom ? new Date(dateFrom).toLocaleDateString('fr-FR') :
+                                     datePreset === 'custom' && dateFrom && dateTo ?
+                                       `${new Date(dateFrom).toLocaleDateString('fr-FR')} - ${new Date(dateTo).toLocaleDateString('fr-FR')}` :
+                                     'Période sélectionnée'
+                    printBilanJournee(bilanJournee, profile, dateLabel)
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-semibold text-sm shadow-md"
+                >
+                  <Printer className="w-4 h-4" />
+                  Imprimer Bilan
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Tableau de bilan */}
@@ -2698,13 +2721,35 @@ export default function CaisseChefTab() {
         <div className="space-y-4">
           {/* En-tête */}
           <div className="bg-gradient-to-r from-orange-50 to-red-50 border border-orange-200 rounded-xl p-6">
-            <h2 className="text-xl font-bold text-gray-900 mb-2 flex items-center gap-2">
-              <AlertCircle className="w-6 h-6 text-orange-600" />
-              Instances / Retards — Suivi par ancienneté
-            </h2>
-            <p className="text-sm text-gray-600">
-              Ports dûs non collectés en instance, triés du plus ancien au plus récent
-            </p>
+            <div className="flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900 mb-2 flex items-center gap-2">
+                  <AlertCircle className="w-6 h-6 text-orange-600" />
+                  Instances / Retards — Suivi par ancienneté
+                </h2>
+                <p className="text-sm text-gray-600">
+                  Ports dûs non collectés en instance, triés du plus ancien au plus récent
+                </p>
+              </div>
+              {instances.length > 0 && (
+                <button
+                  onClick={() => {
+                    const dateLabel = datePreset === 'today' ? "Aujourd'hui" :
+                                     datePreset === 'week' ? '7 derniers jours' :
+                                     datePreset === 'month' ? 'Ce mois' :
+                                     datePreset === 'day' && dateFrom ? new Date(dateFrom).toLocaleDateString('fr-FR') :
+                                     datePreset === 'custom' && dateFrom && dateTo ?
+                                       `${new Date(dateFrom).toLocaleDateString('fr-FR')} - ${new Date(dateTo).toLocaleDateString('fr-FR')}` :
+                                     'Toutes périodes'
+                    printInstancesRetards(instances, profile, dateLabel, DELAY_REASONS)
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition font-semibold text-sm shadow-md"
+                >
+                  <Printer className="w-4 h-4" />
+                  Imprimer Retards
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Résumé par bucket */}
@@ -2757,8 +2802,7 @@ export default function CaisseChefTab() {
                     </tr>
                   ) : (
                     instances.map((inst, idx) => {
-                      const { parcel, ageJours, delay, bucket } = inst
-                      const driver = drivers.find(d => d.id === parcel.deliveryDriverId)
+                      const { parcel, ageJours, delay, bucket, driverName } = inst
                       const badgeColor = bucket === '<24h' ? 'bg-yellow-100 text-yellow-800' :
                                         bucket === '1-7j' ? 'bg-orange-100 text-orange-800' :
                                         bucket === '7-30j' ? 'bg-red-100 text-red-800' : 'bg-red-200 text-red-900'
@@ -2774,7 +2818,7 @@ export default function CaisseChefTab() {
                             {parcel.trackingId}
                           </td>
                           <td className="px-4 py-3 font-semibold text-gray-900">
-                            {driver?.name || '—'}
+                            {driverName}
                           </td>
                           <td className="px-4 py-3 text-right font-bold text-gray-900">
                             {safeParseAmount(parcel.price).toFixed(2)} DH

@@ -1250,3 +1250,275 @@ export function printDriverParcels(
     win.document.close()
   }
 }
+
+/**
+ * Imprime le bilan de journée par livreur
+ */
+export function printBilanJournee(bilanData: any[], profileData: any, dateLabel: string): void {
+  const printDate = new Date().toLocaleDateString('fr-MA', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+  const logoUrl = window.location.origin + '/LOGO.jpg'
+
+  const totalAssignes = bilanData.reduce((s, b) => s + b.total, 0)
+  const totalLivres = bilanData.reduce((s, b) => s + b.livresCount, 0)
+  const totalEnCours = bilanData.reduce((s, b) => s + b.enCoursCount, 0)
+  const totalCollectes = bilanData.reduce((s, b) => s + b.portsCollectesMontant, 0)
+  const totalManquant = bilanData.reduce((s, b) => s + b.montantManquant, 0)
+  const tauxGlobal = totalAssignes > 0 ? Math.round((totalLivres / totalAssignes) * 100) : 0
+
+  const rows = bilanData.map((b, i) => `
+    <tr style="background:${i % 2 === 0 ? '#ffffff' : '#f9fafb'}">
+      <td style="padding:8px;font-weight:bold;color:#111827">${b.name}</td>
+      <td style="padding:8px;text-align:center;font-weight:bold;color:#2563eb">${b.total}</td>
+      <td style="padding:8px;text-align:center;font-weight:bold;color:#059669">${b.livresCount}</td>
+      <td style="padding:8px;text-align:center">
+        <span style="padding:4px 8px;border-radius:4px;font-weight:bold;font-size:9pt;
+          background:${b.tauxLivraison >= 80 ? '#d1fae5;color:#065f46' : b.tauxLivraison >= 50 ? '#fef3c7;color:#92400e' : '#fee2e2;color:#991b1b'}">
+          ${b.tauxLivraison}%
+        </span>
+      </td>
+      <td style="padding:8px;text-align:center;font-weight:bold;color:#ea580c">${b.enCoursCount}</td>
+      <td style="padding:8px;text-align:right">
+        <div style="font-weight:bold;color:#059669">${b.portsCollectesMontant.toFixed(2)} DH</div>
+        <div style="font-size:8pt;color:#6b7280">(${b.portsCollectesCount} colis)</div>
+      </td>
+      <td style="padding:8px;text-align:right">
+        ${b.montantManquant > 0 ? `
+          <div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:4px;padding:4px 8px;display:inline-block">
+            <div style="font-weight:bold;color:#991b1b">${b.montantManquant.toFixed(2)} DH</div>
+            <div style="font-size:8pt;color:#dc2626">(${b.livresNonCollectes.length} colis)</div>
+          </div>
+        ` : '<span style="color:#9ca3af">—</span>'}
+      </td>
+    </tr>
+  `).join('')
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Bilan de Journée - ${dateLabel}</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 9pt; padding: 20px; }
+    table { border-collapse: collapse; width: 100%; }
+    th { background: linear-gradient(135deg, #2563eb 0%, #4f46e5 100%); color: white; padding: 10px 8px; text-align: left; font-size: 9pt; font-weight: 600; }
+    td { border-bottom: 1px solid #e5e7eb; }
+    .header-table { border: 2px solid #2563eb; margin-bottom: 12px; }
+    .header-table td { border: none; }
+    .summary-row { background: linear-gradient(135deg, #dbeafe 0%, #e0e7ff 100%); border-top: 2px solid #2563eb; }
+    .summary-row td { padding: 10px 8px; font-weight: bold; border-bottom: none; }
+    @media print {
+      body { padding: 10px; }
+      @page { margin: 15mm; }
+    }
+  </style>
+</head>
+<body>
+  <table class="header-table">
+    <tr>
+      <td style="padding:8px 14px;width:33%;vertical-align:middle">
+        <img src="${logoUrl}" style="height:36px;object-fit:contain;display:block;margin-bottom:4px" onerror="this.style.display='none'">
+        <div style="font-size:9pt;font-weight:bold;color:#2563eb;letter-spacing:0.5px">BG EXPRESS</div>
+        <div style="font-size:7.5pt;color:#374151">N°19, Rue 5, Hay Tissir2 – Casablanca</div>
+        <div style="font-size:7.5pt;color:#374151">☎ 0522 62 92 89 &nbsp;|&nbsp; 📱 0661 97 86 12</div>
+      </td>
+      <td style="padding:8px 14px;text-align:center;vertical-align:middle;border-left:2px solid #2563eb;border-right:2px solid #2563eb;width:34%">
+        <div style="font-size:15pt;font-weight:bold;color:#2563eb;letter-spacing:1px">BILAN DE JOURNÉE</div>
+        <div style="font-size:9pt;color:#374151;margin-top:4px">Suivi Quotidien par Livreur</div>
+        <div style="font-size:8.5pt;color:#6b7280;margin-top:2px">${dateLabel}</div>
+      </td>
+      <td style="padding:8px 14px;text-align:right;vertical-align:middle;width:33%;font-size:8.5pt">
+        <div><strong>Date impression :</strong> ${printDate}</div>
+        <div><strong>Agence :</strong> ${profileData?.city || '—'}</div>
+        <div><strong>Agent :</strong> ${profileData?.name || '—'}</div>
+      </td>
+    </tr>
+  </table>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:20%">Livreur</th>
+        <th style="width:10%;text-align:center">Assignés</th>
+        <th style="width:10%;text-align:center">Livrés</th>
+        <th style="width:10%;text-align:center">Taux %</th>
+        <th style="width:10%;text-align:center">En cours</th>
+        <th style="width:20%;text-align:right">Collectés (DH)</th>
+        <th style="width:20%;text-align:right">🚨 Livrés non encaissés</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows}
+      <tr class="summary-row">
+        <td style="padding:10px 8px;color:#1f2937">TOTAL</td>
+        <td style="padding:10px 8px;text-align:center;color:#2563eb">${totalAssignes}</td>
+        <td style="padding:10px 8px;text-align:center;color:#059669">${totalLivres}</td>
+        <td style="padding:10px 8px;text-align:center;color:#6b7280">${tauxGlobal}%</td>
+        <td style="padding:10px 8px;text-align:center;color:#ea580c">${totalEnCours}</td>
+        <td style="padding:10px 8px;text-align:right;color:#047857">${totalCollectes.toFixed(2)} DH</td>
+        <td style="padding:10px 8px;text-align:right;color:#991b1b">${totalManquant.toFixed(2)} DH</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div style="margin-top:20px;padding:12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;font-size:8pt;color:#6b7280">
+    <strong style="color:#111827">Légende:</strong>
+    <strong>Assignés:</strong> Nombre total d'expéditions confiées au livreur |
+    <strong>Livrés:</strong> Expéditions livrées avec succès |
+    <strong>Taux %:</strong> Pourcentage de livraison (🟢 ≥80% | 🟡 50-79% | 🔴 &lt;50%) |
+    <strong>En cours:</strong> Expéditions encore chez le livreur |
+    <strong>Collectés:</strong> Montant des ports dûs encaissés |
+    <strong>🚨 Livrés non encaissés:</strong> Argent dû mais non collecté (ANOMALIE!)
+  </div>
+
+  <script>window.onload = function(){ window.print(); }<\/script>
+</body>
+</html>`
+
+  const win = window.open('', '_blank', 'width=1200,height=800')
+  if (win) {
+    win.document.write(html)
+    win.document.close()
+  }
+}
+
+/**
+ * Imprime la liste des instances/retards
+ */
+export function printInstancesRetards(instancesData: any[], profileData: any, dateLabel: string, delayReasons: any[]): void {
+  const printDate = new Date().toLocaleDateString('fr-MA', { day: '2-digit', month: 'long', year: 'numeric', hour: '2-digit', minute: '2-digit' })
+  const logoUrl = window.location.origin + '/LOGO.jpg'
+
+  const buckets = [
+    { key: '<24h', label: 'Moins de 24h', color: '#fef3c7', textColor: '#92400e' },
+    { key: '1-7j', label: '1 à 7 jours', color: '#fed7aa', textColor: '#9a3412' },
+    { key: '7-30j', label: '7 à 30 jours', color: '#fecaca', textColor: '#991b1b' },
+    { key: '30j+', label: 'Plus de 30 jours', color: '#fca5a5', textColor: '#7f1d1d' }
+  ]
+
+  const rows = instancesData.map((inst, i) => {
+    const { parcel, ageJours, delay, bucket, driverName } = inst
+    const badgeColor = bucket === '<24h' ? '#fef3c7' : bucket === '1-7j' ? '#fed7aa' : bucket === '7-30j' ? '#fecaca' : '#fca5a5'
+    const badgeText = bucket === '<24h' ? '#92400e' : bucket === '1-7j' ? '#9a3412' : bucket === '7-30j' ? '#991b1b' : '#7f1d1d'
+    const delayReason = delay ? delayReasons.find((r: any) => r.key === delay.reason) : null
+
+    return `
+      <tr style="background:${i % 2 === 0 ? '#ffffff' : '#f9fafb'}">
+        <td style="padding:8px;text-align:center">
+          <span style="padding:4px 8px;border-radius:4px;font-weight:bold;font-size:9pt;background:${badgeColor};color:${badgeText}">
+            ${ageJours}j
+          </span>
+        </td>
+        <td style="padding:8px;font-family:monospace;font-weight:bold;color:#2563eb">${parcel.trackingId}</td>
+        <td style="padding:8px;font-weight:600;color:#111827">${driverName}</td>
+        <td style="padding:8px;text-align:right;font-weight:bold;color:#111827">${parseFloat(parcel.price || 0).toFixed(2)} DH</td>
+        <td style="padding:8px">
+          ${delayReason ? `<span style="background:#f3f4f6;padding:3px 8px;border-radius:4px;font-size:8pt">${delayReason.label}</span>` : '<span style="color:#9ca3af">—</span>'}
+        </td>
+        <td style="padding:8px;font-size:8pt;color:#6b7280">${delay?.details || '—'}</td>
+      </tr>
+    `
+  }).join('')
+
+  const summary = buckets.map(b => {
+    const count = instancesData.filter(i => i.bucket === b.key).length
+    const montant = instancesData.filter(i => i.bucket === b.key).reduce((s, i) => s + parseFloat(i.parcel.price || 0), 0)
+    return { ...b, count, montant }
+  })
+
+  const totalColis = instancesData.length
+  const totalMontant = instancesData.reduce((s, i) => s + parseFloat(i.parcel.price || 0), 0)
+
+  const html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Instances / Retards - ${dateLabel}</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; font-size: 9pt; padding: 20px; }
+    table { border-collapse: collapse; width: 100%; }
+    th { background: linear-gradient(135deg, #ea580c 0%, #dc2626 100%); color: white; padding: 10px 8px; text-align: left; font-size: 9pt; font-weight: 600; }
+    td { border-bottom: 1px solid #e5e7eb; }
+    .header-table { border: 2px solid #ea580c; margin-bottom: 12px; }
+    .header-table td { border: none; }
+    .summary-boxes { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }
+    .summary-box { padding: 12px; border: 1px solid #e5e7eb; border-radius: 6px; text-align: center; }
+    @media print {
+      body { padding: 10px; }
+      @page { margin: 15mm; }
+    }
+  </style>
+</head>
+<body>
+  <table class="header-table">
+    <tr>
+      <td style="padding:8px 14px;width:33%;vertical-align:middle">
+        <img src="${logoUrl}" style="height:36px;object-fit:contain;display:block;margin-bottom:4px" onerror="this.style.display='none'">
+        <div style="font-size:9pt;font-weight:bold;color:#ea580c;letter-spacing:0.5px">BG EXPRESS</div>
+        <div style="font-size:7.5pt;color:#374151">N°19, Rue 5, Hay Tissir2 – Casablanca</div>
+        <div style="font-size:7.5pt;color:#374151">☎ 0522 62 92 89 &nbsp;|&nbsp; 📱 0661 97 86 12</div>
+      </td>
+      <td style="padding:8px 14px;text-align:center;vertical-align:middle;border-left:2px solid #ea580c;border-right:2px solid #ea580c;width:34%">
+        <div style="font-size:15pt;font-weight:bold;color:#ea580c;letter-spacing:1px">INSTANCES / RETARDS</div>
+        <div style="font-size:9pt;color:#374151;margin-top:4px">Suivi par Ancienneté</div>
+        <div style="font-size:8.5pt;color:#6b7280;margin-top:2px">${dateLabel}</div>
+      </td>
+      <td style="padding:8px 14px;text-align:right;vertical-align:middle;width:33%;font-size:8.5pt">
+        <div><strong>Date impression :</strong> ${printDate}</div>
+        <div><strong>Agence :</strong> ${profileData?.city || '—'}</div>
+        <div><strong>Agent :</strong> ${profileData?.name || '—'}</div>
+      </td>
+    </tr>
+  </table>
+
+  <div class="summary-boxes">
+    ${summary.map(s => `
+      <div class="summary-box" style="background:${s.color}">
+        <div style="font-size:8pt;font-weight:600;color:${s.textColor};margin-bottom:4px">${s.label}</div>
+        <div style="font-size:18pt;font-weight:bold;color:${s.textColor}">${s.count}</div>
+        <div style="font-size:8pt;color:#6b7280;margin-top:4px">${s.montant.toFixed(2)} DH</div>
+      </div>
+    `).join('')}
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th style="width:10%;text-align:center">Âge</th>
+        <th style="width:15%">N° EXP</th>
+        <th style="width:20%">Livreur</th>
+        <th style="width:15%;text-align:right">Montant</th>
+        <th style="width:20%">Raison</th>
+        <th style="width:20%">Détail</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows}
+    </tbody>
+  </table>
+
+  <div style="margin-top:20px;padding:12px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:6px;text-align:center;font-weight:bold">
+    Total: <span style="color:#2563eb">${totalColis} colis</span> en instance pour 
+    <span style="color:#dc2626">${totalMontant.toFixed(2)} DH</span>
+  </div>
+
+  <div style="margin-top:12px;padding:12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;font-size:8pt;color:#6b7280">
+    <strong style="color:#111827">Légende:</strong>
+    <strong>Âge:</strong> Nombre de jours depuis la création de l'expédition |
+    🟡 <strong>&lt;24h:</strong> Instance récente (surveillance) |
+    🟠 <strong>1-7j:</strong> Retard modéré (suivi requis) |
+    🔴 <strong>7-30j:</strong> Retard sérieux (action urgente) |
+    🔴 <strong>30j+:</strong> Retard critique (escalade)
+  </div>
+
+  <script>window.onload = function(){ window.print(); }<\/script>
+</body>
+</html>`
+
+  const win = window.open('', '_blank', 'width=1200,height=800')
+  if (win) {
+    win.document.write(html)
+    win.document.close()
+  }
+}
