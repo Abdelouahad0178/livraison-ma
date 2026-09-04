@@ -5,7 +5,7 @@ import {
 } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import DateFilter from '../DateFilter'
-import { filterByDate, entryDate } from '../../../utils/dateFilter'
+import { filterByDate, entryDate, parcelDate } from '../../../utils/dateFilter'
 import { fmtFixed as fmtAmt } from '../../../utils/formatNumber'
 import {
   createAdminTransferFromAgent,
@@ -22,7 +22,7 @@ import { collection, query, where, onSnapshot, documentId } from 'firebase/fires
 import { db } from '../../../firebase/db'
 import { shouldTriggerSearch } from '../../../utils/searchUtils'
 import { printPortsCollectes, printVersementParcels, printDriverParcels } from '../../../utils/agentPrintUtils'
-import { getOperationalDay, isInOperationalDay, getCurrentOperationalDay } from '../../../config/operationalDay'
+import { getOperationalDay, isInOperationalDay, getCurrentOperationalDay, getOperationalDayString } from '../../../config/operationalDay'
 
 // Types
 interface DelayReason {
@@ -73,7 +73,7 @@ export default function CaisseChefTab() {
   } = useAgentCtx()
 
   // État des onglets
-  const [activeTab, setActiveTab] = useState<'livreurs' | 'versements' | 'historique'>('livreurs')
+  const [activeTab, setActiveTab] = useState<'livreurs' | 'journee' | 'instances' | 'versements' | 'historique'>('livreurs')
 
   // Filtres date
   const [datePreset, setDatePreset] = useState<any>('all')
@@ -1000,6 +1000,71 @@ export default function CaisseChefTab() {
     }
   }, [filteredDrivers, driverFilter, adminTransfers, searchResults])
 
+  // 📊 Bilan de journée par livreur (pour onglet "Journée")
+  const bilanJournee = useMemo(() => {
+    return filteredDrivers.map(d => {
+      const portDu = d.parcels.filter((p: any) => p.portType === 'port_du' && !p.portPayeMethod)
+      const livres = d.parcels.filter((p: any) => p.status === 'Livré')
+      const enCours = d.parcels.filter((p: any) => p.status === 'En cours de livraison')
+      // 🚨 ANOMALIE: livré mais port dû non encaissé
+      const livresNonCollectes = portDu.filter((p: any) =>
+        p.status === 'Livré' && !p.portStatus)
+      const montantManquant = livresNonCollectes.reduce(
+        (s: number, p: any) => s + safeParseAmount(p.price), 0)
+      const total = d.parcels.length
+      return {
+        id: d.id,
+        name: d.name,
+        total,
+        livresCount: livres.length,
+        enCoursCount: enCours.length,
+        tauxLivraison: total ? Math.round(livres.length / total * 100) : 0,
+        livresNonCollectes,
+        montantManquant,
+        portsCollectesCount: d.portsCollectesCount,
+        portsCollectesMontant: d.portsCollectesMontant,
+      }
+    })
+  }, [filteredDrivers])
+
+  // 🕰️ Instances / Retards: ports dûs non collectés triés par ancienneté
+  const instances = useMemo(() => {
+    const now = Date.now()
+    const src = dataSource.filter((p: any) => {
+      const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
+      const notCollected = !p.portStatus
+      const notReturned = !['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
+      const enCours = p.status === 'En cours de livraison' || p.status === 'Arrivé en agence'
+      return isPortDu && notCollected && notReturned && enCours &&
+        p.destinationCity === profile?.city
+    })
+    return src.map((p: any) => {
+      const ref = parcelDate(p)
+      const ageJours = ref ? Math.floor((now - ref.getTime()) / 86400000) : 0
+      const delay = deliveryDelays.find((d: any) => d.parcelId === p.id && !d.resolvedAt)
+      const bucket = ageJours >= 30 ? '30j+' : ageJours >= 7 ? '7-30j' : ageJours >= 1 ? '1-7j' : '<24h'
+      return { parcel: p, ageJours, delay, bucket }
+    }).sort((a, b) => b.ageJours - a.ageJours) // Plus ancien en premier
+  }, [dataSource, deliveryDelays, profile?.city])
+
+  // 📊 Ventilation des collectes par jour opérationnel (14 derniers jours)
+  const collectesParJour = useMemo(() => {
+    const map = new Map<string, { count: number; montant: number }>()
+    const src = [...(allDisplayParcels || []), ...Object.values(extraCollectedParcels)]
+      .map((p: any) => modifiedParcels[p.id] ? { ...p, ...modifiedParcels[p.id] } : p)
+    src.forEach((p: any) => {
+      if (p.portType !== 'port_du' || p.portPayeMethod) return
+      if (p.portStatus !== 'collected' && p.portStatus !== 'received') return
+      if (p.destinationCity !== profile?.city) return
+      const d = toDate(p.portCollectedAt) ?? toDate(p.portReceivedAt)
+      if (!d) return
+      const key = getOperationalDayString(d)   // ✅ journée 8h→6h
+      const cur = map.get(key) || { count: 0, montant: 0 }
+      map.set(key, { count: cur.count + 1, montant: cur.montant + safeParseAmount(p.price) })
+    })
+    return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14)
+  }, [allDisplayParcels, extraCollectedParcels, modifiedParcels, profile?.city])
+
   // Toggle expansion d'un livreur
   const toggleDriver = (driverId: string) => {
     const newSet = new Set(expandedDrivers)
@@ -1743,6 +1808,33 @@ export default function CaisseChefTab() {
         </div>
       </div>
 
+      {/* 📊 Bandeau "Collecté par jour" (14 derniers jours) */}
+      {collectesParJour.length > 0 && (
+        <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-5">
+          <div className="flex items-center gap-2 mb-4">
+            <Calendar className="w-5 h-5 text-green-600" />
+            <h3 className="text-lg font-bold text-gray-900">Collectes par jour (14 derniers jours)</h3>
+          </div>
+          <div className="grid grid-cols-7 gap-2">
+            {collectesParJour.map(([dateStr, data]) => {
+              const d = new Date(dateStr)
+              const dayLabel = d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
+              return (
+                <div key={dateStr} className="bg-white border border-green-200 rounded-lg p-3 text-center">
+                  <div className="text-xs font-semibold text-gray-600 mb-1">{dayLabel}</div>
+                  <div className="text-lg font-bold text-green-700">{data.count}</div>
+                  <div className="text-xs text-gray-500 mt-1">{data.montant.toFixed(0)} DH</div>
+                </div>
+              )
+            })}
+          </div>
+          <div className="mt-3 text-xs text-gray-600 text-center">
+            Total 14 jours: <strong>{collectesParJour.reduce((s, [, d]) => s + d.count, 0)} colis</strong> pour{' '}
+            <strong>{collectesParJour.reduce((s, [, d]) => s + d.montant, 0).toFixed(2)} DH</strong>
+          </div>
+        </div>
+      )}
+
       {/* Bouton d'impression des ports collectés */}
       {portsCollectesForPrint.length > 0 && (
         <div className="flex justify-end mb-3">
@@ -1774,6 +1866,28 @@ export default function CaisseChefTab() {
         >
           <User className="w-4 h-4 inline-block mr-2" />
           Livreurs
+        </button>
+        <button
+          onClick={() => setActiveTab('journee')}
+          className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold transition ${
+            activeTab === 'journee'
+              ? 'bg-blue-600 text-white'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <TrendingUp className="w-4 h-4 inline-block mr-2" />
+          Journée
+        </button>
+        <button
+          onClick={() => setActiveTab('instances')}
+          className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold transition ${
+            activeTab === 'instances'
+              ? 'bg-blue-600 text-white'
+              : 'text-gray-600 hover:bg-gray-100'
+          }`}
+        >
+          <AlertCircle className="w-4 h-4 inline-block mr-2" />
+          Instances
         </button>
         <button
           onClick={() => setActiveTab('versements')}
@@ -2450,6 +2564,273 @@ export default function CaisseChefTab() {
             ))}
             </div>
           )}
+        </div>
+      )}
+
+      {activeTab === 'journee' && (
+        <div className="space-y-4">
+          {/* En-tête */}
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl p-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-2 flex items-center gap-2">
+              <TrendingUp className="w-6 h-6 text-blue-600" />
+              Bilan de Journée — Suivi Quotidien par Livreur
+            </h2>
+            <p className="text-sm text-gray-600">
+              Revue de fin d'après-midi: état de livraison et collecte des ports dûs
+            </p>
+          </div>
+
+          {/* Tableau de bilan */}
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gradient-to-r from-blue-600 to-indigo-600 text-white">
+                  <tr>
+                    <th className="px-4 py-3 text-left font-semibold">Livreur</th>
+                    <th className="px-4 py-3 text-center font-semibold">Assignés</th>
+                    <th className="px-4 py-3 text-center font-semibold">Livrés</th>
+                    <th className="px-4 py-3 text-center font-semibold">Taux %</th>
+                    <th className="px-4 py-3 text-center font-semibold">En cours</th>
+                    <th className="px-4 py-3 text-right font-semibold">Collectés (DH)</th>
+                    <th className="px-4 py-3 text-right font-semibold">🚨 Livrés non encaissés</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {bilanJournee.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                        Aucun livreur avec des expéditions sur la période sélectionnée
+                      </td>
+                    </tr>
+                  ) : (
+                    bilanJournee.map((b, idx) => (
+                      <tr key={b.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        <td className="px-4 py-3 font-semibold text-gray-900">{b.name}</td>
+                        <td className="px-4 py-3 text-center font-bold text-blue-600">{b.total}</td>
+                        <td className="px-4 py-3 text-center font-bold text-green-600">{b.livresCount}</td>
+                        <td className="px-4 py-3 text-center">
+                          <span className={`px-2 py-1 rounded text-xs font-bold ${
+                            b.tauxLivraison >= 80 ? 'bg-green-100 text-green-700' :
+                            b.tauxLivraison >= 50 ? 'bg-yellow-100 text-yellow-700' :
+                            'bg-red-100 text-red-700'
+                          }`}>
+                            {b.tauxLivraison}%
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-center font-bold text-orange-600">{b.enCoursCount}</td>
+                        <td className="px-4 py-3 text-right">
+                          <div className="font-bold text-green-700">
+                            {b.portsCollectesMontant.toFixed(2)} DH
+                          </div>
+                          <div className="text-xs text-gray-500">
+                            ({b.portsCollectesCount} colis)
+                          </div>
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {b.montantManquant > 0 ? (
+                            <div className="bg-red-50 border border-red-200 rounded px-2 py-1 inline-block">
+                              <div className="font-bold text-red-700">
+                                {b.montantManquant.toFixed(2)} DH
+                              </div>
+                              <div className="text-xs text-red-600">
+                                ({b.livresNonCollectes.length} colis)
+                              </div>
+                            </div>
+                          ) : (
+                            <span className="text-gray-400">—</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+                {bilanJournee.length > 0 && (
+                  <tfoot className="bg-gradient-to-r from-blue-50 to-indigo-50 border-t-2 border-blue-200">
+                    <tr className="font-bold">
+                      <td className="px-4 py-3 text-gray-900">TOTAL</td>
+                      <td className="px-4 py-3 text-center text-blue-700">
+                        {bilanJournee.reduce((s, b) => s + b.total, 0)}
+                      </td>
+                      <td className="px-4 py-3 text-center text-green-700">
+                        {bilanJournee.reduce((s, b) => s + b.livresCount, 0)}
+                      </td>
+                      <td className="px-4 py-3 text-center text-gray-600">
+                        {bilanJournee.reduce((s, b) => s + b.total, 0) > 0
+                          ? Math.round(
+                              (bilanJournee.reduce((s, b) => s + b.livresCount, 0) /
+                                bilanJournee.reduce((s, b) => s + b.total, 0)) *
+                                100
+                            )
+                          : 0}%
+                      </td>
+                      <td className="px-4 py-3 text-center text-orange-700">
+                        {bilanJournee.reduce((s, b) => s + b.enCoursCount, 0)}
+                      </td>
+                      <td className="px-4 py-3 text-right text-green-800">
+                        {bilanJournee.reduce((s, b) => s + b.portsCollectesMontant, 0).toFixed(2)} DH
+                      </td>
+                      <td className="px-4 py-3 text-right text-red-800">
+                        {bilanJournee.reduce((s, b) => s + b.montantManquant, 0).toFixed(2)} DH
+                      </td>
+                    </tr>
+                  </tfoot>
+                )}
+              </table>
+            </div>
+          </div>
+
+          {/* Légende */}
+          <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+            <h4 className="font-semibold text-gray-900 mb-2">Légende:</h4>
+            <ul className="text-sm text-gray-600 space-y-1">
+              <li><strong>Assignés:</strong> Nombre total d'expéditions confiées au livreur</li>
+              <li><strong>Livrés:</strong> Expéditions livrées avec succès</li>
+              <li><strong>Taux %:</strong> Pourcentage de livraison (🟢 ≥80% | 🟡 50-79% | 🔴 &lt;50%)</li>
+              <li><strong>En cours:</strong> Expéditions encore chez le livreur</li>
+              <li><strong>Collectés:</strong> Montant des ports dûs encaissés</li>
+              <li><strong>🚨 Livrés non encaissés:</strong> Argent dû mais non collecté (ANOMALIE!)</li>
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'instances' && (
+        <div className="space-y-4">
+          {/* En-tête */}
+          <div className="bg-gradient-to-r from-orange-50 to-red-50 border border-orange-200 rounded-xl p-6">
+            <h2 className="text-xl font-bold text-gray-900 mb-2 flex items-center gap-2">
+              <AlertCircle className="w-6 h-6 text-orange-600" />
+              Instances / Retards — Suivi par ancienneté
+            </h2>
+            <p className="text-sm text-gray-600">
+              Ports dûs non collectés en instance, triés du plus ancien au plus récent
+            </p>
+          </div>
+
+          {/* Résumé par bucket */}
+          <div className="grid grid-cols-4 gap-3">
+            {[
+              { key: '<24h', label: 'Moins de 24h', color: 'yellow' },
+              { key: '1-7j', label: '1 à 7 jours', color: 'orange' },
+              { key: '7-30j', label: '7 à 30 jours', color: 'red' },
+              { key: '30j+', label: 'Plus de 30 jours', color: 'red-dark' }
+            ].map(({ key, label, color }) => {
+              const count = instances.filter(i => i.bucket === key).length
+              const montant = instances.filter(i => i.bucket === key).reduce((s, i) => s + safeParseAmount(i.parcel.price), 0)
+              const bgColor = color === 'yellow' ? 'bg-yellow-50 border-yellow-200' :
+                              color === 'orange' ? 'bg-orange-50 border-orange-200' :
+                              color === 'red' ? 'bg-red-50 border-red-200' : 'bg-red-100 border-red-300'
+              const textColor = color === 'yellow' ? 'text-yellow-700' :
+                                color === 'orange' ? 'text-orange-700' :
+                                color === 'red' ? 'text-red-700' : 'text-red-800'
+              return (
+                <div key={key} className={`${bgColor} border rounded-xl p-4`}>
+                  <div className={`text-xs font-semibold ${textColor} mb-1`}>{label}</div>
+                  <div className={`text-2xl font-bold ${textColor}`}>{count}</div>
+                  <div className="text-xs text-gray-600 mt-1">{montant.toFixed(2)} DH</div>
+                </div>
+              )
+            })}
+          </div>
+
+          {/* Tableau des instances */}
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gradient-to-r from-orange-600 to-red-600 text-white">
+                  <tr>
+                    <th className="px-4 py-3 text-left font-semibold">Âge</th>
+                    <th className="px-4 py-3 text-left font-semibold">N° EXP</th>
+                    <th className="px-4 py-3 text-left font-semibold">Livreur</th>
+                    <th className="px-4 py-3 text-right font-semibold">Montant</th>
+                    <th className="px-4 py-3 text-left font-semibold">Raison</th>
+                    <th className="px-4 py-3 text-left font-semibold">Détail</th>
+                    <th className="px-4 py-3 text-center font-semibold">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {instances.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-8 text-center text-gray-500">
+                        ✅ Aucune instance en retard — Tout est à jour!
+                      </td>
+                    </tr>
+                  ) : (
+                    instances.map((inst, idx) => {
+                      const { parcel, ageJours, delay, bucket } = inst
+                      const driver = drivers.find(d => d.id === parcel.deliveryDriverId)
+                      const badgeColor = bucket === '<24h' ? 'bg-yellow-100 text-yellow-800' :
+                                        bucket === '1-7j' ? 'bg-orange-100 text-orange-800' :
+                                        bucket === '7-30j' ? 'bg-red-100 text-red-800' : 'bg-red-200 text-red-900'
+                      const delayReason = delay ? DELAY_REASONS.find(r => r.key === delay.reason) : null
+                      return (
+                        <tr key={parcel.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                          <td className="px-4 py-3">
+                            <span className={`px-2 py-1 rounded text-xs font-bold ${badgeColor}`}>
+                              {ageJours}j
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 font-mono text-xs font-semibold text-blue-600">
+                            {parcel.trackingId}
+                          </td>
+                          <td className="px-4 py-3 font-semibold text-gray-900">
+                            {driver?.name || '—'}
+                          </td>
+                          <td className="px-4 py-3 text-right font-bold text-gray-900">
+                            {safeParseAmount(parcel.price).toFixed(2)} DH
+                          </td>
+                          <td className="px-4 py-3">
+                            {delayReason ? (
+                              <span className="text-xs bg-gray-100 px-2 py-1 rounded">
+                                {delayReason.label}
+                              </span>
+                            ) : (
+                              <span className="text-gray-400 text-xs">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-3 text-xs text-gray-600">
+                            {delay?.details || '—'}
+                          </td>
+                          <td className="px-4 py-3">
+                            <div className="flex items-center justify-center gap-2">
+                              <button
+                                onClick={() => openDelayModal(parcel)}
+                                className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs font-semibold hover:bg-blue-200 transition"
+                              >
+                                {delay ? 'Modifier' : 'Saisir'}
+                              </button>
+                              {delay && (
+                                <button
+                                  onClick={() => handleResolveDelay(delay.id)}
+                                  className="px-2 py-1 bg-green-100 text-green-700 rounded text-xs font-semibold hover:bg-green-200 transition"
+                                >
+                                  Résoudre
+                                </button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Légende */}
+          <div className="bg-gray-50 border border-gray-200 rounded-xl p-4">
+            <h4 className="font-semibold text-gray-900 mb-2">Légende:</h4>
+            <ul className="text-sm text-gray-600 space-y-1">
+              <li><strong>Âge:</strong> Nombre de jours depuis la création de l'expédition</li>
+              <li><strong>🟡 &lt;24h:</strong> Instance récente (surveillance)</li>
+              <li><strong>🟠 1-7j:</strong> Retard modéré (suivi requis)</li>
+              <li><strong>🔴 7-30j:</strong> Retard sérieux (action urgente)</li>
+              <li><strong>🔴 30j+:</strong> Retard critique (escalade)</li>
+              <li><strong>Saisir/Modifier:</strong> Documenter la raison du retard</li>
+              <li><strong>Résoudre:</strong> Marquer le retard comme résolu (port collecté ou situation clarifiée)</li>
+            </ul>
+          </div>
         </div>
       )}
 
