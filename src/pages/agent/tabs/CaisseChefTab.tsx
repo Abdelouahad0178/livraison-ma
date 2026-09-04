@@ -76,7 +76,7 @@ export default function CaisseChefTab() {
   const [activeTab, setActiveTab] = useState<'livreurs' | 'journee' | 'instances' | 'versements' | 'historique'>('livreurs')
 
   // Filtres date
-  const [datePreset, setDatePreset] = useState<any>('all')
+  const [datePreset, setDatePreset] = useState<any>('today')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
 
