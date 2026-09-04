@@ -1066,6 +1066,18 @@ export default function CaisseChefTab() {
     return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14)
   }, [allDisplayParcels, extraCollectedParcels, modifiedParcels, profile?.city])
 
+  // 📅 Label de la période sélectionnée
+  const periodLabel = useMemo(() => {
+    if (datePreset === 'today') return "Aujourd'hui"
+    if (datePreset === 'week') return '7 derniers jours'
+    if (datePreset === 'month') return 'Ce mois'
+    if (datePreset === 'day' && dateFrom) return new Date(dateFrom).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
+    if (datePreset === 'custom' && dateFrom && dateTo) {
+      return `${new Date(dateFrom).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} - ${new Date(dateTo).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}`
+    }
+    return 'Toutes périodes'
+  }, [datePreset, dateFrom, dateTo])
+
   // Toggle expansion d'un livreur
   const toggleDriver = (driverId: string) => {
     const newSet = new Set(expandedDrivers)
@@ -2578,22 +2590,19 @@ export default function CaisseChefTab() {
                   <TrendingUp className="w-6 h-6 text-blue-600" />
                   Bilan de Journée — Suivi Quotidien par Livreur
                 </h2>
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-gray-600 mb-2">
                   Revue de fin d'après-midi: état de livraison et collecte des ports dûs
                 </p>
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-blue-600" />
+                  <span className="text-sm font-semibold text-blue-700 bg-blue-100 px-3 py-1 rounded-full">
+                    {periodLabel}
+                  </span>
+                </div>
               </div>
               {bilanJournee.length > 0 && (
                 <button
-                  onClick={() => {
-                    const dateLabel = datePreset === 'today' ? "Aujourd'hui" :
-                                     datePreset === 'week' ? '7 derniers jours' :
-                                     datePreset === 'month' ? 'Ce mois' :
-                                     datePreset === 'day' && dateFrom ? new Date(dateFrom).toLocaleDateString('fr-FR') :
-                                     datePreset === 'custom' && dateFrom && dateTo ?
-                                       `${new Date(dateFrom).toLocaleDateString('fr-FR')} - ${new Date(dateTo).toLocaleDateString('fr-FR')}` :
-                                     'Période sélectionnée'
-                    printBilanJournee(bilanJournee, profile, dateLabel)
-                  }}
+                  onClick={() => printBilanJournee(bilanJournee, profile, periodLabel)}
                   className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition font-semibold text-sm shadow-md"
                 >
                   <Printer className="w-4 h-4" />
@@ -2727,22 +2736,19 @@ export default function CaisseChefTab() {
                   <AlertCircle className="w-6 h-6 text-orange-600" />
                   Instances / Retards — Suivi par ancienneté
                 </h2>
-                <p className="text-sm text-gray-600">
+                <p className="text-sm text-gray-600 mb-2">
                   Ports dûs non collectés en instance, triés du plus ancien au plus récent
                 </p>
+                <div className="flex items-center gap-2">
+                  <Calendar className="w-4 h-4 text-orange-600" />
+                  <span className="text-sm font-semibold text-orange-700 bg-orange-100 px-3 py-1 rounded-full">
+                    {periodLabel}
+                  </span>
+                </div>
               </div>
               {instances.length > 0 && (
                 <button
-                  onClick={() => {
-                    const dateLabel = datePreset === 'today' ? "Aujourd'hui" :
-                                     datePreset === 'week' ? '7 derniers jours' :
-                                     datePreset === 'month' ? 'Ce mois' :
-                                     datePreset === 'day' && dateFrom ? new Date(dateFrom).toLocaleDateString('fr-FR') :
-                                     datePreset === 'custom' && dateFrom && dateTo ?
-                                       `${new Date(dateFrom).toLocaleDateString('fr-FR')} - ${new Date(dateTo).toLocaleDateString('fr-FR')}` :
-                                     'Toutes périodes'
-                    printInstancesRetards(instances, profile, dateLabel, DELAY_REASONS)
-                  }}
+                  onClick={() => printInstancesRetards(instances, profile, periodLabel, DELAY_REASONS)}
                   className="flex items-center gap-2 px-4 py-2 bg-orange-600 text-white rounded-lg hover:bg-orange-700 transition font-semibold text-sm shadow-md"
                 >
                   <Printer className="w-4 h-4" />
