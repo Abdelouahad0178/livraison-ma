@@ -1,5 +1,11 @@
-export function printEmployeeContract(employee: any, form: any) {
+// variant '1' = BGEXPRESS (Ait Melloul) ; variant '2' = BGEXPRESS² (Guelmim)
+export function printEmployeeContract(employee: any, form: any, variant: '1' | '2' = '1') {
   const logoUrl = window.location.origin + '/LOGO.jpg'
+  const isV2 = variant === '2'
+  const coName = isV2 ? 'BGEXPRESS<sup>2</sup>' : 'BGEXPRESS'
+  const coAddress = isV2 ? 'N°53 AV 3 MARS GUELMIM' : 'Bloc H Rue 2 N°982 Agdal - Ait Melloul'
+  const coCity = isV2 ? 'Guelmim' : 'Ait Melloul'
+  const logoBadge = (h: number) => isV2 ? `<span style="font-size:${h}pt;font-weight:900;color:#1e3a8a;margin-left:-4px;align-self:flex-start">2</span>` : ''
   // Utiliser la date personnalisée si fournie, sinon la date du jour
   const contractDate = form.dateRedaction
     ? new Date(form.dateRedaction).toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: 'numeric' })
@@ -48,15 +54,15 @@ export function printEmployeeContract(employee: any, form: any) {
 <div class="page">
   <div class="body">
     <div class="hdr">
-      <img src="${logoUrl}" style="height:80px;object-fit:contain" onerror="this.style.display='none'">
-      <div class="hdr-info">Bloc H Rue 2 N°982 Agdal - Ait Melloul &nbsp;|&nbsp; 0661 97 86 12 &nbsp;|&nbsp; bgexpress2019@gmail.com</div>
-      <div style="margin-left:auto;text-align:right;font-size:8pt;color:#374151;white-space:nowrap">Fait a Ait Melloul<br><strong>Le : ${contractDate}</strong></div>
+      <img src="${logoUrl}" style="height:80px;object-fit:contain" onerror="this.style.display='none'">${logoBadge(22)}
+      <div class="hdr-info">${coAddress} &nbsp;|&nbsp; 0661 97 86 12 &nbsp;|&nbsp; bgexpress2019@gmail.com</div>
+      <div style="margin-left:auto;text-align:right;font-size:8pt;color:#374151;white-space:nowrap">Fait a ${coCity}<br><strong>Le : ${contractDate}</strong></div>
     </div>
     <h1>Contrat de Travail a Duree ${typeLabel}</h1>
     <div class="subtitle">Regi par le Code du Travail Marocain - Loi n 65-99 et ses textes d'application</div>
     <h2>Article 1 - Parties au contrat</h2>
     <div class="art">
-      <p><strong>L'Employeur :</strong> La societe <strong>BGEXPRESS</strong>, societe a responsabilite limitee de droit marocain, dont le siege social est sis Bloc H Rue 2 N°982 Agdal - Ait Melloul, representee par son gerant, ci-apres denommee l'Employeur.</p>
+      <p><strong>L'Employeur :</strong> La societe <strong>${coName}</strong>, societe a responsabilite limitee de droit marocain, dont le siege social est sis ${coAddress}, representee par son gerant, ci-apres denommee l'Employeur.</p>
       <p style="margin-top:4px"><strong>Le(la) Salarie(e) :</strong></p>
       <table class="info">
         <tr><td class="lbl">Nom et prenom</td><td><strong>${employee.name || '_______________'}</strong></td><td class="lbl">N CIN</td><td>${employee.cin || '_______________'}</td></tr>
@@ -74,7 +80,7 @@ export function printEmployeeContract(employee: any, form: any) {
     </div>
     <h2>Article 2.1 - Clause de mobilite geographique</h2>
     <div class="art">
-      <p>Le(la) salarie(e) accepte expressement que la societe BGEXPRESS puisse, en fonction des necessites du service et de l'organisation de l'entreprise, l'affecter dans toute agence ou site d'exploitation situe sur le territoire marocain. Cette mobilite geographique fait partie integrante des conditions d'execution du present contrat.</p>
+      <p>Le(la) salarie(e) accepte expressement que la societe ${coName} puisse, en fonction des necessites du service et de l'organisation de l'entreprise, l'affecter dans toute agence ou site d'exploitation situe sur le territoire marocain. Cette mobilite geographique fait partie integrante des conditions d'execution du present contrat.</p>
       <p>En cas de mutation definitive, l'employeur s'engage a en informer le(la) salarie(e) par ecrit avec un preavis raisonnable.</p>
     </div>
     <h2>Article 3 - Duree et prise d'effet</h2>
@@ -102,8 +108,8 @@ export function printEmployeeContract(employee: any, form: any) {
 <div class="page">
   <div class="body">
     <div class="hdr2">
-      <img src="${logoUrl}" style="height:50px;object-fit:contain" onerror="this.style.display='none'">
-      <div style="font-size:8pt;font-weight:bold;color:#1e3a8a">BGEXPRESS - Contrat de Travail a Duree ${typeLabel} - ${employee.name || ''}</div>
+      <img src="${logoUrl}" style="height:50px;object-fit:contain" onerror="this.style.display='none'">${logoBadge(14)}
+      <div style="font-size:8pt;font-weight:bold;color:#1e3a8a">${coName} - Contrat de Travail a Duree ${typeLabel} - ${employee.name || ''}</div>
       <div style="margin-left:auto;font-size:7.5pt;color:#6b7280">Page 2 / 2</div>
     </div>
     <h2>Article 6 - Duree et organisation du travail</h2>
@@ -133,7 +139,7 @@ export function printEmployeeContract(employee: any, form: any) {
     <div class="art"><p>Tout differend relatif a l'execution, l'interpretation ou la resiliation du present contrat sera soumis, a defaut de reglement amiable, aux juridictions du travail competentes. Convention collective applicable : <em>${form.conventionColl}</em>.</p></div>
     <div class="mention">Le present contrat est etabli en deux exemplaires originaux de valeur egale, un exemplaire remis a chaque partie.</div>
     <div class="sig-block">
-      <div class="sig-col"><div><strong>L'Employeur</strong></div><div style="color:#374151;margin-top:2px;font-size:8.5pt">BGEXPRESS</div><div class="sig-line">Cachet et Signature</div></div>
+      <div class="sig-col"><div><strong>L'Employeur</strong></div><div style="color:#374151;margin-top:2px;font-size:8.5pt">${coName}</div><div class="sig-line">Cachet et Signature</div></div>
       <div class="sig-col"><div><strong>Le(la) Salarie(e)</strong></div><div style="color:#374151;margin-top:2px;font-size:8.5pt">${employee.name || ''}</div><div class="sig-line">Lu et approuve - Signature</div></div>
     </div>
   </div>

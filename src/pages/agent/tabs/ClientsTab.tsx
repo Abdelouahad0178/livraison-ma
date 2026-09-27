@@ -1,6 +1,7 @@
 import { Check, Edit2, MapPin, Phone, Search, Users, X } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import { fmt } from '../../../utils/formatNumber'
+import { normIncludes } from '../../../utils/normText'
 
 export default function ClientsTab() {
   const {
@@ -17,9 +18,9 @@ export default function ClientsTab() {
   const q = clientsSearch.toLowerCase().trim()
   const filtered = q
     ? cityClients.filter((c: any) =>
-        c.name?.toLowerCase().includes(q) ||
+        normIncludes(c.name, q) ||
         c.tel?.includes(q) ||
-        c.address?.toLowerCase().includes(q)
+        normIncludes(c.address, q)
       )
     : cityClients
 

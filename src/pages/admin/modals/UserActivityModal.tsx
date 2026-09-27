@@ -3,6 +3,9 @@ import { CAISSE_CATEGORIES, STATUS_COLORS } from '../../../firebase/constants'
 import { fmt } from '../../../utils/formatNumber'
 
 const parcelDate = (p: any) => {
+  // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire — voir
+  // src/utils/dateFilter.ts pour l'explication complète de cette règle partagée.
+  if (p.workDate) return new Date(p.workDate + 'T12:00:00')
   if (p.createdAt?.toDate) return p.createdAt.toDate()
   if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
   return new Date(0)

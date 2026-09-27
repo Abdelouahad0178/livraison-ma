@@ -26,6 +26,7 @@ export type AgentRole = 'agent' | 'aide_agent' | 'client_portal' | 'chef_agence'
 export type UserRole =
   | 'admin'
   | 'chef_agence'
+  | 'chef_exploitation'
   | 'agent'
   | 'aide_agent'
   | 'caissier'

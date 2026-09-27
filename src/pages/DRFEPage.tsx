@@ -13,6 +13,7 @@ import {
   Calendar, MapPin, Banknote, AlertTriangle, CheckCircle2, Clock,
   Wallet, TrendingUp, Eye, PackageCheck, HandCoins, RefreshCw,
 } from 'lucide-react'
+import { normIncludes } from '../utils/normText'
 
 type CodStatus = 'pending' | 'collected' | 'remis' | 'all'
 
@@ -64,10 +65,11 @@ export default function DRFEPage() {
     const filterStatus = statusFilter === 'all' ? undefined : statusFilter
 
     const unsub = subscribeCodParcelsEspeces(
-      (data, doc) => {
+      (data, doc, meta) => {
         setParcels(data)
         setLastDoc(doc)
-        setHasMore(data.length >= 9000)
+        // meta.hasOlder : des COD soldés plus anciens (> 90 j) peuvent être chargés
+        setHasMore(meta ? meta.hasOlder : data.length >= 9000)
       },
       (err) => {
         console.error('Error loading COD parcels:', err)
@@ -85,8 +87,12 @@ export default function DRFEPage() {
     setLoadingMore(true)
     try {
       const filterStatus = statusFilter === 'all' ? undefined : statusFilter
-      const result = await getMoreCodParcelsEspeces(lastDoc, filterStatus, 9000)
-      setParcels((prev) => [...prev, ...result.data])
+      const result = await getMoreCodParcelsEspeces(lastDoc, filterStatus, 1000)
+      // Dédupliquer : les COD non soldés anciens sont déjà chargés par l'abonnement
+      setParcels((prev) => {
+        const seen = new Set(prev.map((p) => p.id))
+        return [...prev, ...result.data.filter((p) => !seen.has(p.id))]
+      })
       setLastDoc(result.lastDoc)
       setHasMore(result.hasMore)
     } catch (err) {
@@ -111,7 +117,7 @@ export default function DRFEPage() {
           p.receiver.tel,
           p.receiver.phone,
           p.codAmount.toString(),
-        ].some((v) => v?.toLowerCase().includes(q))
+        ].some((v) => normIncludes(v, q))
         if (!matches) return false
       }
 
@@ -123,7 +129,7 @@ export default function DRFEPage() {
           p.receiver.city,
           p.originCity,
           p.destinationCity,
-        ].some((v) => v?.toLowerCase().includes(q))
+        ].some((v) => normIncludes(v, q))
         if (!cityMatches) return false
       }
 
@@ -211,7 +217,7 @@ export default function DRFEPage() {
               </div>
               <div>
                 <h1 className="text-2xl font-bold text-gray-900">DRFE - Distribution Retour de Fond Espèces</h1>
-                <p className="text-sm text-gray-500">Distributeur • {parcels.length} expéditions COD</p>
+                <p className="text-sm text-gray-500">Distributeur • {parcels.length} expéditions COD · 90 derniers jours + non soldés (Charger plus pour l'historique)</p>
               </div>
             </div>
             <div className="flex items-center gap-3">

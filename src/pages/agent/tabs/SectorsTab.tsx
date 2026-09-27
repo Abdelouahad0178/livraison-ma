@@ -53,7 +53,7 @@ export default function SectorsTab() {
                 ?
               </div>
               <div className="flex-1 min-w-0">
-                <p className="font-bold text-gray-700 text-sm">Non assigné</p>
+                <p className="font-bold text-gray-700 text-sm">En gare - {profile?.city}</p>
                 <p className="text-xs text-gray-500">Expéditions sans livreur</p>
               </div>
               <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-200 rounded-full">

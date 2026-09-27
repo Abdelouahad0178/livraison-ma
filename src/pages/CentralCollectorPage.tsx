@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { signOut } from 'firebase/auth'
-import { doc, onSnapshot } from 'firebase/firestore'
+import { doc, onSnapshot, getDoc, collection, query as fbQuery, where, orderBy, limit as fbLimit } from 'firebase/firestore'
 import { auth, db } from '../firebase/config'
 import * as XLSX from 'xlsx'
 import {
@@ -21,21 +21,34 @@ import {
   getAllArchivedParcels,
   markParcelsControlled,
   unmarkParcelsControlled,
+  markParcelsDeliveryControlled,
+  unmarkParcelsDeliveryControlled,
   unarchiveParcel,
   COD_PAYMENT_TYPES,
+  codPaymentTypeOf,
+  codPaymentTypeLabel,
   COD_STATUS,
   STATUS_COLORS,
   STATUSES,
 } from '../firebase/firestore'
 import { Banknote, Building2, CheckCircle2, ClipboardCheck, Database, LogOut, MapPin, Package, Search, FileText, X, Save, Printer, Calendar, Filter, Edit, Trash2, Sparkles, TrendingUp, Wallet, Archive, Undo2 } from 'lucide-react'
 import ProfilePhotoUpload from '../components/ProfilePhotoUpload'
+import { subscribeAllParcelsWithDateFilter, loadMoreParcelsWithDateFilter } from '../firebase/parcels'
 import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
+import { normText } from '../utils/normText'
 
 // ⚡ Système de chargement optimisé (Option 3 - comme AdminPage)
 const PAGE_SIZE = 50 // Chargement initial réduit
 const FILTERED_PAGE_SIZE = 1000 // Quand filtres actifs
+// Marge (jours) avant la plage de dates pour l'onglet Fournisseurs : le dépôt central
+// est postérieur à la création, on charge donc les colis créés un peu avant la plage
+const SUPPLIER_LEAD_DAYS = 90
+
+// Type de paiement COD : helper partagé (voir src/firebase/constants.ts)
+const codTypeOf = codPaymentTypeOf
+const codTypeLabel = codPaymentTypeLabel
 
 const money = (n: any) => (parseFloat(n) || 0).toLocaleString('fr-MA')
 const asDate = (value: any) => {
@@ -54,13 +67,13 @@ const supplierAgenciesText = (parcels: any) => [...new Set((parcels || []).map(s
 const isParcelPaid = (p: any) => !!p.centralSupplierPaid || !!p.codSenderPaid || p.centralSupplierPaymentStatus === 'paid'
 const isParcelPrepared = (p: any) => !isParcelPaid(p) && (p.centralSupplierPaymentStatus === 'prepared' || !!p.centralSupplierPaymentId)
 const paymentStatus = (pay: any) => pay?.status || 'paid'
-const normalizeSearch = (value: any) => String(value ?? '').toLowerCase().replace(/\s+/g, '')
+const normalizeSearch = (value: any) => normText(value).replace(/\s+/g, '')
 const hasSearch = (values: any, q: any) => {
   if (!q) return true
   const compactQ = normalizeSearch(q)
   return values.some((v: any) => {
-    const raw = String(v ?? '').toLowerCase()
-    return raw.includes(q) || normalizeSearch(raw).includes(compactQ)
+    const raw = normText(v)
+    return raw.includes(normText(q)) || normalizeSearch(raw).includes(compactQ)
   })
 }
 const inDateRange = (value: any, preset: any, from: any, to: any, operationalDay?: Date) => {
@@ -85,11 +98,30 @@ const inDateRange = (value: any, preset: any, from: any, to: any, operationalDay
     const range = getOperationalDayRange(operationalDay)
     start = range.start
     end = range.end
+  } else if (preset === 'day' && from) {
+    start = new Date(from + 'T00:00:00')
+    end = new Date(from + 'T23:59:59')
   } else if (preset === 'custom') {
     start = from ? new Date(from + 'T00:00:00') : null
     end = to ? new Date(to + 'T23:59:59') : end
   }
   return (!start || d >= start) && (!end || d <= end)
+}
+
+// Plage serveur correspondant à un preset (null = pas de borne → chargement paginé classique)
+const presetRange = (preset: any, from: any, to: any, operationalDay?: Date): { start: Date | null; end: Date | null } | null => {
+  if (preset === 'all') return null
+  const now = new Date()
+  if (preset === 'today') { const s = new Date(now); s.setHours(0, 0, 0, 0); return { start: s, end: null } }
+  if (preset === 'week') { const s = new Date(now); s.setDate(now.getDate() - 6); s.setHours(0, 0, 0, 0); return { start: s, end: null } }
+  if (preset === 'month') return { start: new Date(now.getFullYear(), now.getMonth(), 1), end: null }
+  if (preset === 'operational' && operationalDay) { const r = getOperationalDayRange(operationalDay); return { start: r.start, end: r.end } }
+  if (preset === 'day' && from) return { start: new Date(from + 'T00:00:00'), end: new Date(from + 'T23:59:59') }
+  if (preset === 'custom') {
+    if (!from && !to) return null
+    return { start: from ? new Date(from + 'T00:00:00') : null, end: to ? new Date(to + 'T23:59:59') : null }
+  }
+  return null
 }
 
 export default function CentralCollectorPage() {
@@ -194,34 +226,150 @@ export default function CentralCollectorPage() {
     )
   }, [])
 
+  // 🔴 TEMPS RÉEL — Pointage / Confirmation d'arrivée : les colis chargés via pagination
+  // ("Charger plus") sont des lectures ponctuelles, jamais rafraîchies automatiquement — un
+  // pointage posé par un autre encaisseur central pouvait donc rester invisible pour tout le
+  // monde tant qu'aucun rechargement complet de page n'avait lieu. Ces deux écouteurs dédiés
+  // suivent en direct TOUS les colis contrôlés / dont l'arrivée est confirmée (quelle que soit
+  // la ville) et fusionnent l'état réel dans controlOverrides, qui prime déjà sur les données
+  // chargées ailleurs (voir ctlBaseParcels : { ...p, ...controlOverrides[p.id] }).
+  useEffect(() => {
+    const onError = (err: any) => console.warn('CentralCollectorPage pointage live sync:', err.code)
+
+    const qControlled = fbQuery(
+      collection(db, 'parcels'),
+      where('controlled', '==', true),
+      orderBy('controlledAt', 'desc'),
+      fbLimit(500)
+    )
+    const unsubControlled = onSnapshot(qControlled, snap => {
+      setControlOverrides(prev => {
+        const next = { ...prev }
+        snap.docChanges().forEach(change => {
+          // ⚠️ Sur un changement "removed" (le colis ne matche plus controlled==true, donc
+          // vient d'être démarqué), change.doc.data() peut encore refléter l'ancienne valeur
+          // controlled:true — on force explicitement l'état "non contrôlé" dans ce cas.
+          if (change.type === 'removed') {
+            next[change.doc.id] = {
+              ...(next[change.doc.id] || {}),
+              controlled: false, controlledBy: '', controlledById: '', controlledAt: '',
+            }
+            return
+          }
+          const d = change.doc.data()
+          next[change.doc.id] = {
+            ...(next[change.doc.id] || {}),
+            controlled: d.controlled ?? false,
+            controlledBy: d.controlledBy || '',
+            controlledById: d.controlledById || '',
+            controlledAt: d.controlledAt || '',
+          }
+        })
+        return next
+      })
+    }, onError)
+
+    const qDelivery = fbQuery(
+      collection(db, 'parcels'),
+      where('deliveryControlled', '==', true),
+      orderBy('deliveryControlledAt', 'desc'),
+      fbLimit(500)
+    )
+    const unsubDelivery = onSnapshot(qDelivery, snap => {
+      setControlOverrides(prev => {
+        const next = { ...prev }
+        snap.docChanges().forEach(change => {
+          if (change.type === 'removed') {
+            next[change.doc.id] = {
+              ...(next[change.doc.id] || {}),
+              deliveryControlled: false, deliveryControlledBy: '', deliveryControlledById: '', deliveryControlledAt: '',
+            }
+            return
+          }
+          const d = change.doc.data()
+          next[change.doc.id] = {
+            ...(next[change.doc.id] || {}),
+            deliveryControlled: d.deliveryControlled ?? false,
+            deliveryControlledBy: d.deliveryControlledBy || '',
+            deliveryControlledById: d.deliveryControlledById || '',
+            deliveryControlledAt: d.deliveryControlledAt || '',
+          }
+        })
+        return next
+      })
+    }, onError)
+
+    return () => { unsubControlled(); unsubDelivery() }
+  }, [])
+
   // ⚡ Chargement optimisé avec détection de filtres (Option 3)
   // NOTE: query n'est PAS dans les dépendances - la recherche est gérée par searchParcels
   useEffect(() => {
     const onError = (err: any) => console.error('CentralCollectorPage:', err)
 
-    // 🔍 Détecter si des filtres sont actifs (SANS query - géré par recherche serveur)
-    const hasDateFilter = datePreset !== 'all'
-    const hasCityFilter = cityFilter !== 'all'
-    const hasPaymentFilter = paymentFilter !== 'all' && paymentFilter !== 'unpaid'
-    const hasFilters = hasDateFilter || hasCityFilter || hasPaymentFilter
+    // 📅 Plage de dates demandée par l'onglet actif → filtre appliqué côté serveur
+    let range: { start: Date | null; end: Date | null } | null = null
+    if (activeTab === 'controle') {
+      range = presetRange(ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay)
+    } else if (activeTab === 'fournisseurs') {
+      range = presetRange(datePreset, dateFrom, dateTo, operationalDay)
+      // Le dépôt central est postérieur à la création : élargir la borne basse
+      if (range?.start) { const s = new Date(range.start); s.setDate(s.getDate() - SUPPLIER_LEAD_DAYS); range = { ...range, start: s } }
+    }
 
-    const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
+    setMoreParcels([])
+    setLoadAllProgress(0)
+    pagedRef.current = false
+    lastDocRef.current = null
 
-    console.warn(`📊 CHARGEMENT CentralCollector:`, {
-      hasFilters,
-      effectivePageSize,
-      filters: { datePreset, cityFilter, paymentFilter }
-    })
+    // Sans plage : comportement paginé classique (50 derniers + "charger plus")
+    if (!range) {
+      const hasCityFilter = cityFilter !== 'all'
+      const hasPaymentFilter = paymentFilter !== 'all' && paymentFilter !== 'unpaid'
+      const effectivePageSize = (hasCityFilter || hasPaymentFilter) ? FILTERED_PAGE_SIZE : PAGE_SIZE
+      setHasMore(true)
+      const unsubParcels = subscribeAllParcels((docs: any[], lastSnap: any) => {
+        setLiveParcels(docs)
+        if (!pagedRef.current) lastDocRef.current = lastSnap
+        if (docs.length < effectivePageSize) setHasMore(false)
+      }, onError, 0, effectivePageSize)
+      return () => { unsubParcels() }
+    }
 
-    const unsubParcels = subscribeAllParcels((docs: any[], lastSnap: any) => {
+    // Avec plage : écoute temps réel sur la plage + chargement automatique de toutes les pages restantes
+    let cancelled = false
+    let fetchingRest = false
+    setHasMore(false)
+    const unsubParcels = subscribeAllParcelsWithDateFilter((docs: any[], lastSnap: any) => {
+      if (cancelled) return
       setLiveParcels(docs)
-      if (!pagedRef.current) lastDocRef.current = lastSnap
-      if (docs.length < effectivePageSize) setHasMore(false)
-      console.warn(`✅ CentralCollector: ${docs.length} colis chargés`)
-    }, onError, 0, effectivePageSize)
+      if (docs.length < FILTERED_PAGE_SIZE || !lastSnap || fetchingRest) return
+      fetchingRest = true
+      ;(async () => {
+        setLoadingAll(true)
+        let cursor = lastSnap
+        let safety = 0
+        try {
+          while (cursor && !cancelled && safety < 200) {
+            const page = await loadMoreParcelsWithDateFilter(cursor, { pageSize: FILTERED_PAGE_SIZE, dateFrom: range!.start, dateTo: range!.end })
+            if (cancelled) break
+            if (page.docs.length) {
+              setMoreParcels(prev => { const m = new Map(prev.map((p: any) => [p.id, p])); page.docs.forEach((p: any) => m.set(p.id, p)); return [...m.values()] })
+              setLoadAllProgress(prev => prev + page.docs.length)
+            }
+            cursor = page.hasMore ? page.lastSnap : null
+            safety += 1
+          }
+        } catch (err) {
+          console.error('CentralCollectorPage range load:', err)
+        } finally {
+          if (!cancelled) setLoadingAll(false)
+        }
+      })()
+    }, onError, { pageSize: FILTERED_PAGE_SIZE, dateFrom: range.start, dateTo: range.end })
 
-    return () => { unsubParcels() }
-  }, [datePreset, cityFilter, paymentFilter])
+    return () => { cancelled = true; unsubParcels(); setLoadingAll(false) }
+  }, [activeTab, datePreset, dateFrom, dateTo, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay, cityFilter, paymentFilter])
 
   // ❌ DÉSACTIVÉ: Chargement automatique (Option 3 - charge seulement ce dont on a besoin)
   // useEffect(() => {
@@ -411,6 +559,12 @@ export default function CentralCollectorPage() {
   // Ville de DESTINATION (ville de réception) - conservé pour compatibilité
   const parcelCity = (p: any) => p.destinationCity || p.receiver?.city || 'Ville inconnue'
   const isControlled = (p: any) => !!p.controlled
+  // 🔁 2ème contrôle : confirme que la valeur est bien arrivée à destination (autre ville,
+  // marqué par un autre utilisateur). Indépendant du 1er contrôle ci-dessus.
+  const isDeliveryControlled = (p: any) => !!p.deliveryControlled
+  // 🔒 Utilisé pour n'autoriser l'annulation d'un pointage (contrôle ou confirmation d'arrivée)
+  // qu'à son propre auteur : chaque pointage est attaché à l'utilisateur qui l'a fait.
+  const myUid = auth.currentUser?.uid || ''
 
   const codParcels = useMemo(() => parcels.filter((p: any) => (parseFloat(p.codAmount) || 0) > 0), [parcels])
 
@@ -444,7 +598,7 @@ export default function CentralCollectorPage() {
 
     // Filtre type de paiement COD
     if (archivePaymentType !== 'all') {
-      filtered = filtered.filter((p: any) => p.codPaymentType === archivePaymentType)
+      filtered = filtered.filter((p: any) => codTypeOf(p) === archivePaymentType)
     }
 
     return filtered
@@ -457,7 +611,7 @@ export default function CentralCollectorPage() {
     const mx = ctlMaxAmount === '' ? null : parseFloat(ctlMaxAmount)
     return parcels.filter((p: any) => {
       if (ctlPayType !== 'all') {
-        const t = p.codPaymentType || ''
+        const t = codTypeOf(p)
         if (ctlPayType === 'none' && t) return false
         if (ctlPayType !== 'none' && t !== ctlPayType) return false
       }
@@ -529,7 +683,7 @@ export default function CentralCollectorPage() {
       const amt = parseFloat(p.codAmount) || 0
       totalAmount += amt
       if (isControlled(p)) { controlledCount += 1; controlledAmount += amt }
-      const t = p.codPaymentType || 'none'
+      const t = codTypeOf(p) || 'none'
       if (!byType[t]) byType[t] = { count: 0, amount: 0 }
       byType[t].count += 1
       byType[t].amount += amt
@@ -560,6 +714,34 @@ export default function CentralCollectorPage() {
     setCtlMaxAmount('')
   }
 
+  // ⚠️ Un colis affiché depuis une page déjà chargée (pagination "Charger plus" = lecture
+  // ponctuelle, pas un flux temps réel) peut être périmé : un autre encaisseur a pu le
+  // contrôler/confirmer entre-temps. Dans ce cas, Firestore refuse à raison (règle
+  // d'ownership) et on obtient "Missing or insufficient permissions" — au lieu d'afficher
+  // cette erreur brute, on récupère l'état réel du colis et on l'affiche avec un message clair.
+  const resyncAfterOwnershipDenial = async (ids: string[], actionLabel: string) => {
+    const results = await Promise.all(ids.map(async id => {
+      try {
+        const snap = await getDoc(doc(db, 'parcels', id))
+        return snap.exists() ? { id, data: snap.data() } : null
+      } catch {
+        return null
+      }
+    }))
+    setControlOverrides(prev => {
+      const next = { ...prev }
+      results.forEach(r => { if (r) next[r.id] = r.data })
+      return next
+    })
+    const owners = new Set(
+      results
+        .map(r => r?.data?.controlledBy || r?.data?.deliveryControlledBy)
+        .filter(Boolean)
+    )
+    const who = owners.size > 0 ? ` (déjà fait par ${[...owners].join(', ')})` : ''
+    alert(`⚠️ Impossible de ${actionLabel} : au moins un colis a été mis à jour entre-temps par un autre encaisseur${who}. L'affichage a été resynchronisé.`)
+  }
+
   // ✅ Pointage : marquer / dé-marquer contrôlé (batch Firestore + MAJ optimiste)
   const applyControl = async (ids: string[], value: boolean) => {
     const clean = ids.filter(Boolean)
@@ -586,7 +768,46 @@ export default function CentralCollectorPage() {
         return s
       })
     } catch (err: any) {
-      alert(err?.message || 'Erreur lors du pointage.')
+      if (err?.code === 'permission-denied') {
+        await resyncAfterOwnershipDenial(clean, value ? 'pointer' : 'annuler le pointage')
+      } else {
+        alert(err?.message || 'Erreur lors du pointage.')
+      }
+    } finally {
+      setPointing(false)
+    }
+  }
+
+  // ✅ 2ème pointage : confirmer l'arrivée de la valeur à destination (batch Firestore + MAJ optimiste)
+  const applyDeliveryControl = async (ids: string[], value: boolean) => {
+    const clean = ids.filter(Boolean)
+    if (clean.length === 0 || pointing) return
+    setPointing(true)
+    try {
+      const name = profile?.name || 'Agence destinataire'
+      const uid = auth.currentUser?.uid || ''
+      if (value) await markParcelsDeliveryControlled(clean, name, uid)
+      else await unmarkParcelsDeliveryControlled(clean)
+      const now = new Date().toISOString()
+      setControlOverrides(prev => {
+        const next = { ...prev }
+        clean.forEach(id => {
+          next[id] = {
+            ...(next[id] || {}),
+            deliveryControlled: value,
+            deliveryControlledBy: value ? name : '',
+            deliveryControlledById: value ? uid : '',
+            deliveryControlledAt: value ? now : '',
+          }
+        })
+        return next
+      })
+    } catch (err: any) {
+      if (err?.code === 'permission-denied') {
+        await resyncAfterOwnershipDenial(clean, value ? 'confirmer l\'arrivée' : 'annuler la confirmation')
+      } else {
+        alert(err?.message || 'Erreur lors de la confirmation d\'arrivée.')
+      }
     } finally {
       setPointing(false)
     }
@@ -612,7 +833,7 @@ export default function CentralCollectorPage() {
   }
 
   const payTypeBadge = (p: any) => {
-    const t = COD_PAYMENT_TYPES.find((x: any) => x.key === p.codPaymentType)
+    const t = COD_PAYMENT_TYPES.find((x: any) => x.key === codTypeOf(p))
     if (!t) return <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-500">—</span>
     return <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${t.bg} ${t.text}`}>{t.emoji} {t.label}</span>
   }
@@ -1070,7 +1291,7 @@ export default function CentralCollectorPage() {
         <td>${p.receiver?.name || p.receiverName || '-'}</td>
         <td>${p.receiver?.tel || p.receiverTel || '-'}</td>
         <td>${parcelCity(p)}</td>
-        <td>${p.codPaymentType ? COD_PAYMENT_TYPES[p.codPaymentType] || p.codPaymentType : '-'}</td>
+        <td>${codTypeLabel(p) || '-'}</td>
         <td style="text-align:right;font-weight:bold">${money(p.codAmount)} DH</td>
         <td style="text-align:center">${isControlled(p) ? '✓' : ''}</td>
       </tr>
@@ -1150,7 +1371,7 @@ export default function CentralCollectorPage() {
     // Déterminer le type de paiement prédominant
     const paymentTypes = toExport
       .filter((p: any) => p.codAmount && p.codAmount > 0)
-      .map((p: any) => p.codPaymentType)
+      .map((p: any) => codTypeOf(p))
     const paymentCounts: any = {}
     paymentTypes.forEach((t: string) => {
       paymentCounts[t] = (paymentCounts[t] || 0) + 1
@@ -1641,6 +1862,7 @@ export default function CentralCollectorPage() {
                     )}
                     {ctlDisplayed.map((p: any) => {
                       const controlled = isControlled(p)
+                      const deliveryControlled = isDeliveryControlled(p)
                       const selected = ctlSelected.has(p.id)
                       return (
                         <tr key={p.id} className={`transition ${controlled ? 'bg-emerald-50/60' : selected ? 'bg-purple-50/60' : 'hover:bg-slate-50'}`}>
@@ -1671,32 +1893,74 @@ export default function CentralCollectorPage() {
                           <td className="px-3 py-2.5">{codStatusBadge(p)}</td>
                           <td className="px-3 py-2.5">{statusBadge(p)}</td>
                           <td className="px-3 py-2.5">
-                            {controlled ? (
-                              <div className="flex items-center gap-2">
-                                <div>
-                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-black bg-green-100 text-green-700">
-                                    <CheckCircle2 className="w-3 h-3" /> Contrôlé
-                                  </span>
-                                  <p className="text-[10px] text-slate-400 mt-0.5">{p.controlledBy || ''} {p.controlledAt ? `· ${fmtDate(p.controlledAt)}` : ''}</p>
+                            {/* ⚠️ Les deux pointages (Contrôlé / Arrivée confirmée) sont rendus
+                                indépendamment l'un de l'autre : annuler l'un ne doit JAMAIS faire
+                                disparaître l'affichage de l'état de l'autre (données déjà
+                                indépendantes en base — voir markParcelsControlled/DeliveryControlled). */}
+                            <div className="flex flex-col items-start gap-1.5">
+                              {/* 1er contrôle */}
+                              {controlled ? (
+                                <div className="flex items-center gap-2">
+                                  <div>
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-black bg-green-100 text-green-700">
+                                      <CheckCircle2 className="w-3 h-3" /> Contrôlé
+                                    </span>
+                                    <p className="text-[10px] text-slate-400 mt-0.5">{p.controlledBy || ''} {p.controlledAt ? `· ${fmtDate(p.controlledAt)}` : ''}</p>
+                                  </div>
+                                  {/* ⚠️ Chaque pointage n'appartient qu'à son auteur : seul l'utilisateur qui a
+                                      contrôlé ce colis peut annuler SON contrôle (comparaison sur controlledById). */}
+                                  {p.controlledById === myUid && (
+                                    <button
+                                      onClick={() => applyControl([p.id], false)}
+                                      disabled={pointing}
+                                      className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-600 disabled:opacity-50 transition"
+                                      title="Annuler mon contrôle"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
                                 </div>
+                              ) : (
                                 <button
-                                  onClick={() => applyControl([p.id], false)}
+                                  onClick={() => applyControl([p.id], true)}
                                   disabled={pointing}
-                                  className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-600 disabled:opacity-50 transition"
-                                  title="Annuler le contrôle"
+                                  className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-[11px] font-black transition"
                                 >
-                                  <X className="w-3.5 h-3.5" />
+                                  Pointer
                                 </button>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={() => applyControl([p.id], true)}
-                                disabled={pointing}
-                                className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-[11px] font-black transition"
-                              >
-                                Pointer
-                              </button>
-                            )}
+                              )}
+
+                              {/* 🔁 2ème contrôle : confirmation d'arrivée de la valeur à destination,
+                                  par un autre utilisateur (autre ville) — totalement indépendant du 1er. */}
+                              {deliveryControlled ? (
+                                <div className="flex items-center gap-2">
+                                  <div>
+                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-black bg-blue-100 text-blue-700">
+                                      <CheckCircle2 className="w-3 h-3" /> Arrivée confirmée
+                                    </span>
+                                    <p className="text-[10px] text-slate-400 mt-0.5">{p.deliveryControlledBy || ''} {p.deliveryControlledAt ? `· ${fmtDate(p.deliveryControlledAt)}` : ''}</p>
+                                  </div>
+                                  {p.deliveryControlledById === myUid && (
+                                    <button
+                                      onClick={() => applyDeliveryControl([p.id], false)}
+                                      disabled={pointing}
+                                      className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-600 disabled:opacity-50 transition"
+                                      title="Annuler ma confirmation d'arrivée"
+                                    >
+                                      <X className="w-3.5 h-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              ) : (
+                                <button
+                                  onClick={() => applyDeliveryControl([p.id], true)}
+                                  disabled={pointing}
+                                  className="px-3 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white text-[11px] font-black transition"
+                                >
+                                  Confirmer arrivée
+                                </button>
+                              )}
+                            </div>
                           </td>
                         </tr>
                       )
@@ -2494,14 +2758,14 @@ export default function CentralCollectorPage() {
                                 {(parseFloat(p.codAmount) || 0) > 0 ? `${money(p.codAmount)} DH` : '—'}
                               </td>
                               <td className="px-4 py-3">
-                                {p.codPaymentType ? (
+                                {codTypeOf(p) ? (
                                   <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                    p.codPaymentType === 'especes' ? 'bg-green-100 text-green-700' :
-                                    p.codPaymentType === 'cheque' ? 'bg-blue-100 text-blue-700' :
-                                    p.codPaymentType === 'traite' ? 'bg-indigo-100 text-indigo-700' :
+                                    codTypeOf(p) === 'especes' ? 'bg-green-100 text-green-700' :
+                                    codTypeOf(p) === 'cheque' ? 'bg-blue-100 text-blue-700' :
+                                    codTypeOf(p) === 'traite' ? 'bg-indigo-100 text-indigo-700' :
                                     'bg-gray-100 text-gray-700'
-                                  }`}>
-                                    {COD_PAYMENT_TYPES.find((t: any) => t.key === p.codPaymentType)?.label || p.codPaymentType}
+                                  }`} title={p.codPaymentType ? 'Type saisi à l\'encaissement' : 'Type déduit du service (non encore encaissé)'}>
+                                    {codTypeLabel(p)}
                                   </span>
                                 ) : '—'}
                               </td>

@@ -4,6 +4,7 @@ import { useState, useMemo } from 'react'
 import { filterByDate } from '../../../utils/dateFilter'
 import type { DateFilterPreset } from '../../../types'
 import { deleteAllDriverVersements } from '../../../firebase/firestore'
+import { normIncludes } from '../../../utils/normText'
 
 const PAYMENT_TYPES: Record<string, { label: string; emoji: string; color: string }> = {
   especes: { label: 'Espèces', emoji: '💵', color: 'green' },
@@ -80,7 +81,7 @@ export default function AdminVersementsTab({
     if (fromRoleFilter !== 'all') list = list.filter((t: any) => (t.fromRole || 'agent') === fromRoleFilter)
     if (search.trim()) {
       const q = search.toLowerCase()
-      list = list.filter((t: any) => (t.fromName || '').toLowerCase().includes(q))
+      list = list.filter((t: any) => normIncludes(t.fromName || '', q))
     }
     list = filterByDate(list, datePreset, dateFrom, dateTo, transferDate)
     return list

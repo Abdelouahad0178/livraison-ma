@@ -34,6 +34,7 @@ import {
   ThumbsUp, MessageSquare, Clock, Eye,
 } from 'lucide-react'
 import { fmt } from '../utils/formatNumber'
+import { normIncludes } from '../utils/normText'
 
 
 const asDate = (value: any) => value?.toDate ? value.toDate() : new Date(value || 0)
@@ -221,9 +222,9 @@ export default function ClientPortalPage() {
     const q = search.trim().toLowerCase()
     if (!q) return parcels
     return parcels.filter(p =>
-      p.trackingId?.toLowerCase().includes(q) ||
-      p.receiver?.name?.toLowerCase().includes(q) ||
-      p.receiver?.city?.toLowerCase().includes(q) ||
+      normIncludes(p.trackingId, q) ||
+      normIncludes(p.receiver?.name, q) ||
+      normIncludes(p.receiver?.city, q) ||
       p.receiver?.tel?.includes(q)
     )
   }, [parcels, search])

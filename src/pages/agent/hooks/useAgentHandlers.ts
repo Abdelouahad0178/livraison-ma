@@ -1,14 +1,14 @@
 import React from 'react'
 import { createUserWithEmailAndPassword, signOut as fbSignOut } from 'firebase/auth'
 import { auth, authSecondary, db } from '../../../firebase/config'
-import { doc, setDoc, updateDoc, deleteDoc } from 'firebase/firestore'
+import { doc, setDoc, updateDoc, deleteDoc, getDoc } from 'firebase/firestore'
 import {
   assignDriver, assignDriversBulk, assignDeliveryDriver,
-  remitCod, collectCodAtSource, collectCodAtDestination, collectPortDu,
-  createCaisseEntry, deleteAgentCashierHistory,
+  remitCod, cancelCodRemise, collectCodAtSource, collectCodAtDestination, collectPortDu,
+  createCaisseEntry, deleteCaisseEntry, deleteAgentCashierHistory,
   adjustAgencyCash, directTransferAgentToCashierAtomic,
   createAgentCashRecoveryRequest,
-  settleCodToSender, batchSettleCods, fetchAllAgentCodParcels,
+  settleCodToSender, batchSettleCods, fetchAllAgentCodParcels, fetchAllAgencyCodParcels,
   markCodSentToSource, confirmCodReceivedBySource,
   validateCodByChef,  // ⭐ Nouvelle fonction
   createAdminTransferFromAgent,
@@ -32,7 +32,10 @@ import {
 import { createBankDeposit } from '../../../firebase/bankDeposits'
 import { createParticularPortalAccount } from '../../../firebase/portalAccounts'
 import { printCharge, printTable, printBonRamassage } from '../../../utils/agentPrintUtils'
-import { ALL_SERVICE_TYPES } from '../../../firebase/constants'
+import { printFeuilleDeCharge } from '../../../utils/printFeuilleDeCharge'
+import { ALL_SERVICE_TYPES, codPaymentTypeOf } from '../../../firebase/constants'
+import { buildParcelCorrectionPatch, describeParcelSaveError } from '../../../firebase/parcels'
+import { showToast } from '../../../utils/toast'
 
 // ALL_SERVICE_TYPES importé depuis constants.ts
 
@@ -76,8 +79,9 @@ export const filterByDate = (list: any, preset: any, from: any, to: any, getDate
 
 // Module-level COD helpers ─────────────────────────────────────────────────────
 
+// Type de paiement COD : serviceType fait foi (codPaymentType seulement s'il est cohérent).
 export const codCaisseCategory = (parcel: any) => {
-  const pt = parcel.codPaymentType || parcel.serviceType || 'especes'
+  const pt = codPaymentTypeOf(parcel) || 'especes'
   if (pt === 'cheque')                              return 'cod_cheque'
   if (pt === 'traite')                              return 'cod_traite'
   if (pt === 'bon_livraison' || pt === 'retour_bl') return 'doc_agent'
@@ -85,12 +89,12 @@ export const codCaisseCategory = (parcel: any) => {
 }
 
 export const isCash = (parcel: any) => {
-  const pt = parcel.codPaymentType || parcel.serviceType || 'especes'
+  const pt = codPaymentTypeOf(parcel) || 'especes'
   return !['cheque', 'traite', 'bon_livraison', 'retour_bl'].includes(pt)
 }
 
 export const isRetourFondValue = (parcel: any) => {
-  const pt = parcel.codPaymentType || parcel.serviceType || 'especes'
+  const pt = codPaymentTypeOf(parcel) || 'especes'
   return (parseFloat(parcel.codAmount) || 0) > 0 || ['cheque', 'traite', 'bon_livraison', 'retour_bl'].includes(pt)
 }
 
@@ -639,12 +643,21 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   }
 
   const handleLoadAllCod = async () => {
-    const { setCodLoadingAll, setAllCodParcels } = s.current
+    const { setCodLoadingAll, setAllCodParcels, setCodLoadAllProgress, profile } = s.current
     const uid = auth.currentUser?.uid
+    const isAgencyManager = profile?.role === 'chef_agence' || profile?.role === 'agentpro'
     setCodLoadingAll(true)
+    setCodLoadAllProgress?.(0)
     try {
-      const all = await fetchAllAgentCodParcels(uid || '')
-      setAllCodParcels(all)
+      // Un chef d'agence doit voir les RETOUR FOND de TOUTE sa ville, pas seulement
+      // ceux qu'il a saisis lui-même : on complète donc par la requête ville.
+      const results = await Promise.all([
+        fetchAllAgentCodParcels(uid || ''),
+        isAgencyManager && profile?.city ? fetchAllAgencyCodParcels(profile.city, (n: number) => setCodLoadAllProgress?.(n)) : Promise.resolve([]),
+      ])
+      const map = new Map<string, any>()
+      results.flat().forEach((p: any) => map.set(p.id, p))
+      setAllCodParcels([...map.values()])
     } finally {
       setCodLoadingAll(false)
     }
@@ -724,7 +737,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   const openReceiveModal = (parcel: any) => {
     const { setReceiveModal } = s.current
     const reglement = findSourceReglementForParcel(parcel)
-    const mode = reglement?.modeReglement || parcel.codPaymentType || parcel.serviceType || 'especes'
+    const mode = reglement?.modeReglement || codPaymentTypeOf(parcel) || 'especes'
     if (['cheque', 'traite'].includes(mode)) {
       setReceiveModal({
         parcel,
@@ -831,6 +844,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         codChefReceivedAt:   now,
         codChefReceivedBy:   name,
         codChefReceivedById: uid,
+        // Mémorise l'état d'origine pour pouvoir annuler l'encaissement plus tard
+        codStatusBeforeRemise: parcel.codStatus || 'pending',
         ...(codCaisseEntryId ? { codCaisseEntryId } : {}),
       }
       await remitCod(parcel.id, name, extraFields)
@@ -838,6 +853,29 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     } catch (err: any) {
       console.error('handleReceptionCod:', err)
       setReceptionCodError(err?.message || 'Erreur lors de la réception RETOUR FOND.')
+    } finally {
+      setCodReceptioning(null)
+    }
+  }
+
+  // ↩️ Annuler un encaissement : remet le RETOUR FOND à son état précédent et
+  // supprime l'entrée de caisse créée lors de la remise.
+  const handleCancelCodRemise = async (parcel: any) => {
+    const { profile, setCodReceptioning, setReceptionCodError } = s.current
+    const uid  = auth.currentUser?.uid
+    const name = profile?.name || 'Agent'
+    setCodReceptioning(parcel.id)
+    setReceptionCodError('')
+    try {
+      const restored = await cancelCodRemise(parcel.id, name, uid || '')
+      if (parcel.codCaisseEntryId) {
+        await deleteCaisseEntry(parcel.codCaisseEntryId).catch((e: any) =>
+          console.error('Suppression entrée caisse:', e))
+      }
+      patchAllCod(parcel.id, restored)
+    } catch (err: any) {
+      console.error('handleCancelCodRemise:', err)
+      setReceptionCodError(err?.message || "Erreur lors de l'annulation de l'encaissement.")
     } finally {
       setCodReceptioning(null)
     }
@@ -1288,14 +1326,20 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
           hasDriverId: !!driverInfo?.id,
           nbColis: parcelsArg?.length
         })
-        if (!driverInfo?.id) {
+        // « En gare - ville » n'a pas de compte livreur à qui rattacher un bon : pas d'alerte dans ce cas
+        if (!driverInfo?.id && !driverName) {
           alert('⚠️ Pas de bon créé: Aucun livreur sélectionné')
         }
       }
 
       // Imprimer le tableau
       console.log('🖨️ Lancement impression...')
-      await printTable(parcelsArg, driverName, s.current.profile, visibleColumns, orientation)
+      // Livreur sélectionné → feuille de charge (même modèle que la page Chef d'exploitation)
+      if (driverName) {
+        printFeuilleDeCharge(driverName, s.current.profile?.city || '', parcelsArg, s.current.profile?.name)
+      } else {
+        await printTable(parcelsArg, driverName, s.current.profile, visibleColumns, orientation)
+      }
       console.log('✅ Impression terminée')
     } catch (err: any) {
       console.error('Erreur impression tableau:', err)
@@ -1336,6 +1380,15 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const qrSvgStr = qrContainer.innerHTML
     qrRoot.unmount()
 
+    const PORT_TYPE_LABELS: Record<string, { label: string; color: string }> = {
+      port_du: { label: 'Port dû', color: '#ea580c' },
+      port_paye: { label: 'Port payé', color: '#16a34a' },
+      port_en_compte_destinataire: { label: 'Port en compte (Dest.)', color: '#7c3aed' },
+      port_en_compte_expediteur: { label: 'Port en compte (Exp.)', color: '#4f46e5' },
+      port_en_compte: { label: 'Port en compte', color: '#7c3aed' },
+    }
+    const portInfo = PORT_TYPE_LABELS[parcel.portType] || PORT_TYPE_LABELS.port_paye
+
     const checks = ALL_SERVICE_TYPES.map((st: any) => {
       // Cas spécial: Retour BL se base sur hasRetourBL au lieu de serviceType
       const isChecked = st.key === 'retour_bl'
@@ -1348,20 +1401,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       </label>`
     }).join('')
 
-    const ticketHtml = `<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <title>Bon-Ramassage-${parcel.trackingId}</title>
-  <style>
-    @page { size: 148mm 210mm; margin: 6mm; }
-    * { box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
-    body { font-family:Arial,sans-serif; font-size:10pt; margin:0; padding:0; }
-    table { border-collapse:collapse; width:100%; }
-    td { vertical-align:top; padding:6px 10px; }
-  </style>
-</head>
-<body>
+    const renderCopy = () => `
   <div style="border:1px solid #d1d5db;max-width:148mm;margin:0 auto">
     <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #d1d5db;padding:8px 10px">
       <img src="${logoUrl}" style="height:36px;object-fit:contain" onerror="this.style.display='none'">
@@ -1411,6 +1451,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         <td style="width:33%;border-right:1px solid #e5e7eb">
           <div style="font-size:8pt;color:#9ca3af;text-transform:uppercase">Prix</div>
           <div style="font-weight:bold;font-size:12pt;color:#1d4ed8">${parcel.price > 0 ? parcel.price + ' DH' : '—'}</div>
+          <div style="font-weight:bold;font-size:8pt;text-transform:uppercase;color:${portInfo.color};margin-top:2px">${portInfo.label}</div>
         </td>
         <td style="width:33%">
           <div style="font-size:8pt;color:#9ca3af;text-transform:uppercase">RETOUR FOND</div>
@@ -1431,7 +1472,26 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         <td style="width:50%">Cachet et Signature destinataire</td>
       </tr>
     </table>
-  </div>
+  </div>`
+
+    const ticketHtml = `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <title>Bon-Ramassage-${parcel.trackingId}</title>
+  <style>
+    @page { size: A4 portrait; margin: 6mm; }
+    * { box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
+    body { font-family:Arial,sans-serif; font-size:10pt; margin:0; padding:0; }
+    table { border-collapse:collapse; width:100%; }
+    td { vertical-align:top; padding:6px 10px; }
+    .cut-line { max-width:148mm; margin:0 auto; text-align:center; color:#9ca3af; font-size:8pt; border-top:1px dashed #9ca3af; padding-top:2px; }
+  </style>
+</head>
+<body>
+  ${renderCopy()}
+  <div class="cut-line">✂ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ✂</div>
+  ${renderCopy()}
   <script>window.onload = function() { window.print(); };<\/script>
 </body>
 </html>`
@@ -1650,7 +1710,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
             const gareDriver = gareDriverSnap.docs[0].data()
             selectedDeliveryDriver = {
               id: gareDriverSnap.docs[0].id,
-              name: gareDriver.name || gareDriver.email || 'Livreur gare'
+              name: `En gare - ${form.receiverCity}` // nom d'affichage normalisé : « En gare - <ville> »
             }
           }
         } catch (err) {
@@ -1810,6 +1870,9 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       codAmount:       parcel.codAmount         ?? 0,
       price:           parcel.price             ?? '',
       serviceType:     parcel.serviceType       || 'oc',
+      portType:        parcel.portType          || '',
+      fragile:         !!parcel.fragile,
+      notes:           parcel.notes             || '',
       status:          parcel.status            || 'Initialisé',
       note:            '',
     })
@@ -1873,6 +1936,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 
     setEditLoading(true)
     setEditError('')
+    let detailsSaved = false
     try {
       if (isReturning) {
         await markParcelAsReturned(
@@ -1880,72 +1944,68 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
           editForm.note ? { note: editForm.note } : {}
         )
       } else {
-        const oldSender   = editingParcel.sender   || {}
-        const oldReceiver = editingParcel.receiver || {}
-        const nextSender = {
-          name:    editForm.senderName,
-          nic:     editForm.senderNic || '',
-          address: editForm.senderAddress || '',
-          tel:     editForm.senderTel,
-          city:    editForm.senderCity,
-        }
-        const nextReceiver = {
-          name:    editForm.receiverName,
-          address: editForm.receiverAddress || '',
-          tel:     editForm.receiverTel,
-          city:    editForm.receiverCity,
-        }
-        const nextWeight         = parsePositiveNumber(editForm.weight)
-        const nextNbColis        = parseInt(editForm.nbColis) || 1
-        const nextNature         = editForm.natureOfGoods === 'Autres'
+        const nextNature = editForm.natureOfGoods === 'Autres'
           ? (editForm.natureOfGoodsCustom || 'Autres')
           : (editForm.natureOfGoods || '')
-        const nextServiceType    = editForm.serviceType || 'oc'
-        const nextPrice          = parsePositiveNumber(editForm.price)
-        const nextDestinationCity = editForm.receiverCity || editingParcel.destinationCity
-        const detailsPatch: any  = {}
-        const changedText = (a: any, b: any) => String(a ?? '') !== String(b ?? '')
+        // Patch = uniquement les champs réellement modifiés (dont codAmount, portType,
+        // fragile, notes et les champs de recherche dénormalisés senderNameLower, etc.)
+        const detailsPatch: any = buildParcelCorrectionPatch(editingParcel, {
+          sender: {
+            name:    editForm.senderName,
+            nic:     editForm.senderNic || '',
+            address: editForm.senderAddress || '',
+            tel:     editForm.senderTel,
+            city:    editForm.senderCity,
+          },
+          receiver: {
+            name:    editForm.receiverName,
+            address: editForm.receiverAddress || '',
+            tel:     editForm.receiverTel,
+            city:    editForm.receiverCity || editingParcel.receiver?.city || '',
+          },
+          weight:        parsePositiveNumber(editForm.weight),
+          nbColis:       editForm.nbColis,
+          natureOfGoods: nextNature,
+          serviceType:   editForm.serviceType || 'oc',
+          price:         parsePositiveNumber(editForm.price),
+          codAmount:     editForm.codAmount,
+          portType:      editForm.portType,
+          fragile:       editForm.fragile,
+          notes:         editForm.notes,
+        }, { uid: auth.currentUser?.uid || null, name: profile?.name || 'Utilisateur' })
 
-        if (
-          changedText(oldSender.name, nextSender.name) ||
-          changedText(oldSender.nic, nextSender.nic) ||
-          changedText(oldSender.address, nextSender.address) ||
-          changedText(oldSender.tel, nextSender.tel) ||
-          changedText(oldSender.city, nextSender.city)
-        ) { detailsPatch.sender = nextSender }
-        if (
-          changedText(oldReceiver.name, nextReceiver.name) ||
-          changedText(oldReceiver.address, nextReceiver.address) ||
-          changedText(oldReceiver.tel, nextReceiver.tel) ||
-          changedText(oldReceiver.city, nextReceiver.city)
-        ) { detailsPatch.receiver = nextReceiver }
-        if (Number(editingParcel.weight || 0)   !== nextWeight)    detailsPatch.weight = nextWeight
-        if (Number(editingParcel.nbColis || 1)  !== nextNbColis)   detailsPatch.nbColis = nextNbColis
-        if (changedText(editingParcel.natureOfGoods, nextNature))   detailsPatch.natureOfGoods = nextNature
-        if (changedText(editingParcel.serviceType || 'oc', nextServiceType)) {
-          detailsPatch.serviceType = nextServiceType
-          // Si passage vers Simple depuis un type COD ou Retour BL → enregistrer le modificateur
-          const oldType = editingParcel.serviceType || 'oc'
-          const wasCOD = ['especes', 'cheque', 'traite', 'retour_bl'].includes(oldType)
-          const nowSimple = nextServiceType === 'simple'
-          if (wasCOD && nowSimple) {
-            detailsPatch.lastModifiedBy = uid
-            detailsPatch.lastModifiedByName = profile?.name || 'Utilisateur'
-            detailsPatch.lastModifiedAt = new Date().toISOString()
-          }
+        // 🔒 Colis chargé dans un camion : seul l'admin peut encore modifier le bon
+        if (Object.keys(detailsPatch).length > 0 && editingParcel.shipmentLoadedAt && profile?.role !== 'admin') {
+          throw Object.assign(new Error('locked'), { code: 'permission-denied' })
         }
-        if (Number(editingParcel.price || 0)     !== nextPrice)     detailsPatch.price = nextPrice
-        if (changedText(editingParcel.destinationCity, nextDestinationCity)) detailsPatch.destinationCity = nextDestinationCity
 
         // Le chef d'agence et l'admin peuvent modifier les colis livrés
         if ((editingParcel.status === 'Livré' || editingParcel.status === 'Livré') && (Object.keys(detailsPatch).length > 0 || (statusChanging && editForm.status !== editingParcel.status))) {
-          if (profile?.role !== 'chef_agence' && profile?.role !== 'admin') {
-            throw new Error('Colis deja livre : toute modification doit passer par une demande au chef d agence ou a l admin.')
+          if (profile?.role !== 'chef_agence' && profile?.role !== 'agentpro' && profile?.role !== 'admin') {
+            throw new Error("Colis déjà livré : toute modification doit passer par une demande au chef d'agence ou à l'admin.")
+          }
+        }
+
+        // 💰 Partie RETOUR FOND / type de service : recalculée à partir du colis relu en base,
+        // pour que l'ancien montant de l'historique et le codPaymentType soient ceux de Firestore
+        // (l'objet ouvert dans le modal peut être périmé).
+        const COD_KEYS = ['serviceType', 'codAmount', 'codAmountHistory', 'codStatus', 'codPaymentType', 'lastModifiedBy', 'lastModifiedByName', 'lastModifiedAt']
+        if (COD_KEYS.some(k => k in detailsPatch)) {
+          const snap = await getDoc(doc(db, 'parcels', editingParcel.id))
+          if (snap.exists()) {
+            const fresh: any = { id: snap.id, ...snap.data() }
+            const codPatch = buildParcelCorrectionPatch(fresh, {
+              serviceType: 'serviceType' in detailsPatch ? detailsPatch.serviceType : undefined,
+              codAmount:   'codAmount' in detailsPatch ? detailsPatch.codAmount : undefined,
+            }, { uid: auth.currentUser?.uid || null, name: profile?.name || 'Utilisateur' })
+            COD_KEYS.forEach(k => { delete detailsPatch[k] })
+            COD_KEYS.forEach(k => { if (k in codPatch) detailsPatch[k] = codPatch[k] })
           }
         }
 
         if (Object.keys(detailsPatch).length > 0) {
           await updateParcel(editingParcel.id, detailsPatch)
+          detailsSaved = true
           setParcels((prev: any) => prev.map((p: any) => p.id === editingParcel.id ? { ...p, ...detailsPatch } : p))
         }
 
@@ -1972,48 +2032,61 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         }
       }
       setEditingParcel(null)
+      if (detailsSaved || statusChanging) showToast('Modifications enregistrées.', 'success', 3000)
     } catch (e: any) {
-      setEditError(`Erreur : ${e?.message || e}`)
+      console.error('handleEditSave:', e)
+      let msg = e?.code ? describeParcelSaveError(e, editingParcel) : `Erreur : ${e?.message || e}`
+      if (detailsSaved) msg = "Les données du bon ont été enregistrées, mais le changement de statut a été refusé. " + (e?.code === 'permission-denied' ? '' : msg)
+      setEditError(msg)
+      showToast(msg, 'error')
     } finally {
       setEditLoading(false)
     }
   }
 
   // 💰 Édition rapide du montant COD
-  const handleSaveCodAmount = async () => {
+  // Renvoie le patch réellement enregistré (objet, éventuellement vide) en cas de succès, null sinon.
+  const handleSaveCodAmount = async (): Promise<Record<string, any> | null> => {
     const { codEditModal, setCodEditModal } = s.current
-    if (!codEditModal) return
+    if (!codEditModal) return null
 
-    const amount = parseFloat(codEditModal.value)
+    const amount = parseFloat(String(codEditModal.value ?? '').replace(',', '.'))
     if (isNaN(amount) || amount < 0) {
       setCodEditModal((m: any) => ({ ...m, error: 'Montant invalide.' }))
-      return
+      return null
     }
 
     setCodEditModal((m: any) => ({ ...m, loading: true, error: '' }))
+    const parcel = codEditModal.parcel
     try {
-      const parcel = codEditModal.parcel
-      const oldAmount = parcel.codAmount || 0
-      const userName = auth.currentUser?.displayName || auth.currentUser?.email || 'Agent'
+      const { profile } = s.current
+      const userName = profile?.name || auth.currentUser?.displayName || auth.currentUser?.email || 'Agent'
 
-      // 🔄 HISTORIQUE COD: Enregistrer le changement de montant
-      const updates: any = { codAmount: amount }
-
-      if (oldAmount !== amount) {
-        const codHistory = parcel.codAmountHistory || []
-        codHistory.push({
-          oldAmount,
-          newAmount: amount,
-          changedAt: new Date().toISOString(),
-          changedBy: userName
-        })
-        updates.codAmountHistory = codHistory
+      // ⚠️ Relire le colis dans Firestore : l'objet affiché peut être périmé (résultat de
+      // recherche, lot "Charger plus"…). L'ancien montant de l'historique, le type de service
+      // et le type de paiement doivent venir de la BASE, pas de l'écran.
+      const snap = await getDoc(doc(db, 'parcels', parcel.id))
+      const fresh: any = snap.exists() ? { id: snap.id, ...snap.data() } : parcel
+      if (amount > 0 && (fresh.serviceType === 'simple' || fresh.serviceType === 'retour_bl')) {
+        throw new Error(`le type de service actuel (${fresh.serviceType}) n'accepte pas de montant RETOUR FOND. Modifiez d'abord le type de service`)
       }
 
-      await updateParcel(parcel.id, updates)
+      // Patch immuable (pas de push dans parcel.codAmountHistory) : codAmount +
+      // codAmountHistory + codStatus/codPaymentType cohérents avec serviceType.
+      const updates: any = buildParcelCorrectionPatch(fresh, { codAmount: amount }, { uid: auth.currentUser?.uid || null, name: userName })
+
+      if (Object.keys(updates).length > 0) {
+        await updateParcel(parcel.id, updates)
+      }
       setCodEditModal(null)
-    } catch {
-      setCodEditModal((m: any) => ({ ...m, loading: false, error: 'Erreur lors de la mise à jour.' }))
+      showToast('Montant RETOUR FOND enregistré.', 'success', 2500)
+      return updates as Record<string, any>
+    } catch (e: any) {
+      console.error('handleSaveCodAmount:', e)
+      const msg = e?.code ? describeParcelSaveError(e, parcel) : `Erreur lors de la mise à jour : ${e?.message || e}`
+      setCodEditModal((m: any) => (m ? { ...m, loading: false, error: msg } : m))
+      showToast(msg, 'error')
+      return null
     }
   }
 
@@ -2553,6 +2626,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     getCentralDepositEligibleCods,
     handleCentralCodDeposit,
     handleReceptionCod,
+    handleCancelCodRemise,
     handleReceiveCodFromDriver,
     handleConfirmDriverVersement,
     handleReceivePortDuEspeces,

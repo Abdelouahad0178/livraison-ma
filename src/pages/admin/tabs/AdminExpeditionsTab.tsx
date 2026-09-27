@@ -27,6 +27,7 @@ import {
 } from '../../../firebase/constants'
 import { fmt } from '../../../utils/formatNumber'
 import { printAdminExpeditions } from '../../../utils/agentPrintUtils'
+import HScrollArrows from '../../../components/HScrollArrows'
 
 const RETURN_REASONS = [
   'Refus du client',
@@ -41,6 +42,8 @@ export default function AdminExpeditionsTab({
   kpis,
   search,
   setSearch,
+  searchScope,
+  setSearchScope,
   isSearching,
   includeArchived,
   setIncludeArchived,
@@ -63,6 +66,7 @@ export default function AdminExpeditionsTab({
   setDateTo,
   filtered,
   totalFiltered,
+  localFilteredCount,
   displayLimit,
   loadMoreDisplayed,
   showAllDisplayed,
@@ -271,6 +275,28 @@ export default function AdminExpeditionsTab({
               </kbd>
             )}
           </div>
+
+          {/* 🔍 Portée de la recherche par nom : Tous / Expéditeur seul / Destinataire seul —
+              évite qu'un colis remonte juste parce que l'AUTRE partie porte ce nom. */}
+          {search && (
+            <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1">
+              {[
+                { key: 'all', label: 'Tous' },
+                { key: 'sender', label: '📤 Expéditeur' },
+                { key: 'receiver', label: '📥 Destinataire' },
+              ].map(({ key, label }) => (
+                <button
+                  key={key}
+                  onClick={() => setSearchScope(key)}
+                  className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition ${
+                    searchScope === key ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          )}
 
           {/* 🗄️ Checkbox Archives (visible seulement si recherche active) */}
           {search && (
@@ -496,6 +522,14 @@ export default function AdminExpeditionsTab({
           <div className="ml-auto flex items-center gap-2">
             <span className="text-xs text-gray-400 bg-gray-100 rounded-lg px-2 py-1 font-semibold">
               {totalFiltered} resultat(s)
+              {typeof localFilteredCount === 'number' && (
+                <span
+                  className="text-purple-600"
+                  title="Ici, chaque expédition compte pour 1, toutes villes confondues. Une expédition LOCALE (même ville d'expédition et de destination, transport entre quartiers) est comptée une seule fois ; sur les pages d'agence, elle apparaît à la fois en envoi et en réception de cette ville."
+                >
+                  {' '}· dont {localFilteredCount} locale(s) <span className="text-gray-400 font-normal">(même ville d'expédition et de destination)</span>
+                </span>
+              )}
               {filtered.length < totalFiltered && (
                 <span className="text-blue-600"> · {filtered.length} affichée(s)</span>
               )}
@@ -547,11 +581,11 @@ export default function AdminExpeditionsTab({
         </div>
       ) : (
         <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden">
-          <div className="overflow-x-auto">
+          <HScrollArrows>
             <table className="w-full text-sm min-w-215">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  {['N EXP', 'Date', 'Expediteur', 'Destinataire', 'Ville', 'Poids', 'Port Payé', 'Port Dû', 'En Compte', 'RETOUR FOND', 'Statut RETOUR FOND', 'Statut', 'Modifier', 'Suivi'].map(h => (
+                  {['N EXP', 'Date', 'Expediteur', 'Destinataire', 'Ville Dest.', 'Poids', 'Port Payé', 'Port Dû', 'En Compte', 'RETOUR FOND', 'Statut RETOUR FOND', 'Statut', 'Modifier', 'Suivi'].map(h => (
                     <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
                       {h}
                     </th>
@@ -632,6 +666,7 @@ export default function AdminExpeditionsTab({
                       <td className="px-4 py-3">
                         <p className="font-medium text-gray-800">{p.sender?.name}</p>
                         <p className="text-xs text-gray-400">{p.sender?.tel}</p>
+                        <p className="text-xs text-blue-500 font-medium">📍 {p.originCity || p.sender?.city || '-'}</p>
                       </td>
                       <td className="px-4 py-3">
                         <p className="font-medium text-gray-800">{p.receiver?.name}</p>
@@ -728,11 +763,12 @@ export default function AdminExpeditionsTab({
                 })}
               </tbody>
             </table>
-          </div>
+          </HScrollArrows>
           <div className="border-t border-gray-100 px-4 py-3 bg-gray-50">
             <div className="flex items-center justify-between text-xs text-gray-500">
               <span>
                 {allParcels.length} colis chargés · <b className="text-blue-600">{totalFiltered} filtrée(s)</b> · {filtered.length} affichée(s)
+                {typeof localFilteredCount === 'number' && <> · dont <b className="text-purple-600">{localFilteredCount}</b> locale(s) (même ville d'expédition et de destination)</>}
               </span>
               <span>RETOUR FOND (affiché) : <b className="text-orange-600">{fmt(filtered.reduce((s: any, p: any) => s + (p.codAmount || 0), 0))} DH</b></span>
             </div>

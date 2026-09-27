@@ -57,6 +57,142 @@ export function printParcelTicket(parcel: any) {
   // Obtenir l'URL du logo (chemin absolu pour éviter les problèmes de chargement)
   const logoUrl = `${window.location.origin}/LOGO.jpg`
 
+  // Libellé du statut du port (dû / payé / en compte) affiché à côté du prix
+  const PORT_TYPE_LABELS: Record<string, { label: string; color: string }> = {
+    port_du: { label: 'Port dû', color: '#ea580c' },
+    port_paye: { label: 'Port payé', color: '#16a34a' },
+    port_en_compte_destinataire: { label: 'Port en compte (Dest.)', color: '#7c3aed' },
+    port_en_compte_expediteur: { label: 'Port en compte (Exp.)', color: '#4f46e5' },
+  }
+  const portInfo = PORT_TYPE_LABELS[parcel.portType] || { label: 'Port payé', color: '#16a34a' }
+
+  // Génère le contenu d'un exemplaire du bon (id suffixé pour permettre 2 copies sur la même page)
+  const renderTicket = (suffix: string) => `
+  <div class="ticket">
+    <!-- Header -->
+    <div class="header">
+      <img src="${logoUrl}" alt="BG Express" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+      <div class="logo-placeholder" style="display:none;">BG EXPRESS</div>
+      <div class="header-right">
+        <div class="header-title">Bon de Ramassage</div>
+        ${parcel.sender?.nic || parcel.senderNic ? `<div class="nic">N EXP : ${parcel.sender?.nic || parcel.senderNic}</div>` : ''}
+        <div class="tracking">${parcel.trackingId || 'TRACKING-ID'}</div>
+        <div class="date">${formatDate(parcel.createdAt)}</div>
+      </div>
+    </div>
+
+    <!-- Type de service -->
+    <div class="service-types">
+      ${ALL_SERVICE_TYPES.map(st => {
+        const types = (parcel.serviceType || '').split(',').filter(Boolean)
+        const isSelected = types.includes(st.key) || (st.key === 'simple' && !parcel.serviceType)
+        return `
+          <div class="service-type">
+            <span class="checkbox ${isSelected ? 'checked' : ''}">${isSelected ? '✓' : ''}</span>
+            <span>${st.label}</span>
+          </div>
+        `
+      }).join('')}
+      <div class="service-type">
+        <span class="checkbox ${parcel.hasRetourBL ? 'checked' : ''}">${parcel.hasRetourBL ? '✓' : ''}</span>
+        <span>Retour BL</span>
+      </div>
+    </div>
+
+    <!-- Expéditeur / Destinataire -->
+    <div class="details-grid">
+      <div class="detail-section">
+        <div class="section-title">Expéditeur</div>
+        <div class="detail-row">
+          <span class="label">Nom : </span>
+          <span class="value">${parcel.sender?.name || parcel.senderName || '—'}</span>
+        </div>
+        <div class="nic-box">
+          <span class="nic-label">N EXP :</span>
+          <span class="nic-value">${parcel.sender?.nic || parcel.senderNic || '—'}</span>
+        </div>
+        ${parcel.sender?.address ? `<div class="detail-row"><span class="label">Adresse : </span>${parcel.sender.address}</div>` : ''}
+        <div class="detail-row">
+          <span class="label">Ville : </span>
+          <span class="value">${parcel.sender?.city || parcel.originCity || '—'}</span>
+        </div>
+        <div class="detail-row">
+          <span class="label">Tél : </span>
+          ${parcel.sender?.tel || parcel.senderTel || '—'}
+        </div>
+      </div>
+      <div class="detail-section">
+        <div class="section-title">Destinataire</div>
+        <div class="detail-row">
+          <span class="label">Nom : </span>
+          <span class="value">${parcel.receiver?.name || parcel.receiverName || '—'}</span>
+        </div>
+        ${parcel.receiver?.address ? `<div class="detail-row"><span class="label">Adresse : </span>${parcel.receiver.address}</div>` : ''}
+        <div class="detail-row">
+          <span class="label">Ville : </span>
+          <span class="value" style="color: #1d4ed8; font-weight: bold;">${parcel.receiver?.city || parcel.destinationCity || '—'}</span>
+        </div>
+        <div class="detail-row">
+          <span class="label">Tél : </span>
+          ${parcel.receiver?.tel || parcel.receiverTel || '—'}
+        </div>
+      </div>
+    </div>
+
+    <!-- Nature + Nb colis -->
+    <div class="nature-section">
+      <div class="nature-item">
+        <span class="nature-icon">📦</span>
+        <div>
+          <div class="nature-label">Nature de marchandise</div>
+          <div class="nature-value">${parcel.natureOfGoods || parcel.contenu || '—'}</div>
+        </div>
+      </div>
+      <div class="nature-item">
+        <span class="nature-icon">🔢</span>
+        <div>
+          <div class="nature-label">Nombre de colis</div>
+          <div class="nature-value">${parcel.nbColis || 1}</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Montants -->
+    <div class="amounts">
+      <div class="amount-item">
+        <div class="amount-label">Poids</div>
+        <div class="amount-value">${parcel.weight || 0} kg</div>
+      </div>
+      <div class="amount-item">
+        <div class="amount-label">Prix</div>
+        <div class="amount-value" style="color: #1d4ed8;">${parcel.price || 0} DH</div>
+        <div class="port-status" style="color: ${portInfo.color};">${portInfo.label}</div>
+      </div>
+      <div class="amount-item">
+        <div class="amount-label">RETOUR FOND</div>
+        <div class="amount-value" style="color: ${(parcel.codAmount || 0) > 0 ? '#ea580c' : '#d1d5db'};">
+          ${(parcel.codAmount || 0) > 0 ? `${parcel.codAmount} DH` : '—'}
+        </div>
+      </div>
+    </div>
+
+    <!-- Barcode + QR -->
+    <div class="barcode-section">
+      <svg id="barcode${suffix}"></svg>
+      <div class="qr-section">
+        <svg id="qrcode${suffix}"></svg>
+        <div class="qr-label">Suivi en ligne</div>
+      </div>
+    </div>
+
+    <!-- Signatures -->
+    <div class="signatures">
+      <div class="signature-item">Cachet et Signature expéditeur</div>
+      <div class="signature-item">Cachet et Signature destinataire</div>
+    </div>
+  </div>
+  `
+
   // Générer le HTML du bon
   const ticketHTML = `
 <!DOCTYPE html>
@@ -66,7 +202,7 @@ export function printParcelTicket(parcel: any) {
   <title>Bon-Ramassage-${parcel.trackingId || 'TRACKING'}</title>
   <style>
     @page {
-      size: A5 portrait;
+      size: A4 portrait;
       margin: 8mm;
     }
 
@@ -75,11 +211,11 @@ export function printParcelTicket(parcel: any) {
         -webkit-print-color-adjust: exact !important;
         print-color-adjust: exact !important;
         color-adjust: exact !important;
+        padding: 0 !important;
+        background: white !important;
       }
       #ticket-print {
-        width: 148mm !important;
-        max-width: 148mm !important;
-        margin: 0 auto !important;
+        width: 100% !important;
       }
     }
 
@@ -91,11 +227,41 @@ export function printParcelTicket(parcel: any) {
     }
 
     #ticket-print {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8mm;
+    }
+
+    .ticket {
+      width: 148mm;
       max-width: 148mm;
-      margin: 0 auto;
       background: white;
       border: 1px solid #ddd;
       font-size: 11px;
+    }
+
+    .cut-line {
+      width: 148mm;
+      max-width: 148mm;
+      border-top: 1px dashed #999;
+      text-align: center;
+      color: #999;
+      font-size: 8px;
+      padding-top: 2px;
+    }
+
+    @media print {
+      .cut-line {
+        border-top: 1px dashed #bbb;
+      }
+    }
+
+    .port-status {
+      font-size: 9px;
+      font-weight: 700;
+      text-transform: uppercase;
+      margin-top: 2px;
     }
 
     .header {
@@ -366,156 +532,41 @@ export function printParcelTicket(parcel: any) {
 </head>
 <body>
   <div id="ticket-print">
-    <!-- Header -->
-    <div class="header">
-      <img src="${logoUrl}" alt="BG Express" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-      <div class="logo-placeholder" style="display:none;">BG EXPRESS</div>
-      <div class="header-right">
-        <div class="header-title">Bon de Ramassage</div>
-        ${parcel.sender?.nic || parcel.senderNic ? `<div class="nic">N EXP : ${parcel.sender?.nic || parcel.senderNic}</div>` : ''}
-        <div class="tracking">${parcel.trackingId || 'TRACKING-ID'}</div>
-        <div class="date">${formatDate(parcel.createdAt)}</div>
-      </div>
-    </div>
-
-    <!-- Type de service -->
-    <div class="service-types">
-      ${ALL_SERVICE_TYPES.map(st => {
-        const types = (parcel.serviceType || '').split(',').filter(Boolean)
-        const isSelected = types.includes(st.key) || (st.key === 'simple' && !parcel.serviceType)
-        return `
-          <div class="service-type">
-            <span class="checkbox ${isSelected ? 'checked' : ''}">${isSelected ? '✓' : ''}</span>
-            <span>${st.label}</span>
-          </div>
-        `
-      }).join('')}
-      <div class="service-type">
-        <span class="checkbox ${parcel.hasRetourBL ? 'checked' : ''}">${parcel.hasRetourBL ? '✓' : ''}</span>
-        <span>Retour BL</span>
-      </div>
-    </div>
-
-    <!-- Expéditeur / Destinataire -->
-    <div class="details-grid">
-      <div class="detail-section">
-        <div class="section-title">Expéditeur</div>
-        <div class="detail-row">
-          <span class="label">Nom : </span>
-          <span class="value">${parcel.sender?.name || parcel.senderName || '—'}</span>
-        </div>
-        <div class="nic-box">
-          <span class="nic-label">N EXP :</span>
-          <span class="nic-value">${parcel.sender?.nic || parcel.senderNic || '—'}</span>
-        </div>
-        ${parcel.sender?.address ? `<div class="detail-row"><span class="label">Adresse : </span>${parcel.sender.address}</div>` : ''}
-        <div class="detail-row">
-          <span class="label">Ville : </span>
-          <span class="value">${parcel.sender?.city || parcel.originCity || '—'}</span>
-        </div>
-        <div class="detail-row">
-          <span class="label">Tél : </span>
-          ${parcel.sender?.tel || parcel.senderTel || '—'}
-        </div>
-      </div>
-      <div class="detail-section">
-        <div class="section-title">Destinataire</div>
-        <div class="detail-row">
-          <span class="label">Nom : </span>
-          <span class="value">${parcel.receiver?.name || parcel.receiverName || '—'}</span>
-        </div>
-        ${parcel.receiver?.address ? `<div class="detail-row"><span class="label">Adresse : </span>${parcel.receiver.address}</div>` : ''}
-        <div class="detail-row">
-          <span class="label">Ville : </span>
-          <span class="value" style="color: #1d4ed8; font-weight: bold;">${parcel.receiver?.city || parcel.destinationCity || '—'}</span>
-        </div>
-        <div class="detail-row">
-          <span class="label">Tél : </span>
-          ${parcel.receiver?.tel || parcel.receiverTel || '—'}
-        </div>
-      </div>
-    </div>
-
-    <!-- Nature + Nb colis -->
-    <div class="nature-section">
-      <div class="nature-item">
-        <span class="nature-icon">📦</span>
-        <div>
-          <div class="nature-label">Nature de marchandise</div>
-          <div class="nature-value">${parcel.natureOfGoods || parcel.contenu || '—'}</div>
-        </div>
-      </div>
-      <div class="nature-item">
-        <span class="nature-icon">🔢</span>
-        <div>
-          <div class="nature-label">Nombre de colis</div>
-          <div class="nature-value">${parcel.nbColis || 1}</div>
-        </div>
-      </div>
-    </div>
-
-    <!-- Montants -->
-    <div class="amounts">
-      <div class="amount-item">
-        <div class="amount-label">Poids</div>
-        <div class="amount-value">${parcel.weight || 0} kg</div>
-      </div>
-      <div class="amount-item">
-        <div class="amount-label">Prix</div>
-        <div class="amount-value" style="color: #1d4ed8;">${parcel.price || 0} DH</div>
-      </div>
-      <div class="amount-item">
-        <div class="amount-label">RETOUR FOND</div>
-        <div class="amount-value" style="color: ${(parcel.codAmount || 0) > 0 ? '#ea580c' : '#d1d5db'};">
-          ${(parcel.codAmount || 0) > 0 ? `${parcel.codAmount} DH` : '—'}
-        </div>
-      </div>
-    </div>
-
-    <!-- Barcode + QR -->
-    <div class="barcode-section">
-      <svg id="barcode"></svg>
-      <div class="qr-section">
-        <svg id="qrcode"></svg>
-        <div class="qr-label">Suivi en ligne</div>
-      </div>
-    </div>
-
-    <!-- Signatures -->
-    <div class="signatures">
-      <div class="signature-item">Cachet et Signature expéditeur</div>
-      <div class="signature-item">Cachet et Signature destinataire</div>
-    </div>
+    ${renderTicket('1')}
+    <div class="cut-line">✂ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ✂</div>
+    ${renderTicket('2')}
   </div>
 
-  <button class="print-button" onclick="window.print()">🖨️ Imprimer</button>
+  <button class="print-button" onclick="window.print()">🖨️ Imprimer (2 exemplaires)</button>
 
   <!-- Charger les librairies de génération de codes-barres -->
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 
   <script>
-    // Générer le code-barres
-    JsBarcode("#barcode", "${parcel.trackingId || 'TRACKING'}", {
-      format: "CODE128",
-      width: 1.3,
-      height: 48,
-      fontSize: 10,
-      margin: 0
-    });
+    ['1', '2'].forEach(function (suffix) {
+      // Générer le code-barres
+      JsBarcode("#barcode" + suffix, "${parcel.trackingId || 'TRACKING'}", {
+        format: "CODE128",
+        width: 1.3,
+        height: 48,
+        fontSize: 10,
+        margin: 0
+      });
 
-    // Générer le QR code
-    QRCode.toCanvas(document.getElementById('qrcode'),
-      "https://arelanc.web.app/track?id=${parcel.trackingId || ''}",
-      {
-        width: 64,
-        margin: 0,
-        errorCorrectionLevel: 'M'
-      },
-      function (error) {
-        if (error) console.error('Erreur QR:', error);
-      }
-    );
+      // Générer le QR code
+      QRCode.toCanvas(document.getElementById('qrcode' + suffix),
+        "https://arelanc.web.app/track?id=${parcel.trackingId || ''}",
+        {
+          width: 64,
+          margin: 0,
+          errorCorrectionLevel: 'M'
+        },
+        function (error) {
+          if (error) console.error('Erreur QR:', error);
+        }
+      );
+    });
   </script>
 </body>
 </html>

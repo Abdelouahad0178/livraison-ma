@@ -4,6 +4,7 @@ import { getAllLostParcels, respondToLostParcel, deleteLostParcel, declareLostPa
 import { searchParcelByNicOptimized } from '../../../firebase/parcels'
 import { CITIES } from '../../../firebase/constants'
 import LostParcelConversationModal from '../../../components/LostParcelConversationModal'
+import { normIncludes } from '../../../utils/normText'
 
 interface LostParcelsTabProps {
   agencyCity: string
@@ -89,7 +90,7 @@ export default function LostParcelsTab({ agencyCity, profile, setMsg }: LostParc
   }
 
   const filtered = lostParcels.filter(lp =>
-    !searchTerm || lp.trackingId.toLowerCase().includes(searchTerm.toLowerCase())
+    !searchTerm || normIncludes(lp.trackingId, searchTerm.toLowerCase())
   )
 
   const pending = filtered.filter(lp => !lp.responses[agencyCity]?.responded)

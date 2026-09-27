@@ -5,7 +5,6 @@ import {
 } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import DateFilter from '../DateFilter'
-import { filterByDate, entryDate, parcelDate } from '../../../utils/dateFilter'
 import { fmtFixed as fmtAmt } from '../../../utils/formatNumber'
 import {
   createAdminTransferFromAgent,
@@ -18,12 +17,18 @@ import {
   subscribeDeliveryDelays
 } from '../../../firebase/delivery'
 import { collectPortDu, uncollectPortDu } from '../../../firebase/cod'
-import { updateParcel, searchParcels } from '../../../firebase/parcels'
+import { updateParcel, searchParcels, subscribeAgencyReturnParcels } from '../../../firebase/parcels'
+import { useAgencyParcelsFull } from '../../../hooks/useAgencyParcelsFull'
+import LoadProgress from '../../../components/LoadProgress'
 import { collection, query, where, onSnapshot, documentId } from 'firebase/firestore'
 import { db } from '../../../firebase/db'
 import { shouldTriggerSearch } from '../../../utils/searchUtils'
-import { printPortsCollectes, printVersementParcels, printDriverParcels, printBilanJournee, printInstancesRetards } from '../../../utils/agentPrintUtils'
-import { getOperationalDay, isInOperationalDay, getCurrentOperationalDay, getOperationalDayString } from '../../../config/operationalDay'
+import { printPortsCollectes, printVersementParcels, printDriverExpeditionsTable, printBilanJournee, printInstancesRetards } from '../../../utils/agentPrintUtils'
+import { getOperationalDay, isInOperationalDay, getCurrentOperationalDay, getOperationalDayRange, getOperationalDayString, formatOperationalDay } from '../../../config/operationalDay'
+import HScrollArrows from '../../../components/HScrollArrows'
+import { printFeuilleDeCharge } from '../../../utils/printFeuilleDeCharge'
+import { useGarePending } from '../../exploitation/useGarePending'
+import { isGarePending, arrivalDateOf, firestoreBoundsFor } from '../../exploitation/caisseRules'
 
 // Types
 interface DelayReason {
@@ -48,12 +53,71 @@ const toDate = (v: any): Date | null => {
   return null
 }
 
-// 🗓️ Date de référence UNIQUE utilisée pour TOUS les filtres de date de cet onglet
-// (dataSource ET filteredDrivers doivent utiliser exactement la même logique).
-// Priorité : deliveryAssignedAt → workDate → createdAt
-// Les expéditions NON assignées sont donc incluses via workDate/createdAt.
-const parcelFilterDate = (p: any): Date | null =>
-  toDate(p?.deliveryAssignedAt) ?? toDate(p?.workDate) ?? toDate(p?.createdAt)
+// ⚠️ Copies LOCALES et indépendantes des fonctions équivalentes de utils/dateFilter.ts,
+// volontairement dupliquées ici plutôt qu'importées : Caisse Agence et Expéditions doivent
+// pouvoir faire évoluer leur propre filtre de date chacune de leur côté, sans qu'une
+// modification sur l'une ne se répercute silencieusement sur l'autre — même si leur logique
+// se ressemble aujourd'hui.
+
+// Date de référence d'un colis pour cette page : la journée d'opération (8h → 6h le
+// lendemain) via workDate, désormais fiable (voir calculateWorkDate dans firebase/parcels.ts).
+// Priorité identique à ParcelsTab/AgentPage et à AdminPortAgenciesTab.
+const caisseParcelDate = (p: any): Date => {
+  if (p?.workDate) return new Date(p.workDate + 'T12:00:00')
+  const ca = p?.createdAt as { toDate?: () => Date } | undefined | null
+  if (ca?.toDate) return ca.toDate()
+  const ts = p?.history?.[0]?.timestamp
+  if (ts) return new Date(ts)
+  return new Date(0)
+}
+
+// Filtre une liste par preset de date pour cette page (même logique que filterByDate à ce jour).
+const caisseFilterByDate = <T,>(
+  list: T[],
+  preset: any,
+  from?: string | null,
+  to?: string | null,
+  getDate: (item: T) => Date = caisseParcelDate as unknown as (item: T) => Date,
+  operationalDay?: Date,
+): T[] => {
+  if (preset === 'all') return list
+  const now = new Date()
+  const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
+  let start: Date | null = null
+  let end: Date = endOfToday
+  if (preset === 'today') {
+    const range = getOperationalDayRange(getCurrentOperationalDay())
+    start = range.start
+    end = range.end
+  } else if (preset === 'week') {
+    // 🕐 7 derniers JOURS D'OPÉRATION (cohérent avec caisseParcelDate qui priorise workDate)
+    const todayOp = getCurrentOperationalDay()
+    const weekAgoOp = new Date(todayOp); weekAgoOp.setDate(weekAgoOp.getDate() - 6)
+    start = getOperationalDayRange(weekAgoOp).start
+    end = getOperationalDayRange(todayOp).end
+  } else if (preset === 'month') {
+    const todayOp = getCurrentOperationalDay()
+    const firstOfMonth = new Date(todayOp.getFullYear(), todayOp.getMonth(), 1)
+    start = getOperationalDayRange(firstOfMonth).start
+    end = getOperationalDayRange(todayOp).end
+  } else if (preset === 'operational' && operationalDay) {
+    const range = getOperationalDayRange(operationalDay)
+    start = range.start
+    end = range.end
+  } else if (preset === 'day') {
+    start = from ? new Date(from) : null
+    if (start) { start.setHours(0, 0, 0, 0); end = new Date(from + 'T23:59:59') }
+  } else if (preset === 'custom') {
+    start = from ? new Date(from + 'T00:00:00') : null
+    end = to ? new Date(to + 'T23:59:59') : endOfToday
+  }
+  return list.filter(item => {
+    const d = getDate(item)
+    if (start && d < start) return false
+    if (end && d > end) return false
+    return true
+  })
+}
 
 const DELAY_REASONS: DelayReason[] = [
   { key: 'client_absent', label: 'Client absent' },
@@ -67,8 +131,6 @@ export default function CaisseChefTab() {
   const {
     uid,
     profile,
-    parcels,
-    allDisplayParcels,
     agentEntries,
     updateParcelOptimistic,
   } = useAgentCtx()
@@ -77,9 +139,65 @@ export default function CaisseChefTab() {
   const [activeTab, setActiveTab] = useState<'livreurs' | 'journee' | 'instances' | 'versements' | 'historique'>('livreurs')
 
   // Filtres date
-  const [datePreset, setDatePreset] = useState<any>('today')
+  const [datePreset, setDatePreset] = useState<any>('all')
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
+  // 🗓️ Journée d'opération (8h → 6h lendemain) — remplace "Jour précis" sur cette page
+  const [operationalDay, setOperationalDay] = useState<Date | null>(null)
+  const handleDatePresetChange = (key: any) => {
+    // Au premier passage sur "Journée d'opération", initialiser sur aujourd'hui
+    if (key === 'operational' && !operationalDay) setOperationalDay(new Date())
+    setDatePreset(key)
+  }
+
+  // 📡 Chargement des expéditions PROPRE à cette page, indépendant de l'onglet Expéditions.
+  // Avant, Caisse Agence lisait passivement les colis déjà chargés en mémoire par un AUTRE
+  // onglet (Expéditions, Accueil...) : pour voir une date ancienne ici, il fallait d'abord
+  // aller la sélectionner côté Expéditions pour déclencher son chargement Firestore. Cette
+  // page pilote maintenant sa propre requête, bornée par SES PROPRES datePreset/dateFrom/
+  // dateTo/operationalDay (locaux à ce fichier, voir plus haut).
+  // ⚠️ CORRECTIF : la requête était plafonnée à 300 colis par sens (1200 avec Période/Journée) et
+  // excluait les archivés, sur une fenêtre par défaut de 30 jours. Casablanca crée ≈ 400 colis/jour :
+  // « Ce mois », « 7 jours » ou une Période de 45 jours n'affichaient que les derniers jours, et les
+  // totaux (ports à collecter, collectés, versements) étaient faux. Désormais : bornes Firestore
+  // exactes pour chaque preset (firestoreBoundsFor, sur-ensemble du filtre client), chargement
+  // jusqu'à épuisement en temps réel, archivés inclus, 45 jours pour les filtres larges.
+  const caisseBounds = firestoreBoundsFor(datePreset, dateFrom, dateTo, operationalDay)
+  const caisseFromMs = caisseBounds.from ? caisseBounds.from.getTime() : 0
+  const caisseToMs = caisseBounds.to ? caisseBounds.to.getTime() : 0
+  const isChefCaisse = profile?.role === 'chef_agence' && !!profile?.city
+  const {
+    parcels: caisseParcels,
+    loaded: caisseLoadedCount,
+    loading: caisseLoadingMore,
+  } = useAgencyParcelsFull(
+    profile?.city,
+    caisseFromMs ? new Date(caisseFromMs) : null,
+    caisseToMs ? new Date(caisseToMs) : null,
+    isChefCaisse,
+  )
+  const [caisseReturnParcels, setCaisseReturnParcels] = useState<any[]>([])
+  useEffect(() => {
+    if (!isChefCaisse || !profile?.city) return
+    setCaisseReturnParcels([])
+    const onErr = (err: any) => console.error('CaisseChefTab chargement retours:', err)
+    const unsubReturns = subscribeAgencyReturnParcels(
+      profile.city,
+      (data: any) => setCaisseReturnParcels(data),
+      onErr,
+      caisseFromMs ? new Date(caisseFromMs) : null,
+      caisseToMs ? new Date(caisseToMs) : null,
+    )
+    return () => { unsubReturns() }
+  }, [isChefCaisse, profile?.city, caisseFromMs, caisseToMs])
+
+  // Fusion colis + retours, même logique que allDisplayParcels côté Expéditions
+  const allDisplayParcels = useMemo(() => {
+    const map = new Map()
+    ;(caisseParcels || []).forEach((p: any) => map.set(p.id, p))
+    ;(caisseReturnParcels || []).forEach((p: any) => map.set(p.id, p))
+    return [...map.values()]
+  }, [caisseParcels, caisseReturnParcels])
 
   // Filtres
   const [driverFilter, setDriverFilter] = useState('all')
@@ -100,6 +218,37 @@ export default function CaisseChefTab() {
   const [delayModal, setDelayModal] = useState<any>(null)
   const [delayForm, setDelayForm] = useState({ reason: '', reasonDetail: '' })
   const [savingDelay, setSavingDelay] = useState(false)
+
+  // 🗂️ Colonnes visibles du tableau des expéditions par livreur : le chef d'agence peut
+  // décocher/recocher n'importe quelle colonne à tout moment, à l'affichage comme à
+  // l'impression. Persisté en localStorage pour rester d'une session à l'autre.
+  const DRIVER_TABLE_COLUMNS_KEY = 'caisseChef_driverTableColumns'
+  const DEFAULT_DRIVER_TABLE_COLUMNS = {
+    nexp: true, dateCreation: true, dateLivraison: true, client: true,
+    type: true, montant: true, status: true,
+    cod: true, especes: true, cheque: true, traite: true,
+  }
+  const [driverTableColumns, setDriverTableColumns] = useState<Record<string, boolean>>(() => {
+    try {
+      const saved = localStorage.getItem(DRIVER_TABLE_COLUMNS_KEY)
+      return saved ? { ...DEFAULT_DRIVER_TABLE_COLUMNS, ...JSON.parse(saved) } : DEFAULT_DRIVER_TABLE_COLUMNS
+    } catch {
+      return DEFAULT_DRIVER_TABLE_COLUMNS
+    }
+  })
+  const [showDriverColumnsMenu, setShowDriverColumnsMenu] = useState(false)
+  const toggleDriverColumn = (key: string) => {
+    setDriverTableColumns(prev => {
+      const next = { ...prev, [key]: !prev[key] }
+      try { localStorage.setItem(DRIVER_TABLE_COLUMNS_KEY, JSON.stringify(next)) } catch {}
+      return next
+    })
+  }
+  const DRIVER_TABLE_COLUMN_LABELS: Record<string, string> = {
+    nexp: 'N° EXP', dateCreation: 'Date création', dateLivraison: 'Date livraison',
+    client: 'Client', type: 'Type', montant: 'Montant', status: 'Status',
+    cod: 'COD', especes: 'Espèces', cheque: 'Chèque', traite: 'Traite',
+  }
 
   // État versements
   const [versementForm, setVersementForm] = useState({ amount: '', note: '' })
@@ -308,6 +457,10 @@ export default function CaisseChefTab() {
           return isPortDu && !p.portStatus && isInDelivery && p.status?.toLowerCase().trim() !== 'retourné'
         case 'collecte':
           return isPortDu && isCollected && p.status?.toLowerCase().trim() !== 'retourné'
+        case 'en_compte':
+          return String(p.portType || '').startsWith('port_en_compte') && !(p.returnedAt || p.wasReturned || p.status === 'Retourné')
+        case 'ramasse':
+          return p.portType === 'port_paye' && !p.portPayeMethod && !(p.returnedAt || p.wasReturned || p.status === 'Retourné')
         case 'en_retard':
           return isPortDu && isLate && p.status?.toLowerCase().trim() !== 'retourné'
         default:
@@ -330,21 +483,34 @@ export default function CaisseChefTab() {
     return (p: any): boolean => {
       if (!datePreset || datePreset === 'all') return true
 
-      // 🚨 EXCEPTION: Les ports dûs NON COLLECTÉS sont TOUJOURS affichés (peu importe leur date)
-      // Cela permet de voir les expéditions anciennes qui attendent encore d'être collectées
+      // 🚨 EXCEPTION (filets larges uniquement : "7 jours" / "Ce mois") : les ports dûs NON
+      // COLLECTÉS restent visibles même hors période, pour ne jamais perdre de vue un montant
+      // en attente ancien. Sur un filtre EXPLICITE (Aujourd'hui, Journée d'opération, Jour
+      // précis, Période) l'utilisateur a délibérément choisi une date ou une plage — l'exception
+      // ne doit pas s'appliquer, sinon elle noie ce choix précis sous tous les ports dûs anciens
+      // (ex: "Période" du 08/09 au 08/09 affichait quand même tout).
+      const isExplicitDateFilter = ['today', 'operational', 'day', 'custom'].includes(datePreset)
       const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
       const isNotCollected = !p.portStatus // portStatus est défini quand le port est collecté
-      if (isPortDu && isNotCollected) {
-        return true // Toujours afficher les ports dûs non collectés
+      if (isPortDu && isNotCollected && !isExplicitDateFilter) {
+        return true // Toujours afficher les ports dûs non collectés (filets larges)
       }
 
-      const d = parcelFilterDate(p)
+      // 🗓️ TOUS les presets (Aujourd'hui, 7 jours, Ce mois, Journée d'opération, Période...)
+      // filtrent sur la même base logique que l'onglet Expéditions : la date de création,
+      // pas la date d'assignation au livreur. Sinon, un colis créé le 8 mais assigné le 9
+      // apparaît "du 9" ici et "du 8" côté Expéditions — deux pages, deux réponses pour ce que
+      // le chef croit être la même question. (Fonctions locales à cette page, voir plus haut.)
+      const d = caisseParcelDate(p)
       // Aucune date exploitable → on inclut par défaut (ne pas masquer l'expédition)
       if (!d) return true
-      // On délègue à filterByDate pour garantir une logique 100% identique
-      return filterByDate([d], datePreset, dateFrom, dateTo, (x) => x).length > 0
+      // 🏬 « En gare » : même filtre de date que les autres livreurs (date de CRÉATION / jour d'opération)
+      return caisseFilterByDate([d], datePreset, dateFrom, dateTo, (x) => x, operationalDay || undefined).length > 0
     }
-  }, [datePreset, dateFrom, dateTo])
+  }, [datePreset, dateFrom, dateTo, operationalDay, profile?.city])
+
+  // 🏬 Colis arrivés en attente en gare, chargés indépendamment de la fenêtre de dates
+  const garePending = useGarePending(profile?.city)
 
   // 🔄 Source de données fusionnée (allDisplayParcels + searchResults + cache modifications)
   const dataSource = useMemo(() => {
@@ -369,6 +535,11 @@ export default function CaisseChefTab() {
       source = source.filter(passesDateFilter)
       console.log(`🗓️ Après filtre de date '${datePreset}': ${source.length} expéditions`)
     }
+    // En gare : colis arrivés en attente, ajoutés même hors fenêtre de dates (jamais masqués)
+    if (searchResults === null) {
+      const known = new Set(source.map((p: any) => p.id))
+      garePending.forEach((p: any) => { if (!known.has(p.id) && (datePreset === 'all' || passesDateFilter(p))) source.push(p) })
+    }
 
     // Appliquer le cache des modifications locales EN DERNIER (priorité absolue)
     // Cela garantit que les modifications utilisateur sont toujours visibles
@@ -383,7 +554,7 @@ export default function CaisseChefTab() {
     })
 
     return source
-  }, [allDisplayParcels, searchResults, modifiedParcels, datePreset, dateFrom, dateTo, passesDateFilter])
+  }, [allDisplayParcels, searchResults, modifiedParcels, datePreset, dateFrom, dateTo, passesDateFilter, garePending])
 
   // Calcul des statistiques
   const stats = useMemo(() => {
@@ -685,7 +856,11 @@ export default function CaisseChefTab() {
         p.portStatus === 'received' &&
         !p.pickupDriverId  // Pas de livreur de ramassage assigné
 
-      // Vérifier qu'aucun livreur n'est assigné (ni ramassage ni livraison)
+      // Vérifier qu'aucun livreur LOCAL n'est assigné (ni ramassage ni livraison).
+      // ⚠️ chauffeurId (transport inter-agences) est volontairement ignoré ici : un colis
+      // encore en transit ou tout juste arrivé en agence, sans livreur local, doit rester
+      // "Non assigné (en gare)" quel que soit son statut de transport — seul un livreur
+      // local encaisse le port dû, pas le chauffeur qui l'a transporté.
       const hasNoDriver = !p.deliveryDriverId && !p.pickupDriverId
 
       return (
@@ -697,9 +872,23 @@ export default function CaisseChefTab() {
     if (unknownParcels.length > 0) {
       driversMap.set('unknown', {
         id: 'unknown',
-        name: '📦 Non assigné',
+        name: `En gare - ${profile?.city || ''}`,
         parcels: unknownParcels,
       })
+    }
+
+    // 🏬 « En gare - <ville> » = UN SEUL groupe : on fusionne le compte « Livreur en gare » de la ville
+    // (nom « En gare - <ville> ») avec les colis sans livreur, sinon deux lignes identiques s'affichent.
+    const gareName = `En gare - ${profile?.city || ''}`
+    const unknownGroup = driversMap.get('unknown')
+    if (unknownGroup) {
+      for (const [id, g] of [...driversMap.entries()]) {
+        if (id !== 'unknown' && g.name === gareName) {
+          const seenIds = new Set(unknownGroup.parcels.map((p: any) => p.id))
+          g.parcels.forEach((p: any) => { if (!seenIds.has(p.id)) unknownGroup.parcels.push(p) })
+          driversMap.delete(id)
+        }
+      }
     }
 
     return Array.from(driversMap.values()).map(driver => {
@@ -857,7 +1046,11 @@ export default function CaisseChefTab() {
         statusFilteredParcels = filteredParcels.filter((p: any) => {
           const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
           const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
-          const isInDelivery = p.status === 'En cours de livraison' || p.status === 'Livré'
+          const isReturned = p.status?.toLowerCase().trim() === 'retourné'
+          // ⚠️ "Arrivé en agence" inclus : un colis non assigné "en gare" (bucket "Non assigné")
+          // dont le port dû n'est pas encore collecté doit apparaître dans "À collecter", pas
+          // seulement les colis déjà en cours de livraison ou livrés.
+          const isInDelivery = p.status === 'En cours de livraison' || p.status === 'Livré' || p.status === 'Arrivé en agence'
 
           let isLate = false
           if (isPortDu && p.status === 'En cours de livraison' && p.deliveryAssignedAt) {
@@ -867,11 +1060,19 @@ export default function CaisseChefTab() {
 
           switch (statusFilter) {
             case 'a_collecter':
-              return isPortDu && !p.portStatus && isInDelivery && p.status?.toLowerCase().trim() !== 'retourné'
+              // "Non assigné" : même règle large que le badge portsACollecter plus bas — tout
+              // port dû non collecté et non retourné compte, peu importe son statut exact
+              // (il peut être "en gare" avant même d'être marqué "Arrivé en agence").
+              if (driver.id === 'unknown') return isPortDu && !p.portStatus && !isReturned
+              return isPortDu && !p.portStatus && isInDelivery && !isReturned
             case 'collecte':
               return isPortDu && isCollected
-            case 'en_retard':
-              return isPortDu && isLate && p.status?.toLowerCase().trim() !== 'retourné'
+            case 'en_compte':
+          return String(p.portType || '').startsWith('port_en_compte') && !(p.returnedAt || p.wasReturned || p.status === 'Retourné')
+        case 'ramasse':
+          return p.portType === 'port_paye' && !p.portPayeMethod && !(p.returnedAt || p.wasReturned || p.status === 'Retourné')
+        case 'en_retard':
+              return isPortDu && isLate && !isReturned
             default:
               return true
           }
@@ -1002,31 +1203,48 @@ export default function CaisseChefTab() {
   }, [filteredDrivers, driverFilter, adminTransfers, searchResults])
 
   // 📊 Bilan de journée par livreur (pour onglet "Journée")
+  // ⚠️ Calculé sur les colis de chaque livreur filtrés par la PÉRIODE uniquement — jamais par le
+  // filtre de statut (À collecter / Collecté / En retard). Avant, il partait de filteredDrivers :
+  // avec « À collecter » actif, "Assignés" affichait le reste à collecter (ex. 8), "Livrés" et
+  // "En cours" ne comptaient que ces colis-là, et "Collectés" tombait à 0.
   const bilanJournee = useMemo(() => {
-    return filteredDrivers.map(d => {
-      const portDu = d.parcels.filter((p: any) => p.portType === 'port_du' && !p.portPayeMethod)
-      const livres = d.parcels.filter((p: any) => p.status === 'Livré')
-      const enCours = d.parcels.filter((p: any) => p.status === 'En cours de livraison')
-      // 🚨 ANOMALIE: livré mais port dû non encaissé
-      const livresNonCollectes = portDu.filter((p: any) =>
-        p.status === 'Livré' && !p.portStatus)
-      const montantManquant = livresNonCollectes.reduce(
-        (s: number, p: any) => s + safeParseAmount(p.price), 0)
-      const total = d.parcels.length
-      return {
-        id: d.id,
-        name: d.name,
-        total,
-        livresCount: livres.length,
-        enCoursCount: enCours.length,
-        tauxLivraison: total ? Math.round(livres.length / total * 100) : 0,
-        livresNonCollectes,
-        montantManquant,
-        portsCollectesCount: d.portsCollectesCount,
-        portsCollectesMontant: d.portsCollectesMontant,
-      }
-    })
-  }, [filteredDrivers])
+    const inSearchMode = searchResults !== null
+    const returned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
+    return drivers
+      .filter(d => d.id !== 'unknown' && (driverFilter === 'all' || d.id === driverFilter)) // "Non assigné" n'a rien d'assigné
+      .map(d => {
+        const parcels = d.parcels.filter((p: any) => inSearchMode || passesDateFilter(p))
+        const portDu = parcels.filter((p: any) => p.portType === 'port_du' && !p.portPayeMethod)
+        const livres = parcels.filter((p: any) => p.status === 'Livré')
+        const enCours = parcels.filter((p: any) => p.status === 'En cours de livraison')
+        // 🚨 ANOMALIE: livré mais port dû non encaissé
+        const livresNonCollectes = portDu.filter((p: any) => p.status === 'Livré' && !p.portStatus)
+        const montantManquant = livresNonCollectes.reduce((s: number, p: any) => s + safeParseAmount(p.price), 0)
+        // Ports collectés : mêmes règles que les totaux livreur
+        const collectes = portDu.filter((p: any) =>
+          (p.portStatus === 'collected' || p.portStatus === 'received') &&
+          !returned.includes(p.status) && !(p.portAdminTransferred || p.adminTransferred))
+        const total = parcels.length
+        // Ports en compte (client en compte) : assignés au livreur mais hors « ports dus / payés »
+        const enCompteCount = parcels.filter((p: any) => !(p.portType === 'port_du' && !p.portPayeMethod) && !(p.portType === 'port_paye' && !p.portPayeMethod)).length
+        const enAgenceCount = parcels.filter((p: any) => p.status === 'Arrivé en agence').length
+        return {
+          id: d.id,
+          name: d.name,
+          total,
+          enCompteCount,
+          enAgenceCount,
+          livresCount: livres.length,
+          enCoursCount: enCours.length,
+          tauxLivraison: total ? Math.round(livres.length / total * 100) : 0,
+          livresNonCollectes,
+          montantManquant,
+          portsCollectesCount: collectes.length,
+          portsCollectesMontant: collectes.reduce((sum: number, p: any) => sum + safeParseAmount(p.price), 0),
+        }
+      })
+      .filter(b => b.total > 0)
+  }, [drivers, driverFilter, searchResults, passesDateFilter])
 
   // 🕰️ Instances / Retards: ports dûs non collectés triés par ancienneté
   const instances = useMemo(() => {
@@ -1036,18 +1254,20 @@ export default function CaisseChefTab() {
       const notCollected = !p.portStatus
       const notReturned = !['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
       const enCours = p.status === 'En cours de livraison' || p.status === 'Arrivé en agence'
+      // Filtre par livreur
+      const matchesDriver = driverFilter === 'all' || p.deliveryDriverId === driverFilter
       return isPortDu && notCollected && notReturned && enCours &&
-        p.destinationCity === profile?.city
+        p.destinationCity === profile?.city && matchesDriver
     })
     return src.map((p: any) => {
-      const ref = parcelDate(p)
+      const ref = caisseParcelDate(p)
       const ageJours = ref ? Math.floor((now - ref.getTime()) / 86400000) : 0
       const delay = deliveryDelays.find((d: any) => d.parcelId === p.id && !d.resolvedAt)
       const bucket = ageJours >= 30 ? '30j+' : ageJours >= 7 ? '7-30j' : ageJours >= 1 ? '1-7j' : '<24h'
       const driver = drivers.find(d => d.id === p.deliveryDriverId)
-      return { parcel: p, ageJours, delay, bucket, driverName: driver?.name || '—' }
+      return { parcel: p, ageJours, delay, bucket, driver, driverName: driver?.name || '—' }
     }).sort((a, b) => b.ageJours - a.ageJours) // Plus ancien en premier
-  }, [dataSource, deliveryDelays, profile?.city, drivers])
+  }, [dataSource, deliveryDelays, profile?.city, drivers, driverFilter])
 
   // 📊 Ventilation des collectes par jour opérationnel (14 derniers jours)
   const collectesParJour = useMemo(() => {
@@ -1058,6 +1278,8 @@ export default function CaisseChefTab() {
       if (p.portType !== 'port_du' || p.portPayeMethod) return
       if (p.portStatus !== 'collected' && p.portStatus !== 'received') return
       if (p.destinationCity !== profile?.city) return
+      // Filtre par livreur
+      if (driverFilter !== 'all' && p.deliveryDriverId !== driverFilter) return
       const d = toDate(p.portCollectedAt) ?? toDate(p.portReceivedAt)
       if (!d) return
       const key = getOperationalDayString(d)   // ✅ journée 8h→6h
@@ -1065,10 +1287,11 @@ export default function CaisseChefTab() {
       map.set(key, { count: cur.count + 1, montant: cur.montant + safeParseAmount(p.price) })
     })
     return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14)
-  }, [allDisplayParcels, extraCollectedParcels, modifiedParcels, profile?.city])
+  }, [allDisplayParcels, extraCollectedParcels, modifiedParcels, profile?.city, driverFilter])
 
   // 📅 Label de la période sélectionnée
   const periodLabel = useMemo(() => {
+    if (datePreset === 'operational' && operationalDay) return formatOperationalDay(operationalDay, true)
     if (datePreset === 'today') return "Aujourd'hui"
     if (datePreset === 'week') return '7 derniers jours'
     if (datePreset === 'month') return 'Ce mois'
@@ -1077,7 +1300,17 @@ export default function CaisseChefTab() {
       return `${new Date(dateFrom).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} - ${new Date(dateTo).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}`
     }
     return 'Toutes périodes'
-  }, [datePreset, dateFrom, dateTo])
+  }, [datePreset, dateFrom, dateTo, operationalDay])
+
+  // 🏷️ Label du statut sélectionné (pour titre d'impression clair)
+  const statusFilterLabel = useMemo(() => {
+    if (statusFilter === 'a_collecter') return 'À collecter'
+    if (statusFilter === 'collecte') return 'Collecté'
+    if (statusFilter === 'en_retard') return 'En retard'
+    if (statusFilter === 'en_compte') return 'En compte'
+    if (statusFilter === 'ramasse') return 'Ramassé'
+    return 'Tous statuts'
+  }, [statusFilter])
 
   // Toggle expansion d'un livreur
   const toggleDriver = (driverId: string) => {
@@ -1124,8 +1357,8 @@ export default function CaisseChefTab() {
         await createDeliveryDelay({
           parcelId: delayModal.parcel.id,
           senderNic: delayModal.parcel.senderNic || delayModal.parcel.sender?.nic || delayModal.parcel.trackingId || 'N/A',
-          driverId: delayModal.driver.id,
-          driverName: delayModal.driver.name,
+          driverId: delayModal.driver?.id || delayModal.parcel.deliveryDriverId || '',
+          driverName: delayModal.driver?.name || '—',
           city: profile?.city || '',
           reason: delayForm.reason,
           reasonDetail: delayForm.reasonDetail,
@@ -1511,7 +1744,11 @@ export default function CaisseChefTab() {
 
     setDeliveringParcelIds(prev => new Set(prev).add(parcel.id))
     try {
-      const now = new Date()
+      // ⚠️ deliveredAt doit être une chaîne ISO (comme partout ailleurs dans l'app), pas un
+      // objet Date natif : Firestore convertit silencieusement un Date en Timestamp à
+      // l'écriture, ce qui cassait l'affichage ("Invalid Date") des pages qui font
+      // new Date(parcel.deliveredAt) en supposant une chaîne.
+      const now = new Date().toISOString()
       const updatedData = {
         status: 'Livré',
         deliveredAt: now,
@@ -1665,59 +1902,6 @@ export default function CaisseChefTab() {
     }
   }
 
-  // Imprimer les expéditions d'un livreur spécifique
-  const handlePrintDriver = (driver: any) => {
-    if (!driver || !driver.parcels || driver.parcels.length === 0) {
-      alert('⚠️ Aucune expédition pour ce livreur')
-      return
-    }
-
-    // Organiser les expéditions par catégorie
-    const now = new Date()
-    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-
-    // 1. Ports collectés
-    const collectes = driver.parcels.filter((p: any) => {
-      const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
-      const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
-      const isAlreadyTransferred = p.portAdminTransferred || p.adminTransferred
-      const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
-      return isPortDu && isCollected && !isReturned && !isAlreadyTransferred
-    })
-
-    // 3. En retard (calculer en premier pour exclure de "à collecter")
-    const enRetard = driver.parcels.filter((p: any) => {
-      const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
-      if (!isPortDu) return false
-      if (p.portPayeMethod) return false
-      if (p.status !== 'En cours de livraison') return false
-      if (!p.deliveryAssignedAt) return false
-
-      const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
-      return assignedDate < oneDayAgo
-    })
-
-    // Créer un Set des IDs en retard pour exclure rapidement
-    const enRetardIds = new Set(enRetard.map(p => p.id))
-
-    // 2. À collecter (EXCLURE les expéditions en retard)
-    const aCollecter = driver.parcels.filter((p: any) => {
-      // Exclure si déjà dans "en retard"
-      if (enRetardIds.has(p.id)) return false
-
-      const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
-      const isReturned = p.returnedAt || p.wasReturned || p.status === 'Retourné'
-      const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
-      if (!isPortDu || isReturned || isCollected) return false
-
-      // En cours de livraison ou livré mais pas encore collecté
-      return p.status === 'Arrivé en agence' || p.status === 'En cours de livraison' || p.status === 'Livré'
-    })
-
-    // Appeler la fonction d'impression
-    printDriverParcels(driver.name, collectes, aCollecter, enRetard, profile)
-  }
-
   // Versements filtrés par date
   const filteredVersements = useMemo(() => {
     const versementDate = (v: any) => {
@@ -1725,7 +1909,7 @@ export default function CaisseChefTab() {
       if (v.createdAt) return new Date(v.createdAt)
       return new Date(0)
     }
-    return filterByDate(adminTransfers, datePreset, dateFrom, dateTo, versementDate)
+    return caisseFilterByDate(adminTransfers, datePreset, dateFrom, dateTo, versementDate)
   }, [adminTransfers, datePreset, dateFrom, dateTo])
 
   // Rendu conditionnel si pas chef d'agence
@@ -1881,6 +2065,13 @@ export default function CaisseChefTab() {
         </div>
       )}
 
+      {/* ⏳ Chargement jusqu'à épuisement de la période sélectionnée */}
+      {isChefCaisse && (
+        <div className="flex justify-end">
+          <LoadProgress loading={caisseLoadingMore} count={caisseLoadedCount} />
+        </div>
+      )}
+
       {/* Onglets */}
       <div className="bg-white border border-gray-200 rounded-xl p-1 flex gap-1">
         <button
@@ -1946,12 +2137,15 @@ export default function CaisseChefTab() {
           {/* Filtre date */}
           <DateFilter
             value={datePreset}
-            onChange={setDatePreset}
+            onChange={handleDatePresetChange}
             from={dateFrom}
             onFromChange={setDateFrom}
             to={dateTo}
             onToChange={setDateTo}
             tone="blue"
+            operationalMode
+            operationalDay={operationalDay}
+            onOperationalDayChange={setOperationalDay}
           />
 
           {/* Filtres */}
@@ -1981,6 +2175,8 @@ export default function CaisseChefTab() {
                 <option value="a_collecter">📦 À collecter</option>
                 <option value="collecte">✅ Collecté</option>
                 <option value="en_retard">⏰ En retard</option>
+                <option value="en_compte">🏦 En compte</option>
+                <option value="ramasse">📬 Ramassé (port payé)</option>
               </select>
 
               {/* Recherche */}
@@ -2028,9 +2224,7 @@ export default function CaisseChefTab() {
                   Résultats de recherche
                   {statusFilter !== 'all' && (
                     <span className="text-xs px-2 py-1 bg-blue-600 text-white rounded">
-                      {statusFilter === 'a_collecter' ? 'À collecter' :
-                       statusFilter === 'collecte' ? 'Collecté' :
-                       'En retard'}
+                      {statusFilterLabel}
                     </span>
                   )}
                 </h3>
@@ -2269,6 +2463,33 @@ export default function CaisseChefTab() {
             </div>
           ) : (
             <div className="space-y-3">
+              {/* 🗂️ Sélecteur de colonnes : s'applique à l'affichage ET à l'impression du
+                  tableau des expéditions de chaque livreur ci-dessous. */}
+              <div className="flex justify-end relative">
+                <button
+                  onClick={() => setShowDriverColumnsMenu(v => !v)}
+                  className="flex items-center gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg text-xs font-semibold text-gray-700 hover:bg-gray-50 transition"
+                >
+                  <Filter className="w-3.5 h-3.5" />
+                  Colonnes ({Object.values(driverTableColumns).filter(Boolean).length}/{Object.keys(driverTableColumns).length})
+                </button>
+                {showDriverColumnsMenu && (
+                  <div className="absolute top-full right-0 mt-1 z-20 bg-white border border-gray-200 rounded-lg shadow-lg p-2 w-52">
+                    {Object.keys(DEFAULT_DRIVER_TABLE_COLUMNS).map(key => (
+                      <label key={key} className="flex items-center gap-2 px-2 py-1.5 rounded hover:bg-gray-50 cursor-pointer text-sm">
+                        <input
+                          type="checkbox"
+                          checked={!!driverTableColumns[key]}
+                          onChange={() => toggleDriverColumn(key)}
+                          className="w-4 h-4 text-blue-600 rounded"
+                        />
+                        {DRIVER_TABLE_COLUMN_LABELS[key]}
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               {filteredDrivers.length === 0 && (
                 <div className="bg-white border border-gray-200 rounded-xl p-8 text-center">
                   <User className="w-12 h-12 text-gray-300 mx-auto mb-3" />
@@ -2290,7 +2511,26 @@ export default function CaisseChefTab() {
                     <div>
                       <h3 className="font-semibold text-gray-900">{driver.name}</h3>
                       <p className="text-xs text-gray-500">
-                        {driver.portDuParcels.length} ports dus · {driver.portsPayesParcels.length} ramassés
+                        {/* Total = ports dus + ports payés ramassés (deux catégories distinctes,
+                            "expéditions" reste donc le terme correct pour la somme). */}
+                        {/* Même total que l'onglet Journée : TOUS les colis assignés au livreur sur la période,
+                            dont les ports en compte (avant, ils n'étaient pas comptés ici). */}
+                        {(() => {
+                          // Filtre de statut actif (À collecter / Collecté / En retard / En compte / Ramassé) :
+                          // le nombre affiché = celui des lignes réellement listées sous ce livreur, pour rester
+                          // cohérent avec la carte « À collecter » du haut (ex. 81 ici + 12 ailleurs = 93).
+                          if (statusFilter !== 'all') {
+                            const n = driver.parcels.length
+                            return `${n} expédition${n > 1 ? 's' : ''} (${statusFilterLabel.toLowerCase()})`
+                          }
+                          const b = bilanJournee.find(x => x.id === driver.id)
+                          const base = driver.portDuParcels.length + driver.portsPayesParcels.length
+                          // Groupe « En gare » (absent du bilan) : toutes ses expéditions, ports en compte inclus,
+                          // exactement le nombre affiché par le filtre « 🏬 En gare » de l'onglet Expéditions.
+                          const total = b ? b.total : (driver.id === 'unknown' ? driver.parcels.length : base)
+                          return `${total} expéditions${total > base ? ` (dont ${total - base} en compte)` : ''}`
+                        })()}
+                        {statusFilter === 'all' && driver.portsPayesParcels.length > 0 && ` -${driver.portsPayesParcels.length} ramassés-`}
                       </p>
                     </div>
                   </div>
@@ -2335,14 +2575,19 @@ export default function CaisseChefTab() {
                       )}
                     </div>
 
-                    {/* Bouton impression */}
+                    {/* Bouton impression : reprend exactement les colonnes cochées par le chef
+                        d'agence (sélecteur "Colonnes" ci-dessus), toujours en portrait. */}
                     <button
                       onClick={(e) => {
                         e.stopPropagation()
-                        handlePrintDriver(driver)
+                        if (!driver.parcels || driver.parcels.length === 0) {
+                          alert('⚠️ Aucune expédition pour ce livreur')
+                          return
+                        }
+                        printFeuilleDeCharge(driver.name, profile?.city || '', driver.parcels, profile?.name || '', periodLabel, statusFilterLabel)
                       }}
                       className="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition text-xs font-semibold flex items-center gap-1.5 shadow-sm"
-                      title="Imprimer les expéditions de ce livreur"
+                      title="Imprimer les expéditions de ce livreur (colonnes sélectionnées, portrait)"
                     >
                       <Printer className="w-3.5 h-3.5" />
                       Imprimer
@@ -2360,17 +2605,21 @@ export default function CaisseChefTab() {
                 {/* Détails des expéditions */}
                 {expandedDrivers.has(driver.id) && (
                   <div className="border-t border-gray-200 bg-gray-50 p-4">
-                    <div className="overflow-x-auto">
+                    <HScrollArrows>
                       <table className="w-full text-sm">
                         <thead>
                           <tr className="border-b border-gray-200">
-                            <th className="text-left py-2 px-3 font-semibold text-gray-700">N° EXP</th>
-                            <th className="text-left py-2 px-3 font-semibold text-gray-700">Date création</th>
-                            <th className="text-left py-2 px-3 font-semibold text-gray-700">Date livraison</th>
-                            <th className="text-left py-2 px-3 font-semibold text-gray-700">Client</th>
-                            <th className="text-center py-2 px-3 font-semibold text-gray-700">Type</th>
-                            <th className="text-right py-2 px-3 font-semibold text-gray-700">Montant</th>
-                            <th className="text-center py-2 px-3 font-semibold text-gray-700">Status</th>
+                            {driverTableColumns.nexp && <th className="text-left py-2 px-3 font-semibold text-gray-700">N° EXP</th>}
+                            {driverTableColumns.dateCreation && <th className="text-left py-2 px-3 font-semibold text-gray-700">Date création</th>}
+                            {driverTableColumns.dateLivraison && <th className="text-left py-2 px-3 font-semibold text-gray-700">Date livraison</th>}
+                            {driverTableColumns.client && <th className="text-left py-2 px-3 font-semibold text-gray-700">Client</th>}
+                            {driverTableColumns.type && <th className="text-center py-2 px-3 font-semibold text-gray-700">Type</th>}
+                            {driverTableColumns.montant && <th className="text-right py-2 px-3 font-semibold text-gray-700">Montant</th>}
+                            {driverTableColumns.status && <th className="text-center py-2 px-3 font-semibold text-gray-700">Status</th>}
+                            {driverTableColumns.cod && <th className="text-right py-2 px-3 font-semibold text-gray-700">COD</th>}
+                            {driverTableColumns.especes && <th className="text-right py-2 px-3 font-semibold text-gray-700">💵 Espèces</th>}
+                            {driverTableColumns.cheque && <th className="text-right py-2 px-3 font-semibold text-gray-700">📋 Chèque</th>}
+                            {driverTableColumns.traite && <th className="text-right py-2 px-3 font-semibold text-gray-700">📝 Traite</th>}
                             <th className="text-center py-2 px-3 font-semibold text-gray-700">Actions</th>
                           </tr>
                         </thead>
@@ -2403,25 +2652,34 @@ export default function CaisseChefTab() {
 
                               return (
                                 <tr key={parcel.id} className="border-b border-gray-100 hover:bg-white transition">
-                                  <td className="py-2 px-3">
-                                    <span className="font-mono text-xs font-semibold text-blue-600">
-                                      {parcel.senderNic || parcel.sender?.nic || parcel.trackingId}
-                                    </span>
-                                  </td>
-                                  <td className="py-2 px-3 text-sm text-gray-600">
-                                    {parcel.createdAt?.toDate ? parcel.createdAt.toDate().toLocaleDateString('fr-FR') : '-'}
-                                  </td>
-                                  <td className="py-2 px-3 text-sm text-gray-600">
-                                    {parcel.status === 'Livré' && parcel.deliveredAt?.toDate
-                                      ? parcel.deliveredAt.toDate().toLocaleDateString('fr-FR')
-                                      : parcel.status === 'Livré' && parcel.deliveredAt
-                                        ? new Date(parcel.deliveredAt).toLocaleDateString('fr-FR')
-                                        : '-'}
-                                  </td>
-                                  <td className="py-2 px-3">
-                                    <div className="text-gray-900">{parcel.receiver?.name || '-'}</div>
-                                    <div className="text-xs text-gray-500">{parcel.receiver?.tel || '-'}</div>
-                                  </td>
+                                  {driverTableColumns.nexp && (
+                                    <td className="py-2 px-3">
+                                      <span className="font-mono text-xs font-semibold text-blue-600">
+                                        {parcel.senderNic || parcel.sender?.nic || parcel.trackingId}
+                                      </span>
+                                    </td>
+                                  )}
+                                  {driverTableColumns.dateCreation && (
+                                    <td className="py-2 px-3 text-sm text-gray-600">
+                                      {parcel.createdAt?.toDate ? parcel.createdAt.toDate().toLocaleDateString('fr-FR') : '-'}
+                                    </td>
+                                  )}
+                                  {driverTableColumns.dateLivraison && (
+                                    <td className="py-2 px-3 text-sm text-gray-600">
+                                      {parcel.status === 'Livré' && parcel.deliveredAt?.toDate
+                                        ? parcel.deliveredAt.toDate().toLocaleDateString('fr-FR')
+                                        : parcel.status === 'Livré' && parcel.deliveredAt
+                                          ? new Date(parcel.deliveredAt).toLocaleDateString('fr-FR')
+                                          : '-'}
+                                    </td>
+                                  )}
+                                  {driverTableColumns.client && (
+                                    <td className="py-2 px-3">
+                                      <div className="text-gray-900">{parcel.receiver?.name || '-'}</div>
+                                      <div className="text-xs text-gray-500">{parcel.receiver?.tel || '-'}</div>
+                                    </td>
+                                  )}
+                                  {driverTableColumns.type && (
                                   <td className="py-2 px-3 text-center">
                                     {isPortDu ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-orange-100 text-orange-700 text-xs font-medium">
@@ -2445,9 +2703,13 @@ export default function CaisseChefTab() {
                                       </span>
                                     )}
                                   </td>
+                                  )}
+                                  {driverTableColumns.montant && (
                                   <td className="py-2 px-3 text-right font-semibold text-gray-900">
                                     {fmtAmt(parcel.price)} DH
                                   </td>
+                                  )}
+                                  {driverTableColumns.status && (
                                   <td className="py-2 px-3 text-center">
                                     {parcel.status === 'Retourné' ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-semibold">
@@ -2491,6 +2753,27 @@ export default function CaisseChefTab() {
                                       </span>
                                     )}
                                   </td>
+                                  )}
+                                  {driverTableColumns.cod && (
+                                    <td className="py-2 px-3 text-right font-semibold text-gray-900">
+                                      {parcel.codAmount ? `${fmtAmt(parcel.codAmount)} DH` : '-'}
+                                    </td>
+                                  )}
+                                  {driverTableColumns.especes && (
+                                    <td className="py-2 px-3 text-right text-green-700">
+                                      {(parcel.codAmount && (parcel.codPaymentType || parcel.serviceType) === 'especes') ? `${fmtAmt(parcel.codAmount)} DH` : '-'}
+                                    </td>
+                                  )}
+                                  {driverTableColumns.cheque && (
+                                    <td className="py-2 px-3 text-right text-blue-700">
+                                      {(parcel.codAmount && (parcel.codPaymentType || parcel.serviceType) === 'cheque') ? `${fmtAmt(parcel.codAmount)} DH` : '-'}
+                                    </td>
+                                  )}
+                                  {driverTableColumns.traite && (
+                                    <td className="py-2 px-3 text-right text-indigo-700">
+                                      {(parcel.codAmount && (parcel.codPaymentType || parcel.serviceType) === 'traite') ? `${fmtAmt(parcel.codAmount)} DH` : '-'}
+                                    </td>
+                                  )}
                                   <td className="py-2 px-3 text-center">
                                     <div className="flex items-center justify-center gap-2">
                                       {(parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné') ? (
@@ -2531,16 +2814,27 @@ export default function CaisseChefTab() {
                                                     : 'Collecter'}
                                               </button>
                                               {!isCollected && (
-                                                <button
-                                                  onClick={() => openDelayModal(parcel, driver)}
-                                                  className={`text-xs px-3 py-1 rounded-lg font-medium transition ${
-                                                    delay
-                                                      ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
-                                                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-                                                  }`}
-                                                >
-                                                  {delay ? 'Modifier retard' : 'Signaler retard'}
-                                                </button>
+                                                <>
+                                                  <button
+                                                    onClick={() => openDelayModal(parcel, driver)}
+                                                    className={`text-xs px-3 py-1 rounded-lg font-medium transition ${
+                                                      delay
+                                                        ? 'bg-amber-100 text-amber-700 hover:bg-amber-200'
+                                                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                                    }`}
+                                                  >
+                                                    {delay ? 'Modifier retard' : 'Signaler retard'}
+                                                  </button>
+                                                  {delay && (
+                                                    <button
+                                                      onClick={() => handleDeleteDelay(delay.id)}
+                                                      className="text-xs px-3 py-1 rounded-lg font-medium transition bg-red-100 text-red-700 hover:bg-red-200"
+                                                      title="Annuler ce signalement de retard"
+                                                    >
+                                                      Annuler retard
+                                                    </button>
+                                                  )}
+                                                </>
                                               )}
                                             </>
                                           )}
@@ -2577,8 +2871,44 @@ export default function CaisseChefTab() {
                               )
                             })}
                         </tbody>
+                        <tfoot>
+                          <tr className="border-t-2 border-blue-600 bg-blue-50 font-bold">
+                            {driverTableColumns.nexp && <td className="py-2 px-3 text-blue-900">TOTAL ({driver.parcels.length})</td>}
+                            {driverTableColumns.dateCreation && <td className="py-2 px-3"></td>}
+                            {driverTableColumns.dateLivraison && <td className="py-2 px-3"></td>}
+                            {driverTableColumns.client && <td className="py-2 px-3">{!driverTableColumns.nexp && `TOTAL (${driver.parcels.length})`}</td>}
+                            {driverTableColumns.type && <td className="py-2 px-3"></td>}
+                            {driverTableColumns.montant && (
+                              <td className="py-2 px-3 text-right text-blue-900">
+                                {fmtAmt(driver.parcels.reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0))} DH
+                              </td>
+                            )}
+                            {driverTableColumns.status && <td className="py-2 px-3"></td>}
+                            {driverTableColumns.cod && (
+                              <td className="py-2 px-3 text-right text-blue-900">
+                                {fmtAmt(driver.parcels.reduce((s: number, p: any) => s + (parseFloat(p.codAmount) || 0), 0))} DH
+                              </td>
+                            )}
+                            {driverTableColumns.especes && (
+                              <td className="py-2 px-3 text-right text-green-700">
+                                {fmtAmt(driver.parcels.reduce((s: number, p: any) => s + ((p.codPaymentType || p.serviceType) === 'especes' ? (parseFloat(p.codAmount) || 0) : 0), 0))} DH
+                              </td>
+                            )}
+                            {driverTableColumns.cheque && (
+                              <td className="py-2 px-3 text-right text-blue-700">
+                                {fmtAmt(driver.parcels.reduce((s: number, p: any) => s + ((p.codPaymentType || p.serviceType) === 'cheque' ? (parseFloat(p.codAmount) || 0) : 0), 0))} DH
+                              </td>
+                            )}
+                            {driverTableColumns.traite && (
+                              <td className="py-2 px-3 text-right text-indigo-700">
+                                {fmtAmt(driver.parcels.reduce((s: number, p: any) => s + ((p.codPaymentType || p.serviceType) === 'traite' ? (parseFloat(p.codAmount) || 0) : 0), 0))} DH
+                              </td>
+                            )}
+                            <td className="py-2 px-3"></td>
+                          </tr>
+                        </tfoot>
                       </table>
-                    </div>
+                    </HScrollArrows>
 
                     {driver.parcels.length === 0 && (
                       <div className="text-center py-8 text-gray-500 text-sm">
@@ -2660,7 +2990,10 @@ export default function CaisseChefTab() {
                     bilanJournee.map((b, idx) => (
                       <tr key={b.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                         <td className="px-4 py-3 font-semibold text-gray-900">{b.name}</td>
-                        <td className="px-4 py-3 text-center font-bold text-blue-600">{b.total}</td>
+                        <td className="px-4 py-3 text-center font-bold text-blue-600">
+                          {b.total}
+                          {b.enCompteCount > 0 && <div className="text-[10px] font-normal text-gray-500">dont {b.enCompteCount} en compte</div>}
+                        </td>
                         <td className="px-4 py-3 text-center font-bold text-green-600">{b.livresCount}</td>
                         <td className="px-4 py-3 text-center">
                           <span className={`px-2 py-1 rounded text-xs font-bold ${
@@ -2671,7 +3004,10 @@ export default function CaisseChefTab() {
                             {b.tauxLivraison}%
                           </span>
                         </td>
-                        <td className="px-4 py-3 text-center font-bold text-orange-600">{b.enCoursCount}</td>
+                        <td className="px-4 py-3 text-center font-bold text-orange-600">
+                          {b.enCoursCount}
+                          {b.enAgenceCount > 0 && <div className="text-[10px] font-normal text-gray-500">+{b.enAgenceCount} en agence</div>}
+                        </td>
                         <td className="px-4 py-3 text-right">
                           <div className="font-bold text-green-700">
                             {b.portsCollectesMontant.toFixed(2)} DH
@@ -2838,7 +3174,7 @@ export default function CaisseChefTab() {
                     </tr>
                   ) : (
                     instances.map((inst, idx) => {
-                      const { parcel, ageJours, delay, bucket, driverName } = inst
+                      const { parcel, ageJours, delay, bucket, driver, driverName } = inst
                       const badgeColor = bucket === '<24h' ? 'bg-yellow-100 text-yellow-800' :
                                         bucket === '1-7j' ? 'bg-orange-100 text-orange-800' :
                                         bucket === '7-30j' ? 'bg-red-100 text-red-800' : 'bg-red-200 text-red-900'
@@ -2851,7 +3187,7 @@ export default function CaisseChefTab() {
                             </span>
                           </td>
                           <td className="px-4 py-3 font-mono text-xs font-semibold text-blue-600">
-                            {parcel.trackingId}
+                            {parcel.senderNic || parcel.sender?.nic || parcel.trackingId}
                           </td>
                           <td className="px-4 py-3 font-semibold text-gray-900">
                             {driverName}
@@ -2874,7 +3210,7 @@ export default function CaisseChefTab() {
                           <td className="px-4 py-3">
                             <div className="flex items-center justify-center gap-2">
                               <button
-                                onClick={() => openDelayModal(parcel)}
+                                onClick={() => openDelayModal(parcel, driver)}
                                 className="px-2 py-1 bg-blue-100 text-blue-700 rounded text-xs font-semibold hover:bg-blue-200 transition"
                               >
                                 {delay ? 'Modifier' : 'Saisir'}
@@ -3031,12 +3367,15 @@ export default function CaisseChefTab() {
           {/* Filtre date */}
           <DateFilter
             value={datePreset}
-            onChange={setDatePreset}
+            onChange={handleDatePresetChange}
             from={dateFrom}
             onFromChange={setDateFrom}
             to={dateTo}
             onToChange={setDateTo}
             tone="blue"
+            operationalMode
+            operationalDay={operationalDay}
+            onOperationalDayChange={setOperationalDay}
           />
 
           {/* Historique */}
@@ -3145,7 +3484,7 @@ export default function CaisseChefTab() {
                 <div className="flex items-center justify-between">
                   <span className="text-sm text-gray-600">Livreur:</span>
                   <span className="font-semibold text-gray-900">
-                    {delayModal.driver.name}
+                    {delayModal.driver?.name || '—'}
                   </span>
                 </div>
                 <div className="flex items-center justify-between">

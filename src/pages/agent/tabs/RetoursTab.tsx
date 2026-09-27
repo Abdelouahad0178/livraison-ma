@@ -3,6 +3,7 @@ import { Package, Truck, User, MapPin, Calendar, RotateCcw, Send, Check, X, Sear
 import { STATUS_COLORS } from '../../../firebase/constants'
 import { printRetoursToLoad, printRetoursReceived, printRetoursHistory } from '../../../utils/printRetours'
 import { isInReturnCircuit } from '../../../firebase/parcels'
+import { normIncludes } from '../../../utils/normText'
 
 export default function RetoursTab({
   profile,
@@ -80,9 +81,9 @@ export default function RetoursTab({
       if (search.trim()) {
         const q = search.toLowerCase()
         filtered = filtered.filter((p: any) =>
-          p.trackingId?.toLowerCase().includes(q) ||
-          p.sender?.name?.toLowerCase().includes(q) ||
-          p.receiver?.name?.toLowerCase().includes(q)
+          normIncludes(p.trackingId, q) ||
+          normIncludes(p.sender?.name, q) ||
+          normIncludes(p.receiver?.name, q)
         )
       }
 

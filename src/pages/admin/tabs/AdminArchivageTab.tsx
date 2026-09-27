@@ -5,6 +5,7 @@ import { db } from '../../../firebase/config'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { STATUS_COLORS } from '../../../firebase/constants'
 import { searchParcels } from '../../../firebase/parcels'
+import { normIncludes } from '../../../utils/normText'
 
 export default function AdminArchivageTab() {
   const [stats, setStats] = useState<any>(null)
@@ -229,9 +230,9 @@ export default function AdminArchivageTab() {
           const search = searchQuery.toLowerCase()
           const nic = String(p.senderNic || p.sender?.nic || p.trackingId || '').toLowerCase()
           return (
-            p.trackingId?.toLowerCase().includes(search) ||
-            p.sender?.name?.toLowerCase().includes(search) ||
-            p.receiver?.name?.toLowerCase().includes(search) ||
+            normIncludes(p.trackingId, search) ||
+            normIncludes(p.sender?.name, search) ||
+            normIncludes(p.receiver?.name, search) ||
             nic.includes(search)
           )
         })

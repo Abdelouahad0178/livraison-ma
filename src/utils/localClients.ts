@@ -1,3 +1,4 @@
+import { normIncludes } from './normText'
 // Gestion des clients locaux (non enregistrés dans Firestore)
 // Pour les clients de passage qui envoient 1-2 colis
 
@@ -76,9 +77,9 @@ export function searchLocalClients(query: string): LocalClient[] {
   const q = query.toLowerCase()
 
   return clients.filter(c =>
-    c.name.toLowerCase().includes(q) ||
+    normIncludes(c.name, q) ||
     c.tel.includes(q) ||
-    c.address?.toLowerCase().includes(q)
+    normIncludes(c.address, q)
   ).slice(0, 10) // Limiter à 10 résultats
 }
 

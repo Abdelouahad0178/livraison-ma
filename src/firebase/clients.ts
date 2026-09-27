@@ -19,6 +19,7 @@ import {
 } from 'firebase/firestore'
 import { db } from './db'
 import { daysAgoTimestamp } from './firestoreUtils'
+import { normIncludes } from '../utils/normText'
 
 const CLIENTS_PAGE_LIMIT = 500
 type FirestoreRow = Record<string, any> & { id: string; createdAt?: any }
@@ -607,9 +608,9 @@ export async function searchExpediteurs(searchTerm: string, filterCity?: string,
 
   // Filtrer par recherche et optionnellement par ville
   const filtered = allClients.filter(c => {
-    const matchSearch = c.name.toLowerCase().includes(normalizedSearch) ||
+    const matchSearch = normIncludes(c.name, normalizedSearch) ||
       c.tel?.includes(normalizedSearch) ||
-      c.address?.toLowerCase().includes(normalizedSearch)
+      normIncludes(c.address, normalizedSearch)
 
     const matchCity = !filterCity || c.city === filterCity
 
@@ -647,9 +648,9 @@ export async function searchDestinataires(searchTerm: string, filterCity?: strin
 
   // Filtrer par recherche et optionnellement par ville
   const filtered = allClients.filter(c => {
-    const matchSearch = c.name.toLowerCase().includes(normalizedSearch) ||
+    const matchSearch = normIncludes(c.name, normalizedSearch) ||
       c.tel?.includes(normalizedSearch) ||
-      c.address?.toLowerCase().includes(normalizedSearch)
+      normIncludes(c.address, normalizedSearch)
 
     const matchCity = !filterCity || c.city === filterCity
 

@@ -10,6 +10,7 @@ import {
   Car, Plus, Edit2, Trash2, X, ChevronDown,
   Search, AlertTriangle, ArrowLeft
 } from 'lucide-react'
+import { normIncludes } from '../utils/normText'
 
 const VEHICLE_TYPES = [
   { key: 'camion',  label: 'Camion',  emoji: '🚛' },
@@ -83,7 +84,7 @@ export default function FleetPage() {
       const statusOk = statusFilter === 'all' || v.statut === statusFilter
       const q        = search.toLowerCase()
       const searchOk = !q || [v.matricule, v.marque, v.modele, v.chauffeurName]
-        .some(f => f?.toLowerCase().includes(q))
+        .some(f => normIncludes(f, q))
       return typeOk && statusOk && searchOk
     })
   , [vehicles, typeFilter, statusFilter, search])

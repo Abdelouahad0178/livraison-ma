@@ -4,14 +4,16 @@ import {
   FileText, Plus, Search, Printer, Eye, Edit2, Trash2, Check, X,
   Calendar, DollarSign, User, MapPin, Filter, Download, AlertCircle, CheckCircle2
 } from 'lucide-react'
+import type { InvoicePortChoice } from '../../../firebase/invoices'
 import {
   subscribeAllInvoices, deleteInvoice, markInvoiceAsPaid, cancelInvoice,
-  getNextInvoiceNumber, createInvoice, updateInvoice, getUnbilledParcelsForClient,
+  getNextInvoiceNumber, createInvoice, updateInvoice, getUnbilledParcelsForClient, invoicePortFamily, INVOICE_PORT_LABELS,
   markParcelsAsInvoiced, unmarkParcelsAsInvoiced,
   type Invoice, type InvoiceItem
 } from '../../../firebase/invoices'
 import { subscribeClients } from '../../../firebase/clients'
 import { CITIES } from '../../../firebase/constants'
+import { normIncludes } from '../../../utils/normText'
 
 export default function AdminInvoicesTab({ uid, userName }: any) {
   const [invoices, setInvoices] = useState<Invoice[]>([])
@@ -41,9 +43,9 @@ export default function AdminInvoicesTab({ uid, userName }: any) {
       if (searchTerm) {
         const term = searchTerm.toLowerCase().trim()
         return (
-          (inv.invoiceNumber || '').toLowerCase().includes(term) ||
-          (inv.clientName || '').toLowerCase().includes(term) ||
-          inv.items.some(item => (item.trackingId || '').toLowerCase().includes(term))
+          normIncludes(inv.invoiceNumber || '', term) ||
+          normIncludes(inv.clientName || '', term) ||
+          inv.items.some(item => normIncludes(item.trackingId || '', term))
         )
       }
       return true
@@ -342,7 +344,7 @@ function CreateInvoiceModal({ clients, onClose, uid, userName }: any) {
   const [agencyCity, setAgencyCity] = useState('')
   const [invoiceNumber, setInvoiceNumber] = useState('')
   const [isManualNumber, setIsManualNumber] = useState(false)
-  const [portType, setPortType] = useState<'port-du' | 'port-paye'>('port-du')
+  const [portType, setPortType] = useState<InvoicePortChoice>('all')
   const [unbilledParcels, setUnbilledParcels] = useState<any[]>([])
   const [selectedParcels, setSelectedParcels] = useState<string[]>([])
   const [dueDate, setDueDate] = useState('')
@@ -443,7 +445,8 @@ function CreateInvoiceModal({ clients, onClose, uid, userName }: any) {
           trackingId: p.trackingId,
           senderNic: p.sender?.nic || '',
           portAmount: p.price || 0,
-          portType: portType,
+          portType: invoicePortFamily(p.portType),
+          portTypeRaw: p.portType || '',
           senderName: p.sender?.name || '',
           recipientName: p.receiver?.name || '',
           recipientCity: p.receiver?.city || '',
@@ -578,27 +581,20 @@ function CreateInvoiceModal({ clients, onClose, uid, userName }: any) {
 
                   <div>
                     <label className="block text-sm font-semibold text-gray-700 mb-2">Type de port</label>
-                    <div className="flex gap-2">
-                      <button
-                        onClick={() => setPortType('port-du')}
-                        className={`flex-1 py-2 px-3 rounded-lg font-semibold border transition ${
-                          portType === 'port-du'
-                            ? 'bg-indigo-600 text-white border-indigo-600'
-                            : 'bg-white text-gray-600 border-gray-300 hover:border-indigo-400'
-                        }`}
-                      >
-                        Port dû
-                      </button>
-                      <button
-                        onClick={() => setPortType('port-paye')}
-                        className={`flex-1 py-2 px-3 rounded-lg font-semibold border transition ${
-                          portType === 'port-paye'
-                            ? 'bg-indigo-600 text-white border-indigo-600'
-                            : 'bg-white text-gray-600 border-gray-300 hover:border-indigo-400'
-                        }`}
-                      >
-                        Port payé
-                      </button>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      {(['all', 'port-du', 'port-paye', 'port-en-compte'] as InvoicePortChoice[]).map(k => (
+                        <button
+                          key={k}
+                          onClick={() => setPortType(k)}
+                          className={`py-2 px-3 rounded-lg font-semibold border transition text-sm ${
+                            portType === k
+                              ? 'bg-indigo-600 text-white border-indigo-600'
+                              : 'bg-white text-gray-600 border-gray-300 hover:border-indigo-400'
+                          }`}
+                        >
+                          {INVOICE_PORT_LABELS[k]}
+                        </button>
+                      ))}
                     </div>
                   </div>
 
@@ -637,7 +633,7 @@ function CreateInvoiceModal({ clients, onClose, uid, userName }: any) {
                   {selectedClient.name} - {agencyCity}
                 </div>
                 <div className="text-xs text-indigo-600 mt-1">
-                  {portType === 'port-du' ? 'Port dû' : 'Port payé'}
+                  {INVOICE_PORT_LABELS[portType]}
                 </div>
               </div>
 
@@ -719,6 +715,7 @@ function CreateInvoiceModal({ clients, onClose, uid, userName }: any) {
                             </td>
                             <td className="px-3 py-2 text-sm font-semibold text-right text-gray-800">
                               {(parcel.price || 0).toLocaleString()} DH
+                              <div className="text-[10px] font-medium text-gray-500">{INVOICE_PORT_LABELS[invoicePortFamily(parcel.portType)]}{parcel.portType === 'port_du_cheque' ? ' (chèque)' : parcel.portType === 'port_en_compte_destinataire' ? ' (dest.)' : ''}</div>
                             </td>
                           </tr>
                         ))}

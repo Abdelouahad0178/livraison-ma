@@ -2,12 +2,14 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { auth, db } from '../firebase/config'
 import { doc, onSnapshot, query, where, collection } from 'firebase/firestore'
+import { isAwaitingArrival } from '../utils/awaitingArrival'
 import { createArrivage, subscribeArrivages, subscribeAllArrivages, subscribeAllArrivedParcels, saveArrivagePointage, searchParcelByTrackingId, subscribeArrivedParcelsByCity, subscribeDrivers, assignDeliveryDriver, createAutoArrivageForCity } from '../firebase/firestore'
 import {
   Truck, Package, CheckSquare, Square, ChevronDown, ChevronRight,
   Clock, CheckCircle2, AlertTriangle, LogOut, MapPin, Minus, Plus,
   Search, X, RotateCcw, Save, CheckCircle, User, UserCheck,
 } from 'lucide-react'
+import { normIncludes } from '../utils/normText'
 
 const SERVICE_TYPE_DISPLAY = {
   simple:    { label: 'Simple',    emoji: '📦', bg: 'bg-gray-100',    text: 'text-gray-600'   },
@@ -85,13 +87,16 @@ export default function ArrivagePage() {
 
   useEffect(() => {
     if (!profile?.city) return
+    // ⚡ Filtre de statut côté serveur : on ne lit que les colis 'En transit' de la ville
+    // (au lieu de toute la ville). Les filtres client ci-dessous restent comme garde-fou.
     const q = query(
       collection(db, 'parcels'),
-      where('destinationCity', '==', profile.city)
+      where('destinationCity', '==', profile.city),
+      where('status', '==', 'En transit')
     )
     return onSnapshot(q, snap => {
       const parcels = (snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[])
-        .filter(p => p.status === 'En transit')
+        .filter(p => p.status === 'En transit' && isAwaitingArrival(p, profile?.city))
         .sort((a, b) => (a.chauffeurName || '').localeCompare(b.chauffeurName || ''))
       setTransitParcels(parcels)
       setArrivedBoxes((prev: any) => {
@@ -1106,7 +1111,7 @@ export default function ArrivagePage() {
           if (filterArrivageRef.trim()) {
             const query = filterArrivageRef.trim().toLowerCase()
             filteredArrivages = filteredArrivages.filter(arr =>
-              (arr.arrivageRef || '').toLowerCase().includes(query)
+              normIncludes(arr.arrivageRef || '', query)
             )
           }
 

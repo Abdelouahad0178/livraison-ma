@@ -134,14 +134,11 @@ export default function FacturierPage() {
           </div>
         ) : profile ? (
           <>
-            {console.log('FacturierPage - Render contenu, activeTab:', activeTab, 'profile:', profile?.role)}
             {/* Garder les deux onglets montés, juste cacher celui qui n'est pas actif */}
             <div style={{ display: activeTab === 'expeditions' ? 'block' : 'none' }}>
-              {console.log('FacturierPage - Render FacturierExpeditionsTab')}
-              <FacturierExpeditionsTab />
+              <FacturierExpeditionsTab userName={profile?.name || profile?.email || 'Facturier'} />
             </div>
             <div style={{ display: activeTab === 'factures' ? 'block' : 'none' }}>
-              {console.log('FacturierPage - Render AdminInvoicesTab')}
               <AdminInvoicesTab
                 uid={auth.currentUser?.uid}
                 userName={profile?.name || profile?.email || 'Facturier'}
@@ -150,7 +147,6 @@ export default function FacturierPage() {
           </>
         ) : (
           <>
-            {console.log('FacturierPage - Pas de profil, rien à afficher')}
             <div className="bg-red-50 border border-red-200 rounded-xl p-4">
               <div className="text-red-700 font-semibold">Erreur de chargement</div>
               <div className="text-red-600 text-sm">Impossible de charger le profil utilisateur</div>

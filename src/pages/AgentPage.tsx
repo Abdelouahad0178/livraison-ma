@@ -1,17 +1,20 @@
-import { useState, useRef, useEffect, useMemo, useCallback, lazy, Suspense } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback, useDeferredValue, lazy, Suspense } from 'react'
+import { createLoadProgressStore } from '../utils/loadProgressStore'
+import { useGarePending } from './exploitation/useGarePending'
+import { isGarePending, arrivalDateOf } from './exploitation/caisseRules'
 import { signOut, createUserWithEmailAndPassword, signOut as fbSignOut, onIdTokenChanged } from 'firebase/auth'
 import { auth, authSecondary, db } from '../firebase/config'
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner'
 import ParcelScanModal from '../components/ParcelScanModal'
-import { doc, onSnapshot, setDoc, collection, updateDoc, deleteDoc, getDoc, query, where, arrayUnion } from 'firebase/firestore'
+import { doc, onSnapshot, setDoc, collection, updateDoc, deleteDoc, getDoc, query, where, arrayUnion, deleteField, FieldValue } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
 import {
   createParcel, subscribeAgentParcels, getMoreAgentParcels, getAccurateAgencyStats,
   updateParcel, deleteParcel, markParcelAsReturned, loadReturnedParcelOnTruck, validateReturnArrival, validateParcelEntry,
   updateParcelStatus, isParcelVisibleInDestinationAgency,
-  subscribeAgencyParcels, subscribeAgencyReturnParcels, subscribePendingAideAgentParcels, subscribeAllParcels,
+  subscribeAgencyParcels, subscribeAgencyParcelsFull, subscribeAgencyReturnParcels, subscribePendingAideAgentParcels, subscribeAllParcels,
   subscribeAllParcelsWithDateFilter, loadMoreParcelsWithDateFilter,
-  createReturnParcel, searchParcelByTrackingId, searchParcels, getMoreAgencyParcels, getParcelsPage,
+  createReturnParcel, searchParcelByTrackingId, searchParcels, getMoreAgencyParcels, getAgencyParcelsDaySlice, getParcelsPage,
   subscribeAllParcelsWithArchives, loadMoreParcelsWithArchives,
 } from '../firebase/parcels'
 import { shouldTriggerSearch } from '../utils/searchUtils'
@@ -78,7 +81,8 @@ import AgentHeader from './agent/AgentHeader'
 import AgentReceiveModal from './agent/modals/AgentReceiveModal'
 import AgentReturnModal from './agent/modals/AgentReturnModal'
 import { printCharge, printTable, printBonRamassage } from '../utils/agentPrintUtils'
-import { getOperationalDayRange } from '../config/operationalDay'
+import { getOperationalDayRange, getCurrentOperationalDay } from '../config/operationalDay'
+import { buildDaySlices } from '../utils/daySlices'
 import DateFilter from './agent/DateFilter'
 import { useOperationalDaySelector } from '../hooks/useOperationalDay' // 🗓️ Journée opérationnelle
 // ⚡ OPTIMISATION : Lazy loading pour tous les tabs (y compris ParcelsTab) pour chargement rapide
@@ -87,6 +91,7 @@ const DirectorCaisseSimple = lazy(() => import('./director/DirectorCaisseSimple'
 const HomeTab = lazy(() => import('./agent/tabs/HomeTab'))
 const NewTab = lazy(() => import('./agent/tabs/NewTab'))
 const CodTab = lazy(() => import('./agent/tabs/CodTab'))
+const ValeursAValiderTab = lazy(() => import('./agent/tabs/ValeursAValiderTab'))
 const AgentClientsTab = lazy(() => import('./agent/tabs/AgentClientsTab'))
 const ModificationsTab = lazy(() => import('./agent/tabs/ModificationsTab'))
 const ChargeTab = lazy(() => import('./agent/tabs/ChargeTab'))
@@ -106,6 +111,16 @@ const PortPayeChequeTab = lazy(() => import('./agent/tabs/PortPayeChequeTab'))
 const PortDuChequeTab = lazy(() => import('./agent/tabs/PortDuChequeTab'))
 const CaisseChefTab = lazy(() => import('./agent/tabs/CaisseChefTab'))
 
+// ⚠️ 'caisse' est inclus volontairement : CaisseChefTab a sa PROPRE souscription indépendante
+// et ne lit pas `parcels` — mais si 'caisse' est absent de cette liste, `needsParcels` passe à
+// false en y accédant, ce qui déclenche le cleanup de l'effet de chargement ci-dessous et
+// COUPE la requête "Expéditions" en plein milieu de sa synchronisation avec le serveur (avant
+// que le snapshot serveur, potentiellement plus complet que le cache local, n'arrive). Revenir
+// ensuite sur Expéditions relance alors une requête fraîche qui repart du cache — d'où des
+// totaux qui semblaient incomplets après un changement de filtre, "corrigés" seulement en
+// passant par un autre onglet qui remplissait le cache entre-temps.
+const TABS_NEEDING_PARCELS = ['home', 'parcels', 'cod', 'charge', 'arrivage', 'retours', 'portsDu', 'portsEnCompte', 'caisse']
+
 const MOD_STATUS = {
   pending:  { label: 'En attente', bg: 'bg-amber-100', text: 'text-amber-700' },
   approved: { label: 'Approuvee',  bg: 'bg-green-100', text: 'text-green-700' },
@@ -118,14 +133,17 @@ const fmtModDate = (ts: any) => {
 }
 
 const parcelDate = (p: any) => {
-  // 📅 PRIORITÉ 1: createdAt (cohérent avec AdminPortAgenciesTab)
-  if (p.createdAt?.toDate) return p.createdAt.toDate()
-  if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
-
-  // 📅 FALLBACK: workDate (pour colis sans createdAt)
+  // 🗓️ PRIORITÉ 1 : workDate — reflète la JOURNÉE D'OPÉRATION (8h → 6h le lendemain), pas le
+  // jour calendaire de createdAt. Un colis saisi à 2h du matin doit compter pour la journée
+  // commencée à 8h la veille. workDate est désormais calculé correctement à la création
+  // (calculateWorkDate → getOperationalDayString, voir firebase/parcels.ts) ; cohérent avec
+  // AdminPortAgenciesTab qui priorise déjà workDate de la même façon.
   if (p.workDate) {
     return new Date(p.workDate + 'T12:00:00')
   }
+  // 📅 FALLBACK createdAt : pour les colis créés AVANT ce correctif ou sans workDate du tout.
+  if (p.createdAt?.toDate) return p.createdAt.toDate()
+  if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
   return new Date(0)
 }
 const entryDate = (e: any) => {
@@ -138,28 +156,44 @@ const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parc
   const now = new Date()
   const endOfToday = new Date(); endOfToday.setHours(23,59,59,999)
   let start: any = null, end: any = endOfToday
-  if      (preset === 'today')  { start = new Date(); start.setHours(0,0,0,0) }
-  else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate()-6); start.setHours(0,0,0,0) }
-  else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
+  // 🗓️ "Aujourd'hui" / "7 jours" / "Mois" doivent utiliser les bornes de la JOURNÉE
+  // D'OPÉRATION (8h → 6h lendemain), pas des bornes calendaires (minuit → 23h59) : getDate()
+  // (parcelDate) compare désormais des dates ancrées sur workDate, qui suit cette même règle.
+  // Sinon un colis saisi entre minuit et 6h (workDate = la veille) disparaissait à tort
+  // du filtre "Aujourd'hui" alors que sa journée d'opération n'est pas encore terminée.
+  if (preset === 'today') {
+    const range = getOperationalDayRange(getCurrentOperationalDay())
+    start = range.start
+    end = range.end
+  }
+  else if (preset === 'week') {
+    const todayOp = getCurrentOperationalDay()
+    const weekAgoOp = new Date(todayOp); weekAgoOp.setDate(weekAgoOp.getDate() - 6)
+    start = getOperationalDayRange(weekAgoOp).start
+    end = getOperationalDayRange(todayOp).end
+  }
+  else if (preset === 'month') {
+    const todayOp = getCurrentOperationalDay()
+    const firstOfMonth = new Date(todayOp.getFullYear(), todayOp.getMonth(), 1)
+    start = getOperationalDayRange(firstOfMonth).start
+    end = getOperationalDayRange(todayOp).end
+  }
   else if (preset === 'day')    { start = from ? new Date(from) : null; if (start) { start.setHours(0,0,0,0); end = new Date(from+'T23:59:59') } }
   else if (preset === 'operational' && operationalDay) {
     // 🗓️ JOUR D'OPÉRATION : 8H → 6H lendemain
     const range = getOperationalDayRange(operationalDay)
     start = range.start
     end = range.end
-    console.log('🗓️ OPERATIONAL RANGE:', { start, end })
   }
   else if (preset === 'custom') {
     // 📅 FILTRE PÉRIODE : Plage de dates normale (00:00 → 23:59)
     if (from) {
       start = new Date(from + 'T00:00:00')
-      console.log('📅 CUSTOM START:', from, '→', start)
     } else {
       start = null
     }
     if (to) {
       end = new Date(to + 'T23:59:59')
-      console.log('📅 CUSTOM END:', to, '→', end)
     } else {
       end = endOfToday
     }
@@ -178,16 +212,14 @@ const dateFilterLabel = (preset: string): string => (({
   month: 'Solde ce mois',
   custom: 'Solde filtre',
 } as Record<string, string>)[preset] || 'Solde filtre')
-const normalizeSearch = (value: any) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
-const matchesSearch = (values: any, query: any) => {
-  const q = String(query ?? '').trim().toLowerCase()
-  if (!q) return true
-  const compactQ = normalizeSearch(q)
-  return values.some((v: any) => {
-    const raw = String(v ?? '').toLowerCase()
-    return raw.includes(q) || normalizeSearch(raw).includes(compactQ)
-  })
-}
+// ⚠️ Accents repliés AVANT de retirer les caractères spéciaux : sinon « COPÏMA » devenait « copma »
+// et n'était jamais trouvé par « copima » (écart avec le Facturier, qui ignore les accents).
+// ⚡ Recherche locale : utils/parcelSearch (makeAgentSearchMatcher) — même règle, champs normalisés
+// mis en cache par expédition au lieu d'être recalculés à chaque frappe / chaque journée chargée.
+// ⚡ Chargement jour par jour : les journées reçues sont ajoutées à la liste par LOTS (au plus une
+// mise à jour toutes les APPEND_FLUSH_MS, et toujours à la fin) — chaque ajout relance tous les
+// filtres/totaux sur la liste complète. Le compteur de progression, lui, reste mis à jour à chaque journée.
+const APPEND_FLUSH_MS = 800
 
 // Mappe le type de service convenu à la création → clé COD_PAYMENT_TYPES
 const serviceToPaymentType = (st: any) =>
@@ -200,6 +232,10 @@ function useDebounce(value: any, delay = 150) {
 }
 
 import { getWorkingDateStr } from '../utils/workingDate'
+import { normName, isBilledByAgency } from '../utils/billingAgency'
+import { isAwaitingArrival } from '../utils/awaitingArrival'
+import { normIncludes, normText } from '../utils/normText'
+import { makeAgentSearchMatcher, sortByCreatedAtDesc } from '../utils/parcelSearch'
 
 const parsePositiveNumber = (value: any, fallback = 0) => {
   const num = parseFloat(String(value ?? '').replace(',', '.'))
@@ -227,6 +263,9 @@ export default function AgentPage() {
   const [profile, setProfile]           = useState<any>(null)
   const [drivers, setDrivers]           = useState<any[]>([])
   const [tab, setTab]                   = useState('home')
+  // Onglets qui exploitent la liste des colis. Sert de dépendance à l'abonnement Firestore :
+  // naviguer entre deux de ces onglets ne doit PAS relancer le chargement.
+  const needsParcels = TABS_NEEDING_PARCELS.includes(tab)
   const [msg, setMsg]                   = useState<{ type: string; text: string } | null>(null)
   const [subTab, setSubTab]             = useState('mine')
   const [viewSignature,     setViewSignature]     = useState<any>(null)
@@ -289,6 +328,11 @@ export default function AgentPage() {
   const [parcels, setParcels]           = useState<any[]>([])
   const [returnParcels, setReturnParcels] = useState<any[]>([])
   const [loadingParcels, setLoadingParcels] = useState(false)
+  // ⚠️ Avec le cache Firestore local, un snapshot "cache" arrive souvent avant la confirmation
+  // serveur — s'il ne contient pas encore tous les documents de la plage demandée (ex: après un
+  // changement de filtre de date), l'affichage semblait "chargé" alors qu'il était incomplet.
+  // Ce flag reste true tant que la réponse SERVEUR n'a pas confirmé les données affichées.
+  const [syncingParcels, setSyncingParcels] = useState(false)
   const [pendingAideParcels, setPendingAideParcels] = useState<any[]>([])
   const [lostParcels, setLostParcels] = useState<any[]>([])  // ⭐ Pour badge Colis perdus
 
@@ -298,14 +342,28 @@ export default function AgentPage() {
   // ⚡ Système de chargement optimisé (Option 3)
   const PAGE_SIZE = 50 // Chargement initial réduit pour performance
   const INITIAL_LOAD_SIZE = 150 // Chargement initial rapide pour chef d'agence (150 par query = ~300 total)
-  const FILTERED_PAGE_SIZE = 1200 // 1200 par query (envoyés + reçus) = ~2400 total avec filtres
+  // ⚠️ Était monté à 20000 pour ne jamais tronquer les totaux d'une agence active sur une
+  // période chargée. Mais 2 × 20000 documents en écoute temps réel est si lourd que le
+  // snapshot SERVEUR met plusieurs secondes à arriver — l'utilisateur ne voyait quasiment
+  // toujours que le premier snapshot CACHE (potentiellement incomplet, voir fromCache dans
+  // subscribeAgencyParcels). Depuis que "Aujourd'hui/7j/Mois/Jour précis" envoient une vraie
+  // plage de dates à Firestore (voir plus bas), la requête est déjà bornée côté serveur : un
+  // plafond de 2000 par requête (≈4000 avec envoyés+reçus) reste largement suffisant pour une
+  // agence, et le snapshot serveur revient assez vite pour ne plus rester bloqué sur le cache.
+  const FILTERED_PAGE_SIZE = 2000 // par query (envoyés + reçus) = jusqu'à ~4000 total avec filtres
   const AGENCY_PAGE_SIZE = PAGE_SIZE // Compatibilité (sera remplacé par effectivePageSize)
   const [liveParcels, setLiveParcels] = useState<any[]>([]) // Premiers 600 en temps réel
   const [moreParcels, setMoreParcels] = useState<any[]>([]) // Chargés progressivement
   const [hasMoreAgency, setHasMoreAgency] = useState(true)
   const [loadingMoreAgency, setLoadingMoreAgency] = useState(false)
   const [loadingAllAgency, setLoadingAllAgency] = useState(false)
-  const [loadAllAgencyProgress, setLoadAllAgencyProgress] = useState(0)
+  // ⚡ Progression (expéditions reçues + journée en cours) HORS de l'état React de la page : elle
+  // change à chaque journée chargée ; en useState elle re-rendait toute la page + l'onglet
+  // Expéditions à chaque journée. Seule la jauge (ParcelsTab → useLoadProgress) se re-rend.
+  const agencyProgressStore = useMemo(() => createLoadProgressStore(), [])
+  // 📅 true : les expéditions de la période viennent d'une lecture ponctuelle jour par jour
+  // (période passée ou partie passée d'une période) — pas d'écoute temps réel dessus.
+  const [agencyOneShot, setAgencyOneShot] = useState(false)
   const agencyLastDocsRef = useRef<any>(null)
   // Mode "Toutes villes" pour agent pro uniquement
   // ✅ FALSE par défaut (Ma ville) - Agent Pro peut basculer, Chef d'agence reste sur Ma ville
@@ -315,12 +373,20 @@ export default function AgentPage() {
   const [allCitiesArchivesLastSnap, setAllCitiesArchivesLastSnap] = useState<any>(null)
   const [allCitiesTotalLoaded, setAllCitiesTotalLoaded] = useState(0)
   const agencyPagedRef = useRef(false)
+  // 🔢 Génération du chargement : incrémentée à chaque (ré)abonnement (changement de filtre).
+  // Une boucle loadAllAgencyParcels lancée pour l'ancien filtre s'arrête dès qu'elle la voit changer.
+  const agencyLoadGenRef = useRef(0)
   const agencyDateFilterRef = useRef<{ dateFrom: Date | null; dateTo: Date | null }>({ dateFrom: null, dateTo: null })
 
   // États pour pagination avec filtre de date
   const [lastSnapWithDateFilter, setLastSnapWithDateFilter] = useState<any>(null)
   const [hasMoreWithDateFilter, setHasMoreWithDateFilter] = useState(false)
   const [loadingMoreWithDateFilter, setLoadingMoreWithDateFilter] = useState(false)
+  // 🔵 Pagination progressive VISIBLE pour Agent Pro "Toutes les villes" (même principe que
+  // loadingAllAgency côté chef d'agence) : continue de charger automatiquement en arrière-plan
+  // tant qu'il reste des colis, avec un total qui se complète progressivement à l'écran.
+  const [loadingAllCities, setLoadingAllCities] = useState(false)
+  const [loadAllCitiesProgress, setLoadAllCitiesProgress] = useState(0)
 
   const [search, setSearch]             = useState('')
   const [includeArchived, setIncludeArchived] = useState(false) // 🗄️ Inclure archives dans recherche
@@ -346,6 +412,9 @@ export default function AgentPage() {
   const [driverFilter, setDriverFilter] = useState('all')  // ⭐ Filtre par livreur/chauffeur
   const [portTypeFilter, setPortTypeFilter] = useState('all')  // ⭐ Filtre par type de port
   const [encaissementFilter, setEncaissementFilter] = useState('all')  // ⭐ Filtre par type d'encaissement
+  // ⭐ Sélection MULTIPLE de types d'encaissement (espèces/chèque/traite combinés) — distinct de
+  // encaissementFilter (qui gère les options exclusives "Tous"/"Simple"). Non vide = prioritaire.
+  const [encaissementTypesFilter, setEncaissementTypesFilter] = useState<string[]>([])
   const [codDocumentStatusFilter, setCodDocumentStatusFilter] = useState<string[]>([])  // ⭐ Filtre par statut document COD (sélection multiple)
   const [driverFilteredParcels, setDriverFilteredParcels] = useState<any[]>([]) // Colis du livreur filtré
   const [loadingDriverParcels, setLoadingDriverParcels] = useState(false)
@@ -371,6 +440,9 @@ export default function AgentPage() {
   const [codDateFrom, setCodDateFrom]           = useState('')
   const [codDateTo, setCodDateTo]               = useState('')
   const [codSearch, setCodSearch]               = useState('')
+  // 🔍 Restreint la recherche par nom à l'expéditeur seul, au destinataire seul, ou les deux
+  // (défaut) — pour éviter qu'un colis remonte juste parce que l'AUTRE partie porte ce nom.
+  const [searchScope, setSearchScope] = useState<'all' | 'sender' | 'receiver'>('all')
 
   // ── Debounced search values (évite le recalcul à chaque frappe)
   const debouncedSearch      = useDebounce(search)
@@ -386,13 +458,21 @@ export default function AgentPage() {
       setIsSearching(false)
       return
     }
+    // ⚡ Période précise choisie (Aujourd'hui, 7 j, Mois, Journée, Période…) : les expéditions de
+    // cette période sont déjà chargées pour l'agence → recherche LOCALE uniquement (accents ignorés),
+    // sans interroger toute la base (toutes dates confondues). Recherche serveur seulement sur « Tout ».
+    if (datePreset !== 'all' && !showAllCities) {
+      setServerSearchResults(null)
+      setIsSearching(false)
+      return
+    }
 
     // ⚡ Recherche serveur dans TOUTE la base
     const performServerSearch = async () => {
       setIsSearching(true)
       try {
         console.warn(`🔍 Recherche serveur AgentPage: "${query}" ${includeArchived ? '(avec archives)' : '(sans archives)'}`)
-        const results = await searchParcels(query, { limit: 50000, includeArchived })
+        const results = await searchParcels(query, { limit: 50000, includeArchived, nameScope: searchScope })
         setServerSearchResults(results)
         setIsSearching(false)
         console.warn(`✅ Recherche serveur AgentPage: ${results.length} résultats trouvés`)
@@ -404,7 +484,7 @@ export default function AgentPage() {
     }
 
     performServerSearch()
-  }, [debouncedSearch, includeArchived])
+  }, [debouncedSearch, includeArchived, searchScope, datePreset, showAllCities])
 
   const [editingParcel, setEditingParcel] = useState<any>(null)
   const [editForm, setEditForm]         = useState<any>(null)
@@ -486,6 +566,7 @@ export default function AgentPage() {
   const [codSettling, setCodSettling]       = useState<any>(null) // parcelId being settled
   const [allCodParcels, setAllCodParcels]   = useState<any>(null) // null = not loaded yet
   const [codLoadingAll, setCodLoadingAll]   = useState(false)
+  const [codLoadAllProgress, setCodLoadAllProgress] = useState(0) // colis parcourus pendant "Charger tout l'historique"
   const [batchSettling, setBatchSettling]   = useState(false)
   const [agentCodRequests, setAgentCodRequests] = useState<any[]>([])
   const [codRequestDrafts, setCodRequestDrafts] = useState<any>({})
@@ -598,10 +679,11 @@ export default function AgentPage() {
       }
     }
 
-    loadLostParcels()
-    // Recharger toutes les 30 secondes pour garder le badge à jour
-    const interval = setInterval(loadLostParcels, 30000)
-    return () => clearInterval(interval)
+    // ⚡ getAllLostParcels lit TOUTE la collection : on espace fortement le rafraîchissement
+    // du badge (5 min au lieu de 30 s = 10x moins de lectures Firestore par utilisateur)
+    const timer = setTimeout(loadLostParcels, 3000)
+    const interval = setInterval(loadLostParcels, 5 * 60 * 1000)
+    return () => { clearTimeout(timer); clearInterval(interval) }
   }, [profile?.city])
 
   // Raccourci Ctrl+Enter depuis l'accueil pour aller à Nouvelle expédition
@@ -636,15 +718,15 @@ export default function AgentPage() {
           auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
         }
       }
-      // aide_agent a accès limité, agentpro a les mêmes accès que chef_agence
-      unsubscribers.push(subscribeClients(setClients, onListenerError('subscribeClients')))
+      // subscribeClients charge TOUS les clients de TOUTES les agences sans limite :
+      // il est démarré à la demande, par les onglets qui en ont besoin (voir plus bas)
       if (!isAide) {
         unsubscribers.push(subscribeDrivers(setDrivers, onListenerError('subscribeDrivers')))
         unsubscribers.push(subscribeAllUsers(data => {
           setAgencyCashiers(data.filter(u => u.role === 'caissier'))
           setAllUsers(data)
         }, onListenerError('subscribeAllUsers')))
-        unsubscribers.push(subscribeAgentCodRequests(uid, setAgentCodRequests, onListenerError('subscribeAgentCodRequests')))
+        // subscribeAgentCodRequests est chargé à l'ouverture de l'onglet RETOUR FOND (bloc lazy)
       }
     }, 500)
 
@@ -654,6 +736,25 @@ export default function AgentPage() {
     }
   }, [profile?.role, authTick])
 
+  // 🔍 Filtres autres que la date : ils sont appliqués CÔTÉ CLIENT (filteredParcels). Ils ne
+  // changent la requête Firestore que via la taille de page (150 → 2000 sans filtre de date).
+  // ⚠️ Avant, CHAQUE filtre (type de port, statut, direction, livreur…) figurait dans les
+  // dépendances de l'effet de chargement : un simple clic sur « Port dû » détruisait les écoutes
+  // et relisait toute la période (≈15 000 expéditions pour « Ce mois » à Casablanca). Seul ce
+  // booléen compte désormais.
+  const hasNonDateFilters =
+    serviceFilter !== 'all' ||
+    parcelStatusFilter !== 'all' ||
+    parcelDirection !== 'all' ||
+    destinationCityFilter !== 'all' ||
+    driverFilter !== 'all' ||
+    portTypeFilter !== 'all' ||
+    encaissementFilter !== 'all' || encaissementTypesFilter.length > 0 ||
+    codDocumentStatusFilter.length > 0
+  // Avec une période choisie, la taille de page est déjà maximale : changer un autre filtre ne
+  // doit alors RIEN relire (needsBigPage reste true).
+  const needsBigPage = datePreset !== 'all' || hasNonDateFilters
+
   // 🔄 Chargement optimisé avec détection de filtres (Option 3)
   // ⚡ OPTIMISATION : Charger les parcels uniquement si l'onglet nécessite des parcels
   useEffect(() => {
@@ -661,26 +762,17 @@ export default function AgentPage() {
     const uid = auth.currentUser?.uid
     if (!uid) return
 
-    // ⚡ Ne charger les parcels que si on est sur un onglet qui en a besoin
-    const tabsNeedingParcels = ['home', 'parcels', 'cod', 'charge', 'arrivage', 'retours', 'portsDu', 'portsEnCompte']
-    if (!tabsNeedingParcels.includes(tab)) {
+    // ⚡ Ne charger les parcels que si on est sur un onglet qui en a besoin.
+    // ⚠️ La dépendance est `needsParcels` (booléen) et NON `tab` : passer d'Accueil à
+    // Expéditions ne doit pas détruire puis recréer l'abonnement Firestore, sinon chaque
+    // changement d'onglet re-télécharge tous les colis de l'agence.
+    if (!needsParcels) {
       console.log(`⏭️ Onglet "${tab}" ne nécessite pas de parcels, chargement ignoré`)
       return
     }
 
     // 🔍 Détecter si des filtres sont actifs
-    const hasDateFilter = datePreset !== 'all'
-    const hasOtherFilters =
-      serviceFilter !== 'all' ||
-      parcelStatusFilter !== 'all' ||
-      parcelDirection !== 'all' ||
-      destinationCityFilter !== 'all' ||
-      driverFilter !== 'all' ||
-      portTypeFilter !== 'all' ||
-      encaissementFilter !== 'all' ||
-      codDocumentStatusFilter.length > 0
-
-    const hasFilters = hasDateFilter || hasOtherFilters
+    const hasFilters = needsBigPage
 
     // ⚡ Chargement progressif pour chef d'agence:
     // - Sans filtres: 150 par query au démarrage (~300 total) pour affichage rapide
@@ -692,25 +784,25 @@ export default function AgentPage() {
       effectivePageSize = FILTERED_PAGE_SIZE
     }
 
-    console.warn(`📊 CHARGEMENT AgentPage:`, {
-      hasFilters,
-      effectivePageSize,
-      filters: {
-        date: datePreset,
-        service: serviceFilter,
-        status: parcelStatusFilter,
-        direction: parcelDirection,
-        city: destinationCityFilter,
-        driver: driverFilter,
-        port: portTypeFilter,
-        encaissement: encaissementFilter,
-        codDoc: codDocumentStatusFilter
-      }
-    })
+    console.warn(`📊 CHARGEMENT AgentPage:`, { hasFilters, effectivePageSize, date: datePreset })
 
     // Nettoyer les anciennes souscriptions
     unsubscribersRef.current.forEach(unsub => unsub())
     unsubscribersRef.current = []
+
+    // ⚠️ CORRECTIF : réinitialiser la pagination progressive à CHAQUE changement de filtre.
+    // Avant, hasMoreAgency / agencyPagedRef / moreParcels n'étaient jamais remis à zéro : après
+    // un premier chargement complet (ex: "Aujourd'hui" à l'ouverture), hasMoreAgency restait
+    // false et le curseur figé — passer ensuite à "Ce mois" n'affichait que les 2 × 2000 colis
+    // temps réel (Casablanca : 3 695 colis au lieu de 15 335).
+    agencyLoadGenRef.current += 1
+    agencyPagedRef.current = false
+    agencyLastDocsRef.current = null
+    setMoreParcels([])
+    setHasMoreAgency(true)
+    setLoadingAllAgency(false)
+    setAgencyOneShot(false)
+    agencyProgressStore.reset()
 
     setLoadingParcels(true)
     const onError = (err: any) => {
@@ -737,11 +829,12 @@ export default function AgentPage() {
         })
 
         const unsubAll = subscribeAllParcelsWithDateFilter(
-          (data: any, lastSnap: any) => {
-            console.log(`✅ [Agent Pro - Jour d'opération] ${data.length} colis chargés`)
+          (data: any, lastSnap: any, fromCache: boolean) => {
+            console.log(`✅ [Agent Pro - Jour d'opération] ${data.length} colis chargés (fromCache: ${fromCache})`)
             setParcels(data)
             setLiveParcels(data)
             setLoadingParcels(false)
+            setSyncingParcels(!!fromCache)
             setLastSnapWithDateFilter(lastSnap)
             setHasMoreWithDateFilter(data.length >= effectivePageSize)
           },
@@ -764,8 +857,12 @@ export default function AgentPage() {
 
       // 🔥 SI FILTRE DE DATE CUSTOM → utiliser subscribeAllParcelsWithDateFilter (comme Admin)
       if (datePreset === 'custom' && (dateFrom || dateTo)) {
-        const dateFromObj = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
-        const dateToObj = dateTo ? new Date(dateTo + 'T23:59:59') : null
+        // 🗓️ "Période" suit désormais la JOURNÉE D'OPÉRATION (8h → 6h lendemain) plutôt que le
+        // jour calendaire : un colis saisi à 2h du matin le jour de fin appartient encore à la
+        // journée d'opération précédente (workDate), donc à la période sélectionnée si celle-ci
+        // se termine ce jour-là. Bornes calendaires strictes (00:00→23:59) l'excluaient à tort.
+        const dateFromObj = dateFrom ? getOperationalDayRange(new Date(dateFrom + 'T12:00:00')).start : null
+        const dateToObj = dateTo ? getOperationalDayRange(new Date(dateTo + 'T12:00:00')).end : null
 
         console.log(`⚡ [Agent Pro] Filtre de date Firestore:`, {
           from: dateFromObj?.toLocaleDateString('fr-MA'),
@@ -773,11 +870,12 @@ export default function AgentPage() {
         })
 
         const unsubAll = subscribeAllParcelsWithDateFilter(
-          (data: any, lastSnap: any) => {
-            console.log(`✅ [Agent Pro - Avec filtre date] ${data.length} colis chargés`)
+          (data: any, lastSnap: any, fromCache: boolean) => {
+            console.log(`✅ [Agent Pro - Avec filtre date] ${data.length} colis chargés (fromCache: ${fromCache})`)
             setParcels(data)
             setLiveParcels(data)
             setLoadingParcels(false)
+            setSyncingParcels(!!fromCache)
             // Stocker lastSnap pour pagination et vérifier s'il y a plus de colis
             setLastSnapWithDateFilter(lastSnap)
             setHasMoreWithDateFilter(data.length >= effectivePageSize)
@@ -799,13 +897,61 @@ export default function AgentPage() {
         }
       }
 
+      // ⚠️ CORRECTIF (mêmes raisons que côté chef d'agence ci-dessous) : today/week/month
+      // passaient par subscribeAllParcels SANS aucune borne de date, chargeant les N derniers
+      // colis TOUTES VILLES CONFONDUES puis filtrant côté client — une ville peu active pouvait
+      // n'avoir aucun colis dans cette fenêtre. On envoie maintenant la vraie plage.
+      if (datePreset === 'today' || datePreset === 'week' || datePreset === 'month') {
+        const todayOp = getCurrentOperationalDay()
+        let dateFromObj: Date, dateToObj: Date
+        if (datePreset === 'today') {
+          const range = getOperationalDayRange(todayOp)
+          dateFromObj = range.start; dateToObj = range.end
+        } else if (datePreset === 'week') {
+          const weekAgoOp = new Date(todayOp); weekAgoOp.setDate(weekAgoOp.getDate() - 6)
+          dateFromObj = getOperationalDayRange(weekAgoOp).start
+          dateToObj = getOperationalDayRange(todayOp).end
+        } else {
+          const firstOfMonth = new Date(todayOp.getFullYear(), todayOp.getMonth(), 1)
+          dateFromObj = getOperationalDayRange(firstOfMonth).start
+          dateToObj = getOperationalDayRange(todayOp).end
+        }
+
+        console.log(`📅 [Agent Pro] Préset "${datePreset}" Firestore (Toutes villes):`, {
+          from: dateFromObj.toLocaleString('fr-MA'), to: dateToObj.toLocaleString('fr-MA')
+        })
+
+        const unsubAll = subscribeAllParcelsWithDateFilter(
+          (data: any, lastSnap: any, fromCache: boolean) => {
+            console.log(`✅ [Agent Pro - ${datePreset}] ${data.length} colis chargés (fromCache: ${fromCache})`)
+            setParcels(data)
+            setLiveParcels(data)
+            setLoadingParcels(false)
+            setSyncingParcels(!!fromCache)
+            setLastSnapWithDateFilter(lastSnap)
+            setHasMoreWithDateFilter(data.length >= effectivePageSize)
+          },
+          onError,
+          { pageSize: effectivePageSize, dateFrom: dateFromObj, dateTo: dateToObj }
+        )
+
+        setReturnParcels([])
+        setPendingAideParcels([])
+        unsubscribersRef.current.push(unsubAll)
+        return () => {
+          unsubscribersRef.current.forEach(unsub => unsub())
+          unsubscribersRef.current = []
+        }
+      }
+
       // SINON → subscribeAllParcels normal
       const unsubAll = subscribeAllParcels(
-        (data: any) => {
-          console.log(`✅ [Agent Pro - Toutes villes] ${data.length} colis chargés`)
+        (data: any, _lastSnap: any, fromCache: boolean) => {
+          console.log(`✅ [Agent Pro - Toutes villes] ${data.length} colis chargés (fromCache: ${fromCache})`)
           setParcels(data)
           setLiveParcels(data)
           setLoadingParcels(false)
+          setSyncingParcels(!!fromCache)
         },
         onError,
         0, // offset
@@ -828,15 +974,18 @@ export default function AgentPage() {
       let filterDateTo: Date | null = null
 
       if (datePreset === 'custom' && (dateFrom || dateTo)) {
-        // 📅 FILTRE PÉRIODE : Utiliser les dates exactes sélectionnées
+        // 🗓️ FILTRE PÉRIODE : basé sur la JOURNÉE D'OPÉRATION (8h → 6h lendemain), pas le jour
+        // calendaire — cohérent avec workDate. Sinon un colis saisi tôt le matin de la date de
+        // fin (encore la veille en journée d'opération) sortait à tort de la période, faussant
+        // les totaux Port dû par rapport à la page Admin.
         if (dateFrom) {
-          filterDateFrom = new Date(dateFrom + 'T00:00:00')
+          filterDateFrom = getOperationalDayRange(new Date(dateFrom + 'T12:00:00')).start
         } else {
           filterDateFrom = null
         }
 
         if (dateTo) {
-          filterDateTo = new Date(dateTo + 'T23:59:59')
+          filterDateTo = getOperationalDayRange(new Date(dateTo + 'T12:00:00')).end
         } else {
           filterDateTo = null
         }
@@ -855,8 +1004,36 @@ export default function AgentPage() {
           from: filterDateFrom?.toLocaleString('fr-MA'),
           to: filterDateTo?.toLocaleString('fr-MA')
         })
+      } else if (datePreset === 'today' || datePreset === 'week' || datePreset === 'month') {
+        // ⚠️ CORRECTIF : ces presets ne passaient AUCUNE borne à Firestore, qui retombait
+        // alors sur un défaut fixe de 30 jours (subscribeAgencyParcels) — un "Jour précis" ou
+        // "Ce mois" plus ancien que 30 jours renvoyait une liste vide, et "Aujourd'hui"/"7j"
+        // chargeaient inutilement une fenêtre plus large que nécessaire. On envoie maintenant
+        // la vraie plage (mêmes bornes "journée d'opération" que le filtre client, voir
+        // utils/dateFilter.ts) → requête plus précise, donc moins coûteuse, pas plus.
+        const todayOp = getCurrentOperationalDay()
+        if (datePreset === 'today') {
+          const range = getOperationalDayRange(todayOp)
+          filterDateFrom = range.start
+          filterDateTo = range.end
+        } else if (datePreset === 'week') {
+          const weekAgoOp = new Date(todayOp); weekAgoOp.setDate(weekAgoOp.getDate() - 6)
+          filterDateFrom = getOperationalDayRange(weekAgoOp).start
+          filterDateTo = getOperationalDayRange(todayOp).end
+        } else {
+          const firstOfMonth = new Date(todayOp.getFullYear(), todayOp.getMonth(), 1)
+          filterDateFrom = getOperationalDayRange(firstOfMonth).start
+          filterDateTo = getOperationalDayRange(todayOp).end
+        }
+        console.log(`📅 [Chef d'agence] Préset "${datePreset}" Firestore pour ${profile.city}:`, {
+          from: filterDateFrom?.toLocaleString('fr-MA'),
+          to: filterDateTo?.toLocaleString('fr-MA')
+        })
+      } else if (datePreset === 'day' && dateFrom) {
+        filterDateFrom = new Date(dateFrom + 'T00:00:00')
+        filterDateTo = new Date(dateFrom + 'T23:59:59')
       } else {
-        // 📦 AUCUNE LIMITE : Charger tous les colis disponibles
+        // 📦 "Tout" (ou "Jour précis" sans date choisie) : pas de borne, comportement inchangé.
         filterDateFrom = null
         filterDateTo = null
 
@@ -865,44 +1042,8 @@ export default function AgentPage() {
 
       agencyDateFilterRef.current = { dateFrom: filterDateFrom, dateTo: filterDateTo }
 
-      const unsubAgency = subscribeAgencyParcels(
-        profile.city,
-        (data: any) => {
-          console.log(`✅ [Chef d'agence] ${data.length} colis chargés pour ${profile.city}`)
-
-          // 🔄 TEMPS RÉEL: Les mises à jour Firestore ont TOUJOURS la priorité
-          // Émettre des événements pour chaque parcel mis à jour
-          if (typeof window !== 'undefined') {
-            data.forEach((parcel: any) => {
-              window.dispatchEvent(new CustomEvent('parcelUpdated', {
-                detail: {
-                  parcelId: parcel.id,
-                  updates: parcel,
-                  timestamp: new Date().toISOString(),
-                  source: 'firestore'
-                }
-              }))
-            })
-          }
-
-          setLiveParcels(data)
-          setParcels(data)
-          setLoadingParcels(false)
-          if (data.length < effectivePageSize) setHasMoreAgency(false)
-        },
-        onError,
-        effectivePageSize, // ⚡ 50 ou 1000 selon filtres
-        (lastDocs: any) => {
-          if (!agencyPagedRef.current) {
-            agencyLastDocsRef.current = lastDocs
-          }
-        },
-        filterDateFrom,
-        filterDateTo
-      )
-
-      // Souscrire aussi aux retours pour cette agence (avec même filtre de date)
-      const unsubReturns = subscribeAgencyReturnParcels(
+      // Souscrire aussi aux retours pour cette agence (avec même filtre de date) — inchangé
+      const subscribeReturns = () => subscribeAgencyReturnParcels(
         profile.city,
         (data: any) => {
           console.log(`✅ [Chef d'agence] ${data.length} colis retour chargés pour ${profile.city}`)
@@ -912,6 +1053,155 @@ export default function AgentPage() {
         filterDateFrom,
         filterDateTo
       )
+
+      // 📅 PÉRIODE BORNÉE (Aujourd'hui, 7 j, Mois, J.Opé, Jour, Période) → même système que le
+      // Facturier : lecture PONCTUELLE jour par jour (getDocs), affichage progressif pour les
+      // ~3 000 premières expéditions puis le reste ajouté EN UNE FOIS à la fin. Seule la journée
+      // d'opération EN COURS (si elle fait partie de la période) reste en écoute temps réel.
+      // ⚠️ Avant : 2 écoutes onSnapshot × 2000 docs (avec includeMetadataChanges → la liste entière
+      // retraitée une fois depuis le cache puis une fois depuis le serveur) recréées à chaque
+      // changement de filtre, puis la boucle jour par jour pour le reste.
+      // Mêmes requêtes (originCity / destinationCity, archivés inclus) et tranches couvrant
+      // EXACTEMENT [début, fin] (buildDaySlices) → totaux finaux identiques.
+      if (filterDateFrom && filterDateTo) {
+        const city = profile.city
+        const gen = agencyLoadGenRef.current
+        const rangeStart = filterDateFrom, rangeEnd = filterDateTo
+        const todayStart = getOperationalDayRange(getCurrentOperationalDay()).start
+        // Partie temps réel : [max(début, début de la journée en cours), fin] si la période l'inclut
+        const liveFrom = rangeEnd.getTime() >= todayStart.getTime()
+          ? (rangeStart.getTime() > todayStart.getTime() ? rangeStart : todayStart)
+          : null
+        // Partie ponctuelle : tranches (journées d'opération) antérieures à la partie temps réel.
+        // todayStart est une frontière de tranche → aucune tranche ne chevauche la partie temps réel.
+        const slices = buildDaySlices(rangeStart, rangeEnd)
+          .filter(s => !liveFrom || s.start.getTime() < liveFrom.getTime())
+
+        setLiveParcels([])
+        setHasMoreAgency(false) // pas de boucle « charger la suite » : tout est lu ci-dessous
+        setSyncingParcels(!!liveFrom)
+        setAgencyOneShot(slices.length > 0)
+        let firstData = true
+        const gotData = () => { if (firstData) { firstData = false; setLoadingParcels(false) } }
+
+        if (liveFrom) {
+          unsubscribersRef.current.push(subscribeAgencyParcelsFull(
+            city,
+            { dateFrom: liveFrom, dateTo: rangeEnd, pageSize: FILTERED_PAGE_SIZE, includeArchived: true },
+            (data, meta) => {
+              if (gen !== agencyLoadGenRef.current) return
+              setLiveParcels(data)
+              setSyncingParcels(meta.fromCache)
+              gotData()
+            },
+            onError
+          ))
+        }
+
+        if (slices.length > 0) {
+          setLoadingAllAgency(true)
+          agencyProgressStore.set({ loaded: 0, day: { done: 0, total: slices.length, label: slices[0].label } })
+          ;(async () => {
+            let loaded = 0
+            let pending: any[] = []
+            let lastFlush = 0
+            let shown = 0 // expéditions déjà envoyées à l'affichage
+            const flush = () => {
+              if (!pending.length) return
+              const docs = pending
+              pending = []
+              lastFlush = Date.now()
+              shown += docs.length
+              setMoreParcels(prev => {
+                const map = new Map()
+                prev.forEach((p: any) => map.set(p.id, p))
+                docs.forEach((p: any) => map.set(p.id, p))
+                return [...map.values()]
+              })
+              gotData()
+            }
+            try {
+              for (let i = 0; i < slices.length; i++) {
+                const s = slices[i]
+                if (gen !== agencyLoadGenRef.current) return
+                agencyProgressStore.set({ day: { done: i, total: slices.length, label: s.label } })
+                const docs = (await Promise.all([
+                  getAgencyParcelsDaySlice(city, 'originCity', s.start, s.end, s.endInclusive, null, FILTERED_PAGE_SIZE),
+                  getAgencyParcelsDaySlice(city, 'destinationCity', s.start, s.end, s.endInclusive, null, FILTERED_PAGE_SIZE),
+                ])).flat()
+                if (gen !== agencyLoadGenRef.current) return
+                loaded += docs.length
+                agencyProgressStore.set({ loaded })
+                if (docs.length) {
+                  for (const d of docs) pending.push(d)
+                  // ⚡ Comme le Facturier : 1re journée tout de suite, puis ~1 ajout / 800 ms tant
+                  // que moins de ~3 000 expéditions sont affichées ; au-delà, réserve ajoutée EN UNE
+                  // FOIS à la fin (chaque ajout recalcule filtres/totaux sur toute la liste).
+                  if (shown < 3000 && Date.now() - lastFlush >= APPEND_FLUSH_MS) flush()
+                }
+              }
+              console.log(`✅ [Chef d'agence] Chargement jour par jour terminé: ${loaded} colis (${slices.length} jours)`)
+            } catch (err) {
+              console.error('[Chef d\'agence] chargement jour par jour error:', err)
+            } finally {
+              if (gen === agencyLoadGenRef.current) {
+                flush()
+                gotData()
+                setLoadingAllAgency(false)
+                agencyProgressStore.reset()
+              }
+            }
+          })()
+        }
+
+        unsubscribersRef.current.push(subscribeReturns())
+        setPendingAideParcels([])
+        return () => {
+          agencyLoadGenRef.current += 1 // arrête la lecture jour par jour en cours
+          unsubscribersRef.current.forEach(unsub => unsub())
+          unsubscribersRef.current = []
+          setLoadingAllAgency(false)
+          agencyProgressStore.reset()
+        }
+      }
+
+      const unsubAgency = subscribeAgencyParcels(
+        profile.city,
+        (data: any, fromCache: boolean) => {
+          console.log(`✅ [Chef d'agence] ${data.length} colis chargés pour ${profile.city} (fromCache: ${fromCache})`)
+
+          // ⚠️ NE PAS émettre un événement 'parcelUpdated' par colis ici : à 300 colis cela
+          // déclenchait 300 événements, chacun re-mappant 3 tableaux complets — soit un blocage
+          // du thread principal à chaque snapshot. setParcels/setLiveParcels ci-dessous
+          // appliquent déjà les données fraîches en une seule fois.
+          // ⚡ Plus de setParcels(data) ici : la fusion live + « charger plus » (effet plus bas)
+          // s'en charge. Le faire ici déclenchait un rendu complet (tri + filtres) avec la liste
+          // temps réel SEULE — les colis déjà chargés disparaissant un instant — puis un second.
+          setLiveParcels(data)
+          setLoadingParcels(false)
+          setSyncingParcels(!!fromCache)
+          // ⚠️ CORRECTIF : `data` est la fusion DÉDUPLIQUÉE de deux requêtes (envoyés +
+          // reçus), chacune plafonnée à effectivePageSize. Sa longueur peut donc être
+          // inférieure à effectivePageSize même quand l'une des deux requêtes a atteint sa
+          // limite (donc qu'il reste potentiellement plus de données) — comparer le total
+          // fusionné à effectivePageSize masquait à tort le bouton "Charger plus". On laisse
+          // désormais le clic sur "Charger plus" (via getParcelsPage) déterminer lui-même la
+          // fin de liste, ce qu'il fait déjà correctement plus bas.
+          if (data.length === 0) setHasMoreAgency(false)
+        },
+        onError,
+        effectivePageSize, // ⚡ 50 ou 1000 selon filtres
+        (lastDocs: any) => {
+          if (!agencyPagedRef.current) {
+            agencyLastDocsRef.current = lastDocs
+          }
+        },
+        filterDateFrom,
+        filterDateTo,
+        true // 🗄️ archivés inclus (comme Facturier / Ports en compte) : totaux exacts sur toute période
+      )
+
+      const unsubReturns = subscribeReturns()
 
       setPendingAideParcels([]) // Plus de pending
       unsubscribersRef.current.push(unsubAgency, unsubReturns)
@@ -933,20 +1223,29 @@ export default function AgentPage() {
       unsubscribersRef.current.forEach(unsub => unsub())
       unsubscribersRef.current = []
     }
-  }, [tab, profile?.role, profile?.city, authTick, showAllCities, datePreset, dateFrom, dateTo, operationalDay, serviceFilter, parcelStatusFilter, parcelDirection, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, codDocumentStatusFilter]) // ⚡ TOUS les filtres pour recharger 50→1000 + tab pour chargement lazy
+  }, [needsParcels, profile?.role, profile?.city, authTick, showAllCities, datePreset, dateFrom, dateTo, operationalDay, needsBigPage]) // ⚡ needsBigPage : taille de page 150 → 2000 seulement
 
-  // ❌ DÉSACTIVÉ: Chargement automatique de tous les colis (désormais MANUEL uniquement)
-  // useEffect(() => {
-  //   if (profile?.role !== 'chef_agence' || !hasMoreAgency || loadingAllAgency || loadingMoreAgency || !agencyLastDocsRef.current) return
-  //   if (liveParcels.length === 0) return // Attendre le chargement initial
-  //   const timer = setTimeout(() => {
-  //     if (hasMoreAgency && !loadingAllAgency && !loadingMoreAgency && agencyLastDocsRef.current) {
-  //       console.log(`🚀 [Chef d'agence] Démarrage du chargement automatique de tous les colis...`)
-  //       loadAllAgencyParcels()
-  //     }
-  //   }, 2000)
-  //   return () => clearTimeout(timer)
-  // }, [liveParcels.length, hasMoreAgency, profile?.role])
+  // ⚡ PAGINATION PROGRESSIVE VISIBLE : le premier chargement reste rapide (plafonné à
+  // FILTERED_PAGE_SIZE=2000 par requête, voir plus haut), mais si une agence active dépasse ce
+  // plafond sur la période sélectionnée (hasMoreAgency reste true), on continue de charger le
+  // reste automatiquement en arrière-plan par tranches — au lieu de tronquer silencieusement les
+  // totaux (l'ancien comportement) ou de tout charger d'un coup au prix d'une synchronisation de
+  // plusieurs secondes (FILTERED_PAGE_SIZE=50000, essayé puis abandonné). Un indicateur visible
+  // ("Chargement complet… N colis") informe l'utilisateur pendant que ça se poursuit, et les
+  // totaux affichés se complètent progressivement plutôt que de rester figés sur un sous-ensemble.
+  // Limité aux vues FILTRÉES (datePreset !== 'all') pour ne pas charger toute l'agence par défaut.
+  useEffect(() => {
+    if ((profile?.role !== 'chef_agence' && profile?.role !== 'agentpro') || datePreset === 'all' || showAllCities) return
+    if (!hasMoreAgency || loadingAllAgency || loadingMoreAgency || !agencyLastDocsRef.current) return
+    if (liveParcels.length === 0) return // Attendre le chargement initial
+    const timer = setTimeout(() => {
+      if (hasMoreAgency && !loadingAllAgency && !loadingMoreAgency && agencyLastDocsRef.current) {
+        console.log(`🚀 [Chef d'agence] Démarrage du chargement progressif du reste des colis...`)
+        loadAllAgencyParcels()
+      }
+    }, 800)
+    return () => clearTimeout(timer)
+  }, [liveParcels.length, hasMoreAgency, loadingAllAgency, profile?.role, datePreset, showAllCities])
 
   // Fusionner liveParcels et moreParcels pour le chef d'agence et agentpro
   useEffect(() => {
@@ -964,8 +1263,10 @@ export default function AgentPage() {
   const loadMoreAgencyParcels = async () => {
     if (!hasMoreAgency || loadingMoreAgency || loadingAllAgency || !agencyLastDocsRef.current || !profile?.city) return
     setLoadingMoreAgency(true)
+    const gen = agencyLoadGenRef.current
     try {
-      const result = await getMoreAgencyParcels(profile.city, agencyLastDocsRef.current, AGENCY_PAGE_SIZE, agencyDateFilterRef.current.dateFrom, agencyDateFilterRef.current.dateTo)
+      const result = await getMoreAgencyParcels(profile.city, agencyLastDocsRef.current, AGENCY_PAGE_SIZE, agencyDateFilterRef.current.dateFrom, agencyDateFilterRef.current.dateTo, true)
+      if (gen !== agencyLoadGenRef.current) return // filtre changé entre-temps : résultat périmé
       agencyPagedRef.current = true
       setMoreParcels(prev => {
         const map = new Map()
@@ -987,17 +1288,33 @@ export default function AgentPage() {
   const loadAllAgencyParcels = async () => {
     if (!profile?.city || loadingAllAgency || loadingMoreAgency || !hasMoreAgency || !agencyLastDocsRef.current) return
     setLoadingAllAgency(true)
-    setLoadAllAgencyProgress(0)
+    agencyProgressStore.set({ loaded: 0, day: null })
+    const gen = agencyLoadGenRef.current
+    // Bornes figées au lancement : elles doivent correspondre au curseur (même requête).
+    const { dateFrom: loopFrom, dateTo: loopTo } = agencyDateFilterRef.current
+    // 📅 Les périodes bornées (début ET fin) sont lues jour par jour par l'effet de chargement
+    // (voir plus haut) : cette boucle ne sert plus qu'aux plages ouvertes (curseur + tranches).
     try {
       let cursor = agencyLastDocsRef.current
       let more = true
       let loaded = 0
       let safety = 0
+      // ⚠️ Tranches de AGENCY_PAGE_SIZE (=50) : pour une agence à plusieurs milliers de colis,
+      // ça forçait des dizaines d'allers-retours réseau avant de s'arrêter, même une fois le
+      // total réel déjà atteint — d'où un badge "Chargement…" qui semblait tourner pour rien.
+      // On réutilise FILTERED_PAGE_SIZE (même ordre de grandeur que le chargement initial) pour
+      // finir en 1-2 tranches. Le filtre de date sélectionné doit aussi être transmis ici — il
+      // ne l'était pas, cette boucle rechargeait sinon les 30 derniers jours par défaut.
       while (more && cursor && safety < 500) {
-        const result = await getMoreAgencyParcels(profile.city, cursor, AGENCY_PAGE_SIZE)
+        const result = await getMoreAgencyParcels(
+          profile.city, cursor, FILTERED_PAGE_SIZE, loopFrom, loopTo, true
+        )
+        // Filtre changé pendant le chargement : abandonner sans polluer la nouvelle liste
+        // (le nouvel abonnement relancera sa propre boucle).
+        if (gen !== agencyLoadGenRef.current) return
         agencyPagedRef.current = true
         loaded += result.docs.length
-        setLoadAllAgencyProgress(loaded)
+        agencyProgressStore.set({ loaded })
         console.log(`📦 [Chef d'agence] Chargement automatique: +${result.docs.length} colis (total: ${loaded})`)
         setMoreParcels(prev => {
           const map = new Map()
@@ -1015,7 +1332,10 @@ export default function AgentPage() {
     } catch (err) {
       console.error('[Chef d\'agence] loadAll error:', err)
     } finally {
-      setLoadingAllAgency(false)
+      if (gen === agencyLoadGenRef.current) {
+        setLoadingAllAgency(false)
+        agencyProgressStore.reset()
+      }
     }
   }
 
@@ -1100,20 +1420,38 @@ export default function AgentPage() {
 
   useEffect(() => {
     setHasMoreParcels(parcels.length >= 200)
-    setExtraParcels([])
+    // ⚡ Garder la MÊME référence si déjà vide : un nouveau [] à chaque changement de `parcels`
+    // invalidait allDisplayParcels → re-tri + re-filtrage complets dans un rendu supplémentaire.
+    setExtraParcels(prev => (prev.length ? [] : prev))
   }, [parcels])
 
   // Reset to page 1 when any filter changes
+  // ⚠️ CORRECTIF : cette liste omettait operationalDay, destinationCityFilter, driverFilter,
+  // portTypeFilter, encaissementFilter, codDocumentStatusFilter et dateFilterType — en changeant
+  // l'un de ces filtres depuis une page &gt; 0, la page restait clampée sur une tranche
+  // intermédiaire/finale des nouveaux résultats au lieu de revenir au début, donnant
+  // l'impression que des expéditions avaient disparu.
   useEffect(() => {
     setParcelPage(0)
-  }, [datePreset, dateFrom, dateTo, subTab, serviceFilter, parcelStatusFilter, parcelDirection, parcelEditorFilter, debouncedSearch])
+  }, [datePreset, dateFrom, dateTo, operationalDay, dateFilterType, subTab, serviceFilter, parcelStatusFilter,
+      parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter,
+      encaissementFilter, encaissementTypesFilter, codDocumentStatusFilter, debouncedSearch])
 
   // Fetch accurate agency stats when chef opens the home tab
+  // ⚡ Mis en cache 2 min : 4 requêtes de comptage serveur, inutile de les relancer
+  // à chaque retour sur l'Accueil pendant qu'on navigue entre les onglets.
+  const statsCacheRef = useRef<{ city: string; at: number } | null>(null)
   useEffect(() => {
     if (tab !== 'home' || profile?.role !== 'chef_agence' || !profile?.city) return
+    const cache = statsCacheRef.current
+    if (cache && cache.city === profile.city && Date.now() - cache.at < 120000) return
     let cancelled = false
     getAccurateAgencyStats(profile.city)
-      .then(stats => { if (!cancelled) setAccurateStats(stats) })
+      .then(stats => {
+        if (cancelled) return
+        statsCacheRef.current = { city: profile.city, at: Date.now() }
+        setAccurateStats(stats)
+      })
       .catch(() => {})
     return () => { cancelled = true }
   }, [tab, profile?.role, profile?.city])
@@ -1167,7 +1505,11 @@ export default function AgentPage() {
       const mergeTransit = (() => {
         let normal: any[] = [], retour: any[] = []
         const merge = () => {
-          const list = [...normal, ...retour]
+          // Dédoublonnage par id : un même colis ne doit jamais compter deux fois dans le badge
+          const uniq = new Map<string, any>()
+          // + exclusion des colis déjà réceptionnés/assignés/livrés dont le statut est resté « En transit »
+          ;[...normal, ...retour].filter(p => isAwaitingArrival(p, profile?.city)).forEach(p => uniq.set(p.id, p))
+          const list = [...uniq.values()]
             .sort((a, b) => (a.chauffeurName || '').localeCompare(b.chauffeurName || ''))
           setTransitParcels(list)
           setArrivedBoxes((prev: any) => {
@@ -1206,6 +1548,10 @@ export default function AgentPage() {
       console.error(`AgentPage ${label}:`, err)
       if (err.code === 'permission-denied') auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
     }
+    // 👥 Clients : collection entière sans limite — chargée seulement pour les onglets qui l'exploitent
+    if (['new', 'clients', 'invoices', 'clientportdu'].includes(tab) && !started.clients) {
+      started.clients = [subscribeClients(setClients, onErr('subscribeClients'))]
+    }
     if (tab === 'caisse' && !started.caisse) {
       started.caisse = [
         subscribeCaisseByCity(profile.city, (data: any) => setAgentEntries(data), onErr('subscribeCaisseByCity')),
@@ -1215,7 +1561,7 @@ export default function AgentPage() {
         (profile.role === 'chef_agence' || profile.role === 'agentpro') ? subscribeDriverVersements(profile.city, setDriverVersements, onErr('subscribeDriverVersements')) : null,
       ].filter(Boolean)
     }
-    if ((tab === 'charge' || tab === 'cod') && !started.charge && (profile?.role === 'chef_agence' || profile?.role === 'agentpro')) {
+    if (tab === 'charge' && !started.charge && (profile?.role === 'chef_agence' || profile?.role === 'agentpro')) {
       const retry = (err: any) => { if (err.code === 'permission-denied') auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {}) }
       started.charge = [
         subscribeRapports(profile.city, setPointeurRapports, err => { console.error('subscribeRapports:', err); retry(err) }),
@@ -1227,6 +1573,29 @@ export default function AgentPage() {
   useEffect(() => {
     return () => { ;(Object.values(_agentLazyStarted.current).flat() as any[]).forEach(unsub => unsub?.()) }
   }, [])
+
+  // 💰 RETOUR FOND : listeners actifs UNIQUEMENT pendant que l'onglet est ouvert.
+  // Sans ce cleanup, chaque mise à jour continuait à re-rendre AgentPage — et donc
+  // l'onglet affiché — longtemps après avoir quitté la page.
+  useEffect(() => {
+    if (tab !== 'cod' || !profile?.city || profile?.role === 'aide_agent') return
+    const started = _agentLazyStarted.current
+    const codUid = auth.currentUser?.uid
+    const onErr = (label: string) => (err: any) => {
+      console.error(`AgentPage ${label}:`, err)
+      if (err.code === 'permission-denied') auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
+    }
+    const isChef = profile.role === 'chef_agence' || profile.role === 'agentpro'
+    const subs = [
+      codUid ? subscribeAgentCodRequests(codUid, setAgentCodRequests, onErr('subscribeAgentCodRequests')) : null,
+      // Ne pas doubler un listener déjà ouvert par un autre onglet
+      started.caisse ? null : subscribeBankDepositsByCity(profile.city, setBankDeposits, onErr('subscribeBankDepositsByCity')),
+      (isChef && !started.charge) ? subscribeRapports(profile.city, setPointeurRapports, onErr('subscribeRapports')) : null,
+      (isChef && !started.charge) ? subscribeAllReglements(profile.city, setPointeurReglements, onErr('subscribeAllReglements')) : null,
+      (isChef && !started.charge) ? subscribeSourceReglements(profile.city, setSourcePointeurReglements, onErr('subscribeSourceReglements')) : null,
+    ].filter(Boolean) as any[]
+    return () => subs.forEach(unsub => unsub?.())
+  }, [tab, profile?.city, profile?.role, authTick])
 
   useEffect(() => {
     if (profile?.role === 'aide_agent') return
@@ -1353,6 +1722,7 @@ export default function AgentPage() {
     codSettling, setCodSettling,
     allCodParcels, setAllCodParcels,
     codLoadingAll, setCodLoadingAll,
+    codLoadAllProgress, setCodLoadAllProgress,
     batchSettling, setBatchSettling,
     agentCodRequests, setAgentCodRequests,
     codRequestDrafts, setCodRequestDrafts,
@@ -1448,7 +1818,7 @@ export default function AgentPage() {
     handleDeleteAgentOperations, handleDeleteCashierHistory,
     patchAllCod, handleRemitCod, handleSettleCod, handleLoadAllCod, handleReplyCodRequest,
     handleSettleCodFromRequest, handleBatchSettle, findSourceReglementForParcel, openReceiveModal,
-    getCentralDepositEligibleCods, handleCentralCodDeposit, handleReceptionCod,
+    getCentralDepositEligibleCods, handleCentralCodDeposit, handleReceptionCod, handleCancelCodRemise,
     handleReceiveCodFromDriver, handleConfirmDriverVersement, handleReceivePortDuEspeces,
     handleMarkSentToSource, handleBankDeposit, handleConfirmReceived,
     handleCreateInlineClient, handleAgentCreateClient,
@@ -1514,18 +1884,19 @@ export default function AgentPage() {
     if (!clientSearch.trim()) return cityClients
     const s = clientSearch.toLowerCase()
     return cityClients.filter(c =>
-      c.name?.toLowerCase().includes(s) || c.tel?.includes(s) || c.nic?.toLowerCase().includes(s)
+      normIncludes(c.name, s) || c.tel?.includes(s) || normIncludes(c.nic, s)
     )
   })()
   const ef = (field: any) => (e: any) => setEditForm((p: any) => ({ ...p, [field]: e.target.value }))
 
   const allDisplayParcels = useMemo(() => {
     const map = new Map()
-    // Vérifications de sécurité pour éviter erreurs si undefined
-    ;(parcels || []).forEach(p => map.set(p.id, p))
-
-    ;(returnParcels || []).forEach(p => map.set(p.id, p))
+    // ⚠️ extraParcels (lot "Charger plus", lecture ponctuelle) D'ABORD : les listes temps réel
+    // (parcels, returnParcels) doivent l'emporter, sinon une ancienne copie masquait la valeur
+    // réellement en base (montant RF, type de service…).
     ;(extraParcels || []).forEach(p => map.set(p.id, p))
+    ;(parcels || []).forEach(p => map.set(p.id, p))
+    ;(returnParcels || []).forEach(p => map.set(p.id, p))
     // Si un livreur est filtré, inclure ses colis (filtrés par date opérationnelle si actif)
     if (driverFilter !== 'all' && driverFilter !== 'unassigned') {
       let driverParcels = driverFilteredParcels || []
@@ -1539,32 +1910,82 @@ export default function AgentPage() {
       }
       driverParcels.forEach(p => map.set(p.id, p))
     }
-    return [...map.values()].sort((a, b) => {
-      const ta = a.createdAt?.toDate?.() || new Date(0)
-      const tb = b.createdAt?.toDate?.() || new Date(0)
-      return tb - ta
-    })
+    // ⚡ Même ordre (createdAt décroissant, tri stable) mais chaque date n'est convertie qu'une fois
+    return sortByCreatedAtDesc([...map.values()])
   }, [parcels, returnParcels, extraParcels, driverFilter, driverFilteredParcels, datePreset, operationalDay])
 
   const profileCity = profile?.city
   const profileRole = profile?.role
 
+  // 🏬 « En gare - ville » : toutes les expéditions ARRIVÉES en attente (hors fenêtre de dates)
+  const garePendingList = useGarePending(
+    (profile?.role === 'chef_agence' || profile?.role === 'agentpro') ? profile?.city : undefined)
+
+  // ⚡ Filtrage en priorité BASSE (comme le Facturier) : la frappe, les clics sur les filtres et
+  // l'arrivée de nouvelles journées restent fluides ; React calcule la nouvelle liste filtrée
+  // (≈30 ms sur 15 000 expéditions, ≈90 ms avec un terme de recherche) dans un rendu
+  // interruptible. Même résultat final.
+  const fSearch = useDeferredValue(debouncedSearch)
+  const fAllDisplay = useDeferredValue(allDisplayParcels)
   const filteredParcels = useMemo(() => {
     // 🔍 Si recherche serveur active, utiliser ses résultats en priorité
-    const sourceData = (debouncedSearch && serverSearchResults !== null)
-      ? serverSearchResults
-      : allDisplayParcels
+    const isGareFilter = driverFilter === 'unassigned' && (profileRole === 'chef_agence' || profileRole === 'agentpro') && !!profileCity
+    // Les résultats de recherche serveur sont une lecture ponctuelle : si le colis est aussi dans
+    // une liste temps réel (listener), c'est la version temps réel qui est affichée.
+    const liveById = (fSearch && serverSearchResults !== null)
+      ? new Map<string, any>([...(fAllDisplay || []), ...(garePendingList || [])].map((p: any) => [p.id, p]))
+      : null
+    // 🔍 La recherche serveur compare senderNameLower/receiverNameLower tels quels (préfixe) : elle
+    // rate les variantes d'écriture (« COPÏMA », nom modifié après coup, clientName…). On complète
+    // donc avec les colis DÉJÀ chargés pour la période dont un NOM (client, expéditeur, destinataire
+    // selon searchScope) commence par le terme, accents/casse/espaces ignorés (utils/billingAgency) —
+    // sinon le décompte d'un client différait du Facturier.
+    const baseSource = (fSearch && serverSearchResults !== null)
+      ? (() => {
+          const out = new Map<string, any>(serverSearchResults.map((p: any) => [p.id, liveById!.get(p.id) || p]))
+          const q = normName(fSearch)
+          if (q) liveById!.forEach((p: any, id: string) => {
+            if (out.has(id)) return
+            const names = searchScope === 'sender' ? [p.clientName, p.sender?.name]
+              : searchScope === 'receiver' ? [p.receiver?.name]
+                : [p.clientName, p.sender?.name, p.receiver?.name]
+            if (names.some((n: any) => normName(n).startsWith(q))) out.set(id, p)
+          })
+          return [...out.values()]
+        })()
+      : fAllDisplay
+    // 🏬 Filtre « En gare - ville » : on ajoute TOUS les colis arrivés en attente (hors fenêtre de dates),
+    // puis les autres filtres (direction, origine/destination, service, port…) s'appliquent normalement.
+    // ⚡ Set d'ids : l'ancien .some() imbriqué parcourait toute la liste pour CHAQUE colis en gare.
+    const displayedIds = isGareFilter && !(fSearch && serverSearchResults !== null)
+      ? new Set((fAllDisplay || []).map((q: any) => q.id))
+      : null
+    const gareExtra = displayedIds
+      ? garePendingList.filter((p: any) => !displayedIds.has(p.id))
+      : []
+    const sourceData = gareExtra.length ? [...baseSource, ...gareExtra] : baseSource
 
     // 📅 Extracteur de date selon le type de filtre (création/livraison)
     const dateExtractor = dateFilterType === 'livraison'
       ? (p: any) => {
           if (!p.deliveredAt) return new Date(0) // Pas de date de livraison
+          // ⚠️ deliveredAt est parfois un Timestamp Firestore (pas toujours une chaîne ISO)
+          if (p.deliveredAt?.toDate) return p.deliveredAt.toDate()
           return new Date(p.deliveredAt)
         }
       : parcelDate
 
-    // ✅ Toujours appliquer le filtre par date (même si un livreur est sélectionné)
+    // 🔍 La recherche serveur (par nom expéditeur/destinataire, NIC, tracking...) respecte
+    // désormais le filtre de date/période actif, comme la recherche locale du tableau — sinon
+    // un colis trouvé par nom pouvait s'afficher hors de la période sélectionnée, ce qui ne
+    // correspondait plus au contexte affiché (totaux, période) du reste de la page.
+    // 🏬 « En gare » : même filtre de date que tous les autres livreurs (date de création / jour d'opération)
     const dateFilteredData = filterByDate(sourceData, datePreset, dateFrom, dateTo, dateExtractor, operationalDay)
+
+    // 🔍 Prédicat de recherche locale construit UNE fois par recalcul (champs normalisés en cache)
+    const agentSearchMatch = (fSearch && serverSearchResults === null)
+      ? makeAgentSearchMatcher(fSearch.toLowerCase(), searchScope)
+      : null
 
     const filtered = dateFilteredData.filter((p: any) => {
     // 🔒 FILTRE VILLE OBLIGATOIRE (sauf en mode "Toutes les villes")
@@ -1631,8 +2052,12 @@ export default function AgentPage() {
     // ⭐ Filtre par livreur/chauffeur
     if (driverFilter !== 'all') {
       if (driverFilter === 'unassigned') {
-        // Afficher uniquement les expéditions non assignées
-        if (p.deliveryDriverId || p.chauffeurId) return false
+        // « 🏬 En gare - ville » : expéditions ARRIVÉES en attente (sans livreur ou tenues par le compte en gare)
+        if (isGareFilter) {
+          if (!isGarePending(p, profileCity)) return false
+        } else if (p.deliveryDriverId || p.chauffeurId) {
+          return false
+        }
       } else {
         // Filtre par livreur spécifique
         const matchesDriver = p.deliveryDriverId === driverFilter || p.chauffeurId === driverFilter
@@ -1643,8 +2068,22 @@ export default function AgentPage() {
     if (portTypeFilter !== 'all' && p.portType !== portTypeFilter) {
       return false
     }
-    // ⭐ Filtre par type d'encaissement
-    if (encaissementFilter !== 'all') {
+    // 💼 Ports en compte (direction « Tous ») : seulement ceux FACTURÉS par l'agence — compte
+    // expéditeur à l'origine, compte destinataire à la destination — même règle que la page
+    // Ports en compte, les totaux « En compte » ci-dessous et le Facturier (utils/billingAgency).
+    // Ex. un compte expéditeur Agadir → Casablanca (facturé à Agadir) ne compte plus à Casablanca.
+    // Les directions explicites « Envoyés »/« Reçus » gardent l'affichage par mouvement.
+    if ((portTypeFilter === 'port_en_compte_expediteur' || portTypeFilter === 'port_en_compte_destinataire')
+      && !showAllCities && profileCity && parcelDirection === 'all'
+      && (profileRole === 'chef_agence' || profileRole === 'agentpro')
+      && !isBilledByAgency(p, profileCity)) {
+      return false
+    }
+    // ⭐ Filtre par type d'encaissement : sélection MULTIPLE (espèces/chèque/traite combinés)
+    // prioritaire si active, sinon repli sur l'ancien filtre exclusif (Tous/Simple).
+    if (encaissementTypesFilter.length > 0) {
+      if (!encaissementTypesFilter.includes(p.serviceType)) return false
+    } else if (encaissementFilter !== 'all') {
       if (encaissementFilter === 'simple' && p.codAmount > 0) return false
       if (encaissementFilter === 'especes' && p.serviceType !== 'especes') return false
       if (encaissementFilter === 'cheque' && p.serviceType !== 'cheque') return false
@@ -1660,14 +2099,14 @@ export default function AgentPage() {
         return false
       }
     }
-    if (debouncedSearch) {
+    if (fSearch) {
       // Si on utilise serverSearchResults, pas besoin de refiltrer par recherche
       // (déjà fait par searchParcels côté serveur)
       if (serverSearchResults !== null) {
         return true
       }
       // Sinon, recherche locale dans les colis chargés
-      const searchLower = debouncedSearch.toLowerCase()
+      const searchLower = fSearch.toLowerCase()
 
       // Recherche spéciale pour chèques/traites : "c" suivi du montant
       if (searchLower.startsWith('c') && searchLower.length > 1) {
@@ -1681,78 +2120,28 @@ export default function AgentPage() {
       }
 
       // Recherche normale
-      const matches = matchesSearch([
-        p.id, p.trackingId, p.senderNic, p.sender?.nic, p.sender?.name, p.sender?.tel,
-        p.sender?.city, p.receiver?.name, p.receiver?.tel, p.receiver?.city,
-        p.originCity, p.destinationCity,
-      ], searchLower)
-      return matches
+      // ⚠️ En scope restreint (sender/receiver), on retire les champs nom/tél/ville de l'AUTRE
+      // partie — sinon un colis remontait ici même quand seul le destinataire (ou l'expéditeur)
+      // portait le nom cherché, malgré le choix "Expéditeur seul"/"Destinataire seul".
+      // Champs : id, trackingId, NIC + (expéditeur : client, nom, tél, ville) + (destinataire : nom, tél, ville)
+      return agentSearchMatch ? agentSearchMatch(p) : true
     }
     return true
     })
 
     return filtered
-  }, [allDisplayParcels, datePreset, dateFrom, dateTo, dateFilterType, operationalDay, profileCity, profileRole, subTab, uid, serviceFilter,
-       parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, codDocumentStatusFilter, debouncedSearch, serverSearchResults, showAllCities])
+  }, [fAllDisplay, datePreset, dateFrom, dateTo, dateFilterType, operationalDay, profileCity, profileRole, subTab, uid, serviceFilter,
+       parcelStatusFilter, parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter, encaissementTypesFilter, codDocumentStatusFilter, fSearch, serverSearchResults, showAllCities, garePendingList, searchScope])
 
-  // 📊 Calcul du nombre de mouvements (pour "Tous", compte envoyés + reçus séparément)
-  const parcelMovementCount = useMemo(() => {
-    if (parcelDirection !== 'all') {
-      // Pour 'sent' ou 'received', le nombre de mouvements = nombre de colis
-      return filteredParcels.length
-    }
+  // 📊 Nombre d'expéditions affichées : UNE expédition = UNE ligne = compte 1.
+  // ⚠️ Avant, pour la direction « Tous », un colis LOCAL (ville d'expédition = ville de destination) était
+  // compté 2 fois (1 envoi + 1 réception), alors qu'il n'apparaît qu'une seule fois dans la liste.
+  const parcelMovementCount = useMemo(() => filteredParcels.length, [filteredParcels])
 
-    // Pour 'all': compter les mouvements (entrées + sorties) dans filteredParcels
-    // Un colis interne (même ville) compte 2 fois (1 envoi + 1 réception)
-    // ⚠️ Les colis retournés comptent pour l'agence qui les a retournés
-    if (!showAllCities && profileCity) {
-      let sentCount = 0
-      let receivedCount = 0
-      let returnsCount = 0
-
-      filteredParcels.forEach((p: any) => {
-        // 🔄 Vérifier si c'est un colis retourné
-        const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
-
-        if (isReturned) {
-          // Pour un retour, compter pour l'agence qui retourne (returnToCity ou createdByCity)
-          const returnCity = p.returnToCity || p.createdByCity
-          if (returnCity === profileCity) {
-            sentCount++ // Compte comme envoyé par l'agence qui retourne
-            returnsCount++
-          }
-        } else {
-          // Logique normale pour les colis non-retournés
-          const isSentFromMyCity = p.originCity === profileCity
-          const isReceivedInMyCity = p.destinationCity === profileCity
-
-          if (isSentFromMyCity) {
-            sentCount++
-          }
-          if (isReceivedInMyCity) {
-            receivedCount++
-          }
-        }
-      })
-
-      return sentCount + receivedCount
-    }
-
-    // Si showAllCities, pas de notion de direction
-    return filteredParcels.length
-  }, [filteredParcels, parcelDirection, profileCity, showAllCities])
-
-  // 📜 Scroll automatique vers le haut après filtrage
-  const firstRenderRef = useRef(true)
-  useEffect(() => {
-    // Skip au premier rendu
-    if (firstRenderRef.current) {
-      firstRenderRef.current = false
-      return
-    }
-    // Scroller vers le haut quand les filtres changent (SAUF dates pour ne pas déranger la saisie)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
-  }, [datePreset, serviceFilter, parcelStatusFilter, parcelDirection, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter])
+  // ⚠️ Ancien "scroll automatique vers le haut après filtrage" retiré : il se déclenchait à
+  // CHAQUE changement de filtre (y compris la date, malgré le commentaire qui prétendait
+  // l'exclure) et faisait sauter la page loin des contrôles de filtre que l'utilisateur
+  // venait justement de manipuler. On laisse maintenant le scroll là où l'utilisateur l'a mis.
 
   // ── Phase 3: memoized stats — only recompute when Firestore sends new data ──
 
@@ -1906,6 +2295,18 @@ export default function AgentPage() {
       return editPermissions?.aide_agent?.includes(fieldPath) ?? false
     }
 
+    // Agent: correction de SES propres bons (le bouton Modifier n'apparaît que pour le créateur,
+    // et firestore.rules n'autorise que le créateur). Liste configurable via editPermissions.agent,
+    // sinon champs du bon + COD (pas le type de port ni le statut, gérés par le chef).
+    if (profile?.role === 'agent') {
+      const agentFields: string[] = Array.isArray(editPermissions?.agent) ? editPermissions.agent : [
+        'sender.name', 'sender.nic', 'sender.tel', 'sender.city', 'sender.address',
+        'receiver.name', 'receiver.tel', 'receiver.city', 'receiver.address',
+        'weight', 'nbColis', 'serviceType', 'codAmount', 'price', 'notes', 'fragile',
+      ]
+      return agentFields.includes(fieldPath)
+    }
+
     // Par défaut: pas autorisé
     return false
   }
@@ -1993,9 +2394,9 @@ export default function AgentPage() {
     if (arrivageOriginFilter !== 'all' && p.originCity !== arrivageOriginFilter) return false
     if (arrivageSearch.trim()) {
       const q = arrivageSearch.trim().toLowerCase()
-      if (!(p.trackingId || '').toLowerCase().includes(q) &&
-          !(p.sender?.name || '').toLowerCase().includes(q) &&
-          !(arrNexp(p) || '').toLowerCase().includes(q)) return false
+      if (!normIncludes(p.trackingId || '', q) &&
+          !normIncludes(p.sender?.name || '', q) &&
+          !normIncludes(arrNexp(p) || '', q)) return false
     }
     return true
   })
@@ -2183,7 +2584,12 @@ export default function AgentPage() {
   // 🔄 TEMPS RÉEL: Écouter les événements de mise à jour de parcels
   // ✅ CORRECTION: Utiliser useCallback pour stabiliser le handler et éviter les re-renders inutiles
   const handleParcelUpdate = useCallback((event: CustomEvent) => {
-    const { parcelId, updates, timestamp, source } = event.detail
+    const { parcelId, timestamp } = event.detail
+    // updateParcelStatus émet { data } sans `source` (écriture déjà faite en base) : même
+    // traitement que 'database' — nécessaire pour les périodes lues ponctuellement (pas d'écoute
+    // temps réel sur les journées passées).
+    const updates = event.detail.updates ?? event.detail.data
+    const source = event.detail.source ?? (event.detail.data ? 'database' : undefined)
 
     console.log('🔄 [Temps réel] Événement parcelUpdated reçu:', {
       parcelId,
@@ -2194,40 +2600,34 @@ export default function AgentPage() {
 
     // Les mises à jour depuis Firestore (subscription ou écriture directe) ont priorité absolue
     if (source === 'firestore' || source === 'database') {
-      setParcels(prev => {
-        const updated = prev.map(p => {
-          if (p.id === parcelId) {
-            // Merge les updates avec le parcel existant, en supprimant le flag optimiste
-            const { _optimisticUpdate, ...cleanUpdates } = updates
-            return { ...p, ...cleanUpdates }
-          }
-          return p
-        })
-        return updated
+      // Valeurs réellement écrites : deleteField() → undefined, autres sentinelles
+      // (serverTimestamp, arrayUnion…) ignorées ici (le listener apportera la valeur finale).
+      const clean: Record<string, any> = {}
+      Object.entries(updates || {}).forEach(([k, v]: [string, any]) => {
+        if (k === '_optimisticUpdate') return
+        if (v instanceof FieldValue) {
+          if (v.isEqual(deleteField())) clean[k] = undefined
+          return
+        }
+        clean[k] = v
       })
+      const patchList = (prev: any[]) => {
+        if (!Array.isArray(prev) || !prev.some(p => p?.id === parcelId)) return prev
+        // replace : document COMPLET venant du serveur (écoute des lignes affichées) → remplacé tel
+        // quel, pour qu'un champ supprimé en base ne reste pas affiché.
+        return prev.map(p => (p?.id === parcelId ? (event.detail.replace ? { id: parcelId, ...clean } : { ...p, ...clean }) : p))
+      }
+      // Sources NON temps réel (lots "Charger plus", résultats de recherche serveur) :
+      // sans ce patch elles gardaient l'ancienne valeur (ex. RF 9000 DH affiché alors que
+      // la base contient 2000 DH).
+      setMoreParcels(patchList)
+      setExtraParcels(patchList)
+      setDriverFilteredParcels(patchList)
+      setServerSearchResults(prev => (prev ? patchList(prev) : prev))
 
-      setLiveParcels(prev => {
-        const updated = prev.map(p => {
-          if (p.id === parcelId) {
-            const { _optimisticUpdate, ...cleanUpdates } = updates
-            return { ...p, ...cleanUpdates }
-          }
-          return p
-        })
-        return updated
-      })
-
-      // ⭐ Aussi mettre à jour returnParcels si c'est un colis retourné
-      setReturnParcels(prev => {
-        const updated = prev.map(p => {
-          if (p.id === parcelId) {
-            const { _optimisticUpdate, ...cleanUpdates } = updates
-            return { ...p, ...cleanUpdates }
-          }
-          return p
-        })
-        return updated
-      })
+      setParcels(patchList)
+      setLiveParcels(patchList)
+      setReturnParcels(patchList)
 
       console.log(`✅ [Temps réel] Mise à jour ${source} appliquée pour parcel:`, parcelId)
     } else if (source === 'optimistic') {
@@ -2235,7 +2635,7 @@ export default function AgentPage() {
       // Mais cet événement permet la sync cross-tab pour d'autres instances ouvertes
       console.log('⏩ [Temps réel] Mise à jour optimiste cross-tab pour parcel:', parcelId)
     }
-  }, [setParcels, setLiveParcels, setReturnParcels])
+  }, [])
 
   useEffect(() => {
     window.addEventListener('parcelUpdated', handleParcelUpdate as EventListener)
@@ -2279,6 +2679,57 @@ export default function AgentPage() {
       setLoadingMoreWithDateFilter(false)
     }
   }
+
+  // 🔵 Charge automatiquement TOUT le reste (mode "Toutes les villes") par tranches de
+  // FILTERED_PAGE_SIZE, avec progression visible — même principe que loadAllAgencyParcels.
+  const loadAllCitiesParcels = async () => {
+    if (!showAllCities || loadingAllCities || loadingMoreWithDateFilter || !hasMoreWithDateFilter || !lastSnapWithDateFilter) return
+    setLoadingAllCities(true)
+    setLoadAllCitiesProgress(0)
+    try {
+      const dateFromObj = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
+      const dateToObj = dateTo ? new Date(dateTo + 'T23:59:59') : null
+      let cursor = lastSnapWithDateFilter
+      let more = true
+      let loaded = 0
+      let safety = 0
+      while (more && cursor && safety < 500) {
+        const result = await loadMoreParcelsWithDateFilter(cursor, {
+          pageSize: FILTERED_PAGE_SIZE, dateFrom: dateFromObj, dateTo: dateToObj
+        })
+        if (result.docs.length > 0) {
+          setParcels(prev => [...prev, ...result.docs])
+          setLiveParcels(prev => [...prev, ...result.docs])
+          loaded += result.docs.length
+          setLoadAllCitiesProgress(loaded)
+        }
+        cursor = result.lastSnap
+        more = result.hasMore && !!result.lastSnap
+        safety += 1
+      }
+      setLastSnapWithDateFilter(cursor)
+      setHasMoreWithDateFilter(false)
+      console.log(`✅ [Agent Pro] Chargement progressif terminé: ${loaded} colis chargés`)
+    } catch (err) {
+      console.error('[Agent Pro] loadAllCities error:', err)
+    } finally {
+      setLoadingAllCities(false)
+    }
+  }
+
+  // Déclenchement automatique dès qu'il reste des données à charger (vue filtrée uniquement)
+  useEffect(() => {
+    if (!showAllCities || datePreset === 'all') return
+    if (!hasMoreWithDateFilter || loadingAllCities || loadingMoreWithDateFilter || !lastSnapWithDateFilter) return
+    if (parcels.length === 0) return // Attendre le chargement initial
+    const timer = setTimeout(() => {
+      if (hasMoreWithDateFilter && !loadingAllCities && !loadingMoreWithDateFilter) {
+        console.log(`🚀 [Agent Pro] Démarrage du chargement progressif du reste des colis...`)
+        loadAllCitiesParcels()
+      }
+    }, 800)
+    return () => clearTimeout(timer)
+  }, [parcels.length, hasMoreWithDateFilter, showAllCities, datePreset])
 
   // Mise à jour optimiste d'un parcel (pour affichage instantané)
   const updateParcelOptimistic = (parcelId: string, updates: Record<string, any>) => {
@@ -2341,9 +2792,11 @@ export default function AgentPage() {
     extraParcels, setExtraParcels,
     hasMoreParcels, setHasMoreParcels,
     loadingParcels, setLoadingParcels,
+    syncingParcels,
     loadingMore, setLoadingMore,
     pendingAideParcels, setPendingAideParcels,
     search, setSearch,
+    searchScope, setSearchScope,
     includeArchived, setIncludeArchived,  // 🗄️ Inclure archives dans recherche
     isSearching,
     datePreset, setDatePreset,
@@ -2358,7 +2811,7 @@ export default function AgentPage() {
     destinationCityFilter, setDestinationCityFilter,  // ⭐ Filtre ville de destination
     driverFilter, setDriverFilter,  // ⭐ Filtre par livreur/chauffeur
     portTypeFilter, setPortTypeFilter,  // ⭐ Filtre par type de port
-    encaissementFilter, setEncaissementFilter,  // ⭐ Filtre par type d'encaissement
+    encaissementFilter, setEncaissementFilter, encaissementTypesFilter, setEncaissementTypesFilter,
     codDocumentStatusFilter, setCodDocumentStatusFilter,  // ⭐ Filtre par statut document COD
     parcelPage, setParcelPage,
     scanOpen, setScanOpen,
@@ -2472,6 +2925,7 @@ export default function AgentPage() {
     codSettling, setCodSettling,
     allCodParcels, setAllCodParcels,
     codLoadingAll, setCodLoadingAll,
+    codLoadAllProgress, setCodLoadAllProgress,
     batchSettling, setBatchSettling,
     agentCodRequests, setAgentCodRequests,
     codRequestDrafts, setCodRequestDrafts,
@@ -2485,6 +2939,7 @@ export default function AgentPage() {
     handleLoadAllCod,
     handleCentralCodDeposit,
     handleReceptionCod,
+    handleCancelCodRemise,
     handleMarkSentToSource,
     handleSettleCod,
     handleBatchSettle,
@@ -2630,6 +3085,11 @@ export default function AgentPage() {
     hasMoreAgency,
     loadMoreAgencyParcels,
     loadingMoreAgency,
+    loadingAllAgency,
+    agencyProgressStore, // ⚡ progression hors état React (voir useLoadProgress)
+    agencyOneShot,
+    loadingAllCities,
+    loadAllCitiesProgress,
 
     // ── Agent Pro: Toutes villes (chargement progressif)
     showAllCities, setShowAllCities,
@@ -2730,6 +3190,12 @@ export default function AgentPage() {
         {tab === 'cod' && (
           <Suspense fallback={null}>
             <CodTab />
+          </Suspense>
+        )}
+
+        {tab === 'valeurs' && profile?.role === 'chef_agence' && (
+          <Suspense fallback={null}>
+            <ValeursAValiderTab />
           </Suspense>
         )}
 

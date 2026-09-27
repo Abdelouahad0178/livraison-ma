@@ -1,4 +1,5 @@
 import { useMemo } from 'react'
+import { normIncludes } from '../utils/normText'
 
 interface ParcelFilters {
   search?: string
@@ -23,13 +24,13 @@ export function useOptimizedParcels(parcels: any[], filters: ParcelFilters = {})
     if (search && search.trim()) {
       const searchLower = search.toLowerCase().trim()
       result = result.filter(p =>
-        p.trackingId?.toLowerCase().includes(searchLower) ||
-        p.receiverName?.toLowerCase().includes(searchLower) ||
-        p.receiver?.name?.toLowerCase().includes(searchLower) ||
+        normIncludes(p.trackingId, searchLower) ||
+        normIncludes(p.receiverName, searchLower) ||
+        normIncludes(p.receiver?.name, searchLower) ||
         p.receiverPhone?.includes(searchLower) ||
         p.receiver?.phone?.includes(searchLower) ||
-        p.senderName?.toLowerCase().includes(searchLower) ||
-        p.sender?.name?.toLowerCase().includes(searchLower)
+        normIncludes(p.senderName, searchLower) ||
+        normIncludes(p.sender?.name, searchLower)
       )
     }
 

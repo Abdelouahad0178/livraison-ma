@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { Clock, Building2, User, Calendar, Filter, TrendingUp, TrendingDown } from 'lucide-react'
 import { PORT_ECHEANCES, CITIES } from '../../../firebase/constants'
 import { parcelWorkDate } from '../../../utils/dateFilter'
+import { normIncludes } from '../../../utils/normText'
 
 interface Props {
   allParcels: any[]
@@ -59,8 +60,8 @@ export default function AdminPortsEnCompteTab({ allParcels }: Props) {
         p.portDeliveredBy || '',
         p.id || '',
         (p.price || '').toString()
-      ].join(' ').toLowerCase()
-      return searchableFields.includes(query)
+      ].join(' ')
+      return normIncludes(searchableFields, query)
     })
   }, [basePortsParcels, searchQuery])
 

@@ -120,7 +120,7 @@ export function printDeliveryList(groups: DeliveryGroup[], profile: DynamicData 
   <meta charset="UTF-8" />
   <title>${esc(title)}</title>
   <style>
-    @page { size: A4 landscape; margin: 8mm; }
+    @page { size: A4 portrait; margin: 8mm; }
     * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
     body { margin: 0; font-family: Arial, sans-serif; color: #111827; font-size: 8pt; }
     .page.break { page-break-after: always; }

@@ -11,6 +11,7 @@ import { Banknote, CheckCircle2, X, Clock, Search, AlertTriangle, Eye, Package }
 import DateFilter from '../../agent/DateFilter'
 import { filterByDate } from '../../../utils/dateFilter'
 import type { DateFilterPreset } from '../../../types'
+import { normIncludes } from '../../../utils/normText'
 
 const TYPE_META: Record<string, { label: string, emoji: string, cls: string }> = {
   port_du: { label: 'Port Dû', emoji: '📮', cls: 'bg-orange-100 text-orange-700' },
@@ -91,8 +92,8 @@ export default function DirectorVersementsTab({ profile, versements: versementsP
     if (search.trim()) {
       const q = search.toLowerCase()
       list = list.filter((v: any) =>
-        (v.driverName || '').toLowerCase().includes(q) ||
-        (v.note || '').toLowerCase().includes(q)
+        normIncludes(v.driverName || '', q) ||
+        normIncludes(v.note || '', q)
       )
     }
     return filterByDate(list, datePreset, dateFrom, dateTo, versementDate)

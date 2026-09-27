@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useMemo } from 'react'
+import { codPaymentTypeOf } from '../firebase/constants'
 import { signOut } from 'firebase/auth'
 import { doc, onSnapshot } from 'firebase/firestore'
 import { auth, db } from '../firebase/config'
@@ -35,8 +36,12 @@ import VersementAdminModal from './director/components/VersementAdminModal'
 import DirectorVersementsTab from './director/tabs/DirectorVersementsTab'
 import DirectorCaisseSimple from './director/DirectorCaisseSimple'
 import { fmt } from '../utils/formatNumber'
+import { normIncludes } from '../utils/normText'
 
 const parcelDate = (p: any) => {
+  // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire — voir
+  // src/utils/dateFilter.ts pour l'explication complète de cette règle partagée.
+  if (p.workDate) return new Date(p.workDate + 'T12:00:00')
   if (p.createdAt?.toDate) return p.createdAt.toDate()
   if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
   return new Date(0)
@@ -328,7 +333,7 @@ export default function DirectorPage() {
       receiverName:    parcel.receiver?.name || '—',
       receiverCity:    parcel.receiver?.city || '—',
       codAmount:       parcel.codAmount || 0,
-      codPaymentType:  parcel.codPaymentType || '—',
+      codPaymentType:  codPaymentTypeOf(parcel) || '—',
       codStatus:       parcel.codStatus || '—',
     })
   }
@@ -370,7 +375,7 @@ export default function DirectorPage() {
       const cityOk   = cityFilter   === 'Toutes' || p.receiver?.city === cityFilter || p.sender?.city === cityFilter
       const statusOk = statusFilter === 'Tous'   || p.status === statusFilter
       const searchOk = !search || [p.trackingId, p.sender?.name, p.receiver?.name, p.receiver?.tel]
-        .some(v => v?.toLowerCase().includes(search.toLowerCase()))
+        .some(v => normIncludes(v, search.toLowerCase()))
       return cityOk && statusOk && searchOk
     })
   }, [parcels, cityFilter, statusFilter, search, datePreset, dateFrom, dateTo])
@@ -388,9 +393,9 @@ export default function DirectorPage() {
     if (codSearch) {
       const q = codSearch.toLowerCase()
       list = list.filter((p: any) =>
-        p.trackingId?.toLowerCase().includes(q) ||
-        p.receiver?.name?.toLowerCase().includes(q) ||
-        p.receiver?.city?.toLowerCase().includes(q)
+        normIncludes(p.trackingId, q) ||
+        normIncludes(p.receiver?.name, q) ||
+        normIncludes(p.receiver?.city, q)
       )
     }
     return list
@@ -402,8 +407,8 @@ export default function DirectorPage() {
     remisDH:     codParcels.filter(p => p.codStatus === 'remis').reduce((s,p) => s+(p.codAmount||0), 0),
     byType: COD_PAYMENT_TYPES.map(pt => ({
       ...pt,
-      total: codParcels.filter(p => p.codPaymentType === pt.key).reduce((s,p) => s+(p.codAmount||0), 0),
-      count: codParcels.filter(p => p.codPaymentType === pt.key).length,
+      total: codParcels.filter(p => codPaymentTypeOf(p) === pt.key).reduce((s,p) => s+(p.codAmount||0), 0),
+      count: codParcels.filter(p => codPaymentTypeOf(p) === pt.key).length,
     })).filter(pt => pt.total > 0),
   }), [codParcels])
 
@@ -413,8 +418,8 @@ export default function DirectorPage() {
     remisDH:     codDateFiltered.filter((p: any) => p.codStatus === 'remis').reduce((s: any,p: any) => s+(p.codAmount||0), 0),
     byType: COD_PAYMENT_TYPES.map(pt => ({
       ...pt,
-      total: codDateFiltered.filter((p: any) => p.codPaymentType === pt.key).reduce((s: any,p: any) => s+(p.codAmount||0), 0),
-      count: codDateFiltered.filter((p: any) => p.codPaymentType === pt.key).length,
+      total: codDateFiltered.filter((p: any) => codPaymentTypeOf(p) === pt.key).reduce((s: any,p: any) => s+(p.codAmount||0), 0),
+      count: codDateFiltered.filter((p: any) => codPaymentTypeOf(p) === pt.key).length,
     })).filter(pt => pt.total > 0),
   }), [codDateFiltered])
 
@@ -439,7 +444,7 @@ export default function DirectorPage() {
     return nonAdminUsers.filter(u => {
       const roleOk   = roleFilter === 'Tous' || u.role === roleFilter
       const searchOk = !userSearch || [u.name, u.email, u.city, u.code, u.cin, u.cnss, u.tel]
-        .some(v => v?.toLowerCase().includes(userSearch.toLowerCase()))
+        .some(v => normIncludes(v, userSearch.toLowerCase()))
       let dateOk = true
       if (usersDatePreset !== 'all') {
         const d = u.createdAt ? new Date(u.createdAt) : new Date(0)
@@ -501,6 +506,39 @@ export default function DirectorPage() {
       })
       .sort((a, b) => (b.lastActivity || 0) - (a.lastActivity || 0))
   }, [parcels, caisseEntries, nonAdminUsers, activityRoleFilter, activityDatePreset, activityDateFrom, activityDateTo])
+
+  // ⚠️ Ce useMemo vivait auparavant DANS le JSX (comme valeur de prop de VersementAdminModal,
+  // après le "if (!profile) return" ci-dessous). Un hook appelé après un retour anticipé n'est
+  // exécuté que sur les rendus où ce retour est déjà passé — ici, seulement une fois `profile`
+  // chargé. Au premier rendu (profile === null, écran de chargement), ce hook n'était jamais
+  // atteint ; dès que le profil arrivait, il l'était soudainement, changeant le nombre total de
+  // hooks entre deux rendus du même composant → erreur React #310 ("Rendered more hooks than
+  // during the previous render"), déclenchée à chaque connexion. Remonté ici, avant le retour
+  // anticipé, il est désormais appelé inconditionnellement à chaque rendu.
+  const versementTypeBalances = useMemo(() => {
+    // Calculer les soldes disponibles par type (Port Dû / COD) à verser à l'admin
+    // = Versements livreurs (en attente + validés) − Transferts admin (en attente + validés)
+    const sumAmounts = (list: any[]) => list.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0)
+
+    const confirmedPortDu = sumAmounts(driverVersements.filter((v: any) =>
+      (v.status === 'confirmed' || v.status === 'pending') && v.type === 'port_du'
+    ))
+    const confirmedCod = sumAmounts(driverVersements.filter((v: any) =>
+      (v.status === 'confirmed' || v.status === 'pending') && v.type === 'cod'
+    ))
+
+    const versedPortDu = sumAmounts(adminTransfers.filter((t: any) =>
+      (t.status === 'pending' || t.status === 'confirmed') && t.type === 'port_du'
+    ))
+    const versedCod = sumAmounts(adminTransfers.filter((t: any) =>
+      (t.status === 'pending' || t.status === 'confirmed') && t.type === 'cod'
+    ))
+
+    return {
+      port_du: confirmedPortDu - versedPortDu,
+      cod: confirmedCod - versedCod
+    }
+  }, [driverVersements, adminTransfers])
 
   const selectCls = "border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:border-blue-500 focus:outline-none"
   const inputCls  = "border border-gray-200 rounded-xl px-3 py-2 text-sm bg-gray-50 focus:bg-white focus:border-blue-500 focus:outline-none w-full transition"
@@ -1496,7 +1534,7 @@ export default function DirectorPage() {
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
               {nonAdminUsers
                 .filter(u => roleFilter === 'Tous' || u.role === roleFilter)
-                .filter(u => !userSearch || [u.name, u.city, u.code, u.cin, u.cnss].some(v => v?.toLowerCase().includes(userSearch.toLowerCase())))
+                .filter(u => !userSearch || [u.name, u.city, u.code, u.cin, u.cnss].some(v => normIncludes(v, userSearch.toLowerCase())))
                 .map(u => {
                   const role = EDIT_ROLES.find(r => r.key === u.role) || { emoji: '👤', label: u.role, badge: 'bg-gray-100 text-gray-600' }
                   const month = currentSalaryMonth()
@@ -1594,30 +1632,7 @@ export default function DirectorPage() {
           onClose={() => setVersementModal(false)}
           user={{ ...(profile || {}), uid: auth.currentUser?.uid }}
           agencyCash={agencyCash}
-          typeBalances={useMemo(() => {
-            // Calculer les soldes disponibles par type (Port Dû / COD) à verser à l'admin
-            // = Versements livreurs (en attente + validés) − Transferts admin (en attente + validés)
-            const sumAmounts = (list: any[]) => list.reduce((s, x) => s + (parseFloat(x.amount) || 0), 0)
-
-            const confirmedPortDu = sumAmounts(driverVersements.filter((v: any) =>
-              (v.status === 'confirmed' || v.status === 'pending') && v.type === 'port_du'
-            ))
-            const confirmedCod = sumAmounts(driverVersements.filter((v: any) =>
-              (v.status === 'confirmed' || v.status === 'pending') && v.type === 'cod'
-            ))
-
-            const versedPortDu = sumAmounts(adminTransfers.filter((t: any) =>
-              (t.status === 'pending' || t.status === 'confirmed') && t.type === 'port_du'
-            ))
-            const versedCod = sumAmounts(adminTransfers.filter((t: any) =>
-              (t.status === 'pending' || t.status === 'confirmed') && t.type === 'cod'
-            ))
-
-            return {
-              port_du: confirmedPortDu - versedPortDu,
-              cod: confirmedCod - versedCod
-            }
-          }, [driverVersements, adminTransfers])}
+          typeBalances={versementTypeBalances}
         />
     </div>
   )

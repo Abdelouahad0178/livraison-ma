@@ -13,3 +13,6 @@ serviceAccount.json
 serviceAccountKey.json
 **/serviceAccountKey.json
 *-firebase-adminsdk-*.json
+
+# context-mem
+.context-mem/

@@ -4,6 +4,7 @@ import { subscribeAllParcels, subscribeAllParcelsWithDateFilter, deleteParcel } 
 import { useOperationalDaySelector } from '../../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../../config/operationalDay'
 import { Package } from 'lucide-react'
+import { normIncludes } from '../../utils/normText'
 
 const AdminExpeditionsTab = lazy(() => import('../admin/tabs/AdminExpeditionsTab'))
 
@@ -171,14 +172,14 @@ const AdminExpeditionsPage = () => {
         // Recherche texte normale
         const qLower = q.toLowerCase()
         list = list.filter((p: any) =>
-          (p.trackingId || '').toLowerCase().includes(qLower) ||
-          (p.senderNic || '').toLowerCase().includes(qLower) ||
-          (p.sender?.nic || '').toLowerCase().includes(qLower) ||
-          (p.sender?.name || '').toLowerCase().includes(qLower) ||
-          (p.receiver?.name || '').toLowerCase().includes(qLower) ||
-          (p.receiver?.phone || '').toLowerCase().includes(qLower) ||
-          (p.receiver?.address || '').toLowerCase().includes(qLower) ||
-          (p.destinationCity || '').toLowerCase().includes(qLower)
+          normIncludes(p.trackingId || '', qLower) ||
+          normIncludes(p.senderNic || '', qLower) ||
+          normIncludes(p.sender?.nic || '', qLower) ||
+          normIncludes(p.sender?.name || '', qLower) ||
+          normIncludes(p.receiver?.name || '', qLower) ||
+          normIncludes(p.receiver?.phone || '', qLower) ||
+          normIncludes(p.receiver?.address || '', qLower) ||
+          normIncludes(p.destinationCity || '', qLower)
         )
       }
     }

@@ -8,6 +8,7 @@ import { STATUS_COLORS, CITIES } from '../firebase/constants'
 import {
   ChevronLeft, ChevronRight, Search, Archive, Calendar, X, Package, RefreshCw,
 } from 'lucide-react'
+import { normIncludes } from '../utils/normText'
 
 const PAGE_SIZE = 25
 const MONTH_NAMES = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc']
@@ -127,13 +128,13 @@ export default function ArchivePage() {
     if (search.trim()) {
       const q = search.trim().toLowerCase()
       list = list.filter((p: any) =>
-        (p.trackingId || '').toLowerCase().includes(q) ||
-        (p.sender?.name || '').toLowerCase().includes(q) ||
-        (p.receiver?.name || '').toLowerCase().includes(q) ||
+        normIncludes(p.trackingId || '', q) ||
+        normIncludes(p.sender?.name || '', q) ||
+        normIncludes(p.receiver?.name || '', q) ||
         (p.sender?.tel || '').includes(q) ||
         (p.receiver?.tel || '').includes(q) ||
-        (p.originCity || '').toLowerCase().includes(q) ||
-        (p.destinationCity || '').toLowerCase().includes(q)
+        normIncludes(p.originCity || '', q) ||
+        normIncludes(p.destinationCity || '', q)
       )
     }
 

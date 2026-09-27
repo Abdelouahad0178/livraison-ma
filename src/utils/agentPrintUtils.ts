@@ -80,7 +80,7 @@ export function printCharge(groups: any[], profileData: any): void {
   <meta charset="UTF-8">
   <title>Feuille-Charge-${printDate.replace(/ /g,'-')}</title>
   <style>
-    @page { size: A4 landscape; margin: 10mm; }
+    @page { size: A4 portrait; margin: 10mm; }
     * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-sizing: border-box; }
     body { font-family: Arial, sans-serif; font-size: 8.5pt; color: #111; margin: 0; padding: 0; }
     table { border-collapse: collapse; width: 100%; }
@@ -211,7 +211,7 @@ export async function printTable(
   if (cols.livreur) headers.push('<th>Livreur</th>')
 
   const colCount = headers.length
-  const pageSize = orientation === 'portrait' ? 'A4 portrait' : 'A4 landscape'
+  const pageSize = 'A4 portrait' // toute l'impression du site est en PORTRAIT
   const fontSize = orientation === 'portrait' ? '6.5pt' : '7.5pt'
 
   const html = `<!DOCTYPE html>
@@ -506,7 +506,7 @@ export function printAdminExpeditions(
   <meta charset="UTF-8">
   <title>${title.replace(/ /g, '-')}-${printDate.replace(/ /g, '-')}</title>
   <style>
-    @page { size: A4 landscape; margin: 12mm; }
+    @page { size: A4 portrait; margin: 12mm; }
     * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-sizing: border-box; }
     body { font-family: Arial, sans-serif; font-size: 8pt; color: #111; margin: 0; padding: 0; }
     table { border-collapse: collapse; width: 100%; }
@@ -677,7 +677,7 @@ export function printPortsCollectes(
   <meta charset="UTF-8">
   <title>Ports-Collectes-${printDate.replace(/ /g, '-')}</title>
   <style>
-    @page { size: A4 landscape; margin: 12mm; }
+    @page { size: A4 portrait; margin: 12mm; }
     * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-sizing: border-box; }
     body { font-family: Arial, sans-serif; font-size: 8pt; color: #111; margin: 0; padding: 0; }
 
@@ -908,7 +908,7 @@ export function printVersementParcels(
   <meta charset="UTF-8">
   <title>Versement-${transfer.id?.substring(0, 8) || 'N/A'}-${printDate.replace(/ /g, '-')}</title>
   <style>
-    @page { size: A4 landscape; margin: 12mm; }
+    @page { size: A4 portrait; margin: 12mm; }
     * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; box-sizing: border-box; }
     body { font-family: Arial, sans-serif; font-size: 8pt; color: #111; margin: 0; padding: 0; }
 
@@ -1252,6 +1252,222 @@ export function printDriverParcels(
 }
 
 /**
+ * Imprime le tableau des expéditions d'un livreur tel qu'affiché à l'écran (Caisse Agence,
+ * onglet Livreurs) : mêmes colonnes que celles cochées par le chef d'agence, toujours en
+ * portrait — contrairement à printDriverParcels ci-dessus qui a sa propre mise en page fixe.
+ */
+export function printDriverExpeditionsTable(
+  driverName: string,
+  parcels: any[],
+  visibleColumns: Record<string, boolean>,
+  profileData?: any,
+  periodLabel?: string,
+  statusLabel?: string
+): void {
+  if (!parcels.length) return
+
+  const PORT_TYPE_LABEL: Record<string, string> = {
+    port_du: 'Port dû',
+    port_en_compte_destinataire: 'C/Dest',
+    port_en_compte_expediteur: 'C/Exp',
+    port_paye: 'Port payé',
+  }
+
+  const printDate = new Date().toLocaleDateString('fr-MA', { day: '2-digit', month: '2-digit', year: 'numeric' })
+  const fmtDate = (d: any) => d ? new Date(d?.toDate ? d.toDate() : d).toLocaleDateString('fr-FR') : '—'
+
+  const cols = [
+    visibleColumns.nexp && { key: 'nexp', label: 'N° EXP' },
+    visibleColumns.dateCreation && { key: 'dateCreation', label: 'Date création' },
+    visibleColumns.dateLivraison && { key: 'dateLivraison', label: 'Date livraison' },
+    visibleColumns.client && { key: 'client', label: 'Client' },
+    visibleColumns.type && { key: 'type', label: 'Type' },
+    visibleColumns.montant && { key: 'montant', label: 'Montant' },
+    visibleColumns.status && { key: 'status', label: 'Status' },
+    visibleColumns.cod && { key: 'cod', label: 'COD' },
+    visibleColumns.especes && { key: 'especes', label: 'Espèces' },
+    visibleColumns.cheque && { key: 'cheque', label: 'Chèque' },
+    visibleColumns.traite && { key: 'traite', label: 'Traite' },
+  ].filter(Boolean) as { key: string; label: string }[]
+
+  const STATUS_BADGE: Record<string, { bg: string; col: string }> = {
+    'Initialisé':            { bg: '#f3f4f6', col: '#4b5563' },
+    'En transit':            { bg: '#dbeafe', col: '#1d4ed8' },
+    'Arrivé en agence':      { bg: '#ede9fe', col: '#6d28d9' },
+    'En cours de livraison': { bg: '#ffedd5', col: '#c2410c' },
+    'Livré':                 { bg: '#dcfce7', col: '#15803d' },
+    'Retourné':              { bg: '#fee2e2', col: '#b91c1c' },
+  }
+  const badge = (text: string, bg: string, col: string) =>
+    `<span style="display:inline-block;padding:1.5px 7px;border-radius:8px;background:${bg};color:${col};font-size:7pt;font-weight:600">${text}</span>`
+
+  const cellFor = (p: any, key: string): string => {
+    switch (key) {
+      case 'nexp': return p.senderNic || p.sender?.nic || p.trackingId || '—'
+      case 'dateCreation': return fmtDate(p.createdAt)
+      case 'dateLivraison': return p.status === 'Livré' ? fmtDate(p.deliveredAt) : '—'
+      case 'client': return `<strong>${p.receiver?.name || '—'}</strong>${p.receiver?.tel ? `<br><span style="color:#9ca3af;font-size:6.5pt">${p.receiver.tel}</span>` : ''}`
+      case 'type': return badge((PORT_TYPE_LABEL as any)[p.portType] || (p.portType || '—'), '#eef2ff', '#4338ca')
+      case 'montant': return `${(parseFloat(p.price) || 0).toFixed(2)} DH`
+      case 'status': {
+        const s = STATUS_BADGE[p.status] || { bg: '#f3f4f6', col: '#4b5563' }
+        return badge(p.status || '—', s.bg, s.col)
+      }
+      case 'cod': return p.codAmount ? `${(parseFloat(p.codAmount) || 0).toFixed(2)} DH` : '—'
+      case 'especes': return (p.codAmount && (p.codPaymentType || p.serviceType) === 'especes') ? `${(parseFloat(p.codAmount) || 0).toFixed(2)} DH` : '—'
+      case 'cheque': return (p.codAmount && (p.codPaymentType || p.serviceType) === 'cheque') ? `${(parseFloat(p.codAmount) || 0).toFixed(2)} DH` : '—'
+      case 'traite': return (p.codAmount && (p.codPaymentType || p.serviceType) === 'traite') ? `${(parseFloat(p.codAmount) || 0).toFixed(2)} DH` : '—'
+      default: return '—'
+    }
+  }
+
+  const alignFor = (key: string) => (
+    key === 'montant' || key === 'cod' || key === 'especes' || key === 'cheque' || key === 'traite'
+      ? 'right'
+      : key === 'type' || key === 'status' ? 'center' : 'left'
+  )
+
+  const rows = parcels.map((p: any, i: number) => `
+    <tr style="background:${i % 2 === 0 ? '#ffffff' : '#f8fafc'}">
+      ${cols.map(c => `<td style="text-align:${alignFor(c.key)}">${cellFor(p, c.key)}</td>`).join('')}
+    </tr>
+  `).join('')
+
+  // 🧮 Ligne de total : nombre d'expéditions + somme des montants (si la colonne est visible)
+  const totalMontant = parcels.reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
+  const totalCod = parcels.reduce((s: number, p: any) => s + (parseFloat(p.codAmount) || 0), 0)
+  const totalEspeces = parcels.reduce((s: number, p: any) => s + ((p.codPaymentType || p.serviceType) === 'especes' ? (parseFloat(p.codAmount) || 0) : 0), 0)
+  const totalCheque = parcels.reduce((s: number, p: any) => s + ((p.codPaymentType || p.serviceType) === 'cheque' ? (parseFloat(p.codAmount) || 0) : 0), 0)
+  const totalTraite = parcels.reduce((s: number, p: any) => s + ((p.codPaymentType || p.serviceType) === 'traite' ? (parseFloat(p.codAmount) || 0) : 0), 0)
+  const totalRow = `
+    <tr class="total-row">
+      ${cols.map((c, i) => {
+        if (c.key === 'montant') return `<td style="text-align:right">${totalMontant.toFixed(2)} DH</td>`
+        if (c.key === 'cod') return `<td style="text-align:right">${totalCod.toFixed(2)} DH</td>`
+        if (c.key === 'especes') return `<td style="text-align:right">${totalEspeces.toFixed(2)} DH</td>`
+        if (c.key === 'cheque') return `<td style="text-align:right">${totalCheque.toFixed(2)} DH</td>`
+        if (c.key === 'traite') return `<td style="text-align:right">${totalTraite.toFixed(2)} DH</td>`
+        if (i === 0) return `<td>TOTAL — ${parcels.length} expédition${parcels.length > 1 ? 's' : ''}</td>`
+        return `<td></td>`
+      }).join('')}
+    </tr>
+  `
+
+  const logoUrl = window.location.origin + '/LOGO.jpg'
+  const statusText = statusLabel && statusLabel !== 'Tous statuts' ? statusLabel : ''
+  const pageTitle = `Expéditions — ${driverName}${statusText ? ' — ' + statusText : ''}`
+
+  const html = `<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>${pageTitle}</title>
+  <style>
+    @page { size: A4 portrait; margin: 8mm 8mm; }
+    * { box-sizing: border-box; -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: 'Segoe UI', Arial, sans-serif;
+      font-size: 9pt;
+      line-height: 1.4;
+      color: #1f2937;
+      max-width: 210mm;
+      margin: 0 auto;
+      padding: 3mm;
+    }
+
+    .header { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 10px; padding-bottom: 10px; margin-bottom: 6px; border-bottom: 2px solid #1e40af; }
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand img { height: 34px; object-fit: contain; }
+    .brand-name { font-size: 12pt; font-weight: 800; color: #1e40af; letter-spacing: 0.4px; }
+    .brand-sub { font-size: 7pt; color: #6b7280; }
+    .header-right { text-align: right; }
+    .title { font-size: 13pt; font-weight: 800; color: #111827; }
+    .subtitle { font-size: 8pt; color: #6b7280; margin-top: 2px; }
+
+    .status-badge { display: inline-block; margin-left: 6px; padding: 2px 9px; border-radius: 10px; font-size: 8pt; font-weight: 700; vertical-align: middle; }
+    .status-badge.a_collecter { background: #dbeafe; color: #1d4ed8; }
+    .status-badge.collecte    { background: #dcfce7; color: #15803d; }
+    .status-badge.en_retard   { background: #fef3c7; color: #92400e; }
+
+    .info-band { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 6px; background: #f1f5fd; border-radius: 6px; padding: 7px 12px; margin: 10px 0 12px; font-size: 8pt; color: #374151; }
+    .info-band strong { color: #1e40af; }
+
+    .table-wrap { width: 100%; overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; table-layout: auto; }
+    thead th { background: #1e40af; color: #fff; font-size: 6pt; font-weight: 700; text-transform: uppercase; letter-spacing: 0.2px; padding: 5px 4px; text-align: left; white-space: nowrap; }
+    tbody td { padding: 3px 4px; font-size: 7pt; border-bottom: 1px solid #e5e7eb; vertical-align: middle; word-break: break-word; }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:nth-child(even) { background: #f9fafb; }
+
+    .total-row td { border-top: 1.5px solid #1e40af; border-bottom: none; padding: 6px 7px; font-weight: 800; font-size: 8.5pt; color: #1e40af; background: #f1f5fd; }
+
+    .footer { margin-top: 16px; font-size: 7pt; color: #9ca3af; text-align: center; }
+
+    /* 📱 Aperçu écran (avant impression) : page cadrée et lisible même sur petit écran */
+    @media screen {
+      body { background: #e5e7eb; }
+      body { background: #e5e7eb; padding: 4mm; max-width: 100%; }
+      .sheet { max-width: 210mm; margin: 0 auto; background: #fff; padding: 10mm; border-radius: 6px; box-shadow: 0 1px 4px rgba(0,0,0,0.15); }
+      .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+    }
+    @media screen and (max-width: 480px) {
+      body { font-size: 8pt; padding: 2mm; }
+      .sheet { padding: 4mm; }
+      .header { flex-direction: column; align-items: flex-start; }
+      .header-right { text-align: left; }
+      thead th, tbody td { padding: 3px 5px; font-size: 7pt; }
+    }
+  </style>
+</head>
+<body>
+  <div class="sheet">
+    <div class="header">
+      <div class="brand">
+        <img src="${logoUrl}" onerror="this.style.display='none'" />
+        <div>
+          <div class="brand-name">BG EXPRESS</div>
+          <div class="brand-sub">Agence de ${profileData?.city || '—'}</div>
+        </div>
+      </div>
+      <div class="header-right">
+        <div class="title">
+          Expéditions — ${driverName}
+          ${statusText ? `<span class="status-badge ${statusText === 'À collecter' ? 'a_collecter' : statusText === 'Collecté' ? 'collecte' : (statusText === 'En compte' || statusText === 'Ramassé') ? 'a_collecter' : 'en_retard'}">${statusText}</span>` : ''}
+        </div>
+        <div class="subtitle">Imprimé le ${printDate}</div>
+      </div>
+    </div>
+
+    <div class="info-band">
+      <span>Période : <strong>${periodLabel || 'Toutes périodes'}</strong></span>
+      <span>Statut : <strong>${statusLabel || 'Tous statuts'}</strong></span>
+      <span>${parcels.length} expédition${parcels.length > 1 ? 's' : ''}</span>
+    </div>
+
+    <div class="table-wrap">
+      <table>
+        <thead><tr>${cols.map(c => `<th style="text-align:${alignFor(c.key)}">${c.label}</th>`).join('')}</tr></thead>
+        <tbody>${rows}${totalRow}</tbody>
+      </table>
+    </div>
+
+    <div class="footer">BG EXPRESS — Document généré automatiquement</div>
+  </div>
+
+  <script>window.onload = function(){ window.print(); }<\/script>
+</body>
+</html>`
+
+  const win = window.open('', '_blank', 'width=900,height=1100')
+  if (win) {
+    win.document.write(html)
+    win.document.close()
+  }
+}
+
+/**
  * Imprime le bilan de journée par livreur
  */
 export function printBilanJournee(bilanData: any[], profileData: any, dateLabel: string): void {
@@ -1409,7 +1625,7 @@ export function printInstancesRetards(instancesData: any[], profileData: any, da
             ${ageJours}j
           </span>
         </td>
-        <td style="padding:8px;font-family:monospace;font-weight:bold;color:#2563eb">${parcel.trackingId}</td>
+        <td style="padding:8px;font-family:monospace;font-weight:bold;color:#2563eb">${parcel.senderNic || parcel.sender?.nic || parcel.trackingId || '—'}</td>
         <td style="padding:8px;font-weight:600;color:#111827">${driverName}</td>
         <td style="padding:8px;text-align:right;font-weight:bold;color:#111827">${parseFloat(parcel.price || 0).toFixed(2)} DH</td>
         <td style="padding:8px">

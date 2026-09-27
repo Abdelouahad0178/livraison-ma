@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { AlertTriangle, Search, Filter, Trash2, CheckCircle, XCircle } from 'lucide-react'
 import { getAllLostParcels, deleteLostParcel, LostParcelDeclaration } from '../../../firebase/lostParcels'
+import { normIncludes } from '../../../utils/normText'
 
 export default function AdminLostParcelsTab() {
   const [lostParcels, setLostParcels] = useState<LostParcelDeclaration[]>([])
@@ -48,8 +49,8 @@ export default function AdminLostParcelsTab() {
 
   const filtered = lostParcels.filter(lp => {
     const matchSearch = !searchTerm ||
-      (lp as any).senderNic?.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      lp.trackingId.toLowerCase().includes(searchTerm.toLowerCase())
+      normIncludes((lp as any).senderNic, searchTerm.toLowerCase()) ||
+      normIncludes(lp.trackingId, searchTerm.toLowerCase())
     const matchStatus = statusFilter === 'all' || lp.status === statusFilter
     return matchSearch && matchStatus
   })

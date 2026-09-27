@@ -19,20 +19,40 @@ type WithCreatedAt = {
   history?: Array<{ timestamp?: string } | null>
 }
 
+// ⚡ Cache par objet expédition : new Date('YYYY-MM-DDT12:00:00') (analyse de chaîne) était refait
+// pour chaque expédition à CHAQUE filtrage. Validé par identité des champs sources (workDate,
+// createdAt, history) : si l'un change, la date est recalculée. Renvoie toujours un NOUVEL objet
+// Date (un appelant peut le modifier sans polluer le cache).
+const PARCEL_DATE_CACHE = new WeakMap<object, { wd: unknown; ca: unknown; h: unknown; ms: number }>()
 export const parcelDate = (p: any): Date => {
-  // ⚠️ TEMPORAIRE: Ignorer workDate et utiliser SEULEMENT createdAt
-  // workDate semble incorrect (tous à août au lieu de juillet)
+  if (!p || typeof p !== 'object') return parcelDateRaw(p)
+  const c = PARCEL_DATE_CACHE.get(p)
+  if (c && c.wd === p.workDate && c.ca === p.createdAt && c.h === p.history) return new Date(c.ms)
+  const d = parcelDateRaw(p)
+  PARCEL_DATE_CACHE.set(p, { wd: p.workDate, ca: p.createdAt, h: p.history, ms: d.getTime() })
+  return d
+}
 
-  // Utiliser createdAt directement
+const parcelDateRaw = (p: any): Date => {
+  // 🗓️ PRIORITÉ 1 : workDate — la JOURNÉE D'OPÉRATION du système (8h → 6h le lendemain), pas
+  // le jour calendaire de createdAt. Une expédition saisie à 2h du matin appartient à la
+  // journée commencée à 8h la veille.
+  //
+  // ⚠️ Historique : ce fichier ignorait workDate ("TEMPORAIRE... workDate semble incorrect,
+  // tous à août au lieu de juillet") à cause d'un vrai bug — calculateWorkDate utilisait
+  // toISOString() (conversion UTC), ce qui décalait la date d'un jour pour tout colis créé
+  // entre minuit et 1h heure du Maroc. Ce bug est corrigé à la source (firebase/parcels.ts,
+  // calculateWorkDate délègue maintenant à getOperationalDayString) : workDate est de nouveau
+  // fiable pour les colis créés depuis ce correctif.
+  if (p.workDate) {
+    return new Date(p.workDate + 'T12:00:00')
+  }
+
+  // 📅 FALLBACK createdAt : pour les colis créés AVANT ce correctif ou sans workDate du tout.
   const ca = p.createdAt as { toDate?: () => Date } | undefined | null
   if (ca?.toDate) return ca.toDate()
   const ts = p.history?.[0]?.timestamp
   if (ts) return new Date(ts)
-
-  // Fallback: si vraiment pas de createdAt, utiliser workDate
-  if (p.workDate) {
-    return new Date(p.workDate + 'T12:00:00')
-  }
 
   return new Date(0)
 }
@@ -69,9 +89,17 @@ export const filterByDate = <T>(
     start = range.start
     end = range.end
   } else if (preset === 'week') {
-    start = new Date(); start.setDate(now.getDate() - 6); start.setHours(0, 0, 0, 0)
+    // 🕐 Idem "today" : 7 derniers JOURS D'OPÉRATION, pas 7 jours calendaires — sinon un colis
+    // saisi entre minuit et 6h (workDate = la veille) sortait à tort de la fenêtre "7 jours".
+    const todayOp = getCurrentOperationalDay()
+    const weekAgoOp = new Date(todayOp); weekAgoOp.setDate(weekAgoOp.getDate() - 6)
+    start = getOperationalDayRange(weekAgoOp).start
+    end = getOperationalDayRange(todayOp).end
   } else if (preset === 'month') {
-    start = new Date(now.getFullYear(), now.getMonth(), 1)
+    const todayOp = getCurrentOperationalDay()
+    const firstOfMonth = new Date(todayOp.getFullYear(), todayOp.getMonth(), 1)
+    start = getOperationalDayRange(firstOfMonth).start
+    end = getOperationalDayRange(todayOp).end
   } else if (preset === 'operational' && operationalDay) {
     // 🗓️ Mode journée opérationnelle: 08:00 → 06:00 (lendemain)
     const range = getOperationalDayRange(operationalDay)
@@ -81,15 +109,17 @@ export const filterByDate = <T>(
     start = from ? new Date(from) : null
     if (start) { start.setHours(0, 0, 0, 0); end = new Date(from + 'T23:59:59') }
   } else if (preset === 'custom') {
-    // 📅 FILTRE PÉRIODE : Plage de dates normale (00:00 → 23:59)
-    // Ex: 13/08 → 15/08 = du 13/08 à 00:00 jusqu'au 15/08 à 23:59
+    // 🗓️ FILTRE PÉRIODE : basé sur la JOURNÉE D'OPÉRATION (8h → 6h lendemain), pas le jour
+    // calendaire. Ex: 13/08 → 15/08 = du 13/08 8h00 jusqu'au 16/08 ~6h00 (fin de la journée
+    // d'opération du 15/08). Sinon un colis saisi entre minuit et 8h le 16/08 (workDate = 15/08,
+    // donc dans la période) était exclu par une borne calendaire stricte à 15/08 23:59.
     if (from) {
-      start = new Date(from + 'T00:00:00')
+      start = getOperationalDayRange(new Date(from + 'T12:00:00')).start
     } else {
       start = null
     }
     if (to) {
-      end = new Date(to + 'T23:59:59')
+      end = getOperationalDayRange(new Date(to + 'T12:00:00')).end
     } else {
       end = endOfToday
     }

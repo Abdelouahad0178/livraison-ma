@@ -5,6 +5,8 @@ import { collection, query, orderBy, limit, onSnapshot, startAfter, getDocs, whe
 import { db } from '../../../firebase/config'
 import { getOperationalDayRange } from '../../../config/operationalDay'
 import AdminCaisseView from '../components/AdminCaisseView'
+import HScrollArrows from '../../../components/HScrollArrows'
+import LoadProgress from '../../../components/LoadProgress'
 
 interface Props {
   datePreset: string
@@ -65,6 +67,12 @@ export default function AdminPortAgenciesTab({
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadingAll, setLoadingAll] = useState(false)
   const [hasMore, setHasMore] = useState(true)
+  // ⚠️ Avec le cache local Firestore (persistentLocalCache), un onSnapshot renvoie d'abord un
+  // résultat depuis le CACHE de l'appareil — potentiellement incomplet si ce cache ne contient
+  // pas encore tous les documents de la plage demandée (ex: après un changement de filtre de
+  // date) — avant que le serveur confirme. Ce flag reste true tant que le total affiché n'est
+  // pas confirmé par le serveur (même correctif que sur AgentPage.tsx / CaisseChefTab.tsx).
+  const [syncing, setSyncing] = useState(false)
   const lastDocRef = useRef<any>(null)
 
   // 📊 États pour système de filtrage robuste
@@ -73,6 +81,7 @@ export default function AdminPortAgenciesTab({
     total: 0,
     percentage: 0
   })
+  const [batchLoadedCount, setBatchLoadedCount] = useState(0) // colis reçus pendant le chargement par batches
   const [periodWarning, setPeriodWarning] = useState<string | null>(null)
   const [periodDays, setPeriodDays] = useState<number>(0)
   const [invalidDatesWarning, setInvalidDatesWarning] = useState(false)
@@ -160,6 +169,7 @@ export default function AdminPortAgenciesTab({
     // Réinitialiser les avertissements et progression
     setPeriodWarning(null)
     setBatchProgress({ current: 0, total: 0, percentage: 0 })
+    setBatchLoadedCount(0)
     setInvalidDatesWarning(false)
 
     // 🔍 Détecter si des filtres de DATE sont actifs
@@ -167,7 +177,12 @@ export default function AdminPortAgenciesTab({
     const hasDateFilter = datePreset !== 'all'
     const hasFilters = hasDateFilter
 
-    const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
+    // ⚠️ CORRECTIF : « Tout » est lui aussi borné (10 derniers jours, voir plus bas) mais restait
+    // plafonné à PAGE_SIZE=2000 colis TOUTES AGENCES — le réseau en crée ≈ 500/jour, donc « Tout »
+    // n'affichait que les ~4 derniers jours des 10 annoncés (et le bandeau « chargement partiel »
+    // est masqué pour 'all'). Toutes les requêtes étant bornées par des dates, on applique partout
+    // la limite haute de sécurité.
+    const effectivePageSize = FILTERED_PAGE_SIZE
 
     console.warn(`📊 CHARGEMENT Port par Agence:`, {
       hasFilters,
@@ -186,8 +201,11 @@ export default function AdminPortAgenciesTab({
       fromDate = new Date(now.getFullYear(), now.getMonth(), now.getDate())
       toDate = new Date(now)
     } else if (datePreset === 'week') {
+      // -6 jours (et non -7) pour couvrir exactement 7 jours EN COMPTANT aujourd'hui,
+      // même convention que la page Expéditions (AgentPage.tsx) — sinon Admin comptait
+      // un jour de plus (8 jours) pour la même période "7 jours".
       const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      fromDate = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
+      fromDate = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000)
       toDate = new Date(now)
     } else if (datePreset === 'month') {
       fromDate = new Date(now.getFullYear(), now.getMonth(), 1)
@@ -198,8 +216,11 @@ export default function AdminPortAgenciesTab({
       toDate = range.end
     } else if (datePreset === 'custom') {
       if (dateFrom && dateTo) {
-        const tempFromDate = new Date(dateFrom + 'T00:00:00')
-        const tempToDate = new Date(dateTo + 'T23:59:59')
+        // 🗓️ "Période" suit la JOURNÉE D'OPÉRATION (8h → 6h lendemain), pas le jour calendaire —
+        // cohérent avec workDate et avec la page Chef d'agence. Sinon un colis saisi tôt le matin
+        // du dernier jour (encore la veille en journée d'opération) sortait à tort de la période.
+        const tempFromDate = getOperationalDayRange(new Date(dateFrom + 'T12:00:00')).start
+        const tempToDate = getOperationalDayRange(new Date(dateTo + 'T12:00:00')).end
 
         // ⚠️ Validation: dateFrom doit être <= dateTo
         if (tempFromDate > tempToDate) {
@@ -275,6 +296,7 @@ export default function AdminPortAgenciesTab({
 
               const batchData = await loadBatchData(batch.start, batch.end)
               allData = [...allData, ...batchData]
+              setBatchLoadedCount(allData.length)
 
               // Mettre à jour la progression
               setBatchProgress({
@@ -293,6 +315,7 @@ export default function AdminPortAgenciesTab({
 
             setLiveParcels(uniqueData)
             setHasMore(false)
+            setSyncing(false) // getDocs va toujours chercher au serveur : résultat définitif
             setLoading(false)
             setRefreshing(false)
             console.warn(`✅ Chargement par batches terminé: ${uniqueData.length} colis`)
@@ -372,6 +395,7 @@ export default function AdminPortAgenciesTab({
 
     const unsub = onSnapshot(
       q,
+      { includeMetadataChanges: true },
       (snap) => {
         const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
         setLiveParcels(data)
@@ -379,12 +403,14 @@ export default function AdminPortAgenciesTab({
         setHasMore(snap.docs.length >= effectivePageSize)
         setLoading(false)
         setRefreshing(false)
-        console.warn(`✅ Port par Agence: ${data.length} colis chargés`)
+        setSyncing(snap.metadata.fromCache)
+        console.warn(`✅ Port par Agence: ${data.length} colis chargés (fromCache: ${snap.metadata.fromCache})`)
       },
       (err) => {
         console.error('Erreur chargement initial:', err)
         setLoading(false)
         setRefreshing(false)
+        setSyncing(false)
       }
     )
 
@@ -485,12 +511,15 @@ export default function AdminPortAgenciesTab({
 
     const now = new Date()
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
+    // -6 jours : même convention que le chargement Firestore ci-dessus et que AgentPage.tsx
+    const weekAgo = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000)
     const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
 
     return liveParcels.filter((p: any) => {
-      // 🗄️ Exclure les colis archivés (comme AgentPage)
-      if (p.isArchived) return false
+      // 🗄️ Les colis archivés (isArchived, toujours dans 'parcels') sont INCLUS : l'archivage auto
+      // marque les livrés sans COD après 30 j et tout colis après 45 j. Les exclure faisait perdre
+      // l'essentiel des ports d'une période de plus de 30 jours (comme AgentPage / Facturier, qui
+      // les incluent désormais).
 
       const pDate = parcelDate(p)
 
@@ -503,7 +532,7 @@ export default function AdminPortAgenciesTab({
         return pDate >= range.start && pDate <= range.end
       }
       if (datePreset === 'custom' && dateFrom && dateTo) {
-        // 📅 CORRECTION TIMEZONE: 00:00 → 23:59
+        // 📅 Validité (comparaison calendaire simple, juste pour détecter début > fin)
         const from = new Date(dateFrom + 'T00:00:00')
         const to = new Date(dateTo + 'T23:59:59')
 
@@ -517,7 +546,11 @@ export default function AdminPortAgenciesTab({
           return pDate >= fallbackFrom && pDate <= fallbackTo
         }
 
-        return pDate >= from && pDate <= to
+        // 🗓️ Bornes réelles du filtre : JOURNÉE D'OPÉRATION (8h → 6h lendemain), pas jour
+        // calendaire — cohérent avec workDate et avec la page Chef d'agence.
+        const opFrom = getOperationalDayRange(new Date(dateFrom + 'T12:00:00')).start
+        const opTo = getOperationalDayRange(new Date(dateTo + 'T12:00:00')).end
+        return pDate >= opFrom && pDate <= opTo
       }
       return true // 'all'
     })
@@ -651,8 +684,12 @@ export default function AdminPortAgenciesTab({
         // Logique normale pour les colis non-retournés
         // Compter les expéditions ENVOYÉES (à l'origine)
         if (directionFilter === 'all' || directionFilter === 'sent') {
-          if (originCity && stats[originCity]) {
-            stats[originCity].nbExpeditions += 1
+          // Expédition créée dans une agence (y compris LOCALE, livrée dans la même ville) :
+          // ville de création = originCity, sinon agence créatrice / ville de l'expéditeur
+          const createdCity = (originCity && stats[originCity]) ? originCity
+            : [p.createdByCity, p.sender?.city, destCity && !originCity ? destCity : undefined].find((c: any) => c && stats[c])
+          if (createdCity) {
+            stats[createdCity].nbExpeditions += 1
           }
         }
 
@@ -708,6 +745,12 @@ export default function AdminPortAgenciesTab({
   }, [portStats, selectedCity, portTypeFilter])
 
   // ✅ Calculer les totaux sur les stats FILTRÉES - 4 TYPES + EXPÉDITIONS SEULEMENT
+  // 🏙️ Expéditions LOCALES de la période (même ville d'expédition et de destination, transport entre
+  // quartiers) : dans « Port par Agence », chacune compte 2 fois pour son agence (1 envoyée + 1 reçue).
+  const localExpeditionsCount = useMemo(() => filteredByDate.filter((p: any) =>
+    !['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status) &&
+    p.originCity && p.originCity === p.destinationCity).length, [filteredByDate])
+
   const totauxFiltres = useMemo(() => {
     const totaux = filteredStats.reduce((acc, stat) => ({
       portPaye: acc.portPaye + stat.portPaye,
@@ -746,7 +789,7 @@ export default function AdminPortAgenciesTab({
         @media print {
           @page {
             margin: 1cm;
-            size: A4 landscape;
+            size: A4 portrait;
           }
           body {
             print-color-adjust: exact;
@@ -825,6 +868,7 @@ export default function AdminPortAgenciesTab({
               <p className="text-xs text-purple-700 mt-0.5">
                 Batch {batchProgress.current} / {batchProgress.total} ({batchProgress.percentage}%)
               </p>
+              <LoadProgress loading count={batchLoadedCount} className="mt-1" />
             </div>
           </div>
           <div className="w-full bg-purple-200 rounded-full h-3 overflow-hidden">
@@ -883,7 +927,7 @@ export default function AdminPortAgenciesTab({
               </h1>
               <p className="text-lg font-bold text-indigo-700 mt-2">
                 {totauxFiltres.nbExpeditions} expédition{totauxFiltres.nbExpeditions > 1 ? 's' : ''}
-                {directionFilter === 'sent' && ' envoyée' + (totauxFiltres.nbExpeditions > 1 ? 's' : '')}
+                {directionFilter === 'sent' && ' créée' + (totauxFiltres.nbExpeditions > 1 ? 's' : '') + ' et envoyée' + (totauxFiltres.nbExpeditions > 1 ? 's' : '') + (selectedCity === 'all' ? ' (toutes agences)' : ` par ${selectedCity}`)}
                 {directionFilter === 'received' && (
                   <>
                     {' reçue' + (totauxFiltres.nbExpeditions > 1 ? 's' : '')}
@@ -918,7 +962,17 @@ export default function AdminPortAgenciesTab({
               <div className="flex items-center gap-2 sm:gap-3">
                 <Building2 className="w-6 h-6 sm:w-8 sm:h-8 flex-shrink-0" />
                 <div>
-                  <h2 className="text-xl sm:text-2xl font-black">Port par Agence</h2>
+                  <div className="flex items-center gap-2">
+                    <h2 className="text-xl sm:text-2xl font-black">Port par Agence</h2>
+                    {/* ⚠️ Tant que ce badge est affiché, le total peut encore changer : les
+                        données viennent du cache local en attendant la confirmation serveur. */}
+                    {syncing && (
+                      <span className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-400/20 text-amber-100 text-[11px] font-semibold print:hidden">
+                        <span className="w-2 h-2 rounded-full bg-amber-300 animate-pulse" />
+                        Synchronisation…
+                      </span>
+                    )}
+                  </div>
                   <p className="text-blue-100 text-xs sm:text-sm mt-1 hidden sm:block">
                     {viewMode === 'theoretical'
                       ? 'Port Payé et En Compte (collecté par expéditeur) · Port Dû (collecté à destination)'
@@ -1179,7 +1233,7 @@ export default function AdminPortAgenciesTab({
                       : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                 >
-                  📤 Envoyées (origine)
+                  📤 Créées / envoyées (nombre réel d'expéditions)
                 </button>
                 <button
                   onClick={() => setDirectionFilter('received')}
@@ -1277,7 +1331,7 @@ export default function AdminPortAgenciesTab({
                   )}
                   {directionFilter !== 'all' && (
                     <span className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-100 text-amber-700 rounded-lg text-xs font-bold">
-                      {directionFilter === 'sent' && '📤 Envoyées'}
+                      {directionFilter === 'sent' && '📤 Créées / envoyées'}
                       {directionFilter === 'received' && '📥 Reçues'}
                       <button
                         onClick={() => setDirectionFilter('all')}
@@ -1321,9 +1375,19 @@ export default function AdminPortAgenciesTab({
       {/* Carte résumé (filtré) */}
       <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-orange-200 rounded-xl p-6 shadow-lg print:bg-gray-50 print:rounded-none print:mb-6">
         <div className="flex items-center justify-between mb-4">
-          <h3 className="text-lg font-bold text-gray-800">
-            📊 Résumé {hasActiveFilter ? '(Filtré)' : 'Global'}
-          </h3>
+          <div>
+            <h3 className="text-lg font-bold text-gray-800">
+              📊 Résumé {hasActiveFilter ? '(Filtré)' : 'Global'}
+            </h3>
+            {/* 🗓️ "Période" est basée sur la journée d'opération (8h → 6h lendemain) : on
+                l'affiche explicitement pour que le total corresponde bien à ce qui est montré,
+                plutôt que de laisser croire à une plage calendaire simple (00:00 → 23:59). */}
+            {datePreset === 'custom' && dateFrom && dateTo && (
+              <p className="text-xs text-gray-500 mt-0.5">
+                🗓️ Journée d'opération : {new Date(dateFrom + 'T12:00:00').toLocaleDateString('fr-MA')} 08h00 → {new Date(dateTo + 'T12:00:00').toLocaleDateString('fr-MA')} +1j 06h00
+              </p>
+            )}
+          </div>
           <span className="text-sm text-gray-600">
             {filteredStats.length} agence(s) affichée(s)
           </span>
@@ -1334,6 +1398,7 @@ export default function AdminPortAgenciesTab({
             <div>
               <div className="text-xs text-gray-600 font-medium uppercase tracking-wide">Expéditions</div>
               <div className="text-2xl font-black text-indigo-700">{totauxFiltres.nbExpeditions}</div>
+              {localExpeditionsCount > 0 && <div className="text-[10px] text-gray-500 leading-tight mt-0.5">dont {localExpeditionsCount} locale{localExpeditionsCount > 1 ? 's' : ''}</div>}
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -1346,7 +1411,7 @@ export default function AdminPortAgenciesTab({
           <div className="flex items-center gap-3">
             <div className="w-3 h-3 rounded-full bg-orange-500"></div>
             <div>
-              <div className="text-xs text-gray-600 font-medium">💰 Port Dû</div>
+              <div className="text-xs text-gray-600 font-medium">💰 Port Dû (espèces)</div>
               <div className="text-xl font-black text-orange-700">{totauxFiltres.portDu.toLocaleString('fr-MA')} DH</div>
             </div>
           </div>
@@ -1355,6 +1420,16 @@ export default function AdminPortAgenciesTab({
             <div>
               <div className="text-xs text-gray-600 font-medium">📋 Port Dû Chèque</div>
               <div className="text-xl font-black text-purple-700">{totauxFiltres.portDuCheque.toLocaleString('fr-MA')} DH</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className="w-3 h-3 rounded-full bg-orange-700"></div>
+            <div>
+              {/* La page Expéditions (Chef d'agence) affiche un seul "Total Port dû" qui
+                  additionne espèces + chèque : cette carte donne la valeur équivalente pour
+                  éviter toute impression d'écart entre les deux pages. */}
+              <div className="text-xs text-gray-600 font-medium">💰 Port Dû total (= Chef d'agence)</div>
+              <div className="text-xl font-black text-orange-900">{(totauxFiltres.portDu + totauxFiltres.portDuCheque).toLocaleString('fr-MA')} DH</div>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -1383,7 +1458,7 @@ export default function AdminPortAgenciesTab({
 
       {/* Tableau par agence */}
       <div className="bg-white rounded-2xl shadow-xl border-2 border-purple-100 overflow-hidden print:rounded-none print:border print:border-gray-300">
-        <div className="overflow-x-auto print:overflow-visible">
+        <HScrollArrows className="print:overflow-visible">
           <table className="w-full print:text-sm">
             <thead className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white">
               <tr>
@@ -1527,7 +1602,7 @@ export default function AdminPortAgenciesTab({
               )}
             </tbody>
           </table>
-        </div>
+        </HScrollArrows>
       </div>
 
       {/* Message si aucun résultat */}

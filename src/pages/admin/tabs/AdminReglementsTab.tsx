@@ -2,6 +2,7 @@ import { auth } from '../../../firebase/config'
 import { validerRapport, rejeterRapport } from '../../../firebase/firestore'
 import { Banknote, FileText, Search } from 'lucide-react'
 import { fmtFixed as fmtAmt } from '../../../utils/formatNumber'
+import { normIncludes } from '../../../utils/normText'
 
 const filterByDate = (list: any, preset: any, from: any, to: any, getDate: any) => {
   if (preset === 'all') return list
@@ -73,7 +74,7 @@ export default function AdminReglementsTab({
               const q = rgSearch.toLowerCase()
               const linkedParcel = r.parcelId ? parcels.find((p: any) => p.id === r.parcelId) : null
               if (![r.trackingNumber, r.expediteurNic, r.senderNic, r.nexp, linkedParcel?.sender?.nic, r.expediteur, r.destinataire, r.banque, r.numeroPiece, r.agencyCity, r.pointeurName]
-                .some(v => (v || '').toLowerCase().includes(q))) return false
+                .some(v => normIncludes(v || '', q))) return false
             }
             return true
           })

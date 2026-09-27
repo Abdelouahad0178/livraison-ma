@@ -117,6 +117,7 @@ export function useFuseSearch<T>({
       threshold,
       isCaseSensitive: false, // ⚡ INSENSIBLE À LA CASSE (majuscules/minuscules acceptées)
       ignoreLocation: true, // Cherche partout dans le champ
+      ignoreDiacritics: true, // COPÏMA = COPIMA (accents/trémas ignorés)
       useExtendedSearch,
       includeScore: true,
       includeMatches: true, // Pour highlighting

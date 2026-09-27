@@ -4,37 +4,83 @@ import {
   LayoutGrid, Lock, Package, Pencil, PenTool, Printer, Search, Table2, Trash2, Truck,
   Unlock, User, X,
 } from 'lucide-react'
-import { useState, useRef, useEffect, useMemo } from 'react'
-import { deleteField } from 'firebase/firestore'
+import { useState, useRef, useEffect, useMemo, useDeferredValue } from 'react'
+import { deleteField, Timestamp, collection, documentId, onSnapshot, query, where } from 'firebase/firestore'
+import { db } from '../../../firebase/config'
 import * as XLSX from 'xlsx'
 import {
   loadReturnedParcelOnTruck, validateReturnArrival, getMoreAgentParcels,
 } from '../../../firebase/firestore'
-import { isInReturnCircuit, updateParcel } from '../../../firebase/parcels'
+import { isInReturnCircuit, updateParcel, buildParcelCorrectionPatch, describeParcelSaveError } from '../../../firebase/parcels'
 import {
   STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS, codCollectedLabel,
-  CITIES, ALL_SERVICE_TYPES,
+  CITIES, ALL_SERVICE_TYPES, codPaymentTypeOf,
 } from '../../../firebase/constants'
 import { useAgentCtx } from '../AgentCtx'
 import { OperationalDaySelector } from '../../../components/OperationalDaySelector'
 import QuickStatusToggles from '../../../components/QuickStatusToggles'
+import HScrollArrows from '../../../components/HScrollArrows'
+import LoadProgress from '../../../components/LoadProgress'
+import { useLoadProgress, type LoadProgressStore } from '../../../utils/loadProgressStore'
 
 import { parcelDate, filterByDate } from '../../../utils/dateFilter'
+import { formatOperationalDay } from '../../../config/operationalDay'
+import { normText } from '../../../utils/normText'
+import { makeTableSearchMatcher } from '../../../utils/parcelSearch'
 
-const normalizeSearch = (value: any) => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '')
+const normalizeSearch = (value: any) => normText(value).replace(/[^a-z0-9]/g, '')
 const matchesSearch = (values: any, query: any) => {
-  const q = String(query ?? '').trim().toLowerCase()
+  const q = normText(query)
   if (!q) return true
   const compactQ = normalizeSearch(q)
   return values.some((v: any) => {
-    const raw = String(v ?? '').toLowerCase()
+    const raw = normText(v)
     return raw.includes(q) || normalizeSearch(raw).includes(compactQ)
   })
 }
 
 // ALL_SERVICE_TYPES importé depuis constants.ts
 
+// Mode de règlement d'une valeur (RETOUR FOND, port dû, port payé…) : le type saisi à
+// l'encaissement (codPaymentType) prime, sinon on le déduit du service choisi à la création.
+const VALUE_TYPE_INFO: Record<string, { label: string; emoji: string }> = {
+  especes:       { label: 'Espèces',          emoji: '💵' },
+  cheque:        { label: 'Chèque',           emoji: '📋' },
+  traite:        { label: 'Traite',           emoji: '📝' },
+  bon_livraison: { label: 'Bon de livraison', emoji: '🧾' },
+  retour_bl:     { label: 'Bon de livraison', emoji: '🧾' },
+  simple:        { label: 'Simple',           emoji: '📦' },
+}
+// serviceType fait foi : codPaymentType n'est retenu que s'il est cohérent (codPaymentTypeOf).
+const valueTypeOf = (p: any): string => {
+  const t = codPaymentTypeOf(p)
+  if (t && VALUE_TYPE_INFO[t]) return t
+  return p?.serviceType === 'simple' ? 'simple' : 'especes'
+}
+const valueTypeLabel = (p: any) => {
+  const info = VALUE_TYPE_INFO[valueTypeOf(p)]
+  return `${info.emoji} ${info.label}`
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ⚡ Jauge de chargement abonnée SEULE au store de progression (useLoadProgress) : l'avancement
+// jour par jour ne re-rend plus la page Chef d'agence ni cet onglet (≈ 6 000 lignes).
+function AgencyLoadProgress({ store, displayCount, agencyLoading, citiesProgress }: {
+  store: LoadProgressStore | null; displayCount: number; agencyLoading: boolean; citiesProgress: number
+}) {
+  const { loaded, day } = useLoadProgress(store)
+  const extra = agencyLoading ? loaded : citiesProgress
+  return (
+    <LoadProgress
+      loading
+      count={Math.max(displayCount, agencyLoading && day ? loaded : 0)}
+      detail={agencyLoading && day && day.total > 1
+        ? `jour par jour : ${day.label} (jour ${day.done + 1}/${day.total}) — liste et totaux complets à la fin du chargement`
+        : extra > 0 ? `+${extra.toLocaleString('fr-MA')} en arrière-plan` : undefined}
+    />
+  )
+}
 
 export default function ParcelsTab() {
   const {
@@ -49,6 +95,9 @@ export default function ParcelsTab() {
     filteredParcels,
     parcelMovementCount,
     loadingParcels,
+    syncingParcels,
+    loadingAllAgency, agencyProgressStore, agencyOneShot,
+    loadingAllCities, loadAllCitiesProgress,
     hasMoreParcels, setHasMoreParcels,
     hasMoreWithDateFilter,
     loadingMoreWithDateFilter,
@@ -61,6 +110,7 @@ export default function ParcelsTab() {
 
     // Search / filters
     search, setSearch,
+    searchScope, setSearchScope,
     includeArchived, setIncludeArchived,
     isSearching,
     datePreset, setDatePreset,
@@ -76,6 +126,7 @@ export default function ParcelsTab() {
     driverFilter, setDriverFilter,  // ⭐ Filtre par livreur
     portTypeFilter, setPortTypeFilter,  // ⭐ Filtre par type de port
     encaissementFilter, setEncaissementFilter,  // ⭐ Filtre par type d'encaissement
+    encaissementTypesFilter, setEncaissementTypesFilter,  // ⭐ Sélection multiple espèces/chèque/traite
     codDocumentStatusFilter, setCodDocumentStatusFilter,  // ⭐ Filtre par statut document COD
     showFilters, setShowFilters,
     subTab, setSubTab,
@@ -197,6 +248,12 @@ export default function ParcelsTab() {
   // 🔍 Filtre local par adresse
   const [addressFilter, setAddressFilter] = useState('')
 
+  // 🔍 Filtres locaux par plage (Nb Colis et COD)
+  const [nbColisFilterMin, setNbColisFilterMin] = useState('')
+  const [nbColisFilterMax, setNbColisFilterMax] = useState('')
+  const [codFilterMin, setCodFilterMin] = useState('')
+  const [codFilterMax, setCodFilterMax] = useState('')
+
   // État pour gérer les colonnes visibles
   const [visibleColumns, setVisibleColumns] = useState({
     nexp: true, date: true, dateLivraison: true, statut: true, expediteur: true, telExp: true, villeExp: true,
@@ -232,6 +289,14 @@ export default function ParcelsTab() {
   // ⚡ Système de mise à jour en temps réel
   const [localParcelUpdates, setLocalParcelUpdates] = useState<Record<string, any>>({})
   const [forceUpdateCounter, setForceUpdateCounter] = useState(0)
+
+  // ⚠️ Les surcharges locales ne sont qu'un pont en attendant les données serveur : dès que
+  // la liste source change (listener Firestore, événement parcelUpdated, rechargement), on les
+  // abandonne. Avant, elles restaient indéfiniment et masquaient les valeurs réellement en
+  // base (ex. « RF 9000 DH » / « C/Chèque » affichés alors que Firestore avait 2000 DH / traite).
+  useEffect(() => {
+    setLocalParcelUpdates(prev => (Object.keys(prev).length ? {} : prev))
+  }, [filteredParcels])
 
   // Rafraîchissement automatique en arrière-plan quand des données sont modifiées
   useEffect(() => {
@@ -272,8 +337,10 @@ export default function ParcelsTab() {
     )
   }, [drivers, profile?.city])
 
+  // ⚡ Villes / livreurs disponibles : 4 parcours de TOUTES les expéditions, autrefois refaits à
+  // chaque rendu (chaque frappe, chaque tic de progression…) → recalculés seulement si la liste change.
   // ⭐ Calculer les villes de destination disponibles
-  const availableDestCities = (() => {
+  const availableDestCities = useMemo(() => {
     const cities = new Set<string>()
     const parcels = allDisplayParcels || []
     parcels.forEach((p: any) => {
@@ -281,10 +348,10 @@ export default function ParcelsTab() {
       if (destCity) cities.add(destCity)
     })
     return Array.from(cities).sort()
-  })()
+  }, [allDisplayParcels])
 
   // ⭐ Calculer les villes d'origine (expédition) disponibles
-  const availableOriginCities = (() => {
+  const availableOriginCities = useMemo(() => {
     const cities = new Set<string>()
     const parcels = allDisplayParcels || []
     parcels.forEach((p: any) => {
@@ -292,10 +359,10 @@ export default function ParcelsTab() {
       if (originCity) cities.add(originCity)
     })
     return Array.from(cities).sort()
-  })()
+  }, [allDisplayParcels])
 
   // ⭐ Toutes les villes (origine + destination) pour direction "Tous"
-  const availableAllCities = (() => {
+  const availableAllCities = useMemo(() => {
     const cities = new Set<string>()
     const parcels = allDisplayParcels || []
     parcels.forEach((p: any) => {
@@ -305,10 +372,10 @@ export default function ParcelsTab() {
       if (destCity) cities.add(destCity)
     })
     return Array.from(cities).sort()
-  })()
+  }, [allDisplayParcels])
 
   // ⭐ Calculer les livreurs/chauffeurs disponibles (ceux qui ont des colis assignés dans la ville de l'agent)
-  const availableDrivers = (() => {
+  const availableDrivers = useMemo(() => {
     const driverIds = new Set<string>()
     const parcels = allDisplayParcels || []
     const agentCity = profile?.city
@@ -325,7 +392,31 @@ export default function ParcelsTab() {
         d.sectorId  // ⭐ Ne montrer que les livreurs associés à un secteur
       )
       .sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''))
-  })()
+  }, [allDisplayParcels, drivers, profile?.city])
+
+  // ⚡ Listes des panneaux d'actions groupées (chargement camion, assignation, Port dû) : 3 filtres
+  // de toute la liste filtrée, autrefois refaits à chaque rendu → mémoïsés. Mêmes règles.
+  const loadableParcelsMemo = useMemo(
+    () => (filteredParcels || []).filter(canLoadTransportParcel),
+    // canLoadTransportParcel ne dépend que du rôle
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filteredParcels, profile?.role]
+  )
+  const loadableIdSet = useMemo(() => new Set(loadableParcelsMemo.map((p: any) => p.id)), [loadableParcelsMemo])
+  const assignableParcelsMemo = useMemo(() => (filteredParcels || []).filter((p: any) => {
+    // Colis assignables: arrivés dans la ville du chef, pas encore livrés
+    const isInMyCity = (p.destinationCity === profile?.city || p.receiver?.city === profile?.city)
+    // Tous les colis dans ma ville qui ne sont pas livrés ni retournés
+    const notDelivered = !p.deliveredAt && !p.returnedAt && p.status !== 'Livré'
+    return isInMyCity && notDelivered
+  }), [filteredParcels, profile?.city])
+  const portDuParcelsMemo = useMemo(() => (filteredParcels || []).filter((p: any) => {
+    // Filtrer les parcels Port Dû dans ma ville de destination (non livrés)
+    const isDestinationAgency = p.destinationCity === profile?.city || p.receiver?.city === profile?.city
+    const isPortDu = p.portType === 'port_du'
+    const notDelivered = !p.deliveredAt && p.status !== 'Livré'
+    return isPortDu && isDestinationAgency && notDelivered
+  }), [filteredParcels, profile?.city])
 
   // État pour basculer entre vue cartes et vue tableau
   const [viewMode, setViewMode] = useState<'cards' | 'table'>('table')
@@ -346,14 +437,6 @@ export default function ParcelsTab() {
   const [bulkPortDuBusy, setBulkPortDuBusy] = useState(false)
   const [bulkPortDuError, setBulkPortDuError] = useState('')
   const [isPortDuSectionOpen, setIsPortDuSectionOpen] = useState(false) // ⭐ Section fermée par défaut
-  const [isCustomSheetOpen, setIsCustomSheetOpen] = useState(false) // ⭐ Feuille de charge fermée par défaut
-
-  // ⭐ États pour la feuille de charge personnalisée
-  const [customSheetSearch, setCustomSheetSearch] = useState('')
-  const [customSheetParcels, setCustomSheetParcels] = useState<any[]>([])
-  const [customSheetDriver, setCustomSheetDriver] = useState('')
-  const [customSheetSearchResult, setCustomSheetSearchResult] = useState<any | null>(null)
-  const [customSheetPointage, setCustomSheetPointage] = useState<{[key: string]: 'livre' | 'non_livre' | 'souffrance'}>({})
 
   // ⭐ Palette de couleurs pour les livreurs (12 couleurs vives)
   const DRIVER_COLORS = [
@@ -377,15 +460,29 @@ export default function ParcelsTab() {
       // Utiliser expeditionDate au lieu de modifier createdAt
       // pour ne pas affecter les filtres système
       const { updateParcel } = await import('../../../firebase/parcels')
-      await updateParcel(parcelId, {
-        expeditionDate: newDate // Format YYYY-MM-DD
-      })
+      if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(newDate || '')) { alert('❌ Date invalide.'); return }
+      // expeditionDate = date affichée ; workDate = jour d'opération utilisé par les filtres de date
+      // La date de CRÉATION suit aussi (même heure de la journée) pour que toutes les pages
+      // (caisse, admin, impressions, filtres, requêtes serveur) restent cohérentes ; l'originale est conservée.
+      const cur = (filteredParcels || []).find((p: any) => p.id === parcelId) || {}
+      const oldCreated: Date | null = cur.createdAt?.toDate ? cur.createdAt.toDate() : (cur.createdAt?.seconds ? new Date(cur.createdAt.seconds * 1000) : null)
+      const [yy, mo, dd] = newDate.split('-').map(Number)
+      const base = oldCreated || new Date()
+      const newCreated = new Date(yy, mo - 1, dd, base.getHours(), base.getMinutes(), base.getSeconds())
+      const updates: any = {
+        expeditionDate: newDate, // Format YYYY-MM-DD
+        workDate: newDate,
+        createdAt: Timestamp.fromDate(newCreated),
+      }
+      if (oldCreated && !cur.createdAtOriginal) updates.createdAtOriginal = Timestamp.fromDate(oldCreated)
+      await updateParcel(parcelId, updates)
+      setLocalParcelUpdates(prev => ({ ...prev, [parcelId]: { ...prev[parcelId], expeditionDate: newDate, workDate: newDate, createdAt: Timestamp.fromDate(newCreated) } }))
 
       setEditingDateId(null)
       setEditingDateValue('')
     } catch (err: any) {
       console.error('Erreur modification date:', err)
-      alert(`❌ Erreur: ${err.message}`)
+      alert(err?.code === 'permission-denied' ? '❌ Modification refusée : le colis est chargé/verrouillé ou vous n’avez pas le droit de modifier sa date.' : `❌ Erreur: ${err.message}`)
     }
   }
 
@@ -423,7 +520,7 @@ export default function ParcelsTab() {
   }
 
   // ⭐ Fonction helper pour calculer les résultats filtrés par la recherche tableau
-  const getTableFilteredParcels = (allParcels: any[]) => {
+  const getTableFilteredParcels = (allParcels: any[], search: string = tableSearch) => {
     // Filtrer par statut d'abord
     let filtered = allParcels
     if (parcelStatusFilter && parcelStatusFilter !== 'all') {
@@ -431,19 +528,10 @@ export default function ParcelsTab() {
     }
 
     // Puis filtrer par recherche texte
-    if (tableSearch) {
-      const searchLower = tableSearch.toLowerCase()
-      filtered = filtered.filter((p: any) => (
-        p.sender?.nic?.toLowerCase().includes(searchLower) ||
-        p.trackingId?.toLowerCase().includes(searchLower) ||
-        p.sender?.name?.toLowerCase().includes(searchLower) ||
-        p.receiver?.name?.toLowerCase().includes(searchLower) ||
-        p.sender?.tel?.toLowerCase().includes(searchLower) ||
-        p.receiver?.tel?.toLowerCase().includes(searchLower) ||
-        p.sender?.city?.toLowerCase().includes(searchLower) ||
-        p.receiver?.city?.toLowerCase().includes(searchLower) ||
-        p.receiver?.address?.toLowerCase().includes(searchLower)
-      ))
+    if (search) {
+      // Accents/casse/espaces ignorés (COPÏMA = COPIMA), comme le Facturier.
+      // ⚡ Champs normalisés mis en cache par expédition (utils/parcelSearch) : même règle qu'avant.
+      filtered = filtered.filter(makeTableSearchMatcher(search))
     }
 
     // 🔍 Filtre spécifique par adresse
@@ -455,8 +543,97 @@ export default function ParcelsTab() {
       })
     }
 
+    // 🔍 Filtre par plage Nb Colis
+    if (nbColisFilterMin !== '') {
+      const min = Number.parseFloat(nbColisFilterMin)
+      if (!Number.isNaN(min)) filtered = filtered.filter((p: any) => (p.nbColis || 1) >= min)
+    }
+    if (nbColisFilterMax !== '') {
+      const max = Number.parseFloat(nbColisFilterMax)
+      if (!Number.isNaN(max)) filtered = filtered.filter((p: any) => (p.nbColis || 1) <= max)
+    }
+
+    // 🔍 Filtre par plage COD
+    if (codFilterMin !== '') {
+      const min = Number.parseFloat(codFilterMin)
+      if (!Number.isNaN(min)) filtered = filtered.filter((p: any) => (p.codAmount || 0) >= min)
+    }
+    if (codFilterMax !== '') {
+      const max = Number.parseFloat(codFilterMax)
+      if (!Number.isNaN(max)) filtered = filtered.filter((p: any) => (p.codAmount || 0) <= max)
+    }
+
     return filtered
   }
+
+  // ⚡ PERF : la fusion avec les mises à jour locales, la recherche du tableau et les 5 totaux
+  // étaient recalculés sur TOUTES les expéditions (≈15 000 copies d'objets + 5 parcours) à CHAQUE
+  // rendu — chaque frappe dans une barre de recherche, chaque journée chargée, chaque tic du
+  // compteur de progression… (~150 ms par rendu). Ils ne sont plus recalculés que lorsque leurs
+  // données changent. On ne copie plus que les expéditions réellement modifiées localement.
+  const mergedFilteredParcels = useMemo(() => {
+    const list = filteredParcels || []
+    if (!localParcelUpdates || Object.keys(localParcelUpdates).length === 0) return list
+    return list.map((p: any) => (localParcelUpdates[p.id] ? { ...p, ...localParcelUpdates[p.id] } : p))
+  }, [filteredParcels, localParcelUpdates])
+  // La saisie reste fluide : le filtrage du tableau suit la frappe en priorité basse.
+  const deferredTableSearch = useDeferredValue(tableSearch)
+  const tableFilteredParcelsMemo = useMemo(
+    () => getTableFilteredParcels(mergedFilteredParcels, deferredTableSearch),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mergedFilteredParcels, deferredTableSearch, parcelStatusFilter, addressFilter, nbColisFilterMin, nbColisFilterMax, codFilterMin, codFilterMax]
+  )
+  const tableTotals = useMemo(() => {
+    const agencyCity = profile?.city
+    const isDest = (p: any) => p.destinationCity === agencyCity || p.receiver?.city === agencyCity
+    const isOrig = (p: any) => p.originCity === agencyCity || p.sender?.city === agencyCity
+    const isPortDuT = (p: any) => p.portType === 'port_du' || p.portType === 'port_du_cheque'
+    let totalCod = 0, totalPortDu = 0, totalPortPaye = 0, totalPortEnCompteExp = 0, totalPortEnCompteDest = 0
+    for (const p of tableFilteredParcelsMemo) {
+      // Même ordre d'addition que les anciens reduce (résultats identiques au centime près)
+      totalCod += isDest(p) ? (parseFloat(p.codAmount) || 0) : 0
+      totalPortDu += isPortDuT(p) && isDest(p) ? (parseFloat(p.price) || 0) : 0
+      totalPortPaye += p.portType === 'port_paye' && isOrig(p) ? (parseFloat(p.price) || 0) : 0
+      totalPortEnCompteExp += (p.portType === 'port_en_compte' || p.portType === 'port_en_compte_expediteur') && isOrig(p) ? (parseFloat(p.price) || 0) : 0
+      totalPortEnCompteDest += p.portType === 'port_en_compte_destinataire' && isDest(p) ? (parseFloat(p.price) || 0) : 0
+    }
+    return { totalCod, totalPortDu, totalPortPaye, totalPortEnCompteExp, totalPortEnCompteDest }
+  }, [tableFilteredParcelsMemo, profile?.city])
+
+  // 📡 Période lue PONCTUELLEMENT (journées passées, voir AgentPage) : pas d'écoute temps réel sur
+  // toute la période. Les ≤ 25 lignes AFFICHÉES restent néanmoins à jour en temps réel (écoute par
+  // identifiant, ≤ 30 par requête) : une modification (livreur assigné, statut…) faite ici ou
+  // ailleurs apparaît aussitôt sur la page visible ; elle est propagée à toutes les listes via
+  // l'événement 'parcelUpdated' (même chemin que les écritures directes en base).
+  const visibleIdsKey = useMemo(() => {
+    if (!agencyOneShot) return ''
+    const list = tableFilteredParcelsMemo
+    const totalPages = Math.max(1, Math.ceil(list.length / PAGE_SIZE))
+    const safePage = Math.min(parcelPage, totalPages - 1)
+    return list.slice(safePage * PAGE_SIZE, (safePage + 1) * PAGE_SIZE).map((p: any) => p.id).sort().join(',')
+  }, [agencyOneShot, tableFilteredParcelsMemo, parcelPage])
+  useEffect(() => {
+    if (!visibleIdsKey) return
+    const ids = visibleIdsKey.split(',')
+    const unsubs: (() => void)[] = []
+    for (let i = 0; i < ids.length; i += 30) {
+      let initial = true
+      unsubs.push(onSnapshot(
+        query(collection(db, 'parcels'), where(documentId(), 'in', ids.slice(i, i + 30))),
+        snap => {
+          if (initial) { initial = false; return } // 1er instantané = données déjà affichées
+          snap.docChanges().forEach(ch => {
+            if (ch.type !== 'modified') return
+            window.dispatchEvent(new CustomEvent('parcelUpdated', {
+              detail: { parcelId: ch.doc.id, updates: ch.doc.data(), timestamp: new Date().toISOString(), source: 'firestore', replace: true },
+            }))
+          })
+        },
+        err => console.warn('ParcelsTab visible rows listener:', err?.code || err)
+      ))
+    }
+    return () => unsubs.forEach(u => u())
+  }, [visibleIdsKey])
 
   // ⭐ Fonctions de gestion des couleurs
   const colorSelectedParcels = () => {
@@ -639,12 +816,35 @@ export default function ParcelsTab() {
   }
 
   // État pour modal détails ports
-  const [portDetailsModal, setPortDetailsModal] = useState<{ open: boolean; portType: string; title: string; parcels: any[] }>({
+  // amountKey : 'price' pour les ports, 'codAmount' pour le RETOUR FOND
+  const [portDetailsModal, setPortDetailsModal] = useState<{ open: boolean; portType: string; title: string; amountKey?: string; parcels: any[] }>({
     open: false,
     portType: '',
     title: '',
+    amountKey: 'price',
     parcels: []
   })
+  const [printChoiceMenuOpen, setPrintChoiceMenuOpen] = useState(false)
+  // 📅 Période affichée dans le titre des tableaux de détail (jour d'opération ou période choisie)
+  const periodLabel = useMemo(() => {
+    if (datePreset === 'operational' && operationalDay) return formatOperationalDay(operationalDay, true)
+    if (datePreset === 'today') return "Aujourd'hui"
+    if (datePreset === 'week') return '7 derniers jours'
+    if (datePreset === 'month') return 'Ce mois'
+    if (datePreset === 'day' && dateFrom) return new Date(dateFrom).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
+    if (datePreset === 'custom' && dateFrom && dateTo) {
+      return `${new Date(dateFrom).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} → ${new Date(dateTo).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}`
+    }
+    if (datePreset === 'custom' && dateFrom) return `À partir du ${new Date(dateFrom).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}`
+    if (datePreset === 'custom' && dateTo) return `Jusqu'au ${new Date(dateTo).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}`
+    return 'Toutes périodes'
+  }, [datePreset, dateFrom, dateTo, operationalDay])
+
+  const detailAmount = (p: any) => parseFloat(p?.[portDetailsModal.amountKey || 'price']) || 0
+  const detailTotal = () => portDetailsModal.parcels.reduce((s: number, p: any) => s + detailAmount(p), 0)
+  const detailColor = portDetailsModal.portType === 'cod' ? 'text-green-700'
+    : portDetailsModal.portType === 'port_paye' ? 'text-blue-700'
+    : portDetailsModal.portType === 'port_du' ? 'text-orange-700' : 'text-gray-700'
 
   // État pour modal changement livreur
   const [changeDriverModal, setChangeDriverModal] = useState<{ open: boolean; parcel: any; newDriverId: string; loading: boolean; error: string }>({
@@ -709,8 +909,14 @@ export default function ParcelsTab() {
         // Vérifier si on est déjà sur un checkbox d'assignation
         const isOnAssignCheckbox = e.target instanceof HTMLElement && e.target.classList.contains('checkbox-assign-table')
 
+        // ⚠️ Le champ de recherche (searchInputRef) est volontairement EXCLU de cette exception :
+        // après une recherche, Tab doit sauter vers la première checkbox correspondante (le
+        // tableau n'affiche déjà que les lignes filtrées par la recherche), pour permettre de la
+        // sélectionner ensuite avec Espace. Avant ce correctif, Tab depuis la recherche suivait
+        // l'ordre de tabulation normal du navigateur et ne pointait jamais sur le résultat trouvé.
+        const isSearchInput = e.target === searchInputRef.current
         // Si on est ailleurs (input text, select, etc.), laisser Tab normal
-        if (e.target instanceof HTMLInputElement && !isOnAssignCheckbox) return
+        if (e.target instanceof HTMLInputElement && !isOnAssignCheckbox && !isSearchInput) return
         if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLSelectElement) return
 
         // On a des checkboxes d'assignation, bloquer Tab
@@ -756,6 +962,224 @@ export default function ParcelsTab() {
       checkboxRefs.current[0]?.focus()
     }, 100)
   }, [parcelPage])
+
+  // ⚠️ CORRECTIF : ces filtres sont locaux à cet onglet (AgentPage ne les connaît pas, donc
+  // son propre effet de reset de page ne peut pas les surveiller). Sans ça, changer l'un
+  // d'eux depuis une page &gt; 0 laissait la pagination sur une tranche intermédiaire des
+  // nouveaux résultats filtrés.
+  useEffect(() => {
+    setParcelPage(0)
+  }, [tableSearch, addressFilter, nbColisFilterMin, nbColisFilterMax, codFilterMin, codFilterMax, showDeliveredByOthers])
+
+  // 🖨️ Fonction d'impression des détails des ports
+  const printPortDetails = (title: string, parcels: any[], total: number, portType: string, agencyName: string, amountKey = 'price', mode: 'normal' | 'bordereau' = 'normal') => {
+    const amountOf = (p: any) => parseFloat(p?.[amountKey]) || 0
+    const now = new Date().toLocaleString('fr-FR', {
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    })
+
+    const colorClass = portType === 'cod' ? 'text-green-700'
+      : portType === 'port_paye' ? 'text-blue-700'
+      : portType === 'port_du' ? 'text-orange-700' : 'text-gray-700'
+    const bgColorClass = portType === 'cod' ? 'bg-green-50'
+      : portType === 'port_paye' ? 'bg-blue-50'
+      : portType === 'port_du' ? 'bg-orange-50' : 'bg-gray-50'
+
+    const tableRows = parcels.map((p: any, idx: number) => `
+      <tr class="border-b border-gray-200">
+        <td class="px-3 py-2 text-xs text-gray-400 text-center">${idx + 1}</td>
+        <td class="px-3 py-2 text-xs font-mono">${p.senderNic || p.sender?.nic || '-'}</td>
+        <td class="px-3 py-2 text-xs">${valueTypeLabel(p)}</td>
+        <td class="px-3 py-2 text-xs">${p.workDate || (p.createdAt?.toDate ? p.createdAt.toDate().toLocaleDateString('fr-FR') : '-')}</td>
+        <td class="px-3 py-2 text-xs">
+          <div class="font-medium">${p.senderName || p.sender?.name || '-'}</div>
+          <div class="text-gray-500">${p.senderTel || p.sender?.tel || ''}</div>
+        </td>
+        <td class="px-3 py-2 text-xs">${p.originCity || p.sender?.city || '-'}</td>
+        <td class="px-3 py-2 text-xs">
+          <div class="font-medium">${p.receiverName || p.receiver?.name || '-'}</div>
+          <div class="text-gray-500">${p.receiverTel || p.receiver?.tel || ''}</div>
+        </td>
+        <td class="px-3 py-2 text-xs">${p.destinationCity || p.receiver?.city || '-'}</td>
+        <td class="px-3 py-2 text-xs text-right font-bold ${colorClass}">${amountOf(p).toLocaleString('fr-MA')} DH</td>
+      </tr>
+    `).join('')
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="UTF-8">
+        <title>${title} - ${agencyName}</title>
+        <style>
+          * { margin: 0; padding: 0; box-sizing: border-box; }
+          body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            padding: 20px;
+            background: white;
+          }
+          .header {
+            text-align: center;
+            margin-bottom: 30px;
+            border-bottom: 3px solid #2563eb;
+            padding-bottom: 20px;
+          }
+          .header h1 {
+            color: #1e40af;
+            font-size: 28px;
+            font-weight: 800;
+            margin-bottom: 8px;
+          }
+          .header .subtitle {
+            color: #64748b;
+            font-size: 14px;
+            margin-top: 8px;
+          }
+          .info-box {
+            background: ${bgColorClass};
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+          }
+          .info-box .title {
+            font-size: 18px;
+            font-weight: 700;
+            color: #1f2937;
+          }
+          .info-box .count {
+            color: #64748b;
+            font-size: 14px;
+          }
+          table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+            font-size: 11px;
+          }
+          thead {
+            background: linear-gradient(to right, #2563eb, #3b82f6);
+            color: white;
+          }
+          th {
+            padding: 12px 8px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 11px;
+          }
+          th:last-child, td:last-child {
+            text-align: right;
+          }
+          tbody tr:nth-child(even) {
+            background: #f9fafb;
+          }
+          tbody tr:hover {
+            background: #f3f4f6;
+          }
+          .total-row {
+            background: #f1f5f9;
+            font-weight: 700;
+            border-top: 2px solid #cbd5e1;
+          }
+          .total-row td {
+            padding: 15px 8px;
+            font-size: 14px;
+          }
+          .text-blue-700 { color: #1d4ed8; }
+          .text-orange-700 { color: #c2410c; }
+          .bg-blue-50 { background: #eff6ff; }
+          .bg-orange-50 { background: #fff7ed; }
+          .text-gray-500 { color: #6b7280; }
+          .border-b { border-bottom: 1px solid #e5e7eb; }
+          .border-gray-200 { border-color: #e5e7eb; }
+          .font-mono { font-family: 'Courier New', monospace; }
+          .font-medium { font-weight: 500; }
+          .text-xs { font-size: 11px; }
+          @media print {
+            body { padding: 10px; }
+            .no-print { display: none; }
+          }
+        </style>
+      </head>
+      <body>
+        <div class="header">
+          <h1>🚚 BG EXPRESS</h1>
+          <div style="font-size: 16px; color: #1e40af; font-weight: 600; margin: 8px 0;">${agencyName}</div>
+          ${mode === 'bordereau' ? `
+            <div style="font-size: 26px; font-weight: 900; color: #111827; letter-spacing: 1px; margin: 14px 0 4px; text-transform: uppercase;">
+              Bordereau — Accusé de réception
+            </div>
+          ` : `
+            <div class="subtitle">${title}</div>
+          `}
+          <div class="subtitle">Imprimé le ${now}</div>
+        </div>
+
+        <div class="info-box">
+          <div>
+            ${mode === 'bordereau' ? '' : `<div class="title">${title}</div>`}
+            <div class="count">${parcels.length} expédition${parcels.length > 1 ? 's' : ''}</div>
+          </div>
+          <div style="font-size: 24px; font-weight: 800;" class="${colorClass}">
+            ${total.toLocaleString('fr-MA')} DH
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th style="width:30px;text-align:center">#</th>
+              <th>N° EXP</th>
+              <th>Mode de règlement</th>
+              <th>Date</th>
+              <th>Expéditeur</th>
+              <th>Ville Origine</th>
+              <th>Destinataire</th>
+              <th>Ville Dest.</th>
+              <th>${amountKey === 'codAmount' ? 'Montant' : 'Port'}</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${tableRows}
+          </tbody>
+          <tfoot>
+            <tr class="total-row">
+              <td colspan="8" style="text-align: right;">TOTAL:</td>
+              <td class="${colorClass}" style="font-size: 16px;">${total.toLocaleString('fr-MA')} DH</td>
+            </tr>
+          </tfoot>
+        </table>
+
+        ${mode === 'bordereau' ? `
+          <div style="display:flex; justify-content:space-between; margin-top:50px; font-size:12px;">
+            <div style="width:45%;">
+              <div style="border-top:1px solid #111827; padding-top:6px;">Signature et cachet — Remis par</div>
+            </div>
+            <div style="width:45%;">
+              <div style="border-top:1px solid #111827; padding-top:6px;">Signature et cachet — Reçu par (accusé de réception)</div>
+            </div>
+          </div>
+        ` : ''}
+      </body>
+      </html>
+    `
+
+    const printWindow = window.open('', '_blank')
+    if (printWindow) {
+      printWindow.document.write(html)
+      printWindow.document.close()
+      printWindow.focus()
+      setTimeout(() => {
+        printWindow.print()
+      }, 250)
+    }
+  }
 
   return (
     <>
@@ -810,6 +1234,28 @@ export default function ParcelsTab() {
             </button>
           )}
         </div>}
+
+        {/* 🔍 Portée de la recherche par nom : Tous / Expéditeur seul / Destinataire seul —
+            évite qu'un colis remonte juste parce que l'AUTRE partie porte ce nom. */}
+        {search && (
+          <div className="flex items-center gap-1 bg-gray-100 rounded-lg p-1 w-fit">
+            {[
+              { key: 'all', label: 'Tous' },
+              { key: 'sender', label: '📤 Expéditeur' },
+              { key: 'receiver', label: '📥 Destinataire' },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setSearchScope(key)}
+                className={`px-3 py-1.5 rounded-md text-xs font-semibold whitespace-nowrap transition ${
+                  searchScope === key ? 'bg-blue-600 text-white shadow-sm' : 'text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* 🗄️ Checkbox Archives - visible seulement quand recherche active */}
         {search && (
@@ -944,6 +1390,11 @@ export default function ParcelsTab() {
                 <span className="text-sm font-bold text-white">
                   {filteredParcels.length} résultat{filteredParcels.length > 1 ? 's' : ''} trouvé{filteredParcels.length > 1 ? 's' : ''}
                 </span>
+                {datePreset !== 'all' && (
+                  <span className="text-xs font-medium text-white/90 bg-white/20 px-2 py-0.5 rounded-full">
+                    Toutes dates — filtre date ignoré pendant la recherche
+                  </span>
+                )}
               </div>
               <button
                 onClick={() => setSearch('')}
@@ -955,12 +1406,7 @@ export default function ParcelsTab() {
             </div>
             <div className="max-h-[400px] overflow-y-auto divide-y divide-gray-100">
               {(() => {
-                // ⚡ Créer une version fusionnée des résultats de recherche
-                const mergedFilteredParcels = filteredParcels.map((p: any) => ({
-                  ...p,
-                  ...(localParcelUpdates[p.id] || {})
-                }))
-
+                // ⚡ Version fusionnée (mémoïsée) des résultats de recherche : seules les 10 premières sont affichées
                 return mergedFilteredParcels.slice(0, 10).map((parcel: any) => {
                   // Les données sont déjà fusionnées
                 const sc = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
@@ -1035,7 +1481,7 @@ export default function ParcelsTab() {
                       </div>
 
                       {/* Boutons toggle - version compacte */}
-                      {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                      {canManageStatus(parcel) && (
                         <div className="flex-shrink-0">
                           <QuickStatusToggles
                             parcel={parcel}
@@ -1207,7 +1653,7 @@ export default function ParcelsTab() {
                       className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
                         driverFilter === 'unassigned' ? 'bg-gray-600 text-white' : 'bg-gray-200 text-gray-600 hover:bg-gray-300'
                       }`}
-                    >❓ Livreur inconnu</button>
+                    >🏬 En gare - {profile?.city}</button>
                     {availableDrivers.map((driver: any) => (
                       <button key={driver.id} onClick={() => setDriverFilter(driver.id)}
                         className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
@@ -1239,19 +1685,47 @@ export default function ParcelsTab() {
                   {/* Type d'encaissement */}
                   <div className="px-4 py-3 flex items-center gap-1.5 flex-wrap">
                     <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Encaiss.</span>
+                    {/* "Tous" / "Simple" restent exclusifs et effacent la sélection multiple ci-dessous */}
                     {[
                       { key: 'all', label: 'Tous', emoji: '📦' },
                       { key: 'simple', label: 'Simple', emoji: '💰' },
-                      { key: 'especes', label: 'Espèces', emoji: '💵' },
-                      { key: 'cheque', label: 'Chèque', emoji: '📝' },
-                      { key: 'traite', label: 'Traite', emoji: '📄' },
                     ].map(({ key, label, emoji }) => (
-                      <button key={key} onClick={() => setEncaissementFilter(key)}
+                      <button key={key} onClick={() => { setEncaissementFilter(key); setEncaissementTypesFilter([]) }}
                         className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
-                          encaissementFilter === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                          encaissementFilter === key && encaissementTypesFilter.length === 0 ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                         }`}
                       >{emoji} {label}</button>
                     ))}
+                    <span className="w-px h-4 bg-gray-200 mx-0.5" />
+                    {/* ⭐ Espèces/Chèque/Traite : sélection MULTIPLE — on peut cocher plusieurs
+                        types d'encaissement en même temps (ex: Chèque + Traite ensemble). */}
+                    {[
+                      { key: 'especes', label: 'Espèces', emoji: '💵' },
+                      { key: 'cheque', label: 'Chèque', emoji: '📝' },
+                      { key: 'traite', label: 'Traite', emoji: '📄' },
+                    ].map(({ key, label, emoji }) => {
+                      const isSelected = encaissementTypesFilter.includes(key)
+                      return (
+                        <button key={key} onClick={() => {
+                            setEncaissementFilter('all')
+                            setEncaissementTypesFilter(isSelected
+                              ? encaissementTypesFilter.filter((k: string) => k !== key)
+                              : [...encaissementTypesFilter, key])
+                          }}
+                          className={`shrink-0 px-2.5 py-1 rounded-full text-[10px] font-semibold transition whitespace-nowrap ${
+                            isSelected ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                          }`}
+                        >{isSelected ? '☑' : '☐'} {emoji} {label}</button>
+                      )
+                    })}
+                    {encaissementTypesFilter.length > 0 && (
+                      <button
+                        onClick={() => setEncaissementTypesFilter([])}
+                        className="text-[9px] text-red-600 hover:text-red-700 font-semibold ml-1"
+                      >
+                        ✕ Effacer
+                      </button>
+                    )}
                   </div>
 
                   {/* Statut document COD (sélection multiple) */}
@@ -1362,6 +1836,26 @@ export default function ParcelsTab() {
                       >
                         ✅ Livraison
                       </button>
+                      {/* ⚠️ Les données affichées viennent du cache local le temps que le
+                          serveur confirme — évite de croire le total "final" trop tôt. */}
+                      {syncingParcels && (
+                        <span className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-50 text-amber-600 text-[11px] font-semibold">
+                          <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                          Synchronisation…
+                        </span>
+                      )}
+                      {/* 🔵 Pagination progressive VISIBLE : au-delà du 1er lot rapide (2000
+                          colis/requête), le reste se charge automatiquement en arrière-plan par
+                          tranches — cet indicateur montre que les totaux ne sont pas encore
+                          complets, plutôt que de laisser croire à tort qu'ils le sont. */}
+                      {(loadingAllAgency || loadingAllCities) && (
+                        <AgencyLoadProgress
+                          store={agencyProgressStore}
+                          displayCount={(allDisplayParcels || []).length}
+                          agencyLoading={!!loadingAllAgency}
+                          citiesProgress={loadAllCitiesProgress || 0}
+                        />
+                      )}
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Période</span>
@@ -1446,8 +1940,9 @@ export default function ParcelsTab() {
         })()}
 
         {(() => {
-          const loadableParcels = filteredParcels.filter(canLoadTransportParcel)
-          const selectedCount = bulkLoadSelectedIds.filter((id: any) => loadableParcels.some((p: any) => p.id === id)).length
+          const loadableParcels = loadableParcelsMemo
+          // ⚡ Set d'ids : l'ancien .some() imbriqué était O(sélection × colis)
+          const selectedCount = bulkLoadSelectedIds.filter((id: any) => loadableIdSet.has(id)).length
           const allSelected = loadableParcels.length > 0 && selectedCount === loadableParcels.length
           const aideValidationParcels = (profile?.role === 'chef_agence' || profile?.role === 'agentpro')
             ? filteredParcels.filter(isPendingAideParcelForAgency)
@@ -1515,7 +2010,7 @@ export default function ParcelsTab() {
                           sectorCode: selectedDriver.sectorCode,
                         } : undefined
 
-                        handlePrintTable(parcelsToPrint, selectedDriver?.name, visibleColumns, printOrientation, driverInfo)
+                        handlePrintTable(parcelsToPrint, selectedDriver?.name || (driverFilter === 'unassigned' ? `En gare - ${profile?.city || ''}` : undefined), visibleColumns, printOrientation, driverInfo)
                       }}
                       className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-orange-600 text-white hover:bg-orange-700 transition"
                       title="Imprimer uniquement les colis sélectionnés"
@@ -1570,7 +2065,7 @@ export default function ParcelsTab() {
 
                       console.log('driverInfo final:', driverInfo)
 
-                      handlePrintTable(filteredParcels, selectedDriver?.name, visibleColumns, printOrientation, driverInfo)
+                      handlePrintTable(filteredParcels, selectedDriver?.name || (driverFilter === 'unassigned' ? `En gare - ${profile?.city || ''}` : undefined), visibleColumns, printOrientation, driverInfo)
                     }}
                     disabled={filteredParcels.length === 0}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
@@ -1780,7 +2275,7 @@ export default function ParcelsTab() {
                           // Déterminer le type de paiement prédominant
                           const paymentTypes = selectedParcels
                             .filter((p: any) => p.codAmount && p.codAmount > 0)
-                            .map((p: any) => p.codPaymentType)
+                            .map((p: any) => codPaymentTypeOf(p) || 'especes')
                           const paymentCounts: any = {}
                           paymentTypes.forEach((t: string) => {
                             paymentCounts[t] = (paymentCounts[t] || 0) + 1
@@ -1883,12 +2378,7 @@ export default function ParcelsTab() {
               {/* ⭐ NOUVEAU: Panneau d'assignation en masse à un livreur (chef d'agence et agentpro) */}
               {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (() => {
                 // Colis assignables: arrivés dans la ville du chef, pas encore livrés
-                const assignableParcels = filteredParcels.filter((p: any) => {
-                  const isInMyCity = (p.destinationCity === profile?.city || p.receiver?.city === profile?.city)
-                  // Tous les colis dans ma ville qui ne sont pas livrés ni retournés
-                  const notDelivered = !p.deliveredAt && !p.returnedAt && p.status !== 'Livré'
-                  return isInMyCity && notDelivered
-                })
+                const assignableParcels = assignableParcelsMemo
                 const selectedCount = bulkAssignSelectedIds.length
                 const allSelected = assignableParcels.length > 0 && selectedCount === assignableParcels.length
 
@@ -1995,7 +2485,7 @@ export default function ParcelsTab() {
                             // Déterminer le type de paiement prédominant
                             const paymentTypes = selectedParcels
                               .filter((p: any) => p.codAmount && p.codAmount > 0)
-                              .map((p: any) => p.codPaymentType)
+                              .map((p: any) => codPaymentTypeOf(p) || 'especes')
                             const paymentCounts: any = {}
                             paymentTypes.forEach((t: string) => {
                               paymentCounts[t] = (paymentCounts[t] || 0) + 1
@@ -2119,450 +2609,12 @@ export default function ParcelsTab() {
                 )
               })()}
 
-              {/* ⭐ FEUILLE DE CHARGE PERSONNALISÉE */}
-              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
-                <div className="mb-4 bg-gradient-to-br from-blue-50 to-indigo-50 border-2 border-blue-300 rounded-2xl overflow-hidden">
-                  {/* Header avec flèche toggle */}
-                  <button
-                    type="button"
-                    onClick={() => setIsCustomSheetOpen(!isCustomSheetOpen)}
-                    className="w-full p-4 sm:p-5 flex items-center justify-between gap-3 hover:bg-blue-100/50 transition cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <span className="text-xl shrink-0">📋</span>
-                      <div className="text-left">
-                        <h3 className="text-base font-bold text-blue-800">
-                          Feuille de charge personnalisée
-                        </h3>
-                        <p className="text-xs text-blue-600 mt-0.5">
-                          Recherchez et ajoutez des expéditions manuellement
-                        </p>
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2 shrink-0">
-                      {customSheetParcels.length > 0 && (
-                        <span className="px-2 py-1 bg-blue-600 text-white rounded-lg text-xs font-bold">
-                          {customSheetParcels.length}
-                        </span>
-                      )}
-                      <ChevronDown
-                        className={`w-5 h-5 text-blue-700 transition-transform ${isCustomSheetOpen ? 'rotate-180' : ''}`}
-                      />
-                    </div>
-                  </button>
-
-                  {/* Contenu collapsible */}
-                  {isCustomSheetOpen && (
-                    <div className="px-4 sm:px-5 pb-4 sm:pb-5 space-y-4 border-t-2 border-blue-300">
-                      {/* Bouton vider en haut si des colis sont ajoutés */}
-                      {customSheetParcels.length > 0 && (
-                        <div className="flex justify-end pt-4">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setCustomSheetParcels([])
-                              setCustomSheetPointage({})
-                              setCustomSheetDriver('')
-                            }}
-                            className="px-3 py-2 rounded-xl text-xs font-bold bg-red-100 hover:bg-red-200 text-red-700 border border-red-300 transition flex items-center gap-1"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                            Vider la feuille ({customSheetParcels.length})
-                          </button>
-                        </div>
-                      )}
-
-                  {/* Sélection du livreur */}
-                  <div className="bg-white border border-blue-200 rounded-xl px-4 py-3 space-y-3">
-                    <div>
-                      <label className="text-xs font-bold text-blue-700 uppercase tracking-wider block mb-2">
-                        Livreur pour cette feuille *
-                      </label>
-                      <select
-                        value={customSheetDriver}
-                        onChange={e => setCustomSheetDriver(e.target.value)}
-                        className="w-full text-sm font-semibold text-gray-800 border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-                      >
-                        <option value="">-- Choisir un livreur --</option>
-                        {(drivers || [])
-                          .filter((d: any) => d.city === profile?.city && ['livreur', 'chauffeur'].includes(d.role) && d.sectorId)
-                          .map((d: any) => (
-                            <option key={d.id} value={d.id}>{d.name}</option>
-                          ))}
-                      </select>
-                    </div>
-                    {customSheetDriver && (
-                      <button
-                        type="button"
-                        onClick={() => {
-                          // Charger tous les colis assignés à ce livreur
-                          const driverParcels = allDisplayParcels.filter((p: any) =>
-                            p.deliveryDriverId === customSheetDriver &&
-                            !p.deliveredAt
-                          )
-                          setCustomSheetParcels(driverParcels)
-                          setCustomSheetPointage({})
-                        }}
-                        className="w-full px-4 py-2.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold transition flex items-center justify-center gap-2"
-                      >
-                        <Truck className="w-4 h-4" />
-                        Charger la feuille du livreur ({allDisplayParcels.filter((p: any) => p.deliveryDriverId === customSheetDriver && !p.deliveredAt).length} colis)
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Zone de recherche */}
-                  <div className="bg-white border border-blue-200 rounded-xl px-3 sm:px-4 py-3 space-y-3">
-                    <label className="text-xs font-bold text-blue-700 uppercase tracking-wider block">
-                      🔍 <span className="hidden sm:inline">RECHERCHER UNE</span> EXPÉDITION
-                    </label>
-                    <div className="flex gap-2 flex-wrap sm:flex-nowrap">
-                      <input
-                        type="text"
-                        value={customSheetSearch}
-                        onChange={e => {
-                          setCustomSheetSearch(e.target.value)
-                          setCustomSheetSearchResult(null)
-                        }}
-                        placeholder="N° EXP, nom, téléphone..."
-                        className="flex-1 min-w-0 text-sm border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-blue-500"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => {
-                          const query = customSheetSearch.trim().toLowerCase()
-                          if (!query) return
-
-                          // Chercher dans TOUTES les expéditions de l'agence
-                          const found = allDisplayParcels.find((p: any) => {
-                            const searchValues = [
-                              p.parcelNumber,
-                              p.sender?.name,
-                              p.sender?.phone,
-                              p.receiver?.name,
-                              p.receiver?.phone,
-                            ]
-                            return matchesSearch(searchValues, query)
-                          })
-
-                          setCustomSheetSearchResult(found || null)
-                        }}
-                        className="px-4 py-2 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold transition flex items-center gap-2 shrink-0 whitespace-nowrap"
-                      >
-                        <Search className="w-4 h-4 shrink-0" />
-                        Chercher
-                      </button>
-                    </div>
-
-                    {/* Résultat de recherche */}
-                    {customSheetSearchResult && (
-                      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-                        <div className="flex items-start justify-between gap-3">
-                          <div className="flex-1 space-y-1">
-                            <p className="text-sm font-bold text-gray-800">
-                              📦 {customSheetSearchResult.parcelNumber}
-                            </p>
-                            <p className="text-xs text-gray-600">
-                              <strong>Expéditeur:</strong> {customSheetSearchResult.sender?.name} ({customSheetSearchResult.sender?.phone})
-                            </p>
-                            <p className="text-xs text-gray-600">
-                              <strong>Destinataire:</strong> {customSheetSearchResult.receiver?.name} ({customSheetSearchResult.receiver?.phone})
-                            </p>
-                            <p className="text-xs text-gray-600">
-                              <strong>Destination:</strong> {customSheetSearchResult.destinationCity || customSheetSearchResult.receiver?.city}
-                            </p>
-                          </div>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!customSheetParcels.find((p: any) => p.id === customSheetSearchResult.id)) {
-                                setCustomSheetParcels([...customSheetParcels, customSheetSearchResult])
-                                setCustomSheetSearch('')
-                                setCustomSheetSearchResult(null)
-                              }
-                            }}
-                            disabled={customSheetParcels.find((p: any) => p.id === customSheetSearchResult.id)}
-                            className="px-4 py-2 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold transition"
-                          >
-                            ➕ Ajouter
-                          </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {customSheetSearch.trim() && !customSheetSearchResult && (
-                      <p className="text-xs text-red-600 font-semibold">
-                        ❌ Aucune expédition trouvée
-                      </p>
-                    )}
-                  </div>
-
-                  {/* Liste des expéditions ajoutées */}
-                  {customSheetParcels.length > 0 && (
-                    <div className="bg-white border border-blue-200 rounded-xl p-4 space-y-3">
-                      <h4 className="text-sm font-bold text-blue-800 flex items-center gap-2">
-                        📋 Expéditions dans la feuille ({customSheetParcels.length})
-                      </h4>
-                      <div className="space-y-2 max-h-96 overflow-y-auto">
-                        {customSheetParcels.map((parcel: any) => (
-                          <div key={parcel.id} className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-                            <div className="flex items-start justify-between gap-3 mb-2">
-                              <div className="flex-1 space-y-1">
-                                <p className="text-sm font-bold text-gray-800">
-                                  📦 {parcel.parcelNumber}
-                                </p>
-                                <p className="text-xs text-gray-600">
-                                  {parcel.receiver?.name} - {parcel.receiver?.phone}
-                                </p>
-                                <p className="text-xs text-gray-500">
-                                  {parcel.destinationCity || parcel.receiver?.city}
-                                </p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setCustomSheetParcels(customSheetParcels.filter((p: any) => p.id !== parcel.id))
-                                  const newPointage = {...customSheetPointage}
-                                  delete newPointage[parcel.id]
-                                  setCustomSheetPointage(newPointage)
-                                }}
-                                className="px-2 py-1 rounded-lg bg-red-100 hover:bg-red-200 text-red-700 text-xs font-bold transition"
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
-                            </div>
-
-                            {/* Système de pointage */}
-                            <div className="flex items-center gap-2 flex-wrap">
-                              <span className="text-[10px] font-bold text-gray-500 uppercase">Pointage:</span>
-                              {[
-                                { key: 'livre', label: 'Livré', emoji: '✅', color: 'green' },
-                                { key: 'non_livre', label: 'Non livré', emoji: '❌', color: 'red' },
-                                { key: 'souffrance', label: 'Souffrance', emoji: '⚠️', color: 'orange' },
-                              ].map(({ key, label, emoji, color }) => (
-                                <button
-                                  key={key}
-                                  type="button"
-                                  onClick={() => {
-                                    setCustomSheetPointage({
-                                      ...customSheetPointage,
-                                      [parcel.id]: key as any
-                                    })
-                                  }}
-                                  className={`px-2 py-1 rounded-lg text-[10px] font-bold transition ${
-                                    customSheetPointage[parcel.id] === key
-                                      ? `bg-${color}-600 text-white`
-                                      : `bg-${color}-100 text-${color}-700 hover:bg-${color}-200`
-                                  }`}
-                                >
-                                  {emoji} {label}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-
-                      {/* Boutons d'impression et export */}
-                      <div className="pt-3 border-t border-blue-200 flex items-center justify-between gap-3 flex-wrap">
-                        <p className="text-xs text-blue-700">
-                          <strong>{Object.values(customSheetPointage).filter(v => v === 'livre').length}</strong> livrée(s) ·
-                          <strong className="ml-1">{Object.values(customSheetPointage).filter(v => v === 'non_livre').length}</strong> non livrée(s) ·
-                          <strong className="ml-1">{Object.values(customSheetPointage).filter(v => v === 'souffrance').length}</strong> en souffrance
-                        </p>
-                        <div className="flex items-center gap-2">
-                          {/* Bouton Export Excel */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (customSheetParcels.length === 0) {
-                                alert('Aucune expédition à exporter')
-                                return
-                              }
-
-                              const driverName = drivers?.find((d: any) => d.id === customSheetDriver)?.name || 'Non assigné'
-                              const today = new Date().toLocaleDateString('fr-FR')
-                              const timeNow = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })
-
-                              // Créer les données pour Excel
-                              const data: any[] = []
-
-                              // Lignes vides au début (pour que le tableau commence à la ligne 4)
-                              data.push(['', '', '', '', '', '', '', '', ''])
-                              data.push(['', '', '', '', '', '', '', '', ''])
-                              data.push(['', '', '', '', '', '', '', '', ''])
-
-                              // Ligne 4 : Date
-                              data.push([`Date: ${today} ${timeNow}`, '', '', '', '', '', '', '', ''])
-
-                              // Ligne 5 : Total
-                              data.push([`Total: ${customSheetParcels.length} expédition(s)`, '', '', '', '', '', '', '', ''])
-
-                              // Ligne 6 : Vide
-                              data.push(['', '', '', '', '', '', '', '', ''])
-
-                              // Ligne 7 : Headers
-                              data.push(['N° EXP (NIC)', 'Destinataire', 'Téléphone', 'Ville Exp.', 'Ville Dest.', 'Statut', 'Pointage', 'COD', 'Service'])
-
-                              // Lignes 5+ : Données
-                              customSheetParcels.forEach((p: any) => {
-                                // Formater le COD
-                                let codText = ''
-                                if (p.codAmount && p.codAmount > 0) {
-                                  const paymentType = p.codPaymentType === 'cheque' ? 'C/Chèque' :
-                                                      p.codPaymentType === 'especes' ? 'C/Espèces' :
-                                                      p.codPaymentType === 'traite' ? 'C/Traite' : 'COD'
-                                  codText = `${p.codAmount} DH (${paymentType})`
-                                }
-
-                                // Formater le service
-                                const serviceText = p.serviceType === 'domicile' ? 'Domicile' :
-                                                   p.serviceType === 'echange' ? 'Echange' :
-                                                   p.serviceType === 'simple' ? 'Simple' : ''
-
-                                data.push([
-                                  p.sender?.nic || '',
-                                  p.receiver?.name || '',
-                                  p.receiver?.phone || '',
-                                  p.sender?.city || p.originCity || '',
-                                  p.destinationCity || p.receiver?.city || '',
-                                  p.status || '',
-                                  customSheetPointage[p.id] === 'livre' ? 'Livré' :
-                                  customSheetPointage[p.id] === 'non_livre' ? 'Non livré' :
-                                  customSheetPointage[p.id] === 'souffrance' ? 'Souffrance' : '',
-                                  codText,
-                                  serviceText
-                                ])
-                              })
-
-                              // Créer le workbook et la worksheet
-                              const wb = XLSX.utils.book_new()
-                              const ws = XLSX.utils.aoa_to_sheet(data)
-
-                              // Largeurs des colonnes
-                              ws['!cols'] = [
-                                { wch: 15 }, // N° EXP
-                                { wch: 25 }, // Destinataire
-                                { wch: 15 }, // Téléphone
-                                { wch: 18 }, // Ville Exp.
-                                { wch: 18 }, // Ville Dest.
-                                { wch: 20 }, // Statut
-                                { wch: 15 }, // Pointage
-                                { wch: 25 }, // COD
-                                { wch: 15 }  // Service
-                              ]
-
-                              // Ajouter la feuille au workbook
-                              XLSX.utils.book_append_sheet(wb, ws, 'Feuille de charge')
-
-                              // Télécharger le fichier
-                              XLSX.writeFile(wb, `Feuille_charge_${driverName}_${today.replace(/\//g, '-')}.xlsx`)
-                            }}
-                            disabled={customSheetParcels.length === 0}
-                            className="px-4 py-2 rounded-xl bg-green-600 hover:bg-green-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold transition flex items-center gap-2"
-                          >
-                            <Download className="w-4 h-4" />
-                            Exporter Excel
-                          </button>
-
-                          {/* Bouton Imprimer */}
-                          <button
-                            type="button"
-                            onClick={() => {
-                              // Filtrer uniquement les expéditions livrées (sans les en compte expéditeur)
-                              const livrees = customSheetParcels.filter((p: any) =>
-                                customSheetPointage[p.id] === 'livre' &&
-                                p.portType !== 'en_compte_expediteur'
-                              )
-
-                              if (livrees.length === 0) {
-                                alert('Aucune expédition livrée à imprimer')
-                                return
-                              }
-
-                              // Créer la feuille d'impression
-                              const driverName = drivers?.find((d: any) => d.id === customSheetDriver)?.name || 'Non assigné'
-                            const html = `
-                              <!DOCTYPE html>
-                              <html>
-                              <head>
-                                <meta charset="UTF-8">
-                                <title>Feuille de charge - ${driverName}</title>
-                                <style>
-                                  body { font-family: Arial; padding: 20px; }
-                                  h1 { text-align: center; color: #1e40af; }
-                                  table { width: 100%; border-collapse: collapse; margin-top: 20px; }
-                                  th, td { border: 1px solid #ccc; padding: 8px; text-align: left; }
-                                  th { background: #1e40af; color: white; }
-                                  .header { display: flex; justify-content: space-between; margin-bottom: 20px; }
-                                </style>
-                              </head>
-                              <body>
-                                <h1>📋 Feuille de charge - Expéditions livrées</h1>
-                                <div class="header">
-                                  <div><strong>Livreur:</strong> ${driverName}</div>
-                                  <div><strong>Date:</strong> ${new Date().toLocaleDateString('fr-FR')}</div>
-                                  <div><strong>Total:</strong> ${livrees.length} expédition(s)</div>
-                                </div>
-                                <table>
-                                  <thead>
-                                    <tr>
-                                      <th>N° EXP</th>
-                                      <th>Destinataire</th>
-                                      <th>Téléphone</th>
-                                      <th>Ville</th>
-                                      <th>Signature</th>
-                                    </tr>
-                                  </thead>
-                                  <tbody>
-                                    ${livrees.map((p: any) => `
-                                      <tr>
-                                        <td>${p.parcelNumber}</td>
-                                        <td>${p.receiver?.name || ''}</td>
-                                        <td>${p.receiver?.phone || ''}</td>
-                                        <td>${p.destinationCity || p.receiver?.city || ''}</td>
-                                        <td style="height: 40px;"></td>
-                                      </tr>
-                                    `).join('')}
-                                  </tbody>
-                                </table>
-                              </body>
-                              </html>
-                            `
-
-                            const win = window.open('', '_blank')
-                            if (win) {
-                              win.document.write(html)
-                              win.document.close()
-                              win.print()
-                            }
-                          }}
-                            disabled={!customSheetDriver || Object.values(customSheetPointage).filter(v => v === 'livre').length === 0}
-                            className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed text-white text-sm font-bold transition flex items-center gap-2"
-                          >
-                            <Printer className="w-4 h-4" />
-                            Imprimer feuille finale
-                          </button>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                    </div>
-                  )}
-                </div>
-              )}
-
               {/* ⭐ TRANSFORMATION GROUPÉE PORT DÛ → COMPTE DESTINATAIRE */}
               {(() => {
                 // Filtrer les parcels Port Dû dans ma ville de destination (non livrés)
-                const portDuParcels = filteredParcels.filter((p: any) => {
-                  const isDestinationAgency = p.destinationCity === profile?.city || p.receiver?.city === profile?.city
-                  const isPortDu = p.portType === 'port_du'
-                  const notDelivered = !p.deliveredAt && p.status !== 'Livré'
-                  return isPortDu && isDestinationAgency && notDelivered
-                })
-
-                const selectedPortDuCount = bulkPortDuSelectedIds.filter((id: string) => portDuParcels.some((p: any) => p.id === id)).length
+                const portDuParcels = portDuParcelsMemo
+                const portDuIds = new Set(portDuParcels.map((p: any) => p.id))
+                const selectedPortDuCount = bulkPortDuSelectedIds.filter((id: string) => portDuIds.has(id)).length
                 const allPortDuSelected = portDuParcels.length > 0 && selectedPortDuCount === portDuParcels.length
 
                 if ((profile?.role === 'chef_agence' || profile?.role === 'agentpro') && portDuParcels.length > 0) {
@@ -2669,14 +2721,8 @@ export default function ParcelsTab() {
             <p className="text-sm">Aucune expédition trouvée</p>
           </div>
         ) : (() => {
-          // ⚡ D'abord fusionner filteredParcels avec les mises à jour locales
-          const mergedFilteredParcels = filteredParcels.map((p: any) => ({
-            ...p,
-            ...(localParcelUpdates[p.id] || {})
-          }))
-
-          // ⭐ Appliquer le filtre de recherche du tableau sur TOUS les parcels fusionnés
-          const tableFilteredParcels = getTableFilteredParcels(mergedFilteredParcels)
+          // ⭐ Fusion + filtre de recherche du tableau sur TOUS les parcels : mémoïsés plus haut
+          const tableFilteredParcels = tableFilteredParcelsMemo
 
           const totalPages = Math.max(1, Math.ceil(tableFilteredParcels.length / PAGE_SIZE))
           const safePage = Math.min(parcelPage, totalPages - 1)
@@ -2695,36 +2741,49 @@ export default function ParcelsTab() {
           // ⭐ Utiliser tableFilteredParcels pour refléter la recherche du tableau
           const parcelsForTotals = tableFilteredParcels
 
-          // RETOUR FOND (COD): collecté à la DESTINATION (colis à livrer dans cette ville)
-          const totalCod = parcelsForTotals.reduce((sum: number, p: any) => {
-            const isDestination = p.destinationCity === agencyCity || p.receiver?.city === agencyCity
-            return sum + (isDestination ? (parseFloat(p.codAmount) || 0) : 0)
-          }, 0)
+          // RETOUR FOND (COD) / Port dû / En compte dest. : à la DESTINATION ; Port payé / En compte exp. : à l'ORIGINE.
+          // ⚠️ Port dû inclut 'port_du_cheque'. ⚡ Totaux mémoïsés (tableTotals) : recalculés seulement si la liste change.
+          const isPortDuType = (p: any) => p.portType === 'port_du' || p.portType === 'port_du_cheque'
+          const { totalCod, totalPortDu, totalPortPaye, totalPortEnCompteExp, totalPortEnCompteDest } = tableTotals
 
-          // Port Dû: collecté à la DESTINATION (colis reçus dans cette ville)
-          const totalPortDu = parcelsForTotals.reduce((sum: number, p: any) => {
-            const isDestination = p.destinationCity === agencyCity || p.receiver?.city === agencyCity
-            return sum + (p.portType === 'port_du' && isDestination ? (parseFloat(p.price) || 0) : 0)
-          }, 0)
-
-          // Port Payé: collecté à l'ORIGINE (colis expédiés depuis cette ville)
-          const totalPortPaye = parcelsForTotals.reduce((sum: number, p: any) => {
-            const isOrigin = p.originCity === agencyCity || p.sender?.city === agencyCity
-            return sum + (p.portType === 'port_paye' && isOrigin ? (parseFloat(p.price) || 0) : 0)
-          }, 0)
-
-          // En Compte EXPÉDITEUR: à l'ORIGINE (NE se paie PAS par le chef - service compta gère)
-          const totalPortEnCompteExp = parcelsForTotals.reduce((sum: number, p: any) => {
-            const isOrigin = p.originCity === agencyCity || p.sender?.city === agencyCity
-            const isEnCompteExp = p.portType === 'port_en_compte' || p.portType === 'port_en_compte_expediteur'
-            return sum + (isEnCompteExp && isOrigin ? (parseFloat(p.price) || 0) : 0)
-          }, 0)
-
-          // En Compte DESTINATAIRE: à la DESTINATION (NE se paie PAS par le chef - destinataire paie)
-          const totalPortEnCompteDest = parcelsForTotals.reduce((sum: number, p: any) => {
-            const isDestination = p.destinationCity === agencyCity || p.receiver?.city === agencyCity
-            return sum + (p.portType === 'port_en_compte_destinataire' && isDestination ? (parseFloat(p.price) || 0) : 0)
-          }, 0)
+          // 🔎 Détail cliquable de chaque solde : la liste ouverte doit correspondre
+          // exactement au total affiché, donc on repart de parcelsForTotals.
+          const isOrigin = (p: any) => p.originCity === agencyCity || p.sender?.city === agencyCity
+          const isDestination = (p: any) => p.destinationCity === agencyCity || p.receiver?.city === agencyCity
+          // Titre du tableau RETOUR FOND : reflète le type de valeur sélectionné dans le
+          // filtre "Encaiss." (Espèces / Chèque / Traite), sinon libellé générique.
+          // Les espèces s'"encaissent", les chèques et traites se "collectent" (ce sont des
+          // documents remis, pas de l'argent perçu directement).
+          const codTitleByType: Record<string, string> = {
+            especes: 'Espèces',
+            cheque:  'Chèques',
+            traite:  'Traites',
+          }
+          // ⭐ Sélection multiple : combine les libellés des types cochés (ex: "Chèques + Traites")
+          const codTitleDetail = encaissementTypesFilter.length > 0
+            ? `${encaissementTypesFilter.map((k: string) => codTitleByType[k]).join(' + ')} à collecter`
+            : codTitleByType[encaissementFilter]
+              ? `${codTitleByType[encaissementFilter]} à ${encaissementFilter === 'especes' ? 'encaisser' : 'collecter'}`
+              : null
+          const codTitle = codTitleDetail
+            ? `RETOUR FOND Clients — ${codTitleDetail} à la livraison (${agencyCity || 'agence'})`
+            : `RETOUR FOND Clients — Valeurs à encaisser à la livraison (${agencyCity || 'agence'})`
+          const openDetails = (key: string) => {
+            const defs: Record<string, { title: string; amountKey: string; filter: (p: any) => boolean }> = {
+              cod:            { title: codTitle, amountKey: 'codAmount', filter: p => isDestination(p) && (parseFloat(p.codAmount) || 0) > 0 },
+              port_paye:      { title: `Ports Payés — Expéditions envoyées depuis ${agencyCity || 'l\'agence'}`,               amountKey: 'price',     filter: p => p.portType === 'port_paye' && isOrigin(p) },
+              port_du:        { title: `Ports Dûs — Expéditions à encaisser à la livraison (${agencyCity || 'agence'})`,       amountKey: 'price',     filter: p => isPortDuType(p) && isDestination(p) },
+              en_compte_exp:  { title: `Ports en Compte Expéditeur — Facturés au client expéditeur`,                           amountKey: 'price', filter: p => (p.portType === 'port_en_compte' || p.portType === 'port_en_compte_expediteur') && isOrigin(p) },
+              en_compte_dest: { title: `Ports en Compte Destinataire — Facturés au client destinataire`,                       amountKey: 'price', filter: p => p.portType === 'port_en_compte_destinataire' && isDestination(p) },
+            }
+            const def = defs[key]
+            // Nom du livreur filtré, ajouté au titre pour que l'impression reste explicite
+            // une fois sortie de son contexte à l'écran.
+            const driverLabel = driverFilter === 'unassigned' ? `En gare - ${profile?.city || ''}`
+              : driverFilter !== 'all' ? availableDrivers.find((d: any) => d.id === driverFilter)?.name : null
+            const titleWithDriver = driverLabel ? `${def.title} — Livreur : ${driverLabel}` : def.title
+            setPortDetailsModal({ open: true, portType: key, title: `${titleWithDriver} — ${periodLabel}`, amountKey: def.amountKey, parcels: parcelsForTotals.filter(def.filter) })
+          }
 
           return viewMode === 'table' ? (
             // ═══════════════════════════════════════════════════════════════════
@@ -2733,6 +2792,14 @@ export default function ParcelsTab() {
             <div className="space-y-4">
               {/* Résumé des totaux */}
               <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-orange-200 rounded-xl p-4 shadow-lg">
+                {/* 🗓️ "Période" est basée sur la journée d'opération (8h → 6h lendemain) : on
+                    l'affiche explicitement pour que le total corresponde bien à ce qui est
+                    montré, plutôt que de laisser croire à une plage calendaire simple. */}
+                {datePreset === 'custom' && dateFrom && dateTo && (
+                  <p className="text-xs text-gray-500 mb-2">
+                    🗓️ Journée d'opération : {new Date(dateFrom + 'T12:00:00').toLocaleDateString('fr-MA')} 08h00 → {new Date(dateTo + 'T12:00:00').toLocaleDateString('fr-MA')} +1j 06h00
+                  </p>
+                )}
                 <div className="flex items-center justify-between gap-6 flex-wrap">
                   <div className="flex items-center gap-2">
                     <Package className="w-5 h-5 text-orange-600" />
@@ -2746,59 +2813,36 @@ export default function ParcelsTab() {
                     )}
                   </div>
                   <div className="flex items-center gap-3 flex-wrap">
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    <button onClick={() => openDetails('cod')}
+                      className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-green-50 transition cursor-pointer shrink-0" title="Voir et imprimer le détail">
                       <Banknote className="w-4 h-4 text-green-600 shrink-0" />
                       <span className="text-xs text-gray-600 whitespace-nowrap">Total RETOUR FOND :</span>
                       <span className="text-sm font-black text-green-700">{totalCod.toLocaleString('fr-MA')} DH</span>
-                    </div>
-                    <button
-                      onClick={() => {
-                        const portPayeParcels = filteredParcels.filter((p: any) => {
-                          const isOrigin = p.originCity === agencyCity || p.sender?.city === agencyCity
-                          return p.portType === 'port_paye' && isOrigin
-                        })
-                        setPortDetailsModal({
-                          open: true,
-                          portType: 'port_paye',
-                          title: 'Ports Payés',
-                          parcels: portPayeParcels
-                        })
-                      }}
-                      className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-blue-50 transition cursor-pointer shrink-0"
-                    >
+                    </button>
+                    <button onClick={() => openDetails('port_paye')}
+                      className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-blue-50 transition cursor-pointer shrink-0" title="Voir et imprimer le détail">
                       <span className="text-lg shrink-0">✅</span>
                       <span className="text-xs text-gray-600 whitespace-nowrap">Total Port payé :</span>
                       <span className="text-sm font-black text-blue-700">{totalPortPaye.toLocaleString('fr-MA')} DH</span>
                     </button>
-                    <button
-                      onClick={() => {
-                        const portDuParcels = filteredParcels.filter((p: any) => {
-                          const isDestination = p.destinationCity === agencyCity || p.receiver?.city === agencyCity
-                          return p.portType === 'port_du' && isDestination
-                        })
-                        setPortDetailsModal({
-                          open: true,
-                          portType: 'port_du',
-                          title: 'Ports Dûs',
-                          parcels: portDuParcels
-                        })
-                      }}
-                      className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-orange-50 transition cursor-pointer shrink-0"
-                    >
+                    <button onClick={() => openDetails('port_du')}
+                      className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-orange-50 transition cursor-pointer shrink-0" title="Voir et imprimer le détail">
                       <span className="text-lg shrink-0">📮</span>
                       <span className="text-xs text-gray-600 whitespace-nowrap">Total Port dû :</span>
                       <span className="text-sm font-black text-orange-700">{totalPortDu.toLocaleString('fr-MA')} DH</span>
                     </button>
-                    <div className="flex items-center gap-1.5 opacity-60 shrink-0">
+                    <button onClick={() => openDetails('en_compte_exp')}
+                      className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-gray-100 transition cursor-pointer shrink-0" title="Voir et imprimer le détail">
                       <span className="text-lg shrink-0">💼</span>
                       <span className="text-xs text-gray-500 whitespace-nowrap">Port en compte Exp. :</span>
                       <span className="text-sm font-bold text-gray-600">{totalPortEnCompteExp.toLocaleString('fr-MA')} DH</span>
-                    </div>
-                    <div className="flex items-center gap-1.5 opacity-60 shrink-0">
+                    </button>
+                    <button onClick={() => openDetails('en_compte_dest')}
+                      className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-gray-100 transition cursor-pointer shrink-0" title="Voir et imprimer le détail">
                       <span className="text-lg shrink-0">🎯</span>
                       <span className="text-xs text-gray-500 whitespace-nowrap">Port en compte Dest. :</span>
                       <span className="text-sm font-bold text-gray-600">{totalPortEnCompteDest.toLocaleString('fr-MA')} DH</span>
-                    </div>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -2859,7 +2903,7 @@ export default function ParcelsTab() {
                 )}
               </div>
 
-              <div className="overflow-x-auto bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 rounded-2xl shadow-xl border-2 border-purple-200">
+              <HScrollArrows className="bg-gradient-to-br from-blue-50 via-purple-50 to-pink-50 rounded-2xl shadow-xl border-2 border-purple-200">
                 <table className="w-full text-xs">
                   <thead className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white sticky top-0 shadow-lg">
                     <tr>
@@ -2929,7 +2973,29 @@ export default function ParcelsTab() {
                         </th>
                       )}
                       {visibleColumns.service && <th className="px-4 py-4 text-left font-bold whitespace-nowrap border-r border-purple-400/30">Service</th>}
-                      {visibleColumns.nbColis && <th className="px-4 py-4 text-center font-bold whitespace-nowrap border-r border-purple-400/30">Nb Colis</th>}
+                      {visibleColumns.nbColis && (
+                        <th className="px-4 py-4 text-center font-bold whitespace-nowrap border-r border-purple-400/30">
+                          <div className="flex flex-col items-center gap-1">
+                            <span>Nb Colis</span>
+                            <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                              <input
+                                type="number"
+                                placeholder="Min"
+                                value={nbColisFilterMin}
+                                onChange={e => setNbColisFilterMin(e.target.value)}
+                                className="w-12 px-1 py-1 text-xs border border-purple-300 rounded bg-white text-gray-900 placeholder-gray-500 focus:ring-1 focus:ring-purple-500 focus:border-purple-500"
+                              />
+                              <input
+                                type="number"
+                                placeholder="Max"
+                                value={nbColisFilterMax}
+                                onChange={e => setNbColisFilterMax(e.target.value)}
+                                className="w-12 px-1 py-1 text-xs border border-purple-300 rounded bg-white text-gray-900 placeholder-gray-500 focus:ring-1 focus:ring-purple-500 focus:border-purple-500"
+                              />
+                            </div>
+                          </div>
+                        </th>
+                      )}
                       {visibleColumns.poids && <th className="px-4 py-4 text-center font-bold whitespace-nowrap border-r border-purple-400/30">Poids</th>}
                       {visibleColumns.port && (
                         <th className="px-4 py-4 text-right font-bold whitespace-nowrap border-r border-purple-400/30 bg-green-600/30">
@@ -2947,8 +3013,24 @@ export default function ParcelsTab() {
                       )}
                       {visibleColumns.cod && (
                         <th className="px-4 py-4 text-right font-bold whitespace-nowrap border-r border-purple-400/30 bg-green-600/30">
-                          <div className="flex items-center justify-end gap-1">
-                            💵 COD
+                          <div className="flex flex-col items-end gap-1">
+                            <span className="flex items-center gap-1">💵 COD</span>
+                            <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                              <input
+                                type="number"
+                                placeholder="Min"
+                                value={codFilterMin}
+                                onChange={e => setCodFilterMin(e.target.value)}
+                                className="w-14 px-1 py-1 text-xs border border-green-300 rounded bg-white text-gray-900 placeholder-gray-500 focus:ring-1 focus:ring-green-500 focus:border-green-500"
+                              />
+                              <input
+                                type="number"
+                                placeholder="Max"
+                                value={codFilterMax}
+                                onChange={e => setCodFilterMax(e.target.value)}
+                                className="w-14 px-1 py-1 text-xs border border-green-300 rounded bg-white text-gray-900 placeholder-gray-500 focus:ring-1 focus:ring-green-500 focus:border-green-500"
+                              />
+                            </div>
                           </div>
                         </th>
                       )}
@@ -2963,22 +3045,8 @@ export default function ParcelsTab() {
                     </tr>
                   </thead>
                   <tbody className="bg-white">
-                    {pagedParcels.filter((p: any) => {
-                      // ⭐ Filtre par recherche tableau
-                      if (!tableSearch) return true
-                      const searchLower = tableSearch.toLowerCase()
-                      return (
-                        p.sender?.nic?.toLowerCase().includes(searchLower) ||
-                        p.trackingId?.toLowerCase().includes(searchLower) ||
-                        p.sender?.name?.toLowerCase().includes(searchLower) ||
-                        p.receiver?.name?.toLowerCase().includes(searchLower) ||
-                        p.sender?.tel?.toLowerCase().includes(searchLower) ||
-                        p.receiver?.tel?.toLowerCase().includes(searchLower) ||
-                        p.sender?.city?.toLowerCase().includes(searchLower) ||
-                        p.receiver?.city?.toLowerCase().includes(searchLower) ||
-                        p.receiver?.address?.toLowerCase().includes(searchLower)
-                      )
-                    }).map((parcel: any, idx: number) => {
+                    {/* pagedParcels est déjà filtré par la recherche tableau (getTableFilteredParcels) */}
+                    {pagedParcels.map((parcel: any, idx: number) => {
                       const isOwn = canActAsParcelOwner(parcel)
                       const sc = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
                       const serviceType = ALL_SERVICE_TYPES.find(st => st.key === parcel.serviceType)
@@ -3026,6 +3094,17 @@ export default function ParcelsTab() {
                                       if (checked && bulkAssignDriverId) {
                                         const driverColor = getDriverColor(bulkAssignDriverId)
                                         setParcelColors(prev => ({ ...prev, [parcel.id]: driverColor }))
+                                      }
+
+                                      // ⚠️ Sélection atteinte via une recherche (Tab depuis le champ,
+                                      // voir handleKeyDown) : vider la recherche et remettre le focus
+                                      // dessus pour enchaîner directement sur une nouvelle recherche,
+                                      // sans avoir à cliquer sur le champ à chaque colis.
+                                      if (checked && tableSearch) {
+                                        setTableSearch('')
+                                        setTimeout(() => {
+                                          searchInputRef.current?.focus()
+                                        }, 100)
                                       }
                                     }}
                                     tabIndex={0}
@@ -3126,7 +3205,7 @@ export default function ParcelsTab() {
                             <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
                               {(() => {
                                 const isOriginAgency = parcel.originCity === profile?.city || parcel.sender?.city === profile?.city
-                                const canEditDate = profile?.role === 'chef_agence' && isOriginAgency
+                                const canEditDate = (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && isOriginAgency
 
                                 // Utiliser expeditionDate si défini, sinon createdAt
                                 let currentDate: Date | null = null
@@ -3208,9 +3287,14 @@ export default function ParcelsTab() {
                           {visibleColumns.dateLivraison && (
                             <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
                               <span className="text-gray-600 font-medium text-sm">
-                                {parcel.deliveredAt
-                                  ? new Date(parcel.deliveredAt).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' })
-                                  : '—'}
+                                {/* ⚠️ deliveredAt existe en base sous deux formats (chaîne ISO ou
+                                    Timestamp Firestore selon le chemin d'écriture) — new Date() seul
+                                    sur un Timestamp produit "Invalid Date". Gérer les deux. */}
+                                {parcel.deliveredAt?.toDate
+                                  ? parcel.deliveredAt.toDate().toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+                                  : parcel.deliveredAt
+                                    ? new Date(parcel.deliveredAt).toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: '2-digit' })
+                                    : '—'}
                               </span>
                             </td>
                           )}
@@ -3483,15 +3567,31 @@ export default function ParcelsTab() {
                                     </button>
                                   )}
                                 </div>
+                              ) : (parcel.originCity && parcel.originCity === parcel.destinationCity) ? (
+                                // Expédition LOCALE (ville d'expédition = ville de destination) : « 🚚 En gare - <ville> 🖐️ »
+                                <div className="inline-flex items-center gap-1.5">
+                                  <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded-lg font-semibold">
+                                    🚚 En gare - {parcel.destinationCity}
+                                  </span>
+                                  {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                                    <button
+                                      onClick={() => setChangeDriverModal({ open: true, parcel, newDriverId: '', loading: false, error: '' })}
+                                      className="hover:scale-125 transition-transform cursor-pointer text-base"
+                                      title="Assigner à un livreur"
+                                    >
+                                      🖐️
+                                    </button>
+                                  )}
+                                </div>
                               ) : (
-                                <span className="text-gray-400 text-xs">Non assigné</span>
+                                <span className="text-gray-500 text-xs">En gare - {parcel.destinationCity || profile?.city}</span>
                               )}
                             </td>
                           )}
                           <td className="px-4 py-3">
                             <div className="flex flex-col gap-2">
                               {/* ⚡ Actions rapides — Toggles de statuts (version compacte tableau) */}
-                              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                              {canManageStatus(parcel) && (
                                 <QuickStatusToggles
                                   parcel={parcel}
                                   profile={profile}
@@ -3552,10 +3652,10 @@ export default function ParcelsTab() {
                     })}
                   </tbody>
                 </table>
-              </div>
+              </HScrollArrows>
 
               {/* Pagination pour vue tableau */}
-              {filteredParcels.length > PAGE_SIZE && (() => {
+              {totalPages > 1 && (() => {
                 const goTo = (p: number) => { setParcelPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }) }
                 const pages: number[] = []
                 for (let i = 0; i < totalPages; i++) {
@@ -3627,6 +3727,13 @@ export default function ParcelsTab() {
           <div className="space-y-4">
             {/* Résumé des totaux */}
             <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-orange-200 rounded-xl p-4 shadow-lg">
+              {/* 🗓️ Voir explication dans la vue tableau ci-dessus : "Période" = journée
+                  d'opération (8h → 6h lendemain), affichée pour éviter toute confusion. */}
+              {datePreset === 'custom' && dateFrom && dateTo && (
+                <p className="text-xs text-gray-500 mb-2">
+                  🗓️ Journée d'opération : {new Date(dateFrom + 'T12:00:00').toLocaleDateString('fr-MA')} 08h00 → {new Date(dateTo + 'T12:00:00').toLocaleDateString('fr-MA')} +1j 06h00
+                </p>
+              )}
               <div className="flex items-center justify-between gap-6 flex-wrap">
                 <div className="flex items-center gap-2">
                   <Package className="w-5 h-5 text-orange-600" />
@@ -3635,59 +3742,36 @@ export default function ParcelsTab() {
                   </span>
                 </div>
                 <div className="flex items-center gap-3 flex-wrap">
-                  <div className="flex items-center gap-1.5 shrink-0">
+                  <button onClick={() => openDetails('cod')}
+                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-green-50 transition cursor-pointer shrink-0" title="Voir et imprimer le détail">
                     <Banknote className="w-4 h-4 text-green-600 shrink-0" />
                     <span className="text-xs text-gray-600 whitespace-nowrap">Total RETOUR FOND :</span>
                     <span className="text-sm font-black text-green-700">{totalCod.toLocaleString('fr-MA')} DH</span>
-                  </div>
-                  <button
-                    onClick={() => {
-                      const portPayeParcels = filteredParcels.filter((p: any) => {
-                        const isOrigin = p.originCity === agencyCity || p.sender?.city === agencyCity
-                        return p.portType === 'port_paye' && isOrigin
-                      })
-                      setPortDetailsModal({
-                        open: true,
-                        portType: 'port_paye',
-                        title: 'Ports Payés',
-                        parcels: portPayeParcels
-                      })
-                    }}
-                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-blue-50 transition cursor-pointer shrink-0"
-                  >
+                  </button>
+                  <button onClick={() => openDetails('port_paye')}
+                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-blue-50 transition cursor-pointer shrink-0" title="Voir et imprimer le détail">
                     <span className="text-lg shrink-0">✅</span>
                     <span className="text-xs text-gray-600 whitespace-nowrap">Total Port payé :</span>
                     <span className="text-sm font-black text-blue-700">{totalPortPaye.toLocaleString('fr-MA')} DH</span>
                   </button>
-                  <button
-                    onClick={() => {
-                      const portDuParcels = filteredParcels.filter((p: any) => {
-                        const isDestination = p.destinationCity === agencyCity || p.receiver?.city === agencyCity
-                        return p.portType === 'port_du' && isDestination
-                      })
-                      setPortDetailsModal({
-                        open: true,
-                        portType: 'port_du',
-                        title: 'Ports Dûs',
-                        parcels: portDuParcels
-                      })
-                    }}
-                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-orange-50 transition cursor-pointer shrink-0"
-                  >
+                  <button onClick={() => openDetails('port_du')}
+                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-orange-50 transition cursor-pointer shrink-0" title="Voir et imprimer le détail">
                     <span className="text-lg shrink-0">📮</span>
                     <span className="text-xs text-gray-600 whitespace-nowrap">Total Port dû :</span>
                     <span className="text-sm font-black text-orange-700">{totalPortDu.toLocaleString('fr-MA')} DH</span>
                   </button>
-                  <div className="flex items-center gap-1.5 opacity-60 shrink-0">
+                  <button onClick={() => openDetails('en_compte_exp')}
+                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-gray-100 transition cursor-pointer shrink-0" title="Voir et imprimer le détail">
                     <span className="text-lg shrink-0">💼</span>
                     <span className="text-xs text-gray-500 whitespace-nowrap">Port en compte Exp. :</span>
                     <span className="text-sm font-bold text-gray-600">{totalPortEnCompteExp.toLocaleString('fr-MA')} DH</span>
-                  </div>
-                  <div className="flex items-center gap-1.5 opacity-60 shrink-0">
+                  </button>
+                  <button onClick={() => openDetails('en_compte_dest')}
+                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-gray-100 transition cursor-pointer shrink-0" title="Voir et imprimer le détail">
                     <span className="text-lg shrink-0">🎯</span>
                     <span className="text-xs text-gray-500 whitespace-nowrap">Port en compte Dest. :</span>
                     <span className="text-sm font-bold text-gray-600">{totalPortEnCompteDest.toLocaleString('fr-MA')} DH</span>
-                  </div>
+                  </button>
                 </div>
               </div>
             </div>
@@ -3894,7 +3978,10 @@ export default function ParcelsTab() {
                         // Ne pas afficher de badge pour les services "simple"
                         if (parcel.serviceType === 'simple' || !parcel.serviceType) return null
 
-                        const stDef = ALL_SERVICE_TYPES.find(t => t.key === parcel.serviceType)
+                        // Type réel (serviceType fait foi, codPaymentType seulement s'il est cohérent)
+                        const realType = codPaymentTypeOf(parcel)
+                        const badgeKey = realType === 'bon_livraison' ? 'retour_bl' : (realType || parcel.serviceType)
+                        const stDef = ALL_SERVICE_TYPES.find(t => t.key === badgeKey) || ALL_SERVICE_TYPES.find(t => t.key === parcel.serviceType)
                         if (!stDef) return null
 
                         const colors: Record<string, string> = {
@@ -3904,7 +3991,7 @@ export default function ParcelsTab() {
                           retour_bl: 'bg-amber-100 text-amber-700',
                         }
                         return (
-                          <span className={`inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-semibold ${colors[parcel.serviceType] || 'bg-gray-100 text-gray-600'} shrink-0`}>
+                          <span className={`inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-semibold ${colors[stDef.key] || 'bg-gray-100 text-gray-600'} shrink-0`}>
                             {stDef.emoji} {stDef.label}
                           </span>
                         )
@@ -4091,7 +4178,7 @@ export default function ParcelsTab() {
                           : parcel.codSentToSource && !parcel.codReceivedBySource
                           ? { label: 'En transit source', bg: 'bg-blue-100', text: 'text-blue-700' }
                           : COD_STATUS[parcel.codStatus || 'pending']
-                        const cpt = COD_PAYMENT_TYPES.find(t => t.key === (parcel.codPaymentType || parcel.serviceType))
+                        const cpt = COD_PAYMENT_TYPES.find(t => t.key === codPaymentTypeOf(parcel))
                         const st  = ALL_SERVICE_TYPES.find(t => t.key === parcel.serviceType)
                         const emoji = cpt?.emoji || st?.emoji || '💵'
                         // Ne pas afficher "Livré" si c'est un retour
@@ -4100,7 +4187,7 @@ export default function ParcelsTab() {
                         const dispBg  = isCollected && cpt ? cpt.bg   : cs.bg
                         const dispTxt = isCollected && cpt ? cpt.text : cs.text
                         const lbl = isCollected
-                          ? codCollectedLabel(parcel.codPaymentType || parcel.serviceType)
+                          ? codCollectedLabel(codPaymentTypeOf(parcel))
                           : cs.label
                         return (
                           <div className={`mt-1.5 inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${dispBg} ${dispTxt} border border-current/20`}>
@@ -4205,7 +4292,7 @@ export default function ParcelsTab() {
                   )}
 
                   {/* ⚡ Actions rapides — Toggles de statuts en temps réel */}
-                  {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                  {canManageStatus(parcel) && (
                     <QuickStatusToggles
                       parcel={parcel}
                       profile={profile}
@@ -4523,7 +4610,7 @@ export default function ParcelsTab() {
             </div>
 
             {/* Barre de pagination */}
-            {filteredParcels.length > PAGE_SIZE && (() => {
+            {totalPages > 1 && (() => {
               const goTo = (p: number) => { setParcelPage(p); window.scrollTo({ top: 0, behavior: 'smooth' }) }
               // Calcule les numéros à afficher : toujours 1, last, et les 2 autour de safePage
               const pages: number[] = []
@@ -4744,6 +4831,12 @@ export default function ParcelsTab() {
               }}
             >
               {editError && <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {editError}</div>}
+              {editingParcel.shipmentLoadedAt && profile?.role !== 'admin' && (
+                <div className="bg-amber-50 border border-amber-200 text-amber-800 p-3 rounded-xl text-sm flex items-start gap-2">
+                  <Lock className="w-4 h-4 mt-0.5 shrink-0" />
+                  <span>Colis déjà chargé dans un camion : les données du bon sont verrouillées (seul l'administrateur peut les modifier).</span>
+                </div>
+              )}
 
               <section>
                 <h4 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">Expéditeur</h4>
@@ -4923,11 +5016,17 @@ export default function ParcelsTab() {
                     )}
                   </div>
 
-                  {/* RETOUR FOND (COD Amount) */}
+                  {/* RETOUR FOND (COD Amount) — modifiable dès qu'un type de service avec COD est choisi (même depuis « Simple ») */}
+                  {(() => {
+                    const isCodType = (editForm?.serviceType && !['simple','retour_bl','oc',''].includes(editForm.serviceType))
+                    const codEditable = canEditField('codAmount') || (isCodType && canEditField('serviceType'))
+                    return (
                   <div className="col-span-2">
+                    {(() => null)()}
                     <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5 flex items-center gap-2">
                       RETOUR FOND (COD)
-                      {!canEditField('codAmount') && <Lock className="w-3.5 h-3.5 text-gray-400" />}
+                      {isCodType && <span className="normal-case text-green-600 font-bold">← saisissez le montant</span>}
+                      {!codEditable && <Lock className="w-3.5 h-3.5 text-gray-400" />}
                     </label>
                     <div className="relative">
                       <input
@@ -4937,12 +5036,14 @@ export default function ParcelsTab() {
                         placeholder="Montant COD (DH)"
                         value={editForm.codAmount || ''}
                         onChange={ef('codAmount')}
-                        disabled={!canEditField('codAmount')}
-                        className={`${inputCls} ${!canEditField('codAmount') ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''} ${editForm.codAmount > 0 ? 'font-bold text-orange-600' : ''}`}
+                        disabled={!codEditable}
+                        className={`${inputCls} ${!codEditable ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''} ${editForm.codAmount > 0 ? 'font-bold text-orange-600' : ''}`}
                       />
-                      {!canEditField('codAmount') && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
+                      {!codEditable && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
                     </div>
                   </div>
+                    )
+                  })()}
 
                   {/* Type de Port */}
                   <div className="col-span-2">
@@ -5126,6 +5227,7 @@ export default function ParcelsTab() {
                 )}
               </section>
 
+              {editError && <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {editError}</div>}
               <button onClick={handleEditSave} disabled={editLoading}
                 className="w-full bg-blue-600 hover:bg-blue-700 disabled:opacity-60 text-white py-3 rounded-xl font-semibold transition flex items-center justify-center gap-2"
               >
@@ -5465,25 +5567,58 @@ export default function ParcelsTab() {
 
       {/* ── MODAL DÉTAILS PORTS ── */}
       {portDetailsModal.open && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setPortDetailsModal({ open: false, portType: '', title: '', parcels: [] })}>
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4" onClick={() => setPortDetailsModal({ open: false, portType: '', title: '', amountKey: 'price', parcels: [] })}>
           <div className="bg-white rounded-2xl w-full max-w-6xl max-h-[90vh] flex flex-col" onClick={(e) => e.stopPropagation()}>
             {/* Header */}
-            <div className="flex items-center justify-between p-6 border-b border-gray-200">
-              <div>
-                <h3 className="font-bold text-xl text-gray-800">{portDetailsModal.title}</h3>
+            <div className="flex items-start justify-between gap-3 p-6 border-b border-gray-200">
+              <div className="min-w-0 flex-1">
+                <h3 className="font-bold text-xl text-gray-800 break-words">{portDetailsModal.title}</h3>
                 <p className="text-sm text-gray-500 mt-1">
                   {portDetailsModal.parcels.length} expédition{portDetailsModal.parcels.length > 1 ? 's' : ''} • Total: {' '}
-                  <span className={`font-black ${portDetailsModal.portType === 'port_paye' ? 'text-blue-700' : 'text-orange-700'}`}>
-                    {portDetailsModal.parcels.reduce((sum: number, p: any) => sum + (p.price || 0), 0).toLocaleString('fr-MA')} DH
+                  <span className={`font-black ${detailColor}`}>
+                    {detailTotal().toLocaleString('fr-MA')} DH
                   </span>
                 </p>
               </div>
-              <button
-                onClick={() => setPortDetailsModal({ open: false, portType: '', title: '', parcels: [] })}
-                className="p-2 hover:bg-gray-100 rounded-xl transition"
-              >
-                <X className="w-6 h-6 text-gray-500" />
-              </button>
+              <div className="flex items-center gap-2 shrink-0 relative">
+                <button
+                  onClick={() => setPrintChoiceMenuOpen(v => !v)}
+                  className="p-2 hover:bg-blue-100 rounded-xl transition flex items-center gap-2 px-4 bg-blue-50 text-blue-700 shrink-0"
+                  title="Imprimer la liste"
+                >
+                  <Printer className="w-5 h-5" />
+                  <span className="text-sm font-semibold whitespace-nowrap">Imprimer</span>
+                  <ChevronDown className="w-4 h-4" />
+                </button>
+                {printChoiceMenuOpen && (
+                  <div className="absolute top-full right-0 mt-1 z-20 bg-white border border-gray-200 rounded-xl shadow-lg py-1 w-64">
+                    <button
+                      onClick={() => {
+                        setPrintChoiceMenuOpen(false)
+                        printPortDetails(portDetailsModal.title, portDetailsModal.parcels, detailTotal(), portDetailsModal.portType, profile?.agency || profile?.city || 'Agence', portDetailsModal.amountKey || 'price', 'normal')
+                      }}
+                      className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition"
+                    >
+                      📄 Liste normale
+                    </button>
+                    <button
+                      onClick={() => {
+                        setPrintChoiceMenuOpen(false)
+                        printPortDetails(portDetailsModal.title, portDetailsModal.parcels, detailTotal(), portDetailsModal.portType, profile?.agency || profile?.city || 'Agence', portDetailsModal.amountKey || 'price', 'bordereau')
+                      }}
+                      className="w-full text-left px-4 py-2.5 text-sm hover:bg-gray-50 transition"
+                    >
+                      🧾 Bordereau — Accusé de réception
+                    </button>
+                  </div>
+                )}
+                <button
+                  onClick={() => setPortDetailsModal({ open: false, portType: '', title: '', amountKey: 'price', parcels: [] })}
+                  className="p-2 hover:bg-gray-100 rounded-xl transition shrink-0"
+                >
+                  <X className="w-6 h-6 text-gray-500" />
+                </button>
+              </div>
             </div>
 
             {/* Table */}
@@ -5498,21 +5633,32 @@ export default function ParcelsTab() {
                   <table className="w-full text-sm">
                     <thead className="bg-gray-100 sticky top-0">
                       <tr>
+                        <th className="px-4 py-3 text-center font-semibold text-gray-700 w-10">#</th>
                         <th className="px-4 py-3 text-left font-semibold text-gray-700">N° EXP</th>
-                        <th className="px-4 py-3 text-left font-semibold text-gray-700">Tracking ID</th>
+                        <th className="px-4 py-3 text-left font-semibold text-gray-700">Mode de règlement</th>
                         <th className="px-4 py-3 text-left font-semibold text-gray-700">Date</th>
                         <th className="px-4 py-3 text-left font-semibold text-gray-700">Expéditeur</th>
                         <th className="px-4 py-3 text-left font-semibold text-gray-700">Ville Origine</th>
                         <th className="px-4 py-3 text-left font-semibold text-gray-700">Destinataire</th>
                         <th className="px-4 py-3 text-left font-semibold text-gray-700">Ville Destination</th>
-                        <th className="px-4 py-3 text-right font-semibold text-gray-700">Port</th>
+                        <th className="px-4 py-3 text-right font-semibold text-gray-700">{portDetailsModal.amountKey === 'codAmount' ? 'Montant' : 'Port'}</th>
                       </tr>
                     </thead>
                     <tbody>
                       {portDetailsModal.parcels.map((p: any, idx: number) => (
                         <tr key={p.id || idx} className="border-b border-gray-100 hover:bg-gray-50 transition">
+                          <td className="px-4 py-3 text-center text-xs text-gray-400">{idx + 1}</td>
                           <td className="px-4 py-3 font-mono text-xs">{p.senderNic || p.sender?.nic || '-'}</td>
-                          <td className="px-4 py-3 font-mono text-xs text-blue-600">{p.trackingId || '-'}</td>
+                          <td className="px-4 py-3 text-xs">
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full font-semibold ${
+                              valueTypeOf(p) === 'especes' ? 'bg-green-50 text-green-700' :
+                              valueTypeOf(p) === 'cheque' ? 'bg-blue-50 text-blue-700' :
+                              valueTypeOf(p) === 'traite' ? 'bg-indigo-50 text-indigo-700' :
+                              'bg-gray-100 text-gray-600'
+                            }`}>
+                              {valueTypeLabel(p)}
+                            </span>
+                          </td>
                           <td className="px-4 py-3 text-xs text-gray-600">
                             {p.workDate || (p.createdAt?.toDate ? p.createdAt.toDate().toLocaleDateString('fr-FR') : '-')}
                           </td>
@@ -5527,8 +5673,8 @@ export default function ParcelsTab() {
                           </td>
                           <td className="px-4 py-3 text-xs text-gray-600">{p.destinationCity || p.receiver?.city || '-'}</td>
                           <td className="px-4 py-3 text-right">
-                            <span className={`font-bold ${portDetailsModal.portType === 'port_paye' ? 'text-blue-700' : 'text-orange-700'}`}>
-                              {(p.price || 0).toLocaleString('fr-MA')} DH
+                            <span className={`font-bold ${detailColor}`}>
+                              {detailAmount(p).toLocaleString('fr-MA')} DH
                             </span>
                           </td>
                         </tr>
@@ -5536,10 +5682,10 @@ export default function ParcelsTab() {
                     </tbody>
                     <tfoot className="bg-gray-50 sticky bottom-0">
                       <tr>
-                        <td colSpan={7} className="px-4 py-3 text-right font-bold text-gray-700">TOTAL:</td>
+                        <td colSpan={8} className="px-4 py-3 text-right font-bold text-gray-700">TOTAL:</td>
                         <td className="px-4 py-3 text-right">
-                          <span className={`text-lg font-black ${portDetailsModal.portType === 'port_paye' ? 'text-blue-700' : 'text-orange-700'}`}>
-                            {portDetailsModal.parcels.reduce((sum: number, p: any) => sum + (p.price || 0), 0).toLocaleString('fr-MA')} DH
+                          <span className={`text-lg font-black ${detailColor}`}>
+                            {detailTotal().toLocaleString('fr-MA')} DH
                           </span>
                         </td>
                       </tr>
@@ -5552,7 +5698,7 @@ export default function ParcelsTab() {
             {/* Footer */}
             <div className="p-6 border-t border-gray-200">
               <button
-                onClick={() => setPortDetailsModal({ open: false, portType: '', title: '', parcels: [] })}
+                onClick={() => setPortDetailsModal({ open: false, portType: '', title: '', amountKey: 'price', parcels: [] })}
                 className="w-full py-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-semibold transition"
               >
                 Fermer
@@ -5877,63 +6023,84 @@ export default function ParcelsTab() {
 
                   setQuickEditModal(m => ({ ...m, loading: true, error: '' }))
                   try {
-                    // Importer la fonction de mise à jour
-                    const { updateParcel } = await import('../../../firebase/parcels')
+                    const { updateParcelStatus } = await import('../../../firebase/parcels')
+                    const { getDoc, doc } = await import('firebase/firestore')
+                    const { db } = await import('../../../firebase/config')
 
-                    // Préparer les données à mettre à jour
-                    const updates: any = {}
-                    if (price !== parcel.price?.toString()) updates.price = price ? Number.parseFloat(price) : null
-                    if (portType && portType !== parcel.portType) updates.portType = portType
-                    if (status && status !== parcel.status) updates.status = status
+                    // Relire le colis en base : l'objet affiché peut être périmé. Les champs que
+                    // l'utilisateur a modifiés sont détectés par rapport à l'écran, mais l'ancien
+                    // montant RF / l'historique / le codPaymentType sont calculés sur la BASE.
+                    const snap = await getDoc(doc(db, 'parcels', parcel.id))
+                    const fresh: any = snap.exists() ? { id: snap.id, ...snap.data() } : parcel
+                    const modifier = { uid: uid || null, name: profile?.name || 'Utilisateur' }
+                    const txt = (v: any) => String(v ?? '').trim()
+                    const num = (v: any) => { const n = Number.parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(n) ? n : 0 }
 
-                    // Si le service est "simple" ou "retour_bl", forcer le montant COD à 0
+                    // 1) Champs du bon + RETOUR FOND (règle Firestore parcelBonEditFields) :
+                    //    buildParcelCorrectionPatch garde codAmount / codAmountHistory / codStatus /
+                    //    codPaymentType cohérents avec serviceType (serviceType fait foi).
+                    const next: any = {}
+                    if (serviceType && serviceType !== parcel.serviceType) next.serviceType = serviceType
                     const finalCodAmount = serviceType === 'simple' || serviceType === 'retour_bl' ? '0' : codAmount
-                    if (finalCodAmount !== parcel.codAmount?.toString()) {
-                      updates.codAmount = finalCodAmount ? Number.parseFloat(finalCodAmount) : 0
+                    if (num(finalCodAmount) !== num(parcel.codAmount)) next.codAmount = finalCodAmount
+                    if (num(price) !== num(parcel.price)) next.price = price
+                    if (txt(nbColis) && txt(nbColis) !== txt(parcel.nbColis)) next.nbColis = nbColis
+                    if (portType && portType !== parcel.portType) next.portType = portType
+                    const bonPatch: Record<string, any> = buildParcelCorrectionPatch(fresh, next, modifier)
+
+                    // 2) Champs hors bon (écriture séparée, autorisée par une autre règle)
+                    const extra: Record<string, any> = {}
+                    if (bonPatch.serviceType !== undefined) {
+                      extra.serviceTypeHistory = [
+                        ...(Array.isArray(fresh.serviceTypeHistory) ? fresh.serviceTypeHistory : []),
+                        {
+                          timestamp: new Date().toISOString(),
+                          userName: profile?.name || 'Utilisateur inconnu',
+                          userUid: uid,
+                          oldServiceType: fresh.serviceType || null,
+                          newServiceType: bonPatch.serviceType,
+                        },
+                      ].slice(-50)
                     }
+                    if (txt(poids) !== txt(parcel.poids)) extra.poids = txt(poids) ? num(poids) : null
+                    if (txt(contenu) !== txt(parcel.contenu)) extra.contenu = txt(contenu) || null
+                    if (txt(remarque) !== txt(parcel.remarque)) extra.remarque = txt(remarque) || null
 
-                    // Détecter changement de type de service
-                    if (serviceType && serviceType !== parcel.serviceType) {
-                      updates.serviceType = serviceType
+                    // 3) Statut (avec historique)
+                    const statusChange = !!status && status !== parcel.status && status !== fresh.status
 
-                      // Créer ou mettre à jour l'historique des modifications
-                      const historyEntry = {
-                        timestamp: new Date().toISOString(),
-                        userName: profile?.name || 'Utilisateur inconnu',
-                        userUid: uid,
-                        oldServiceType: parcel.serviceType,
-                        newServiceType: serviceType
-                      }
-
-                      // Ajouter l'entrée à l'historique (max 50 entrées)
-                      const currentHistory = parcel.serviceTypeHistory || []
-                      updates.serviceTypeHistory = [...currentHistory, historyEntry].slice(-50)
-
-                      // Si changement vers "simple" depuis un autre type (avec COD)
-                      const serviceTypesAvecCOD = ['especes', 'cheque', 'traite', 'virement']
-                      if (serviceType === 'simple' && serviceTypesAvecCOD.includes(parcel.serviceType)) {
-                        updates.lastModifiedByName = profile?.name || 'Utilisateur inconnu'
-                        updates.lastModifiedByUid = uid
-                      }
-                    }
-                    if (nbColis !== parcel.nbColis?.toString()) updates.nbColis = nbColis ? Number.parseInt(nbColis) : null
-                    if (poids !== parcel.poids?.toString()) updates.poids = poids ? Number.parseFloat(poids) : null
-                    if (contenu !== parcel.contenu) updates.contenu = contenu || null
-                    if (remarque !== parcel.remarque) updates.remarque = remarque || null
-
-                    // Vérifier qu'il y a au moins une modification
-                    if (Object.keys(updates).length === 0) {
+                    if (Object.keys(bonPatch).length === 0 && Object.keys(extra).length === 0 && !statusChange) {
                       setQuickEditModal(m => ({ ...m, loading: false, error: 'Aucune modification détectée' }))
                       return
                     }
 
-                    // Mettre à jour le colis
-                    await updateParcel(parcel.id, updates)
+                    const saved: Record<string, any> = {}
+                    if (Object.keys(bonPatch).length > 0) {
+                      await updateParcel(parcel.id, bonPatch)
+                      Object.assign(saved, bonPatch)
+                    }
+                    try {
+                      if (Object.keys(extra).length > 0) {
+                        await updateParcel(parcel.id, extra)
+                        Object.assign(saved, extra)
+                      }
+                      if (statusChange) {
+                        await updateParcelStatus(parcel.id, status, { note: 'Édition complète' })
+                        saved.status = status
+                      }
+                    } catch (e2: any) {
+                      if (Object.keys(saved).length > 0) {
+                        setLocalParcelUpdates(prev => ({ ...prev, [parcel.id]: { ...prev[parcel.id], ...saved } }))
+                        setForceUpdateCounter(c => c + 1)
+                        throw Object.assign(new Error("Une partie des modifications a été enregistrée (type de service / montants), mais le reste a été refusé : " + (e2?.message || e2)), { partial: true })
+                      }
+                      throw e2
+                    }
 
-                    // ⚡ Mise à jour locale pour affichage temps réel
+                    // ⚡ Affichage immédiat des valeurs RÉELLEMENT enregistrées
                     setLocalParcelUpdates(prev => ({
                       ...prev,
-                      [parcel.id]: { ...prev[parcel.id], ...updates }
+                      [parcel.id]: { ...prev[parcel.id], ...saved }
                     }))
                     setForceUpdateCounter(c => c + 1)
 
@@ -5956,7 +6123,8 @@ export default function ParcelsTab() {
                     alert('✅ Modifications enregistrées avec succès!')
                   } catch (err: any) {
                     console.error('Erreur édition complète:', err)
-                    setQuickEditModal(m => ({ ...m, loading: false, error: err.message || 'Erreur lors de la mise à jour' }))
+                    const msg = err?.code && !err?.partial ? describeParcelSaveError(err, parcel) : (err?.message || 'Erreur lors de la mise à jour')
+                    setQuickEditModal(m => ({ ...m, loading: false, error: msg }))
                   }
                 }}
                 disabled={quickEditModal.loading}
@@ -6172,14 +6340,17 @@ export default function ParcelsTab() {
                 </button>
                 <button
                   onClick={async () => {
-                    await handleSaveCodAmount()
+                    const parcelId = codEditModal?.parcel?.id
+                    // Renvoie le patch RÉELLEMENT enregistré, ou null en cas d'échec (toast déjà affiché)
+                    const saved = await handleSaveCodAmount()
+                    if (!saved || !parcelId) return
 
-                    // ⚡ Mise à jour locale pour affichage temps réel
-                    if (codEditModal?.parcel?.id) {
-                      const newAmount = parseFloat(codEditModal.value)
+                    // ⚡ Affichage immédiat des valeurs enregistrées (codAmount, historique,
+                    // codPaymentType/codStatus) — remplacées par le listener dès qu'il se met à jour.
+                    if (Object.keys(saved).length > 0) {
                       setLocalParcelUpdates(prev => ({
                         ...prev,
-                        [codEditModal.parcel.id]: { ...prev[codEditModal.parcel.id], codAmount: newAmount }
+                        [parcelId]: { ...prev[parcelId], ...saved }
                       }))
                       setForceUpdateCounter(c => c + 1)
                     }

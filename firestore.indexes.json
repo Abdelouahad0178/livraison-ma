@@ -4,513 +4,1060 @@
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "agentId",        "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",      "order": "DESCENDING" }
+        {
+          "fieldPath": "controlled",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "controlledAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "destinationAgentId", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",          "order": "DESCENDING" }
+        {
+          "fieldPath": "deliveryControlled",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "deliveryControlledAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "destinationCity", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",       "order": "DESCENDING" }
+        {
+          "fieldPath": "agentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "originCity",  "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",   "order": "DESCENDING" }
+        {
+          "fieldPath": "destinationAgentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "originCity",  "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",   "order": "ASCENDING"  }
+        {
+          "fieldPath": "destinationCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "chauffeurId", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",   "order": "DESCENDING" }
+        {
+          "fieldPath": "originCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "deliveryDriverId", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",        "order": "DESCENDING" }
+        {
+          "fieldPath": "originCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "clientId",  "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "chauffeurId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "deliveryDriverId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "clientId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "sectors",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "city", "order": "ASCENDING" },
-        { "fieldPath": "code", "order": "ASCENDING" }
+        {
+          "fieldPath": "city",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "code",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "bonRamasageBatches",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "city",      "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "city",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "caissierRemarks",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "city",      "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "city",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "payments",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "clientId",  "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "clientId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "caisseEntries",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "city",      "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "city",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "agentRemises",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "agentId",   "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "agentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "adminTransfers",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "fromId",    "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "fromId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "adminTransfers",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "city",      "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "city",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "driverPortDuTransactions",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "driverId",  "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "driverId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "driverPortDuTransactions",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "city",      "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "city",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "arrivages",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "city",      "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "city",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "reglements",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "agencyCity", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "agencyCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "reglementsRapports",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "agencyCity", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "agencyCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "reglementsRapports",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "pointeurId", "order": "ASCENDING"  },
-        { "fieldPath": "agencyCity", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "pointeurId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "agencyCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "retourDocuments",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "agencyCity", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "agencyCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "bankDeposits",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "city",      "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "city",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "clientMessages",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "agencyCity", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "agencyCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "modificationRequests",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "clientId",   "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "clientId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "modificationRequests",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "agencyCity", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "agencyCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "modificationRequests",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "targetClientId", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",      "order": "DESCENDING" }
+        {
+          "fieldPath": "targetClientId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "modificationRequests",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "targetClientId", "order": "ASCENDING"  },
-        { "fieldPath": "requestedBy",    "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",      "order": "DESCENDING" }
+        {
+          "fieldPath": "targetClientId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "requestedBy",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "originCity", "order": "ASCENDING"  },
-        { "fieldPath": "status",     "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "ASCENDING"  }
+        {
+          "fieldPath": "originCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "destinationCity", "order": "ASCENDING"  },
-        { "fieldPath": "status",          "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",       "order": "ASCENDING"  }
+        {
+          "fieldPath": "destinationCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "destinationCity", "order": "ASCENDING"  },
-        { "fieldPath": "status",          "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",       "order": "DESCENDING" }
+        {
+          "fieldPath": "destinationCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "status",    "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels_archive",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "originCity", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "originCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels_archive",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "destinationCity", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",       "order": "DESCENDING" }
+        {
+          "fieldPath": "destinationCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "returnedByDriverId", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",          "order": "DESCENDING" }
+        {
+          "fieldPath": "returnedByDriverId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "agentNotes",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "agencyCity", "order": "ASCENDING"  },
-        { "fieldPath": "weekId",     "order": "DESCENDING" }
+        {
+          "fieldPath": "agencyCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "weekId",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "wasReturned", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",   "order": "DESCENDING" }
+        {
+          "fieldPath": "wasReturned",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "status",    "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "deliveryMethod",  "order": "ASCENDING"  },
-        { "fieldPath": "destinationCity", "order": "ASCENDING"  },
-        { "fieldPath": "status",          "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",       "order": "DESCENDING" }
+        {
+          "fieldPath": "deliveryMethod",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "destinationCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "caissierTransactions",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "city",      "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "city",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "agentCashRecoveryRequests",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "city",      "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "city",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "validatedByChef", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",       "order": "DESCENDING" }
+        {
+          "fieldPath": "validatedByChef",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "clientPortDuTransactions",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "agencyCity", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "agencyCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "deliverySheets",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "agencyCity", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "agencyCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "invoices",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "agencyCity", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "agencyCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "invoices",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "clientId",  "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "clientId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "senderNic",  "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "senderNic",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "nic",        "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "nic",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "senderTel",  "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "senderTel",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "receiverTel", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",   "order": "DESCENDING" }
+        {
+          "fieldPath": "receiverTel",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "senderNameLower", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",       "order": "DESCENDING" }
+        {
+          "fieldPath": "senderNameLower",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "receiverNameLower", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",         "order": "DESCENDING" }
+        {
+          "fieldPath": "receiverNameLower",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "trackingId", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "trackingId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels_archive",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "senderNic",  "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "senderNic",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels_archive",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "trackingId", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "trackingId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels_archive",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "senderTel",  "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "senderTel",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels_archive",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "receiverTel", "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",   "order": "DESCENDING" }
+        {
+          "fieldPath": "receiverTel",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "originCity", "order": "ASCENDING"  },
-        { "fieldPath": "portType",   "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",  "order": "DESCENDING" }
+        {
+          "fieldPath": "originCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "portType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "destinationCity", "order": "ASCENDING"  },
-        { "fieldPath": "portType",        "order": "ASCENDING"  },
-        { "fieldPath": "createdAt",       "order": "DESCENDING" }
+        {
+          "fieldPath": "destinationCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "portType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "deliveryDelays",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "city",      "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "city",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "deliveryDelays",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "driverId",   "order": "ASCENDING" },
-        { "fieldPath": "resolvedAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "driverId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "resolvedAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
       "collectionGroup": "deliveryDelays",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "parcelId",  "order": "ASCENDING"  },
-        { "fieldPath": "createdAt", "order": "DESCENDING" }
+        {
+          "fieldPath": "parcelId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "destinationCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "deliveryAssignedAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "valeursEnvois",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "city",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "serviceType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "serviceType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "codStatus",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "destinationCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "codStatus",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "returnToCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "createdByCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
       ]
     }
   ],

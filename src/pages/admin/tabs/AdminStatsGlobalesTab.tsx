@@ -3,6 +3,7 @@ import { Building2, TrendingUp, Package, Search, Filter, X, Calendar, ChevronDow
 import { collection, query, getDocs } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
 import { CITIES, STATUSES, STATUS_COLORS } from '../../../firebase/constants'
+import { normIncludes } from '../../../utils/normText'
 
 interface Props {
   allParcels: any[]
@@ -223,7 +224,7 @@ export default function AdminStatsGlobalesTab({
 
     if (searchCity.trim()) {
       const query = searchCity.toLowerCase().trim()
-      filtered = filtered.filter(stat => stat.city.toLowerCase().includes(query))
+      filtered = filtered.filter(stat => normIncludes(stat.city, query))
     }
 
     return filtered

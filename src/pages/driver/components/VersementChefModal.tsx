@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Banknote, X, AlertTriangle, Search, Edit2, Trash2 } from 'lucide-react'
 import { createDriverVersement, updateDriverVersement, deleteDriverVersement } from '../../../firebase/firestore'
 import { fmt } from '../../../utils/formatNumber'
+import { normIncludes } from '../../../utils/normText'
 
 const VERSEMENT_TYPES = [
   { value: 'port_du', label: 'Port Dû', emoji: '📮' },
@@ -73,7 +74,7 @@ export default function VersementChefModal({
     .filter((v: any) => {
       if (histStatus !== 'all' && v.status !== histStatus) return false
       if (histType !== 'all' && v.type !== histType) return false
-      if (histSearch.trim() && !(v.note || '').toLowerCase().includes(histSearch.toLowerCase())) return false
+      if (histSearch.trim() && !normIncludes(v.note || '', histSearch.toLowerCase())) return false
       return true
     })
     .slice(0, 20)

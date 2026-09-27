@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { codPaymentTypeOf } from '../firebase/constants'
 import { signOut } from 'firebase/auth'
 import { doc, onSnapshot } from 'firebase/firestore'
 import { auth, db } from '../firebase/config'
@@ -32,6 +33,7 @@ import ProfilePhotoUpload from '../components/ProfilePhotoUpload'
 import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
+import { normText } from '../utils/normText'
 
 const PAGE_SIZE = 800 // Chargement progressif par tranches de 800
 
@@ -52,13 +54,13 @@ const supplierAgenciesText = (parcels: any) => [...new Set((parcels || []).map(s
 const isParcelPaid = (p: any) => !!p.centralSupplierPaid || !!p.codSenderPaid || p.centralSupplierPaymentStatus === 'paid'
 const isParcelPrepared = (p: any) => !isParcelPaid(p) && (p.centralSupplierPaymentStatus === 'prepared' || !!p.centralSupplierPaymentId)
 const paymentStatus = (pay: any) => pay?.status || 'paid'
-const normalizeSearch = (value: any) => String(value ?? '').toLowerCase().replace(/\s+/g, '')
+const normalizeSearch = (value: any) => normText(value).replace(/\s+/g, '')
 const hasSearch = (values: any, q: any) => {
   if (!q) return true
   const compactQ = normalizeSearch(q)
   return values.some((v: any) => {
-    const raw = String(v ?? '').toLowerCase()
-    return raw.includes(q) || normalizeSearch(raw).includes(compactQ)
+    const raw = normText(v)
+    return raw.includes(normText(q)) || normalizeSearch(raw).includes(compactQ)
   })
 }
 const inDateRange = (value: any, preset: any, from: any, to: any, operationalDay?: Date) => {
@@ -386,7 +388,7 @@ export default function AnalyseurEspecePage() {
 
     // Filtre type de paiement COD
     if (archivePaymentType !== 'all') {
-      filtered = filtered.filter((p: any) => p.codPaymentType === archivePaymentType)
+      filtered = filtered.filter((p: any) => codPaymentTypeOf(p) === archivePaymentType)
     }
 
     return filtered
@@ -399,7 +401,7 @@ export default function AnalyseurEspecePage() {
     const mx = ctlMaxAmount === '' ? null : parseFloat(ctlMaxAmount)
     return codParcels.filter((p: any) => {
       if (ctlPayType !== 'all') {
-        const t = p.codPaymentType || ''
+        const t = codPaymentTypeOf(p) || ''
         if (ctlPayType === 'none' && t) return false
         if (ctlPayType !== 'none' && t !== ctlPayType) return false
       }
@@ -466,7 +468,7 @@ export default function AnalyseurEspecePage() {
       const amt = parseFloat(p.codAmount) || 0
       totalAmount += amt
       if (isControlled(p)) { controlledCount += 1; controlledAmount += amt }
-      const t = p.codPaymentType || 'none'
+      const t = codPaymentTypeOf(p) || 'none'
       if (!byType[t]) byType[t] = { count: 0, amount: 0 }
       byType[t].count += 1
       byType[t].amount += amt
@@ -549,7 +551,7 @@ export default function AnalyseurEspecePage() {
   }
 
   const payTypeBadge = (p: any) => {
-    const t = COD_PAYMENT_TYPES.find((x: any) => x.key === p.codPaymentType)
+    const t = COD_PAYMENT_TYPES.find((x: any) => x.key === codPaymentTypeOf(p))
     if (!t) return <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-500">—</span>
     return <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${t.bg} ${t.text}`}>{t.emoji} {t.label}</span>
   }
@@ -1003,7 +1005,7 @@ export default function AnalyseurEspecePage() {
         <td>${p.receiver?.name || p.receiverName || '-'}</td>
         <td>${p.receiver?.tel || p.receiverTel || '-'}</td>
         <td>${parcelCity(p)}</td>
-        <td>${p.codPaymentType ? COD_PAYMENT_TYPES[p.codPaymentType] || p.codPaymentType : '-'}</td>
+        <td>${codPaymentTypeOf(p) ? COD_PAYMENT_TYPES[codPaymentTypeOf(p)] || codPaymentTypeOf(p) : '-'}</td>
         <td style="text-align:right;font-weight:bold">${money(p.codAmount)} DH</td>
         <td style="text-align:center">${isControlled(p) ? '✓' : ''}</td>
       </tr>
@@ -1083,7 +1085,7 @@ export default function AnalyseurEspecePage() {
     // Déterminer le type de paiement prédominant
     const paymentTypes = toExport
       .filter((p: any) => p.codAmount && p.codAmount > 0)
-      .map((p: any) => p.codPaymentType)
+      .map((p: any) => codPaymentTypeOf(p))
     const paymentCounts: any = {}
     paymentTypes.forEach((t: string) => {
       paymentCounts[t] = (paymentCounts[t] || 0) + 1
@@ -2479,14 +2481,14 @@ export default function AnalyseurEspecePage() {
                                 {(parseFloat(p.codAmount) || 0) > 0 ? `${money(p.codAmount)} DH` : '—'}
                               </td>
                               <td className="px-4 py-3">
-                                {p.codPaymentType ? (
+                                {codPaymentTypeOf(p) ? (
                                   <span className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-bold ${
-                                    p.codPaymentType === 'especes' ? 'bg-green-100 text-green-700' :
-                                    p.codPaymentType === 'cheque' ? 'bg-blue-100 text-blue-700' :
-                                    p.codPaymentType === 'traite' ? 'bg-indigo-100 text-indigo-700' :
+                                    codPaymentTypeOf(p) === 'especes' ? 'bg-green-100 text-green-700' :
+                                    codPaymentTypeOf(p) === 'cheque' ? 'bg-blue-100 text-blue-700' :
+                                    codPaymentTypeOf(p) === 'traite' ? 'bg-indigo-100 text-indigo-700' :
                                     'bg-gray-100 text-gray-700'
                                   }`}>
-                                    {COD_PAYMENT_TYPES.find((t: any) => t.key === p.codPaymentType)?.label || p.codPaymentType}
+                                    {COD_PAYMENT_TYPES.find((t: any) => t.key === codPaymentTypeOf(p))?.label || codPaymentTypeOf(p)}
                                   </span>
                                 ) : '—'}
                               </td>

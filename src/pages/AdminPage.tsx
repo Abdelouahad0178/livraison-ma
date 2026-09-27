@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState, useMemo } from 'react'
+import { codPaymentTypeOf } from '../firebase/constants'
 import { signOut, createUserWithEmailAndPassword, signOut as fbSignOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth'
 import { collection, doc, setDoc, getDoc, getDocs, writeBatch, query, where } from 'firebase/firestore'
 import { auth, authSecondary, db } from '../firebase/config'
@@ -63,6 +64,7 @@ import CompanyContact from '../components/CompanyContact'
 import SignatureViewerModal from '../components/SignatureViewerModal'
 import LiveClock from '../components/LiveClock'
 import WorkingDateIndicator from '../components/WorkingDateIndicator'
+import { normIncludes, normText } from '../utils/normText'
 
 const AdminCaisseTab = lazy(() => import('./admin/tabs/AdminCaisseTab'))
 const AdminVersementsTab = lazy(() => import('./admin/tabs/AdminVersementsTab'))
@@ -98,6 +100,9 @@ import AdminEditParcelModal from './admin/modals/AdminEditParcelModal'
 import { fmt } from '../utils/formatNumber'
 
 const parcelDate = (p: any) => {
+  // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire — voir
+  // src/utils/dateFilter.ts pour l'explication complète de cette règle partagée.
+  if (p.workDate) return new Date(p.workDate + 'T12:00:00')
   if (p.createdAt?.toDate) return p.createdAt.toDate()
   if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
   return new Date(0)
@@ -198,8 +203,8 @@ const levenshteinDistance = (str1: string, str2: string): number => {
 
 // 🎯 Score de similarité avancé (0-100, 100 = match parfait)
 const calculateSimilarity = (value: string, query: string): number => {
-  const v = String(value ?? '').toLowerCase().trim()
-  const q = query.toLowerCase().trim()
+  const v = normText(value)
+  const q = normText(query)
 
   if (!v || !q) return 0
 
@@ -276,7 +281,7 @@ const advancedSearch = (parcel: any, query: string): boolean => {
 }
 
 // Fonction legacy pour compatibilité
-const normalizeSearch = (value: any) => String(value ?? '').toLowerCase().replace(/\s+/g, '')
+const normalizeSearch = (value: any) => normText(value).replace(/\s+/g, '')
 const matchesSearch = (values: any, query: any) => advancedSearch({
   trackingId: values[0],
   senderNic: values[1],
@@ -315,6 +320,7 @@ const ROLES = [
   { key: 'admin',       label: 'Admin',          emoji: '🔐',   badge: 'bg-red-100 text-red-700'         },
   { key: 'directeur',   label: 'Directeur',       emoji: '👔',   badge: 'bg-purple-100 text-purple-700'   },
   { key: 'chef_agence', label: "Chef d'agence",   emoji: '🏢',   badge: 'bg-indigo-100 text-indigo-700'   },
+  { key: 'chef_exploitation',    label: "Chef d'exploitation", emoji: '🧭', badge: 'bg-amber-100 text-amber-700' },
   { key: 'agent',       label: 'Agent',           emoji: '👤', badge: 'bg-blue-100 text-blue-700'      },
   { key: 'aide_agent',           label: 'Aide Agent',         emoji: '🙋',   badge: 'bg-violet-100 text-violet-700'  },
   { key: 'agentpro',             label: 'Agent Pro',          emoji: '⭐',   badge: 'bg-purple-100 text-purple-700'  },
@@ -1057,10 +1063,10 @@ export default function AdminPage() {
     if (codSearch) {
       const q = codSearch.toLowerCase()
       list = list.filter((p: any) =>
-        (p.trackingId||'').toLowerCase().includes(q) ||
-        (p.receiver?.name||'').toLowerCase().includes(q) ||
-        (p.sender?.name||'').toLowerCase().includes(q) ||
-        (p.receiver?.city||'').toLowerCase().includes(q))
+        normIncludes(p.trackingId||'', q) ||
+        normIncludes(p.receiver?.name||'', q) ||
+        normIncludes(p.sender?.name||'', q) ||
+        normIncludes(p.receiver?.city||'', q))
     }
     return list
   }, [codDateFiltered, codFilter, codSearch])
@@ -1084,8 +1090,8 @@ export default function AdminPage() {
       regleDH:     codDateFiltered.filter((p: any) => p.codSenderPaid).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
       byType: COD_PAYMENT_TYPES.map(pt => ({
         ...pt,
-        total: codDateFiltered.filter((p: any) => p.codPaymentType === pt.key).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
-        count: codDateFiltered.filter((p: any) => p.codPaymentType === pt.key).length,
+        total: codDateFiltered.filter((p: any) => codPaymentTypeOf(p) === pt.key).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
+        count: codDateFiltered.filter((p: any) => codPaymentTypeOf(p) === pt.key).length,
       })).filter(pt => pt.total > 0),
     }
   }, [codDateFiltered])
@@ -1104,7 +1110,7 @@ export default function AdminPage() {
   const filteredUsers = useMemo(() => {
     if (!Array.isArray(periodUsers)) return []
     const roleOk = (u: any) => roleFilter === 'Tous' || u.role === roleFilter
-    const searchOk = (u: any) => !userSearch || [u.name, u.email, u.city, u.code, u.cin, u.cnss, u.tel].some(v => v?.toLowerCase().includes(userSearch.toLowerCase()))
+    const searchOk = (u: any) => !userSearch || [u.name, u.email, u.city, u.code, u.cin, u.cnss, u.tel].some(v => normIncludes(v, userSearch.toLowerCase()))
     return periodUsers.filter((u: any) => roleOk(u) && searchOk(u))
   }, [periodUsers, roleFilter, userSearch])
 
@@ -1226,7 +1232,7 @@ export default function AdminPage() {
     })) : [],
     cod: Array.isArray(filteredCod) ? filteredCod.map((p: any) => ({
       tracking: p.trackingId, destinataire: p.receiver?.name, ville: p.receiver?.city,
-      montant: p.codAmount, statut: p.codStatus, mode: p.codPaymentType,
+      montant: p.codAmount, statut: p.codStatus, mode: codPaymentTypeOf(p),
     })) : [],
     retours: Array.isArray(returnParcels) ? returnParcels.map((p: any) => ({ tracking: p.trackingId, status: p.status, motif: p.returnReason, destinataire: p.receiver?.name })) : [],
     agences: Array.isArray(agencyStats) ? agencyStats.map((a: any) => ({ ville: a.city, entrants: a.incoming.length, sortants: a.outgoing.length, livres: a.delivered.length, retours: a.returned.length })) : [],
@@ -1239,6 +1245,17 @@ export default function AdminPage() {
   // - Scoring intelligent (préfixe exact prioritaire pour numéros)
   // - Debounce intégré (300ms) pour performance
   // - 14 champs indexés avec poids optimaux
+  // 🔍 Restreint la recherche par nom à l'expéditeur seul, au destinataire seul, ou les deux
+  // (défaut) — pour éviter qu'un colis remonte juste parce que l'AUTRE partie porte ce nom.
+  const [searchScope, setSearchScope] = useState<'all' | 'sender' | 'receiver'>('all')
+  // ⚠️ En scope restreint, on retire les clés de recherche liées à l'autre partie (nom, tél,
+  // adresse, ville) — sinon Fuse.js (repli local) pourrait quand même matcher via ces champs.
+  const scopedSearchKeys = useMemo(() => {
+    if (searchScope === 'all') return ADMIN_SEARCH_CONFIG.keys
+    const excludedPrefix = searchScope === 'sender' ? 'receiver.' : 'sender.'
+    return ADMIN_SEARCH_CONFIG.keys.filter((k: any) => !k.name.startsWith(excludedPrefix))
+  }, [searchScope])
+
   const {
     search: fuseSearchValue,
     setSearch: setFuseSearch,
@@ -1249,7 +1266,7 @@ export default function AdminPage() {
     totalResults: fuseTotalResults,
   } = useFuseSearch({
     items: periodParcels || [],
-    keys: ADMIN_SEARCH_CONFIG.keys,
+    keys: scopedSearchKeys,
     threshold: ADMIN_SEARCH_CONFIG.threshold,
     debounceMs: ADMIN_SEARCH_CONFIG.debounceMs,
     limit: ADMIN_SEARCH_CONFIG.limit,
@@ -1287,7 +1304,7 @@ export default function AdminPage() {
       setIsServerSearching(true)
       try {
         console.warn(`🔍 Recherche serveur: "${query}" dans TOUTE la base (archives: ${includeArchived})...`)
-        const results = await searchParcels(query, { limit: 50000, includeArchived })
+        const results = await searchParcels(query, { limit: 50000, includeArchived, nameScope: searchScope })
         setServerSearchResults(results)
         setIsServerSearching(false)
         console.warn(`✅ Recherche serveur: ${results.length} résultats trouvés`)
@@ -1299,13 +1316,27 @@ export default function AdminPage() {
     }
 
     performServerSearch()
-  }, [fuseDebouncedSearch, includeArchived])
+  }, [fuseDebouncedSearch, includeArchived, searchScope])
+
+  // 🔍 La recherche serveur interroge TOUTE la base (peu importe la période affichée) — sans ce
+  // filtre, un colis trouvé par nom/NIC/tracking pouvait s'afficher hors de la période
+  // sélectionnée, incohérent avec le reste de la page (totaux, période). Même règle que
+  // periodParcels (workDate en priorité, cf. juste au-dessus).
+  const dateFilteredServerResults = useMemo(() => {
+    if (!serverSearchResults) return serverSearchResults
+    return filterByDate(serverSearchResults, adminDatePreset, adminDateFrom, adminDateTo, (p: any) => {
+      if (p.workDate) return new Date(p.workDate + 'T12:00:00')
+      if (p.createdAt?.toDate) return p.createdAt.toDate()
+      if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
+      return new Date(0)
+    }, operationalDay)
+  }, [serverSearchResults, adminDatePreset, adminDateFrom, adminDateTo, operationalDay])
 
   const filtered = useMemo(() => {
     if (!Array.isArray(periodParcels)) return []
 
     // 🔍 STRATÉGIE SIMPLE ET EFFICACE:
-    // 1️⃣ Si recherche serveur disponible → utiliser ça (TOUTE la base)
+    // 1️⃣ Si recherche serveur disponible → utiliser ça (TOUTE la base, filtrée par période)
     // 2️⃣ Sinon utiliser Fuse.js dans les 2000 chargés (fallback)
     // 3️⃣ Sinon afficher tous les periodParcels
     let results = periodParcels
@@ -1314,12 +1345,12 @@ export default function AdminPage() {
       const searchQuery = debouncedSearch.trim().toUpperCase()
 
       // 🎯 RECHERCHE: Utiliser les résultats serveur si disponibles
-      if (serverSearchResults !== null && serverSearchResults.length > 0) {
-        results = serverSearchResults
+      if (dateFilteredServerResults !== null && dateFilteredServerResults.length > 0) {
+        results = dateFilteredServerResults
         console.warn(`✅ Serveur: ${results.length} résultats pour "${searchQuery}"`)
       } else if (/^[0-9A-Z]+$/.test(searchQuery) && searchQuery.length >= 5) {
         // Match exact dans les résultats serveur ou periodParcels en fallback
-        results = serverSearchResults || periodParcels.filter((p: any) =>
+        results = dateFilteredServerResults || periodParcels.filter((p: any) =>
           p.trackingId?.toUpperCase() === searchQuery ||
           p.sender?.nic?.toUpperCase() === searchQuery ||
           (p.senderNic || p.sender?.nic || p.trackingId)?.toUpperCase() === searchQuery
@@ -1327,9 +1358,9 @@ export default function AdminPage() {
         console.warn(`🎯 Recherche exacte: ${results.length} résultats pour "${searchQuery}"`)
       } else {
         // 🔍 RECHERCHE FLOUE pour noms, téléphones, etc.
-        if (serverSearchResults !== null) {
-          results = serverSearchResults
-          console.warn(`✅ Serveur: ${results.length} résultats (toute la base)`)
+        if (dateFilteredServerResults !== null) {
+          results = dateFilteredServerResults
+          console.warn(`✅ Serveur: ${results.length} résultats (toute la base, période appliquée)`)
         } else {
           // ⚡ NOUVEAU: Utiliser résultats du hook professionnel
           // Scoring automatique (préfixe exact prioritaire pour numéros)
@@ -1401,7 +1432,7 @@ export default function AdminPage() {
     // ✅ Filtrage exact maintenant géré AVANT Fuse.js (voir ligne ~1140)
 
     return results
-  }, [periodParcels, cityFilter, driverFilter, statusFilter, serviceTypeFilter, portTypeFilter, debouncedSearch, fuseResults, fuseTotalResults, fuseIsSearching, serverSearchResults])
+  }, [periodParcels, cityFilter, driverFilter, statusFilter, serviceTypeFilter, portTypeFilter, debouncedSearch, fuseResults, fuseTotalResults, fuseIsSearching, serverSearchResults, dateFilteredServerResults])
 
   // Expéditions affichées avec limite (200 premiers)
   // ⚠️ EXCEPTION: Si filtres actifs → afficher TOUS les résultats
@@ -1420,6 +1451,15 @@ export default function AdminPage() {
     }
     return filtered.slice(0, displayLimit)
   }, [filtered, displayLimit, datePreset, cityFilter, statusFilter, serviceTypeFilter, portTypeFilter, driverFilter])
+
+  // 🏙️ Expéditions LOCALES parmi les résultats filtrés : même ville d'expédition et de destination
+  // (transport entre quartiers). Elles expliquent l'écart avec les pages d'agence, où une expédition
+  // locale est à la fois « envoyée » et « reçue » dans la même ville.
+  const localFilteredCount = useMemo(() => filtered.filter((p: any) => {
+    const o = p.originCity || p.sender?.city
+    const d = p.destinationCity || p.receiver?.city
+    return !!o && o === d
+  }).length, [filtered])
 
   // Fonction pour charger plus d'expéditions
   const loadMoreDisplayed = () => {
@@ -1750,6 +1790,8 @@ export default function AdminPage() {
               kpis={kpis}
               search={search}
               setSearch={setSearch}
+              searchScope={searchScope}
+              setSearchScope={setSearchScope}
               isSearching={isSearching}
               includeArchived={includeArchived}
               setIncludeArchived={setIncludeArchived}
@@ -1772,6 +1814,7 @@ export default function AdminPage() {
               setDateTo={setDateTo}
               filtered={displayedFiltered}
               totalFiltered={filtered.length}
+              localFilteredCount={localFilteredCount}
               displayLimit={displayLimit}
               loadMoreDisplayed={loadMoreDisplayed}
               showAllDisplayed={showAllDisplayed}

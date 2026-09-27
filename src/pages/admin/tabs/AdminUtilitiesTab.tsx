@@ -3,6 +3,7 @@ import { db } from '../../../firebase/config'
 import { collection, query, where, getDocs, updateDoc, doc, deleteDoc, getDoc } from 'firebase/firestore'
 import { AlertCircle, CheckCircle2, Wrench, Trash2, Package } from 'lucide-react'
 import WorkingDateManager from '../../../components/WorkingDateManager'
+import { codPaymentTypeOf } from '../../../firebase/constants'
 
 export default function AdminUtilitiesTab() {
   const [loading, setLoading] = useState(false)
@@ -289,11 +290,9 @@ export default function AdminUtilitiesTab() {
 
     try {
       // Fonction de conversion serviceType → codPaymentType
-      const serviceToPaymentType = (st: string | null | undefined): string => {
-        if (st === 'retour_bl') return 'bon_livraison'
-        if (st === 'simple') return 'especes'
-        return st || 'especes'
-      }
+      // Normalise via le helper partagé : gère 'cheque,traite' et n'écrit jamais de liste
+      const serviceToPaymentType = (st: string | null | undefined): string =>
+        codPaymentTypeOf({ serviceType: st }) || 'especes'
 
       const q = query(collection(db, 'parcels'), where('codAmount', '>', 0))
       const snapshot = await getDocs(q)

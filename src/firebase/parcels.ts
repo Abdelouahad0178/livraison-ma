@@ -4,11 +4,14 @@ import {
   query, where, orderBy, getDocs, onSnapshot, limit, startAfter, getCountFromServer,
   serverTimestamp, arrayUnion, increment, writeBatch, setDoc, Timestamp, runTransaction, deleteField
 } from 'firebase/firestore'
+import type { Query, DocumentData } from 'firebase/firestore'
 import { db } from './db'
 import type { Parcel } from '../types'
-import { CITIES, STATUSES, COD_PAYMENT_TYPES, COD_STATUS, STATUS_COLORS, CAISSE_CATEGORIES } from './constants'
+import { CITIES, STATUSES, COD_PAYMENT_TYPES, COD_STATUS, STATUS_COLORS, CAISSE_CATEGORIES, codPaymentTypeOf } from './constants'
 import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
+import { getOperationalDayString } from '../config/operationalDay'
 import { addPayment } from './clients'
+import { normName } from '../utils/billingAgency'
 
 export const FIRESTORE_PAGE_LIMITS = {
   adminLiveParcels: 300,  // ⚡ OPTIMISATION : Réduit de 10000 à 300 pour chargement rapide
@@ -58,9 +61,22 @@ const DESTINATION_VISIBLE_STATUSES = ['En transit', 'Arrivé en agence', 'En cou
  *   - 21/07 à 23h → workDate = 21/07
  */
 function calculateWorkDate(timestamp?: Date | string): string {
-  const date = timestamp ? new Date(timestamp) : new Date()
-  // Retourne simplement le jour calendaire (00h à 23h59)
-  return date.toISOString().split('T')[0]
+  // ⚠️ Une chaîne "date seule" (ex: '2026-09-09', sans 'T...') est interprétée par JS comme
+  // minuit UTC — soit 1h du matin au Maroc (UTC+1), ce qui la fait basculer à tort sur la
+  // VEILLE une fois passée dans la règle 8h→6h ci-dessous. On l'ancre donc à midi local.
+  const normalized = typeof timestamp === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(timestamp)
+    ? `${timestamp}T12:00:00`
+    : timestamp
+  const date = normalized ? new Date(normalized) : new Date()
+  // 🗓️ workDate suit la JOURNÉE D'OPÉRATION du système (8h → 6h le lendemain), pas le jour
+  // calendaire : une expédition saisie à 2h du matin appartient encore à la journée qui a
+  // commencé à 8h la veille, pas à la nouvelle journée civile qui vient de commencer à minuit.
+  // getOperationalDayString (config/operationalDay.ts) applique cette même règle partout
+  // ailleurs dans l'application (filtres "Aujourd'hui", "Journée d'opération", etc.) — on
+  // s'appuie sur elle ici pour que workDate soit cohérent avec ces filtres dès la création.
+  // (Elle ancre l'heure à 8h avant de convertir en UTC, donc pas de risque de décalage de jour
+  // lié au fuseau horaire, contrairement à un simple .toISOString() à l'heure de création.)
+  return getOperationalDayString(date)
 }
 
 export function isParcelVisibleInDestinationAgency(parcel: Partial<Parcel> = {}) {
@@ -207,7 +223,13 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     }],
     photoUrl:             '',
     createdAt:            opDate,
-    workDate:             calculateWorkDate((data.operationDate as string | undefined) || historyTs), // 📅 Date de travail (gère sessions de nuit)
+    // ⚠️ 'T12:00:00' obligatoire : new Date('2026-09-09') (date seule) est interprété comme
+    // minuit UTC = 1h locale au Maroc, ce qui bascule à tort le colis sur la VEILLE une fois
+    // passé dans la règle 8h→6h (voir calculateWorkDate). Même ancrage midi que opDate/historyTs
+    // ci-dessus, sinon workDate se retrouvait décalé d'un jour par rapport à createdAt.
+    workDate:             calculateWorkDate(
+      data.operationDate ? `${data.operationDate}T12:00:00` : historyTs
+    ), // 📅 Date de travail (gère sessions de nuit)
     agentId:              data.agentId            || null,
     agentName:            data.agentName          || null,
     chauffeurId:          data.chauffeurId        || null,
@@ -231,7 +253,8 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     deliveryAssignedBy:   hasLocalDeliveryDriver ? (data.agentName || '') : '',
     deliveryMethod:       data.deliveryMethod || 'domicile',  // 🚉 Mode de livraison (gare ou domicile)
     codStatus:            hasCod ? 'pending' : null,
-    codPaymentType:       hasCod ? (data.codPaymentType || (data.serviceType === 'retour_bl' ? 'bon_livraison' : (data.serviceType === 'simple' ? 'especes' : (data.serviceType || 'especes')))) : null,  // Mode de paiement COD (especes, cheque, traite, etc.)
+    // Mode de paiement COD normalisé (especes, cheque, traite, bon_livraison) — jamais une liste 'cheque,traite'
+    codPaymentType:       hasCod ? (codPaymentTypeOf({ serviceType: data.serviceType, codPaymentType: data.codPaymentType }) || 'especes') : null,
     codCollectedAt:       null,
     codCollectedBy:       null,
     codRemisAt:           null,
@@ -266,6 +289,9 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     receiverTel:          (receiver?.tel ? String(receiver.tel).replace(/[\s\-\(\)\.]/g, '') : ''),
     senderNameLower:      (sender?.name ? String(sender.name).toLowerCase().trim() : ''),
     receiverNameLower:    (receiver?.name ? String(receiver.name).toLowerCase().trim() : ''),
+    // 🔍 Noms normalisés (sans accents : COPÏMA = COPIMA) pour la recherche serveur
+    senderNameNorm:       normName(sender?.name),
+    receiverNameNorm:     normName(receiver?.name),
     hasRetourBL:          data.hasRetourBL === true,  // ⭐ Retour BL obligatoire
   }
   const ref = await addDoc(collection(db, 'parcels'), parcel)
@@ -464,9 +490,126 @@ async function syncParcelSnapshotInArrivages(parcelId: any, data: any = {}) {
   if (count > 0) batches.push(batch)
   await Promise.all(batches.map(b => b.commit()))
 }
+/** Champs dénormalisés de recherche (mêmes règles de normalisation que createParcel). */
+export function parcelSearchFields(sender?: any, receiver?: any): Record<string, string> {
+  const out: Record<string, string> = {}
+  if (sender) {
+    out.senderNic       = sender.nic ? String(sender.nic).trim().toUpperCase() : ''
+    out.senderTel       = sender.tel ? String(sender.tel).replace(/[\s\-\(\)\.]/g, '') : ''
+    out.senderNameLower = sender.name ? String(sender.name).toLowerCase().trim() : ''
+    out.senderNameNorm  = normName(sender.name)
+  }
+  if (receiver) {
+    out.receiverTel       = receiver.tel ? String(receiver.tel).replace(/[\s\-\(\)\.]/g, '') : ''
+    out.receiverNameLower = receiver.name ? String(receiver.name).toLowerCase().trim() : ''
+    out.receiverNameNorm  = normName(receiver.name)
+  }
+  return out
+}
+
+/**
+ * Construit le patch Firestore d'une correction de bon (modal "Modifier l'expédition"
+ * et modal de confirmation après saisie). Ne contient QUE les champs réellement modifiés,
+ * afin de rester dans la liste autorisée par firestore.rules (parcelBonEditFields).
+ */
+export function buildParcelCorrectionPatch(
+  parcel: any,
+  next: {
+    sender?: any, receiver?: any, weight?: any, nbColis?: any, natureOfGoods?: any,
+    serviceType?: any, price?: any, codAmount?: any, portType?: any, fragile?: any, notes?: any,
+  },
+  modifier?: { uid?: string | null, name?: string }
+): Record<string, any> {
+  const patch: Record<string, any> = {}
+  const txt = (v: any) => String(v ?? '').trim()
+  const num = (v: any) => {
+    const n = parseFloat(String(v ?? '').replace(',', '.'))
+    return Number.isFinite(n) && n >= 0 ? n : 0
+  }
+  const changedObj = (a: any, b: any, keys: string[]) => keys.some(k => txt(a?.[k]) !== txt(b?.[k]))
+
+  if (next.sender && changedObj(parcel.sender, next.sender, ['name', 'nic', 'address', 'tel', 'city'])) {
+    patch.sender = { ...(parcel.sender || {}), ...next.sender }
+  }
+  if (next.receiver && changedObj(parcel.receiver, next.receiver, ['name', 'address', 'tel', 'city'])) {
+    patch.receiver = { ...(parcel.receiver || {}), ...next.receiver }
+    if (txt(next.receiver.city) && txt(next.receiver.city) !== txt(parcel.destinationCity)) patch.destinationCity = next.receiver.city
+  }
+  Object.assign(patch, parcelSearchFields(patch.sender, patch.receiver))
+
+  if (next.weight !== undefined && num(parcel.weight) !== num(next.weight)) patch.weight = num(next.weight)
+  if (next.nbColis !== undefined) {
+    const nb = parseInt(String(next.nbColis)) || 1
+    if ((parseInt(String(parcel.nbColis)) || 1) !== nb) patch.nbColis = nb
+  }
+  if (next.natureOfGoods !== undefined && txt(parcel.natureOfGoods) !== txt(next.natureOfGoods)) patch.natureOfGoods = txt(next.natureOfGoods)
+  if (next.price !== undefined && num(parcel.price) !== num(next.price)) patch.price = num(next.price)
+
+  const oldService = parcel.serviceType || 'oc'
+  const newService = next.serviceType !== undefined ? (next.serviceType || 'oc') : oldService
+  if (newService !== oldService) {
+    patch.serviceType = newService
+    const wasCOD = ['especes', 'cheque', 'traite', 'retour_bl'].includes(oldService)
+    if (wasCOD && newService === 'simple' && modifier) {
+      patch.lastModifiedBy     = modifier.uid || null
+      patch.lastModifiedByName = modifier.name || 'Utilisateur'
+      patch.lastModifiedAt     = new Date().toISOString()
+    }
+  }
+
+  // Montant COD : Simple / Retour BL => 0. Garder codStatus / codPaymentType cohérents.
+  let newCod = next.codAmount !== undefined ? num(next.codAmount) : num(parcel.codAmount)
+  if (newService === 'simple' || newService === 'retour_bl') newCod = 0
+  const oldCod = num(parcel.codAmount)
+  if (newCod !== oldCod) {
+    patch.codAmount = newCod
+    patch.codAmountHistory = [
+      ...(Array.isArray(parcel.codAmountHistory) ? parcel.codAmountHistory : []),
+      { oldAmount: oldCod, newAmount: newCod, changedAt: new Date().toISOString(), changedBy: modifier?.name || 'Agent' },
+    ]
+    if (newCod > 0 && !parcel.codStatus) patch.codStatus = 'pending'
+    if (newCod === 0 && parcel.codStatus === 'pending') patch.codStatus = null
+  }
+  if (newCod > 0 && (patch.codAmount !== undefined || patch.serviceType !== undefined)) {
+    const cpt = codPaymentTypeOf({ serviceType: newService, codPaymentType: parcel.codPaymentType }) || 'especes'
+    if (cpt !== parcel.codPaymentType) patch.codPaymentType = cpt
+  } else if (newCod === 0 && patch.codAmount !== undefined && parcel.codPaymentType && parcel.codStatus === 'pending') {
+    patch.codPaymentType = null
+  }
+
+  if (next.portType !== undefined && next.portType && next.portType !== (parcel.portType || '')) patch.portType = next.portType
+  if (next.fragile !== undefined && !!next.fragile !== !!parcel.fragile) patch.fragile = !!next.fragile
+  if (next.notes !== undefined && txt(next.notes) !== txt(parcel.notes)) patch.notes = txt(next.notes)
+
+  return patch
+}
+
+/** Message clair (FR) pour un refus d'enregistrement d'une correction de colis. */
+export function describeParcelSaveError(err: any, parcel?: any): string {
+  if (err?.code === 'permission-denied') {
+    if (parcel?.shipmentLoadedAt) {
+      return "Modification refusée : ce colis a déjà été chargé dans un camion. Seul l'administrateur peut encore le modifier."
+    }
+    if (parcel?.status === 'Livré' || parcel?.status === LEGACY_DELIVERED_STATUS) {
+      return "Modification refusée : ce colis est déjà livré. Seul le chef d'agence ou l'administrateur peut le corriger."
+    }
+    if (parcel?.codCollectedAt) {
+      return "Modification refusée : le retour de fond (COD) de ce colis a déjà été encaissé, son montant ne peut plus être changé."
+    }
+    return "Modification refusée par le serveur : votre rôle ne permet pas de modifier ces champs sur ce colis. Aucune modification n'a été enregistrée."
+  }
+  return `Erreur lors de l'enregistrement : ${err?.message || err}. Aucune modification n'a été enregistrée.`
+}
+
 export async function updateParcel(parcelId: string, data: Partial<Parcel> & Record<string, unknown>): Promise<void> {
   await updateDoc(doc(db, 'parcels', parcelId), data)
-  await syncParcelSnapshotInArrivages(parcelId, data)
+  // La mise à jour du colis est déjà enregistrée : un échec de synchro des arrivages
+  // (droits, réseau) ne doit pas faire croire à l'utilisateur que sa correction a échoué.
+  try {
+    await syncParcelSnapshotInArrivages(parcelId, data)
+  } catch (err) {
+    console.warn('syncParcelSnapshotInArrivages:', err)
+  }
 
   // 🔄 TEMPS RÉEL: Émettre un événement pour synchronisation immédiate entre les pages/onglets
   if (typeof window !== 'undefined') {
@@ -498,6 +641,9 @@ export async function markParcelAsReturned(parcel: any, extra: any = {}) {
     status:          'Retourné',
     sender:          newSender,
     receiver:        newReceiver,
+    // 🔍 Garder les noms normalisés cohérents avec l'échange expéditeur/destinataire
+    senderNameNorm:   normName(newSender.name),
+    receiverNameNorm: normName(newReceiver.name),
     originCity:      newOrigin,
     destinationCity: newDest,
     returnToCity:    newDest,
@@ -836,10 +982,13 @@ export function subscribeAllParcels(callback: any, onError: (err?: any) => void 
     limit(pageSize)
   )
 
-  return onSnapshot(q, snap => {
+  // includeMetadataChanges: true — sinon Firestore ne redéclenche pas de callback quand le
+  // cache contenait déjà les mêmes documents que le serveur, et fromCache resterait bloqué à
+  // true à tort (même piège que subscribeAgencyParcels).
+  return onSnapshot(q, { includeMetadataChanges: true }, snap => {
     const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
     const lastSnap = snap.docs[snap.docs.length - 1] || null
-    callback(docs, lastSnap)
+    callback(docs, lastSnap, snap.metadata.fromCache)
   }, onError)
 }
 
@@ -886,10 +1035,10 @@ export function subscribeAllParcelsWithDateFilter(
     pageSize,
   })
 
-  return onSnapshot(q, snap => {
+  return onSnapshot(q, { includeMetadataChanges: true }, snap => {
     const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
     const lastSnap = snap.docs[snap.docs.length - 1] || null
-    callback(docs, lastSnap)
+    callback(docs, lastSnap, snap.metadata.fromCache)
   }, onError)
 }
 
@@ -1199,12 +1348,22 @@ export function subscribeAgencyParcels(
   pageLimit = 200, // ⚡ OPTIMISATION : Réduit de 1000 à 200 pour chargement rapide
   callbackWithLastDoc?: (lastDoc: any) => void,
   dateFrom?: Date | null,
-  dateTo?: Date | null
+  dateTo?: Date | null,
+  // 🗄️ true = garder les colis isArchived (toujours dans 'parcels'). L'onglet Expéditions du chef
+  // d'agence le passe à true (comme le Facturier et l'onglet Ports en compte) : sinon une période
+  // de plus de 30 jours perdait l'essentiel de ses colis (archivage auto après 30/45 jours).
+  includeArchived = false
 ) {
   let created: any[] = [], arrived: any[] = []
   let timer: ReturnType<typeof setTimeout> | undefined = undefined
   let lastCreatedDoc: any = null
   let lastArrivedDoc: any = null
+  // ⚠️ Avec le cache local Firestore (persistentLocalCache), chaque onSnapshot renvoie d'abord
+  // un résultat DEPUIS LE CACHE (potentiellement incomplet si le cache ne contient pas encore
+  // tous les documents de la plage demandée), puis un second une fois le serveur interrogé.
+  // On propage cet état pour que l'appelant sache si les données affichées sont définitives.
+  let fromCache1 = true, fromCache2 = true
+  let createdFull = false, arrivedFull = false
 
   const merge = () => {
     clearTimeout(timer)
@@ -1213,9 +1372,11 @@ export function subscribeAgencyParcels(
       created.forEach(p => map.set(p.id, p))
       arrived.forEach(p => map.set(p.id, p))
       const sorted = sortByCreatedDesc([...map.values()])
-      callback(sorted)
+      callback(sorted, fromCache1 || fromCache2)
       if (callbackWithLastDoc) {
-        callbackWithLastDoc({ lastCreatedDoc, lastArrivedDoc })
+        // createdFull / arrivedFull : la requête a atteint pageLimit (il reste peut-être des colis
+        // plus anciens) — sinon la page temps réel couvre déjà toute la plage pour cette requête.
+        callbackWithLastDoc({ lastCreatedDoc, lastArrivedDoc, createdFull, arrivedFull })
       }
     }, 50)
   }
@@ -1232,24 +1393,122 @@ export function subscribeAgencyParcels(
     ? query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('createdAt', 'desc'), limit(pageLimit))
     : query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
 
-  const unsub1 = onSnapshot(q1, snap => {
+  // ⚠️ includeMetadataChanges: true — sinon, quand le cache contient déjà les mêmes documents
+  // que le serveur, Firestore ne redéclenche PAS de callback lors de la confirmation serveur
+  // (snapshot "identique" ignoré par défaut), et fromCache resterait bloqué à true à tort.
+  const unsub1 = onSnapshot(q1, { includeMetadataChanges: true }, snap => {
     // 🗄️ Filtrer les archivés côté client
-    created = snap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .filter(p => !p.isArchived)
+    created = (snap.docs
+      .map(d => ({ id: d.id, ...d.data() })) as any[])
+      .filter(p => includeArchived || !p.isArchived)
     lastCreatedDoc = snap.docs[snap.docs.length - 1] || null
+    createdFull = snap.metadata.fromCache || snap.docs.length >= pageLimit // cache : prudence, supposé plein
+    fromCache1 = snap.metadata.fromCache
     merge()
   }, onError)
-  const unsub2 = onSnapshot(q2, snap => {
+  const unsub2 = onSnapshot(q2, { includeMetadataChanges: true }, snap => {
     // 🗄️ Filtrer les archivés côté client
-    arrived = snap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .filter(p => !p.isArchived)
+    arrived = (snap.docs
+      .map(d => ({ id: d.id, ...d.data() })) as any[])
+      .filter(p => includeArchived || !p.isArchived)
     lastArrivedDoc = snap.docs[snap.docs.length - 1] || null
+    arrivedFull = snap.metadata.fromCache || snap.docs.length >= pageLimit
+    fromCache2 = snap.metadata.fromCache
     merge()
   }, onError)
 
   return () => { unsub1(); unsub2(); clearTimeout(timer) }
+}
+
+// 📡 Colis d'une agence (envoyés + reçus) sur une plage de dates, chargés JUSQU'À ÉPUISEMENT,
+// en temps réel, archivés inclus par défaut.
+// ⚠️ subscribeAgencyParcels ci-dessus est plafonné (pageLimit par requête) : une page qui s'en
+// sert seule (Caisse Agence : 300/1200) ne voyait que les N colis les plus récents de la plage —
+// Casablanca crée ≈ 400 colis/jour, donc « Ce mois » ou une période de 45 jours y était tronqué à
+// quelques jours. Ici chaque requête (originCity / destinationCity) est découpée en pages de
+// `pageSize` documents, chacune écoutée en temps réel ; la page suivante démarre dès que la
+// précédente est confirmée PLEINE par le serveur, jusqu'à la dernière page incomplète.
+// - Les colis poussés hors d'une page par l'arrivée de nouveaux colis (effet du limit) sont
+//   conservés (dernière version connue) pour ne jamais créer de trou à la jonction de deux pages.
+// - Sans dateFrom : 45 derniers jours (durée maximale avant archivage automatique).
+// - meta.complete = toutes les pages sont confirmées par le serveur et la dernière est incomplète.
+export function subscribeAgencyParcelsFull(
+  city: string,
+  opts: { dateFrom?: Date | null; dateTo?: Date | null; pageSize?: number; includeArchived?: boolean },
+  onData: (parcels: any[], meta: { loaded: number; complete: boolean; fromCache: boolean }) => void,
+  onError: (err?: any) => void = () => {}
+): () => void {
+  const pageSize = opts.pageSize ?? 2000
+  const includeArchived = opts.includeArchived ?? true
+  const since = Timestamp.fromDate(opts.dateFrom ?? new Date(Date.now() - 45 * 24 * 60 * 60 * 1000))
+  const until = opts.dateTo ? Timestamp.fromDate(opts.dateTo) : null
+  const FIELDS = ['originCity', 'destinationCity'] as const
+  type Page = { docs: any[]; size: number; server: boolean; nextStarted: boolean; unsub: () => void }
+  const chains: Record<string, Page[]> = { originCity: [], destinationCity: [] }
+  const pushedOut = new Map<string, any>()
+  let stopped = false
+  let timer: ReturnType<typeof setTimeout> | undefined
+
+  const emit = () => {
+    clearTimeout(timer)
+    timer = setTimeout(() => {
+      if (stopped) return
+      const map = new Map<string, any>()
+      pushedOut.forEach((p, id) => map.set(id, p))
+      FIELDS.forEach(f => chains[f].forEach(pg => pg.docs.forEach(p => map.set(p.id, p))))
+      const all = [...map.values()].filter(p => includeArchived || !p.isArchived)
+      const complete = FIELDS.every(f => {
+        const c = chains[f]
+        return c.length > 0 && c.every(pg => pg.server) && c[c.length - 1].size < pageSize
+      })
+      const fromCache = FIELDS.some(f => chains[f].length === 0 || chains[f].some(pg => !pg.server))
+      onData(sortByCreatedDesc(all), { loaded: all.length, complete, fromCache })
+    }, 60)
+  }
+
+  const startPage = (field: typeof FIELDS[number], idx: number, cursor: any) => {
+    if (stopped) return
+    const constraints: any[] = [
+      where(field, '==', city),
+      where('createdAt', '>=', since),
+      ...(until ? [where('createdAt', '<=', until)] : []),
+      orderBy('createdAt', 'desc'),
+      ...(cursor ? [startAfter(cursor)] : []),
+      limit(pageSize),
+    ]
+    const page: Page = { docs: [], size: 0, server: false, nextStarted: false, unsub: () => {} }
+    chains[field][idx] = page
+    page.unsub = onSnapshot(query(collection(db, 'parcels'), ...constraints), { includeMetadataChanges: true }, snap => {
+      if (stopped) return
+      // Document sorti de la page alors qu'elle reste pleine et qu'il est plus ancien que la
+      // nouvelle fin de page : il a été poussé dehors par un colis plus récent (limit), pas
+      // supprimé → on le garde, sinon il disparaîtrait entre cette page et la suivante.
+      const tail = snap.docs[snap.docs.length - 1]
+      const tailMs = tail?.data()?.createdAt?.toMillis?.() ?? 0
+      snap.docChanges().forEach(ch => {
+        if (ch.type !== 'removed' || snap.size < pageSize) return
+        const data: any = ch.doc.data()
+        const ms = data?.createdAt?.toMillis?.() ?? 0
+        if (ms && ms <= tailMs) pushedOut.set(ch.doc.id, { id: ch.doc.id, ...data })
+      })
+      snap.docs.forEach(d => pushedOut.delete(d.id))
+      page.docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      page.size = snap.size
+      page.server = !snap.metadata.fromCache
+      if (page.server && snap.size >= pageSize && !page.nextStarted && tail) {
+        page.nextStarted = true
+        startPage(field, idx + 1, tail)
+      }
+      emit()
+    }, err => { if (!stopped) onError(err) })
+  }
+
+  FIELDS.forEach(f => startPage(f, 0, null))
+  return () => {
+    stopped = true
+    clearTimeout(timer)
+    FIELDS.forEach(f => chains[f].forEach(pg => pg.unsub()))
+  }
 }
 
 // Charger plus de colis pour une agence (pagination)
@@ -1258,7 +1517,8 @@ export async function getMoreAgencyParcels(
   lastDocs: { lastCreatedDoc: any; lastArrivedDoc: any },
   pageSize = 1000,
   dateFrom?: Date | null,
-  dateTo?: Date | null
+  dateTo?: Date | null,
+  includeArchived = false // voir subscribeAgencyParcels
 ): Promise<{ docs: any[]; lastDocs: any; hasMore: boolean }> {
   // ⚡ OPTIMISATION : Chargement 30 jours au lieu de 365 pour performances
   const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(30)
@@ -1266,6 +1526,12 @@ export async function getMoreAgencyParcels(
   const results: any[] = []
   let newLastCreatedDoc: any = null
   let newLastArrivedDoc: any = null
+  // ⚠️ "Il en reste" se décide sur la taille BRUTE de chaque requête (une page pleine = peut-être
+  // encore des colis), jamais sur le nombre de colis gardés après filtrage/fusion : en excluant les
+  // archivés, une page de 2000 docs pouvait n'en garder que quelques centaines, et le chargement
+  // automatique s'arrêtait à tort (ex: Casablanca, août : 2 692 colis affichés sur 12 673).
+  let createdFull = false
+  let arrivedFull = false
 
   try {
     // Query 1: colis créés dans cette ville
@@ -1289,12 +1555,13 @@ export async function getMoreAgencyParcels(
             limit(pageSize)
           )
       const snap1 = await getDocs(q1)
-      // 🗄️ Filtrer les archivés côté client
-      const created = snap1.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(p => !p.isArchived)
+      // 🗄️ Filtrer les archivés côté client (sauf includeArchived)
+      const created = (snap1.docs
+        .map(d => ({ id: d.id, ...d.data() })) as any[])
+        .filter(p => includeArchived || !p.isArchived)
       results.push(...created)
       newLastCreatedDoc = snap1.docs[snap1.docs.length - 1] || lastDocs.lastCreatedDoc
+      createdFull = snap1.docs.length >= pageSize
     }
 
     // Query 2: colis arrivés dans cette ville
@@ -1318,14 +1585,15 @@ export async function getMoreAgencyParcels(
             limit(pageSize)
           )
       const snap2 = await getDocs(q2)
-      const arrived = (snap2.docs.map(d => ({ id: d.id, ...d.data() })) as any[]).filter((p: any) => {
-        // 🗄️ Exclure les archivés
-        if (p.isArchived) return false
-        if (p.wasReturned && (p.returnToCity === city || p.destinationCity === city)) return true
-        return isParcelVisibleInDestinationAgency(p)
-      })
+      // ⚠️ Même filtrage que la première page (subscribeAgencyParcels) : seulement les archivés.
+      // La visibilité côté agence de destination est appliquée par l'appelant (AgentPage) sur
+      // TOUS les colis — la filtrer ici aussi rendait le total dépendant de la page où tombait
+      // le colis (1re page : gardé ; pages suivantes : exclu).
+      const arrived = (snap2.docs.map(d => ({ id: d.id, ...d.data() })) as any[])
+        .filter((p: any) => includeArchived || !p.isArchived)
       results.push(...arrived)
       newLastArrivedDoc = snap2.docs[snap2.docs.length - 1] || lastDocs.lastArrivedDoc
+      arrivedFull = snap2.docs.length >= pageSize
     }
 
     // Fusionner et dédupliquer
@@ -1339,12 +1607,46 @@ export async function getMoreAgencyParcels(
         lastCreatedDoc: newLastCreatedDoc,
         lastArrivedDoc: newLastArrivedDoc
       },
-      hasMore: docs.length >= pageSize
+      hasMore: createdFull || arrivedFull
     }
   } catch (error) {
     console.error('getMoreAgencyParcels error:', error)
     return { docs: [], lastDocs, hasMore: false }
   }
+}
+
+// 📅 Colis d'une agence pour UNE tranche de temps (une journée d'opération), une requête
+// (originCity OU destinationCity), archivés inclus, paginée par pageSize jusqu'à épuisement.
+// Sert au chargement « jour par jour » de l'onglet Expéditions du chef d'agence / agent pro :
+// - [start, end[ (ou [start, end] si endInclusive) ;
+// - afterDoc : curseur de la page temps réel — seuls les colis PLUS ANCIENS que lui sont lus
+//   (ceux au-dessus sont déjà affichés par l'écoute temps réel).
+export async function getAgencyParcelsDaySlice(
+  city: string,
+  field: 'originCity' | 'destinationCity',
+  start: Date,
+  end: Date,
+  endInclusive: boolean,
+  afterDoc: any = null,
+  pageSize = 2000
+): Promise<any[]> {
+  const out: any[] = []
+  let cursor: any = afterDoc
+  for (let guard = 0; guard < 200; guard++) {
+    const constraints: any[] = [
+      where(field, '==', city),
+      where('createdAt', '>=', Timestamp.fromDate(start)),
+      where('createdAt', endInclusive ? '<=' : '<', Timestamp.fromDate(end)),
+      orderBy('createdAt', 'desc'),
+      ...(cursor ? [startAfter(cursor)] : []),
+      limit(pageSize),
+    ]
+    const snap = await getDocs(query(collection(db, 'parcels'), ...constraints))
+    snap.docs.forEach(d => out.push({ id: d.id, ...d.data() }))
+    if (snap.docs.length < pageSize) break
+    cursor = snap.docs[snap.docs.length - 1]
+  }
+  return out
 }
 
 // Colis retournés pour une agence (à charger, reçus, historique)
@@ -1355,32 +1657,21 @@ export function subscribeAgencyReturnParcels(
   dateFrom?: Date | null,
   dateTo?: Date | null
 ) {
-  let allReturns: any[] = []
-
   // 📅 Filtres de date pour la requête Firestore
   const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(30)
   const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
 
-  // 🔍 Requête avec filtres de date appliqués dans Firestore
-  const q = dateTo
-    ? query(
-        collection(db, 'parcels'),
-        where('status', 'in', ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']),
-        where('createdAt', '>=', since),
-        where('createdAt', '<=', until),
-        orderBy('createdAt', 'desc'),
-        limit(5000)
-      )
-    : query(
-        collection(db, 'parcels'),
-        where('status', 'in', ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']),
-        where('createdAt', '>=', since),
-        orderBy('createdAt', 'desc'),
-        limit(5000)
-      )
+  // ⚡ Filtre ville côté serveur : une requête par champ ville utilisé par le filtre
+  // local (destinationCity / returnToCity / createdByCity), fusionnées et dédupliquées.
+  // Le filtre local ci-dessous est conservé tel quel → sortie identique.
+  const CITY_FIELDS = ['destinationCity', 'returnToCity', 'createdByCity'] as const
+  const byField: Record<string, any[] | null> = { destinationCity: null, returnToCity: null, createdByCity: null }
 
-  return onSnapshot(q, snap => {
-    allReturns = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+  const emit = () => {
+    if (CITY_FIELDS.some(f => byField[f] === null)) return
+    const map = new Map<string, any>()
+    CITY_FIELDS.forEach(f => (byField[f] as any[]).forEach(p => map.set(p.id, p)))
+    const allReturns = sortByCreatedDesc([...map.values()])
 
     // Filtrer en local pour cette agence
     const filtered = allReturns.filter((p: any) => {
@@ -1399,7 +1690,24 @@ export function subscribeAgencyReturnParcels(
     })
 
     callback(filtered)
-  }, onError)
+  }
+
+  const unsubs = CITY_FIELDS.map(field => {
+    const q = query(
+      collection(db, 'parcels'),
+      where(field, '==', city),
+      where('status', 'in', ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']),
+      where('createdAt', '>=', since),
+      ...(dateTo ? [where('createdAt', '<=', until)] : []),
+      orderBy('createdAt', 'desc'),
+      limit(5000)
+    )
+    return onSnapshot(q, snap => {
+      byField[field] = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+      emit()
+    }, onError)
+  })
+  return () => unsubs.forEach(u => u())
 }
 
 export function subscribePendingAideAgentParcels(callback: any, onError: (err?: any) => void = () => {}) {
@@ -1682,6 +1990,9 @@ export async function searchParcels(
     limit?: number
     agencyCity?: string      // Pour filtrer par ville (chefs d'agence)
     includeArchived?: boolean // Pour chercher aussi dans archives
+    // 🔍 Restreint la recherche par NOM à l'expéditeur seul, au destinataire seul, ou les deux
+    // (défaut). N'affecte pas les recherches par tracking/NIC/téléphone.
+    nameScope?: 'all' | 'sender' | 'receiver'
   } = {}
 ): Promise<any[]> {
   try {
@@ -1804,22 +2115,36 @@ export async function searchParcels(
       const nameLower = searchTerm.toLowerCase().trim()
       if (/[a-zA-Zà-ÿ]/.test(searchTerm)) {
         try {
-          // Recherche exacte
-          const qName1Exact = query(parcelsCol, where('senderNameLower', '==', nameLower))
-          const qName2Exact = query(parcelsCol, where('receiverNameLower', '==', nameLower))
+          // ⚠️ nameScope restreint à un seul champ : on n'interroge même pas l'autre, pour
+          // que "expéditeur seul" n'affiche jamais un colis matché via le destinataire.
+          const nameScope = options.nameScope || 'all'
+          const nameNorm = normName(searchTerm)
+          const PREFIX_END = '\uf8ff'
+          const doPrefix = nameNorm.length >= 3
+          const wantSender = nameScope !== 'receiver'
+          const wantReceiver = nameScope !== 'sender'
+          const nameQueryList: Query<DocumentData>[] = []
+          // Recherche exacte (champs historiques en minuscules + champs normalisés sans accents)
+          if (wantSender) nameQueryList.push(query(parcelsCol, where('senderNameLower', '==', nameLower)))
+          if (wantReceiver) nameQueryList.push(query(parcelsCol, where('receiverNameLower', '==', nameLower)))
+          if (nameNorm) {
+            if (wantSender) nameQueryList.push(query(parcelsCol, where('senderNameNorm', '==', nameNorm)))
+            if (wantReceiver) nameQueryList.push(query(parcelsCol, where('receiverNameNorm', '==', nameNorm)))
+          }
+          // Recherche par préfixe (commence par) — seulement à partir de 3 caractères
+          if (doPrefix) {
+            if (wantSender) {
+              nameQueryList.push(query(parcelsCol, where('senderNameLower', '>=', nameLower), where('senderNameLower', '<=', nameLower + PREFIX_END)))
+              nameQueryList.push(query(parcelsCol, where('senderNameNorm', '>=', nameNorm), where('senderNameNorm', '<=', nameNorm + PREFIX_END)))
+            }
+            if (wantReceiver) {
+              nameQueryList.push(query(parcelsCol, where('receiverNameLower', '>=', nameLower), where('receiverNameLower', '<=', nameLower + PREFIX_END)))
+              nameQueryList.push(query(parcelsCol, where('receiverNameNorm', '>=', nameNorm), where('receiverNameNorm', '<=', nameNorm + PREFIX_END)))
+            }
+          }
+          const nameSnaps = await Promise.all(nameQueryList.map(q => getDocs(q)))
 
-          // Recherche par préfixe (commence par)
-          const qName1Prefix = query(parcelsCol, where('senderNameLower', '>=', nameLower), where('senderNameLower', '<=', nameLower + ''))
-          const qName2Prefix = query(parcelsCol, where('receiverNameLower', '>=', nameLower), where('receiverNameLower', '<=', nameLower + ''))
-
-          const [snap1Exact, snap2Exact, snap1Prefix, snap2Prefix] = await Promise.all([
-            getDocs(qName1Exact),
-            getDocs(qName2Exact),
-            getDocs(qName1Prefix),
-            getDocs(qName2Prefix)
-          ])
-
-          for (const d of [...snap1Exact.docs, ...snap2Exact.docs, ...snap1Prefix.docs, ...snap2Prefix.docs]) {
+          for (const d of nameSnaps.flatMap(snap => snap.docs)) {
             if (!uniqueIds.has(d.id)) {
               uniqueIds.add(d.id)
               results.push({ id: d.id, ...d.data(), isArchived })
@@ -1996,38 +2321,94 @@ export async function autoArchiveParcels(options: {
 /**
  * S'abonner aux expéditions COD en espèces
  */
-export function subscribeCodParcelsEspeces(
-  callback: (data: Parcel[], lastDoc: any) => void,
-  onError?: (err: any) => void,
-  codStatusFilter?: 'pending' | 'collected' | 'remis',
-  limitCount = 9000
-) {
-  let q = query(
-    collection(db, 'parcels'),
-    where('serviceType', '==', 'especes'),
-    orderBy('createdAt', 'desc'),
-    limit(limitCount)
-  )
+// ⚡ DRFE / DRFC : fenêtre de lecture = COD des COD_RECENT_DAYS derniers jours
+// + COD non soldés (pending / collected / sans statut) quel que soit leur âge.
+// Les COD soldés (remis) plus anciens restent accessibles via « Charger plus ».
+const COD_RECENT_DAYS = 90
+const COD_UNSETTLED_STATUSES = ['pending', 'collected', null]
 
-  if (codStatusFilter) {
-    q = query(
+export type CodSubscriptionMeta = { hasOlder: boolean }
+
+function subscribeCodByServiceType(
+  serviceTypeFilter: ReturnType<typeof where>,
+  callback: (data: Parcel[], lastDoc: any, meta?: CodSubscriptionMeta) => void,
+  onError: ((err: any) => void) | undefined,
+  codStatusFilter: 'pending' | 'collected' | 'remis' | undefined,
+  limitCount: number
+) {
+  const onErr = onError || (() => {})
+  const toParcels = (snapshot: any) => snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Parcel))
+
+  // Filtre sur un statut non soldé : aucune borne de date (rien ne doit disparaître)
+  if (codStatusFilter === 'pending' || codStatusFilter === 'collected') {
+    const q = query(
       collection(db, 'parcels'),
-      where('serviceType', '==', 'especes'),
+      serviceTypeFilter,
       where('codStatus', '==', codStatusFilter),
       orderBy('createdAt', 'desc'),
       limit(limitCount)
     )
+    return onSnapshot(q, (snapshot) => {
+      const data = toParcels(snapshot)
+      callback(data, snapshot.docs[snapshot.docs.length - 1], { hasOlder: data.length >= limitCount })
+    }, onErr)
   }
 
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Parcel))
-      const lastDoc = snapshot.docs[snapshot.docs.length - 1]
-      callback(data, lastDoc)
-    },
-    onError || (() => {})
+  const cutoff = daysAgoTimestamp(COD_RECENT_DAYS)
+  let recent: Parcel[] | null = null
+  let recentLast: any = null
+  // Filtre 'remis' : seulement la fenêtre récente (le reste via « Charger plus »)
+  let older: Parcel[] | null = codStatusFilter ? [] : null
+
+  const emit = () => {
+    if (recent === null || older === null) return
+    const map = new Map<string, Parcel>()
+    ;[...recent, ...older].forEach((p) => map.set(p.id, p))
+    const data = sortByCreatedDesc([...map.values()] as any[]) as Parcel[]
+    // Curseur « Charger plus » : dernier doc récent, ou la date limite si aucun doc récent
+    // (startAfter accepte une valeur de createdAt avec orderBy('createdAt','desc')).
+    callback(data, recentLast || cutoff, { hasOlder: true })
+  }
+
+  const qRecent = query(
+    collection(db, 'parcels'),
+    serviceTypeFilter,
+    ...(codStatusFilter ? [where('codStatus', '==', codStatusFilter)] : []),
+    where('createdAt', '>=', cutoff),
+    orderBy('createdAt', 'desc'),
+    limit(limitCount)
   )
+  const unsubRecent = onSnapshot(qRecent, (snapshot) => {
+    recent = toParcels(snapshot)
+    recentLast = snapshot.docs[snapshot.docs.length - 1] || null
+    emit()
+  }, onErr)
+
+  if (codStatusFilter) return unsubRecent
+
+  const qOlder = query(
+    collection(db, 'parcels'),
+    serviceTypeFilter,
+    where('codStatus', 'in', COD_UNSETTLED_STATUSES),
+    where('createdAt', '<', cutoff),
+    orderBy('createdAt', 'desc'),
+    limit(limitCount)
+  )
+  const unsubOlder = onSnapshot(qOlder, (snapshot) => {
+    older = toParcels(snapshot)
+    emit()
+  }, onErr)
+
+  return () => { unsubRecent(); unsubOlder() }
+}
+
+export function subscribeCodParcelsEspeces(
+  callback: (data: Parcel[], lastDoc: any, meta?: CodSubscriptionMeta) => void,
+  onError?: (err: any) => void,
+  codStatusFilter?: 'pending' | 'collected' | 'remis',
+  limitCount = 9000
+) {
+  return subscribeCodByServiceType(where('serviceType', '==', 'especes'), callback, onError, codStatusFilter, limitCount)
 }
 
 /**
@@ -2067,37 +2448,12 @@ export async function getMoreCodParcelsEspeces(
  * S'abonner aux expéditions COD en chèques/traites
  */
 export function subscribeCodParcelsCheques(
-  callback: (data: Parcel[], lastDoc: any) => void,
+  callback: (data: Parcel[], lastDoc: any, meta?: CodSubscriptionMeta) => void,
   onError?: (err: any) => void,
   codStatusFilter?: 'pending' | 'collected' | 'remis',
   limitCount = 9000
 ) {
-  let q = query(
-    collection(db, 'parcels'),
-    where('serviceType', 'in', ['cheque', 'traite']),
-    orderBy('createdAt', 'desc'),
-    limit(limitCount)
-  )
-
-  if (codStatusFilter) {
-    q = query(
-      collection(db, 'parcels'),
-      where('serviceType', 'in', ['cheque', 'traite']),
-      where('codStatus', '==', codStatusFilter),
-      orderBy('createdAt', 'desc'),
-      limit(limitCount)
-    )
-  }
-
-  return onSnapshot(
-    q,
-    (snapshot) => {
-      const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Parcel))
-      const lastDoc = snapshot.docs[snapshot.docs.length - 1]
-      callback(data, lastDoc)
-    },
-    onError || (() => {})
-  )
+  return subscribeCodByServiceType(where('serviceType', 'in', ['cheque', 'traite']), callback, onError, codStatusFilter, limitCount)
 }
 
 /**
@@ -2166,3 +2522,48 @@ export async function markCodAsRemis(
 }
 
 // -- Règlements (Pointeur-Encaisseur) -------------------------------------
+// 🧾 Facturier : charger TOUTES les expéditions dont createdAt est dans [start, end]
+// (pagination par tranches de 1000, sans limite globale). Requête mono-champ : aucun index composite requis.
+// onProgress(n) : appelé après chaque tranche avec le nombre total reçu (indicateur visible).
+// endExclusive = true : borne haute stricte (<) — utilisé pour découper une plage en tranches
+// jour par jour contiguës sans doublon ni trou (voir FacturierExpeditionsTab).
+export async function getParcelsByCreatedAtRange(
+  start: Date, end: Date, pageSize = 1000, onProgress?: (loaded: number) => void, endExclusive = false
+): Promise<any[]> {
+  const out: any[] = []
+  let cursor: any = null
+  for (let guard = 0; guard < 200; guard++) {
+    const constraints: any[] = [
+      where('createdAt', '>=', Timestamp.fromDate(start)),
+      where('createdAt', endExclusive ? '<' : '<=', Timestamp.fromDate(end)),
+      orderBy('createdAt', 'desc'),
+    ]
+    if (cursor) constraints.push(startAfter(cursor))
+    constraints.push(limit(pageSize))
+    const snap = await getDocs(query(collection(db, 'parcels'), ...constraints))
+    snap.docs.forEach(d => out.push({ id: d.id, ...d.data() }))
+    onProgress?.(out.length)
+    if (snap.docs.length < pageSize) break
+    cursor = snap.docs[snap.docs.length - 1]
+  }
+  return out
+}
+
+// 💼 Ports en compte d'une agence (page Chef d'agence), SANS plafond ni fenêtre de dates :
+// - compte expéditeur (+ ancien type générique) expédiés DEPUIS la ville,
+// - compte destinataire (+ ancien type générique) livrés DANS la ville.
+// ⚠️ Ne PAS s'appuyer sur la liste temps réel de l'agence (plafonnée à 2000 colis par requête et
+// sans les colis archivés) : pour une agence très active (Casablanca ≈ 13 000 expéditions/mois),
+// elle ne couvrait que les derniers jours du mois et le décompte divergeait du Facturier.
+// Comme le Facturier, les colis marqués isArchived (toujours dans 'parcels') sont inclus.
+// Requêtes à égalité seule (== + in) : aucun index composite requis.
+export async function getAgencyPortEnCompteParcels(city: string): Promise<any[]> {
+  if (!city) return []
+  const [snapOrig, snapDest] = await Promise.all([
+    getDocs(query(collection(db, 'parcels'), where('originCity', '==', city), where('portType', 'in', ['port_en_compte_expediteur', 'port_en_compte']))),
+    getDocs(query(collection(db, 'parcels'), where('destinationCity', '==', city), where('portType', 'in', ['port_en_compte_destinataire', 'port_en_compte']))),
+  ])
+  const map = new Map<string, any>()
+  ;[...snapOrig.docs, ...snapDest.docs].forEach(d => map.set(d.id, { id: d.id, ...d.data() }))
+  return sortByCreatedDesc([...map.values()])
+}

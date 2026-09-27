@@ -3,12 +3,17 @@ import { useNavigate } from 'react-router-dom'
 import { LogOut, Package, CheckCircle2, Clock, QrCode, PenLine, Menu, X, Truck, Banknote } from 'lucide-react'
 import { QRCodeSVG } from 'qrcode.react'
 import { auth, db } from '../firebase/config'
-import { collection, query, where, onSnapshot, orderBy, doc } from 'firebase/firestore'
+import { collection, query, where, onSnapshot, orderBy, doc, Timestamp } from 'firebase/firestore'
 import { signOut } from 'firebase/auth'
 import { generateSignatureToken, confirmDeliveryAfterSignature, submitDeliverySignature } from '../firebase/firestore'
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner'
 import LiveClock from '../components/LiveClock'
 import CompanyContact from '../components/CompanyContact'
+import { normIncludes } from '../utils/normText'
+
+// ⚡ Les colis déjà remis (Livré) ne sont chargés que sur cette fenêtre (en jours).
+// Les colis à traiter (Arrivé en agence / En livraison) restent chargés sans limite de date.
+const LIVRE_WINDOW_DAYS = 30
 
 // Couleurs de statut
 const STATUS_COLORS: any = {
@@ -126,17 +131,25 @@ export default function DriverGarePage() {
     }
 
     try {
-      const unsubParcels = onSnapshot(
-        query(
-          collection(db, 'parcels'),
-          where('deliveryMethod', '==', 'gare'),
-          where('destinationCity', '==', String(profile.city)),
-          where('status', 'in', ['En livraison', 'Arrivé en agence', 'Livré']),
-          orderBy('createdAt', 'desc')
-        ),
-        {
-          next: (snap) => {
-            const docs = snap.docs.map(d => {
+      // ⚡ Deux requêtes : colis à traiter (sans borne de date) + colis livrés des
+      // LIVRE_WINDOW_DAYS derniers jours seulement, fusionnés côté client.
+      let activeDocs: any[] | null = null
+      let doneDocs: any[] | null = null
+      const emit = () => {
+        if (activeDocs === null || doneDocs === null) return
+        const map = new Map<string, any>()
+        ;[...activeDocs, ...doneDocs].forEach(p => map.set(p.id, p))
+        const docs = [...map.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+        console.log('🚉 Colis en gare récupérés:', docs.length, docs)
+        setParcels(docs)
+        setLoading(false)
+      }
+      const baseConstraints = [
+        where('deliveryMethod', '==', 'gare'),
+        where('destinationCity', '==', String(profile.city)),
+      ]
+      const livreSince = Timestamp.fromDate(new Date(Date.now() - LIVRE_WINDOW_DAYS * 24 * 60 * 60 * 1000))
+      const mapSnap = (snap: any) => snap.docs.map((d: any) => {
               const data = d.data()
               // Inclure tous les champs nécessaires pour COD, port dû, et historique
               // Convertir les Timestamps dans l'historique
@@ -173,20 +186,33 @@ export default function DriverGarePage() {
                 createdAt: data.createdAt?.toMillis ? data.createdAt.toMillis() : Date.now()
               }
             })
+      const onErr = (err: any) => {
+        console.error('❌ Erreur snapshot parcels:', err)
+        setParcels([])
+        setLoading(false)
+      }
 
-            console.log('🚉 Colis en gare récupérés:', docs.length, docs)
-            setParcels(docs)
-            setLoading(false)
-          },
-          error: (err) => {
-            console.error('❌ Erreur snapshot parcels:', err)
-            setParcels([])
-            setLoading(false)
-          }
-        }
+      const unsubActive = onSnapshot(
+        query(
+          collection(db, 'parcels'),
+          ...baseConstraints,
+          where('status', 'in', ['En livraison', 'Arrivé en agence']),
+          orderBy('createdAt', 'desc')
+        ),
+        { next: (snap) => { activeDocs = mapSnap(snap); emit() }, error: onErr }
+      )
+      const unsubDone = onSnapshot(
+        query(
+          collection(db, 'parcels'),
+          ...baseConstraints,
+          where('status', '==', 'Livré'),
+          where('createdAt', '>=', livreSince),
+          orderBy('createdAt', 'desc')
+        ),
+        { next: (snap) => { doneDocs = mapSnap(snap); emit() }, error: onErr }
       )
 
-      return () => unsubParcels()
+      return () => { unsubActive(); unsubDone() }
     } catch (err) {
       console.error('❌ Erreur setup snapshot:', err)
       setParcels([])
@@ -396,8 +422,8 @@ export default function DriverGarePage() {
   // Appliquer le filtre de recherche
   const filtered = parcels.filter(p =>
     !search ||
-    p.trackingId?.toLowerCase().includes(search.toLowerCase()) ||
-    p.receiver?.name?.toLowerCase().includes(search.toLowerCase()) ||
+    normIncludes(p.trackingId, search.toLowerCase()) ||
+    normIncludes(p.receiver?.name, search.toLowerCase()) ||
     p.receiver?.tel?.includes(search)
   )
 
@@ -486,7 +512,7 @@ export default function DriverGarePage() {
           <div className="bg-gray-800 border border-gray-700 rounded-xl p-4">
             <div className="flex items-center gap-2 mb-1">
               <CheckCircle2 className="w-4 h-4 text-green-400" />
-              <span className="text-xs text-gray-400">Remis</span>
+              <span className="text-xs text-gray-400">Remis ({LIVRE_WINDOW_DAYS} j)</span>
             </div>
             <p className="text-2xl font-bold text-green-400">{doneParcels.length}</p>
           </div>
@@ -603,7 +629,7 @@ export default function DriverGarePage() {
               <div>
                 <h3 className="text-sm font-bold text-gray-400 uppercase mb-3 flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-green-400" />
-                  Remis ({filteredDone.length})
+                  Remis ({filteredDone.length}) · {LIVRE_WINDOW_DAYS} derniers jours
                 </h3>
                 <div className="space-y-3">
                   {filteredDone.map((p: any) => {

@@ -19,7 +19,7 @@ import {
   subscribeDeliverySignature,
   confirmDeliveryWithPaperReceipt,
 } from '../firebase/signatures'
-import { STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS, codCollectedLabel } from '../firebase/constants'
+import { STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS, codCollectedLabel, codPaymentTypeOf } from '../firebase/constants'
 import {
   Truck, LogOut, ScanLine, Search, CheckCircle,
   ArrowLeft, MapPin, Package, X, Phone, Calendar, Home, Banknote, Menu, Printer,
@@ -31,6 +31,7 @@ import { printDeliveryList } from '../utils/printDeliveryList'
 import SignatureViewerModal from '../components/SignatureViewerModal'
 import VersementChefModal from './driver/components/VersementChefModal'
 import { fmt } from '../utils/formatNumber'
+import { normIncludes } from '../utils/normText'
 
 const QRCodeSVG = lazy(() => import('../components/QRCodeSvg'))
 
@@ -43,6 +44,9 @@ const SERVICE_TYPE_DISPLAY = {
 }
 
 const parcelDate = (p: any) => {
+  // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire — voir
+  // src/utils/dateFilter.ts pour l'explication complète de cette règle partagée.
+  if (p.workDate) return new Date(p.workDate + 'T12:00:00')
   if (p.createdAt?.toDate) return p.createdAt.toDate()
   if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
   return new Date(0)
@@ -485,8 +489,8 @@ export default function DriverPage() {
     if (codSearchQuery.trim()) {
       const q = codSearchQuery.toLowerCase()
       myCodParcels = myCodParcels.filter(p =>
-        p.trackingId?.toLowerCase().includes(q) ||
-        p.receiver?.name?.toLowerCase().includes(q)
+        normIncludes(p.trackingId, q) ||
+        normIncludes(p.receiver?.name, q)
       )
     }
 
@@ -497,7 +501,7 @@ export default function DriverPage() {
 
     // 3. Filtre par type de paiement
     if (codTypeFilter !== 'all') {
-      myCodParcels = myCodParcels.filter(p => p.codPaymentType === codTypeFilter)
+      myCodParcels = myCodParcels.filter(p => codPaymentTypeOf(p) === codTypeFilter)
     }
 
     // 4. Filtre par date
@@ -550,7 +554,7 @@ export default function DriverPage() {
     const filteredParcels = !missionQuery ? statusFilteredParcels : statusFilteredParcels.filter((p: any) => {
       const codPayment = COD_PAYMENT_TYPES.find(t => t.key === p.codPaymentType)
       const codState = COD_STATUS[p.codStatus || 'pending']
-      return [
+      return normIncludes([
         p.trackingId,
         p.status,
         p.sender?.name,
@@ -573,7 +577,7 @@ export default function DriverPage() {
         codPayment?.label,
         codPayment?.key,
         codState?.label,
-      ].filter(v => v !== undefined && v !== null).join(' ').toLowerCase().includes(missionQuery)
+      ].filter(v => v !== undefined && v !== null).join(' '), missionQuery)
     })
     return { activeParcels, doneParcels, dateFilteredParcels, filteredParcels }
   }, [activeList, driverTab, filter, datePreset, dateFrom, dateTo, parcelStatusFilter, debouncedMissionSearch])
@@ -643,7 +647,7 @@ export default function DriverPage() {
     parcel,
     status,
     note: '',
-    codPaymentType: parcel.serviceType === 'retour_bl' ? 'bon_livraison' : (parcel.serviceType || 'especes'),
+    codPaymentType: codPaymentTypeOf(parcel),
     loading: false,
     error: ''
   })
@@ -2119,7 +2123,7 @@ export default function DriverPage() {
                         )}
                         {parcel.codAmount > 0 && parcel.status !== 'Retourné' && (() => {
                           const cs  = COD_STATUS[parcel.codStatus || 'pending']
-                          const cpt = COD_PAYMENT_TYPES.find(t => t.key === parcel.codPaymentType)
+                          const cpt = COD_PAYMENT_TYPES.find(t => t.key === codPaymentTypeOf(parcel))
                           const isCollected = parcel.codStatus === 'collected'
                           const bg   = isCollected && cpt ? cpt.darkBg   : cs.darkBg
                           const txt  = isCollected && cpt ? cpt.darkText : cs.darkText
@@ -2634,11 +2638,11 @@ export default function DriverPage() {
                       {/* Type */}
                       <div className="flex items-center gap-2">
                         <span className="text-xs bg-blue-600 text-white px-2 py-1 rounded">
-                          {p.codPaymentType === 'especes' ? '💵 Espèces' :
-                           p.codPaymentType === 'cheque' ? '📋 Chèque' :
-                           p.codPaymentType === 'traite' ? '📝 Traite' :
-                           p.codPaymentType === 'bon_livraison' ? '🧾 BL' :
-                           p.codPaymentType === 'retour_bl' ? '🧾 Retour BL' : '💵 Espèces'}
+                          {codPaymentTypeOf(p) === 'especes' ? '💵 Espèces' :
+                           codPaymentTypeOf(p) === 'cheque' ? '📋 Chèque' :
+                           codPaymentTypeOf(p) === 'traite' ? '📝 Traite' :
+                           codPaymentTypeOf(p) === 'bon_livraison' ? '🧾 BL' :
+                           codPaymentTypeOf(p) === 'retour_bl' ? '🧾 Retour BL' : '💵 Espèces'}
                         </span>
                       </div>
 

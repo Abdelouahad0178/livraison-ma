@@ -26,6 +26,7 @@ import {
   ChevronRight, BarChart3, RefreshCw, Truck, MapPin,
   ArrowRight, Package, ShieldCheck,
 } from 'lucide-react'
+import { normIncludes } from '../utils/normText'
 
 const todayStr = () => new Date().toISOString().split('T')[0]
 
@@ -322,7 +323,7 @@ export default function PointeurPage() {
       const q = search.toLowerCase()
       const linkedParcel = r.parcelId ? codParcels.find(p => p.id === r.parcelId) : null
       if (![r.trackingNumber, r.expediteurNic, r.senderNic, r.nexp, linkedParcel?.sender?.nic, r.expediteur, r.destinataire, r.numeroPiece, r.banque]
-        .some(v => (v || '').toLowerCase().includes(q))) return false
+        .some(v => normIncludes(v || '', q))) return false
     }
     return true
   })
@@ -355,7 +356,7 @@ export default function PointeurPage() {
     if (codSearch) {
       const q = codSearch.toLowerCase()
       if (![p.trackingId, p.sender?.nic, p.sender?.name, p.receiver?.name, p.receiver?.tel, p.originCity, p.deliveryDriverName]
-        .some(v => (v || '').toLowerCase().includes(q))) return false
+        .some(v => normIncludes(v || '', q))) return false
     }
     return true
   })

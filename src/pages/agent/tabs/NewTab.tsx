@@ -8,8 +8,11 @@ import type { Client } from '../../../firebase/clients'
 // import { searchExpediteurs, searchDestinataires } from '../../../firebase/clients'
 // import VoiceInputAI from '../../../components/VoiceInputAI'
 import { collection, query, where, getDocs, limit } from 'firebase/firestore'
-import { db } from '../../../firebase/config'
+import { db, auth } from '../../../firebase/config'
 import { getWorkingDateStr } from '../../../utils/workingDate'
+import { updateParcel, buildParcelCorrectionPatch, describeParcelSaveError } from '../../../firebase/parcels'
+import { showToast } from '../../../utils/toast'
+import { normIncludes } from '../../../utils/normText'
 
 const Barcode = lazy(() => import('react-barcode'))
 const QRCodeSVG = lazy(() => import('../../../components/QRCodeSvg'))
@@ -39,6 +42,15 @@ const getEmptyForm = () => ({
 // Types disponibles pour création (sans retour_bl et retourne - ces types sont pour marquage uniquement)
 const SERVICE_TYPES = ALL_SERVICE_TYPES.filter(t => t.key !== 'retour_bl' && t.key !== 'retourne')
 
+// Libellé du statut du port (dû / payé / en compte) affiché sur le bon de ramassage
+const PORT_TYPE_LABELS: Record<string, { label: string; className: string }> = {
+  port_du: { label: 'Port dû', className: 'text-orange-600' },
+  port_paye: { label: 'Port payé', className: 'text-green-600' },
+  port_en_compte_destinataire: { label: 'Port en compte (Dest.)', className: 'text-purple-600' },
+  port_en_compte_expediteur: { label: 'Port en compte (Exp.)', className: 'text-indigo-600' },
+}
+const portTypeInfo = (portType: string) => PORT_TYPE_LABELS[portType] || PORT_TYPE_LABELS.port_paye
+
 export default function NewTab() {
   const {
     profile, ticketRef,
@@ -60,6 +72,8 @@ export default function NewTab() {
   const [pendingParcel, setPendingParcel] = useState<any>(null)
   const [editableParcel, setEditableParcel] = useState<any>(null)
   const [isConfirmed, setIsConfirmed] = useState(false)
+  const [confirmSaving, setConfirmSaving] = useState(false)
+  const [confirmError, setConfirmError] = useState('')
 
 
   // Ref pour le champ N EXP et le conteneur du ticket
@@ -339,8 +353,8 @@ export default function NewTab() {
     const searchLower = senderSearch.toLowerCase()
     return (
       c.isExpediteur &&
-      (c.name.toLowerCase().includes(searchLower) ||
-       (c.code && c.code.toLowerCase().includes(searchLower)))
+      (normIncludes(c.name, searchLower) ||
+       (c.code && normIncludes(c.code, searchLower)))
     )
   })
 
@@ -348,8 +362,8 @@ export default function NewTab() {
     const searchLower = receiverSearch.toLowerCase()
     return (
       c.isDestinataire &&
-      (c.name.toLowerCase().includes(searchLower) ||
-       (c.code && c.code.toLowerCase().includes(searchLower)))
+      (normIncludes(c.name, searchLower) ||
+       (c.code && normIncludes(c.code, searchLower)))
     )
   })
 
@@ -506,10 +520,12 @@ export default function NewTab() {
     const previousTitle = document.title
     const style = document.createElement('style')
     style.textContent = `
-      @page { size: A5 portrait; margin: 8mm; }
+      @page { size: A4 portrait; margin: 8mm; }
       @media print {
         body { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
-        #ticket-print { width: 148mm !important; max-width: 148mm !important; margin: 0 auto !important; }
+        #ticket-print { width: 100% !important; display: flex !important; flex-direction: column !important; align-items: center !important; gap: 8mm !important; }
+        .ticket-copy { width: 148mm !important; max-width: 148mm !important; margin: 0 auto !important; }
+        .ticket-cut-line { width: 148mm !important; max-width: 148mm !important; }
       }
     `
     document.head.appendChild(style)
@@ -522,12 +538,41 @@ export default function NewTab() {
   }
 
   // Valider et passer à l'impression
-  const handleConfirmPrint = () => {
-    if (editableParcel) {
+  const handleConfirmPrint = async () => {
+    if (editableParcel && !confirmSaving) {
+      // 💾 Enregistrer dans Firestore les corrections faites dans ce modal
+      // (auparavant elles n'étaient appliquées qu'au bon imprimé, jamais en base)
+      const original = pendingParcel || editableParcel
+      const patch = buildParcelCorrectionPatch(original, {
+        sender:        editableParcel.sender,
+        receiver:      editableParcel.receiver,
+        weight:        editableParcel.weight,
+        nbColis:       editableParcel.nbColis,
+        natureOfGoods: editableParcel.natureOfGoods,
+        price:         editableParcel.price,
+        codAmount:     editableParcel.codAmount,
+      }, { uid: auth.currentUser?.uid || null, name: profile?.name || 'Agent' })
+      if (Object.keys(patch).length > 0 && original?.id) {
+        setConfirmSaving(true)
+        setConfirmError('')
+        try {
+          await updateParcel(original.id, patch)
+          showToast('Corrections enregistrées.', 'success', 3000)
+        } catch (err: any) {
+          console.error('handleConfirmPrint updateParcel:', err)
+          const msg = describeParcelSaveError(err, original)
+          setConfirmError(msg)
+          showToast(msg, 'error')
+          setConfirmSaving(false)
+          return
+        }
+        setConfirmSaving(false)
+      }
+      setConfirmError('')
       // Marquer comme confirmé pour éviter que le modal se rouvre
       setIsConfirmed(true)
       // Afficher le bon avec les données éditées
-      setCreatedParcel(editableParcel)
+      setCreatedParcel({ ...(pendingParcel || {}), ...editableParcel, ...(Object.keys(patch).length ? patch : {}) })
       setShowConfirmModal(false)
       setPendingParcel(null)
       setEditableParcel(null)
@@ -540,9 +585,12 @@ export default function NewTab() {
     setPendingParcel(null)
     setEditableParcel(null)
     setIsConfirmed(false)
+    setConfirmError('')
   }
 
   // Modal de confirmation/édition avant impression
+  // Prix figé si déjà encaissé (port payé → caisse) ou imputé à un client en compte
+  const priceLockedInConfirm = !!editableParcel && (editableParcel.portType === 'port_paye' || !!editableParcel.clientId)
   if (showConfirmModal && editableParcel) {
     return (
       <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4 overflow-y-auto">
@@ -740,12 +788,14 @@ export default function NewTab() {
                   <input
                     type="text"
                     inputMode="decimal"
+                    disabled={priceLockedInConfirm}
+                    title={priceLockedInConfirm ? "Port payé / client en compte : le montant est déjà passé en caisse ou au compte client. Corrigez-le via le chef d'agence." : undefined}
                     value={editableParcel.price || ''}
                     onChange={(e) => {
                       const normalized = normalizeDecimal(e.target.value)
                       setEditableParcel({ ...editableParcel, price: parseFloat(normalized) || 0 })
                     }}
-                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none disabled:bg-gray-100 disabled:cursor-not-allowed"
                   />
                 </div>
                 <div>
@@ -766,6 +816,9 @@ export default function NewTab() {
           </div>
 
           {/* Boutons d'action */}
+          {confirmError && (
+            <div className="mx-6 mb-2 bg-red-50 border border-red-200 text-red-700 p-3 rounded-xl text-sm font-medium">⚠️ {confirmError}</div>
+          )}
           <div className="bg-gray-50 px-6 py-4 flex gap-3 sticky bottom-0">
             <button
               onClick={handleCancelConfirm}
@@ -776,9 +829,10 @@ export default function NewTab() {
             <button
               ref={validateButtonRef}
               onClick={handleConfirmPrint}
-              className="flex-1 py-3 px-6 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl font-bold hover:shadow-xl transition flex items-center justify-center gap-2"
+              disabled={confirmSaving}
+              className="flex-1 py-3 px-6 bg-gradient-to-r from-blue-600 to-purple-600 text-white rounded-xl font-bold hover:shadow-xl transition flex items-center justify-center gap-2 disabled:opacity-60"
             >
-              <Printer className="w-5 h-5" /> Valider et Imprimer (Entrée)
+              <Printer className="w-5 h-5" /> {confirmSaving ? 'Enregistrement…' : 'Valider et Imprimer (Entrée)'}
             </button>
           </div>
         </div>
@@ -805,7 +859,15 @@ export default function NewTab() {
           <p className="text-green-600 font-mono text-sm mt-1">{createdParcel.trackingId}</p>
         </div>
 
-        <div id="ticket-print" ref={ticketRef} className="bg-white border border-gray-300 text-[11px]" style={{ maxWidth: '148mm', margin: '0 auto', fontFamily: 'Arial, sans-serif' }}>
+        <div id="ticket-print" ref={ticketRef} className="flex flex-col items-center gap-4">
+        {['1', '2'].map((copyKey, copyIdx) => (
+        <div key={copyKey} className="contents">
+        {copyIdx === 1 && (
+          <div className="ticket-cut-line w-full text-center text-gray-400 text-[9px] border-t border-dashed border-gray-300 pt-1" style={{ maxWidth: '148mm' }}>
+            ✂ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ✂
+          </div>
+        )}
+        <div className="ticket-copy bg-white border border-gray-300 text-[11px]" style={{ maxWidth: '148mm', margin: '0 auto', fontFamily: 'Arial, sans-serif' }}>
           {/* Header */}
           <div className="flex items-center justify-between border-b border-gray-300 px-3 py-2">
             <img src="/LOGO.jpg" alt="BG Express" style={{ height: '36px', objectFit: 'contain' }} />
@@ -894,6 +956,9 @@ export default function NewTab() {
             <div className="border-r border-gray-200 px-2 py-1.5">
               <div className="text-gray-400 text-[9px] uppercase">Prix</div>
               <div className="font-bold text-sm text-blue-700">{createdParcel.price} DH</div>
+              <div className={`font-bold text-[9px] uppercase mt-0.5 ${portTypeInfo(createdParcel.portType).className}`}>
+                {portTypeInfo(createdParcel.portType).label}
+              </div>
             </div>
             <div className="px-2 py-1.5">
               <div className="text-gray-400 text-[9px] uppercase">RETOUR FOND</div>
@@ -926,6 +991,9 @@ export default function NewTab() {
             <div className="border-r border-gray-200 px-3 py-2">Cachet et Signature expéditeur</div>
             <div className="px-3 py-2">Cachet et Signature destinataire</div>
           </div>
+        </div>
+        </div>
+        ))}
         </div>
 
         <div className="grid grid-cols-2 gap-3">

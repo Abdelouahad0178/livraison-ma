@@ -7,6 +7,7 @@ import DateFilter from '../DateFilter'
 import { useAgentCtx } from '../AgentCtx'
 import { entryDate, filterByDate } from '../../../utils/dateFilter'
 import { fmt, fmtFixed as fmtAmt } from '../../../utils/formatNumber'
+import { normIncludes } from '../../../utils/normText'
 
 export default function CaisseTab() {
   const {
@@ -86,7 +87,7 @@ export default function CaisseTab() {
         e.category,
         cat?.label,
         e.amount,
-      ].some(v => String(v ?? '').toLowerCase().includes(caisseQuery))
+      ].some(v => normIncludes(v ?? '', caisseQuery))
     })
   }, [dateFilteredEntries, debouncedCaisseSearch])
 

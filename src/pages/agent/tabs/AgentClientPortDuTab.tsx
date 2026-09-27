@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { subscribeClientPortDuTransactions, collectClientPortDu, cancelClientPortDu } from '../../../firebase/firestore'
 import { Banknote, CheckCircle, X, AlertCircle, User, Package, Search, Calendar, Filter, Download, Trash2, Edit } from 'lucide-react'
+import { normIncludes } from '../../../utils/normText'
 
 interface ClientPortDuTransaction {
   id: string
@@ -91,10 +92,10 @@ export default function AgentClientPortDuTab({ agencyCity, profile }: Props) {
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase().trim()
       filtered = filtered.filter(t =>
-        t.clientName?.toLowerCase().includes(query) ||
-        t.trackingId?.toLowerCase().includes(query) ||
-        t.nic?.toLowerCase().includes(query) ||
-        t.clientTel?.toLowerCase().includes(query)
+        normIncludes(t.clientName, query) ||
+        normIncludes(t.trackingId, query) ||
+        normIncludes(t.nic, query) ||
+        normIncludes(t.clientTel, query)
       )
     }
 

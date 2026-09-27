@@ -1456,22 +1456,30 @@ exports.deleteArchive = onCall({ maxInstances: 1, timeoutSeconds: 540 }, async (
 async function runWeeklyArchiving() {
   console.log('🗄️  Démarrage archivage automatique...')
 
-  const DAYS_THRESHOLD = 30
-  const BATCH_SIZE = 100
-  const MAX_ITERATIONS = 200  // Protection: max 20,000 colis par run
+  const DAYS_THRESHOLD = 30       // Livrés SANS COD : archivés après 30 jours
+  const DAYS_FORCE = 45           // Tous les autres (même avec COD) : archivés après 45 jours
+  const BATCH_SIZE = 500  // = limite d'un WriteBatch Firestore
+  // Borne de temps (au lieu d'un nombre fixe d'itérations) : la fonction dispose de 540s.
+  // L'ancien plafond de 200×100 colis était épuisé par des colis déjà archivés / non archivables
+  // (COD non réglé) avant d'atteindre les colis à archiver.
+  const TIME_BUDGET_MS = 480000
+  const startedAt = Date.now()
+  let timedOut = false
 
   const cutoffDate = new Date()
   cutoffDate.setDate(cutoffDate.getDate() - DAYS_THRESHOLD)
   const cutoffTimestamp = Timestamp.fromDate(cutoffDate)
+  const forceCutoffMs = Date.now() - DAYS_FORCE * 86400000
 
   let totalArchived = 0
   let totalProcessed = 0
   let lastDoc = null
   let iterations = 0
 
-  console.log(`📦 Archivage de TOUS les colis de +${DAYS_THRESHOLD} jours (tous statuts)...`)
+  console.log(`📦 Archivage de TOUS les colis de +${DAYS_THRESHOLD} jours (livrés sans COD) et de +${DAYS_FORCE} jours (tous statuts, COD inclus)...`)
 
-  while (iterations < MAX_ITERATIONS) {
+  while (true) {
+    if (Date.now() - startedAt > TIME_BUDGET_MS) { timedOut = true; break }
     iterations++
 
     // 🔄 Pagination correcte avec startAfter
@@ -1507,13 +1515,12 @@ async function runWeeklyArchiving() {
         return
       }
 
-      // Si "Livré" avec COD, vérifier si payé (pour éviter problèmes comptables)
-      if (data.status === 'Livré' && data.codAmount > 0) {
-        const codPaid = data.codStatus === 'settled' || data.codStatus === 'paid'
-        if (!codPaid) {
-          return // Ne pas archiver si COD non payé
-        }
-      }
+      // Règles : +45 jours = archivé quoi qu'il arrive (COD inclus) ;
+      // entre 30 et 45 jours = seulement les expéditions LIVRÉES et SIMPLES (sans COD)
+      const createdMs = data.createdAt?.toMillis ? data.createdAt.toMillis() : 0
+      const older45 = createdMs > 0 && createdMs < forceCutoffMs
+      const livreSansCod = data.status === 'Livré' && !(Number(data.codAmount) > 0)
+      if (!older45 && !livreSansCod) return
 
       // Marquer comme archivé
       batch.update(doc.ref, {
@@ -1530,12 +1537,10 @@ async function runWeeklyArchiving() {
       console.log(`✅ Batch ${iterations}: ${batchCount} archivés (Total: ${totalArchived} / ${totalProcessed} parcourus)`)
     }
 
-    // Pause anti-throttling
-    await new Promise(resolve => setTimeout(resolve, 300))
   }
 
-  if (iterations >= MAX_ITERATIONS) {
-    console.log(`⚠️ Limite de ${MAX_ITERATIONS} itérations atteinte`)
+  if (timedOut) {
+    console.log(`⚠️ Budget de temps épuisé après ${iterations} itérations — le reste sera traité au prochain passage`)
   }
 
   console.log(`🎉 Archivage terminé: ${totalArchived} archivés sur ${totalProcessed} colis parcourus`)
@@ -1553,9 +1558,9 @@ async function runWeeklyArchiving() {
   return { success: true, totalArchived, totalProcessed }
 }
 
-// Archivage automatique chaque samedi à 02h00 (heure Casablanca)
+// Archivage automatique tous les 3 jours à 02h00 (heure Casablanca)
 exports.scheduledWeeklyArchiving = onSchedule({
-  schedule:       '0 2 * * 6',  // Samedi à 2h00
+  schedule:       '0 2 */3 * *',  // Tous les 3 jours à 2h00
   timeZone:       'Africa/Casablanca',
   memory:         '512MiB',
   timeoutSeconds: 540,
@@ -1564,7 +1569,7 @@ exports.scheduledWeeklyArchiving = onSchedule({
 })
 
 // Bouton manuel d'archivage dans AdminArchivageTab
-exports.manualArchiving = onCall(async (request) => {
+exports.manualArchiving = onCall({ timeoutSeconds: 540, memory: '512MiB' }, async (request) => {
   // Vérifier authentification
   if (!request.auth) {
     throw new Error('Non authentifié')

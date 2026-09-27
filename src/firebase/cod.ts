@@ -37,6 +37,23 @@ export async function collectCod(
 }
 
 // Collecte directe par l'agence destination (client vient sur place) — passe directement à 'remis'
+/** Annule la collecte d'une valeur (COD) tant qu'elle n'est pas remise au chef d'agence. */
+export async function uncollectCod(parcelId: string): Promise<void> {
+  await runTransaction(db, async tx => {
+    const ref = doc(db, 'parcels', parcelId)
+    const snap = await tx.get(ref)
+    if (!snap.exists()) throw new Error('Colis introuvable.')
+    const data = snap.data()
+    if (data.codStatus !== 'collected') throw new Error("Cette valeur n'est pas à l'état « collecté » (déjà reçue ou non collectée).")
+    tx.update(ref, {
+      codStatus: 'pending',
+      codCollectedAt: deleteField(),
+      codCollectedBy: deleteField(),
+      codCollectedById: deleteField(),
+    })
+  })
+}
+
 export async function collectCodAtDestination(parcelId: string, paymentType: string, collectedBy: string) {
   const now = new Date().toISOString()
   await runTransaction(db, async tx => {
@@ -106,6 +123,43 @@ export async function remitCod(parcelId: string, remittedBy: string, extraFields
     })
   })
 }
+/**
+ * Annule un encaissement chef (remise) et remet le RETOUR FOND dans son état précédent.
+ * Refusé si la valeur a déjà quitté l'agence (réglée à l'expéditeur ou versée au compte société),
+ * car l'annuler créerait alors une incohérence comptable.
+ * Retourne les champs restaurés pour la mise à jour optimiste de l'interface.
+ */
+export async function cancelCodRemise(parcelId: string, cancelledBy: string, cancelledById: string): Promise<DynamicData> {
+  return await runTransaction(db, async tx => {
+    const ref = doc(db, 'parcels', parcelId)
+    const snap = await tx.get(ref)
+    if (!snap.exists()) throw new Error('Colis introuvable.')
+    const data = snap.data()
+    if (data.codStatus !== 'remis') throw new Error("Ce RETOUR FOND n'est pas encaissé.")
+    if (data.codSenderPaid) throw new Error("Déjà réglé à l'expéditeur — annulation impossible.")
+    if (data.centralDeposited) throw new Error('Déjà versé au compte société — annulation impossible.')
+    if (data.codSentToSource) throw new Error("Déjà envoyé à l'agence source — annulation impossible.")
+
+    const restored: DynamicData = {
+      codStatus:           data.codStatusBeforeRemise || 'collected',
+      codRemisAt:          null,
+      codRemisBy:          null,
+      codReceivedByChef:   false,
+      codReceivedByChefAt: null,
+      codReceivedByChefBy: null,
+      codChefReceivedAt:   null,
+      codChefReceivedBy:   null,
+      codChefReceivedById: null,
+      codCaisseEntryId:    null,
+      codRemiseCancelledAt:   new Date().toISOString(),
+      codRemiseCancelledBy:   cancelledBy,
+      codRemiseCancelledById: cancelledById,
+    }
+    tx.update(ref, restored)
+    return restored
+  })
+}
+
 export async function settleCodToSender(parcelId: string, settledBy: string, settledById: string): Promise<void> {
   await runTransaction(db, async tx => {
     const ref = doc(db, 'parcels', parcelId)
@@ -197,6 +251,58 @@ export async function fetchAllAgentCodParcels(agentId: string) {
   ;[...s1.docs, ...s2.docs].forEach(d => all.set(d.id, rowFromDoc(d)))
   return [...all.values()].filter(p => parseFloat(p.codAmount) > 0)
 }
+
+/**
+ * RETOUR FOND de TOUTE une agence (ville), pas seulement ceux saisis par l'utilisateur.
+ * Un chef d'agence doit voir les valeurs créées par ses agents : la version par agentId
+ * ci-dessus les manque toutes.
+ */
+// ⚠️ CORRECTIF : c'était un seul lot des 3000 colis les plus récents par sens. Casablanca crée
+// ≈ 400 colis/jour → « Charger tout l'historique » ne remontait qu'à ~7 jours : les RETOUR FOND
+// de 8 à 45 jours (non encore réglés) n'apparaissaient jamais. On pagine désormais jusqu'à
+// épuisement des 45 derniers jours (durée max avant archivage), et au moins autant
+// qu'avant (3000 par sens) pour les petites agences dont l'historique remonte plus loin.
+// onProgress(n) : nombre de colis parcourus, pour l'indicateur de chargement visible.
+export async function fetchAllAgencyCodParcels(city: string, onProgress?: (scanned: number) => void) {
+  const PAGE = 2000
+  const MIN_PER_FIELD = 3000
+  const cutoffMs = Date.now() - 45 * 24 * 60 * 60 * 1000
+  const all = new Map<string, FirestoreRow>()
+  let scanned = 0
+  for (const field of ['originCity', 'destinationCity'] as const) {
+    let cursor: any = null
+    let fieldCount = 0
+    for (let guard = 0; guard < 200; guard++) {
+      const snap = await getDocs(query(
+        collection(db, 'parcels'), where(field, '==', city), orderBy('createdAt', 'desc'),
+        ...(cursor ? [startAfter(cursor)] : []), limit(PAGE),
+      ))
+      snap.docs.forEach(d => all.set(d.id, rowFromDoc(d)))
+      fieldCount += snap.size
+      scanned += snap.size
+      onProgress?.(scanned)
+      if (snap.size < PAGE) break
+      cursor = snap.docs[snap.docs.length - 1]
+      const oldestMs = cursor.data()?.createdAt?.toMillis?.() ?? 0
+      if (fieldCount >= MIN_PER_FIELD && oldestMs && oldestMs < cutoffMs) break
+    }
+  }
+  return [...all.values()].filter(p => parseFloat(p.codAmount) > 0)
+}
+
+// 🗄️ Un colis « isArchived » peut être soit l'ancien modèle (déplacé dans parcels_archive), soit
+// le nouveau (resté dans 'parcels' avec isArchived: true — archivage auto 30/45 j). Les pages
+// Caisse / Chef d'exploitation chargent maintenant ces derniers : cibler aveuglément
+// parcels_archive faisait échouer la collecte (« introuvable »). On vérifie où il se trouve.
+async function resolveParcelCollection(parcelId: string, isArchived: boolean): Promise<'parcels' | 'parcels_archive'> {
+  if (!isArchived) return 'parcels'
+  try {
+    const snap = await getDoc(doc(db, 'parcels_archive', parcelId))
+    return snap.exists() ? 'parcels_archive' : 'parcels'
+  } catch {
+    return 'parcels'
+  }
+}
 export async function collectPortDu(parcelId: string, agentName: string, agentId: string, isArchived: boolean = false) {
   const updates = {
     portStatus:          'collected',
@@ -210,13 +316,14 @@ export async function collectPortDu(parcelId: string, agentName: string, agentId
   // (parcels_archive) : il faut cibler la BONNE collection, sinon updateDoc
   // échoue silencieusement en mode recherche pour ces colis (not-found /
   // permission-denied selon les règles).
+  const coll = await resolveParcelCollection(parcelId, isArchived)
   try {
     await runTransaction(db, async (transaction) => {
-      const ref = doc(db, isArchived ? 'parcels_archive' : 'parcels', parcelId)
+      const ref = doc(db, coll, parcelId)
       const snap = await transaction.get(ref)
 
       if (!snap.exists()) {
-        throw new Error(`Colis ${parcelId} introuvable dans ${isArchived ? 'parcels_archive' : 'parcels'}`)
+        throw new Error(`Colis ${parcelId} introuvable dans ${coll}`)
       }
 
       transaction.update(ref, updates)
@@ -257,7 +364,7 @@ export async function uncollectPortDu(parcelId: string, isArchived: boolean = fa
     portDuReceivedMethod: null,
   }
 
-  await updateDoc(doc(db, isArchived ? 'parcels_archive' : 'parcels', parcelId), updates)
+  await updateDoc(doc(db, await resolveParcelCollection(parcelId, isArchived), parcelId), updates)
 
   // 🔄 TEMPS RÉEL: Émettre événement pour synchronisation cross-tab
   if (typeof window !== 'undefined') {
@@ -527,20 +634,46 @@ export async function markPortDuReceivedByAgent(parcelId: string, receivedBy: st
     portReceivedByAgentAt: new Date().toISOString(),
   })
 }
+// ⚡ Fenêtre de lecture du Pointeur COD : colis récents (tous) + colis plus anciens
+// dont le RETOUR FOND a un codStatus (pending / collected / remis / null), pour
+// qu'aucun COD — soldé ou non — ne disparaisse avec l'âge.
+const COD_RECENT_DAYS = 90
+
 export function subscribeCodParcels(city: string, callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
-  const q = query(
+  const cutoff = Timestamp.fromDate(new Date(Date.now() - COD_RECENT_DAYS * 24 * 60 * 60 * 1000))
+  const matches = (p: FirestoreRow) =>
+    p.codAmount > 0 ||
+    p.codStatus === 'collected' ||
+    (p.portType === 'port_du' && p.portStatus === 'collected')
+
+  let recent: FirestoreRow[] | null = null
+  let older: FirestoreRow[] | null = null
+  const emit = () => {
+    if (recent === null || older === null) return
+    const map = new Map<string, FirestoreRow>()
+    ;[...recent, ...older].forEach(p => map.set(p.id, p))
+    const ms = (p: FirestoreRow) => (p.createdAt?.toMillis ? p.createdAt.toMillis() : 0)
+    callback([...map.values()].filter(matches).sort((a, b) => ms(b) - ms(a)))
+  }
+
+  // 1) Tous les colis de la ville des COD_RECENT_DAYS derniers jours (même filtre client qu'avant)
+  const qRecent = query(
     collection(db, 'parcels'),
     where('destinationCity', '==', city),
+    where('createdAt', '>=', cutoff),
     orderBy('createdAt', 'desc')
   )
-  return onSnapshot(q, snap => {
-    const all = snap.docs.map(rowFromDoc)
-    callback(all.filter(p =>
-      p.codAmount > 0 ||
-      p.codStatus === 'collected' ||
-      (p.portType === 'port_du' && p.portStatus === 'collected')
-    ))
-  }, onError)
+  // 2) Colis plus anciens portant un RETOUR FOND (quel que soit son état)
+  const qOlder = query(
+    collection(db, 'parcels'),
+    where('destinationCity', '==', city),
+    where('codStatus', 'in', ['pending', 'collected', 'remis', null]),
+    where('createdAt', '<', cutoff),
+    orderBy('createdAt', 'desc')
+  )
+  const unsubRecent = onSnapshot(qRecent, snap => { recent = snap.docs.map(rowFromDoc); emit() }, onError)
+  const unsubOlder = onSnapshot(qOlder, snap => { older = snap.docs.map(rowFromDoc); emit() }, onError)
+  return () => { unsubRecent(); unsubOlder() }
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -580,35 +713,37 @@ export function subscribePortPayeCheque(
     callback(sorted)
   }
 
+  // ⚠️ CORRECTIF : les requêtes prenaient les 500 derniers ports payés / ports dûs de l'agence
+  // puis filtraient « chèque » côté client. Une agence active dépasse 500 ports dûs en 1-2 jours
+  // (Agadir ≈ 330 colis reçus/jour) : un chèque de plus de 2 jours disparaissait de la liste.
+  // On filtre maintenant le moyen de paiement CÔTÉ SERVEUR (égalités seules → index simples,
+  // aucun index composite requis), sans plafond ; archivés inclus. Le tri est fait dans merge().
+
   // Query 1: Ports PAYÉS par chèque (créés dans cette agence)
   const q1 = query(
     collection(db, 'parcels'),
     where('originCity', '==', agencyCity),
-    where('portType', '==', 'port_paye'),
-    orderBy('createdAt', 'desc'),
-    limit(500)
+    where('portPayeMethod', '==', 'cheque')
   )
 
   // Query 2: Ports DUS payés par chèque (destination = cette agence)
   const q2 = query(
     collection(db, 'parcels'),
     where('destinationCity', '==', agencyCity),
-    where('portType', '==', 'port_du'),
-    orderBy('createdAt', 'desc'),
-    limit(500)
+    where('portDuReceivedMethod', '==', 'cheque')
   )
 
   const unsub1 = onSnapshot(q1, snap => {
     portPayeParcels = snap.docs
       .map(rowFromDoc)
-      .filter(p => p.portPayeMethod === 'cheque')
+      .filter(p => p.portType === 'port_paye')
     merge()
   }, onError)
 
   const unsub2 = onSnapshot(q2, snap => {
     portDuParcels = snap.docs
       .map(rowFromDoc)
-      .filter(p => p.portDuReceivedMethod === 'cheque')
+      .filter(p => p.portType === 'port_du')
     merge()
   }, onError)
 

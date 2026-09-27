@@ -540,3 +540,47 @@ export async function unmarkParcelsControlled(parcelIds: string[]) {
   }
   return { updated: ids.length }
 }
+
+// ── 2ème contrôle : confirmation d'arrivée de la valeur à destination ──────
+// Distinct du premier contrôle (isControlled) : celui-ci est fait par un utilisateur de
+// l'agence DESTINATAIRE, pour attester que la valeur (chèque/espèces) est bien arrivée.
+// Champs ajoutés sur le colis : deliveryControlled, deliveryControlledBy,
+// deliveryControlledById, deliveryControlledAt
+export async function markParcelsDeliveryControlled(parcelIds: string[], controlledBy: string, controlledById: string) {
+  const ids = [...new Set((parcelIds || []).filter(Boolean))]
+  if (ids.length === 0) return { updated: 0 }
+  const now = new Date().toISOString()
+  for (let i = 0; i < ids.length; i += CONTROL_BATCH_SIZE) {
+    const chunk = ids.slice(i, i + CONTROL_BATCH_SIZE)
+    const batch = writeBatch(db)
+    chunk.forEach(id => {
+      batch.update(doc(db, 'parcels', id), {
+        deliveryControlled: true,
+        deliveryControlledBy: controlledBy || 'Agence destinataire',
+        deliveryControlledById: controlledById || '',
+        deliveryControlledAt: now,
+      })
+    })
+    await batch.commit()
+  }
+  return { updated: ids.length, controlledAt: now }
+}
+
+export async function unmarkParcelsDeliveryControlled(parcelIds: string[]) {
+  const ids = [...new Set((parcelIds || []).filter(Boolean))]
+  if (ids.length === 0) return { updated: 0 }
+  for (let i = 0; i < ids.length; i += CONTROL_BATCH_SIZE) {
+    const chunk = ids.slice(i, i + CONTROL_BATCH_SIZE)
+    const batch = writeBatch(db)
+    chunk.forEach(id => {
+      batch.update(doc(db, 'parcels', id), {
+        deliveryControlled: false,
+        deliveryControlledBy: deleteField(),
+        deliveryControlledById: deleteField(),
+        deliveryControlledAt: deleteField(),
+      })
+    })
+    await batch.commit()
+  }
+  return { updated: ids.length }
+}

@@ -3,6 +3,7 @@ import { confirmBankDeposit } from '../../../firebase/bankDeposits'
 import { Search, Trash2, ChevronDown, ChevronRight, Building2, Edit2 } from 'lucide-react'
 import { fmtFixed as fmtAmt } from '../../../utils/formatNumber'
 import { useState } from 'react'
+import { normIncludes } from '../../../utils/normText'
 
 const filterByDate = (list: any, preset: any, from: any, to: any, getDate: any) => {
   if (preset === 'all') return list
@@ -69,7 +70,7 @@ export default function AdminBanqueTab({
             ? dateFilteredCentral.filter((d: any) =>
                 [d.city, d.agentName, d.amount, d.note, ...(d.parcels || []).flatMap((p: any) => [
                   p.trackingId, p.senderNic, p.senderName, p.senderTel, p.receiverName, p.receiverTel
-                ])].some(v => String(v||'').toLowerCase().includes(q))
+                ])].some(v => normIncludes(v||'', q))
               )
             : dateFilteredCentral
 
@@ -87,7 +88,7 @@ export default function AdminBanqueTab({
             ? dateFilteredPayments.filter((p: any) =>
                 [p.senderName, p.senderTel, p.senderNic, p.chequeNum, p.bankName, p.amount, p.note, ...(p.parcels || []).flatMap((pc: any) => [
                   pc.trackingId, pc.senderNic, pc.receiverName, pc.receiverTel
-                ])].some(v => String(v||'').toLowerCase().includes(q))
+                ])].some(v => normIncludes(v||'', q))
               )
             : dateFilteredPayments
           const totalPayments = displayedPayments.reduce((s: any, p: any) => s + Number(p.amount||0), 0)
@@ -106,7 +107,7 @@ export default function AdminBanqueTab({
           const displayed = q
             ? dateFiltered.filter((d: any) =>
                 [d.trackingId, d.senderName, d.receiverName, d.bankName, d.refNum, d.city, d.agentName, d.note]
-                  .some(v => String(v||'').toLowerCase().includes(q))
+                  .some(v => normIncludes(v||'', q))
               )
             : dateFiltered
 

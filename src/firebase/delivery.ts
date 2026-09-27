@@ -261,6 +261,49 @@ export async function rejectDeliveryAssignment(parcelId: any, driverId: any, dri
     })
   })
 }
+// Annule l'assignation d'un colis à un livreur : le colis redevient "Arrivé en agence", sans livreur.
+// ⛔ Refusé côté client ET côté règles Firestore (keepsDeliveredStatus) si le colis est déjà "Livré".
+export async function cancelDeliveryAssignment(parcelId: any, previousDriverName: any, cancelledBy: any, keepStatus = false) {
+  const now = new Date().toISOString()
+  // keepStatus : colis déjà "Livré" — le statut ne change pas (les règles Firestore interdisent de
+  // quitter "Livré" hors Admin), seule l'assignation au livreur est retirée.
+  await updateDoc(doc(db, 'parcels', parcelId), {
+    deliveryDriverId:     null,
+    deliveryDriverName:   null,
+    deliverySectorId:     null,
+    deliverySectorCode:   null,
+    deliverySectorName:   null,
+    deliveryVehicleId:    null,
+    deliveryVehicleLabel: null,
+    deliveryAssignedAt:   null,
+    deliveryAssignedBy:   null,
+    ...(keepStatus ? {} : { status: 'Arrivé en agence' }),
+    history: arrayUnion({
+      status: keepStatus ? 'Livré' : 'Arrivé en agence',
+      timestamp: now,
+      note: `Assignation annulée${previousDriverName ? ` (livreur : ${previousDriverName})` : ''}${cancelledBy ? ` par ${cancelledBy}` : ''}`
+    })
+  })
+}
+// Réassigne à un autre livreur un colis DÉJÀ "Livré" (port dû dont la collecte a été annulée).
+// Le statut "Livré" est conservé : seuls les champs d'assignation changent.
+export async function reassignDeliveredParcel(parcelId: any, driver: any, sector: any, by: any) {
+  const now = new Date().toISOString()
+  await updateDoc(doc(db, 'parcels', parcelId), {
+    deliveryDriverId:     driver.id,
+    deliveryDriverName:   driver.name || 'Livreur',
+    deliverySectorId:     sector?.id || null,
+    deliverySectorCode:   sector?.code || '',
+    deliverySectorName:   sector?.name || '',
+    deliveryAssignedAt:   now,
+    deliveryAssignedBy:   by || '',
+    history: arrayUnion({
+      status: 'Livré',
+      timestamp: now,
+      note: `Réassigné au livreur ${driver.name || 'Livreur'}${by ? ` par ${by}` : ''} (colis déjà livré, port dû à recollecter)`
+    })
+  })
+}
 export async function getDeliveryDriverParcels(driverId: any) {
   const q    = query(collection(db, 'parcels'), where('deliveryDriverId', '==', driverId))
   const snap = await getDocs(q)

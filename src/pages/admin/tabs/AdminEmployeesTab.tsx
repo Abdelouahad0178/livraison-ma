@@ -1,6 +1,7 @@
 import { useMemo } from 'react'
 import { Banknote, FileText, Search, Wallet, X } from 'lucide-react'
 import { fmt } from '../../../utils/formatNumber'
+import { normIncludes } from '../../../utils/normText'
 
 const currentSalaryMonth = () => new Date().toISOString().slice(0, 7)
 
@@ -23,7 +24,7 @@ export default function AdminEmployeesTab({
       .filter((u: any) => u.role !== 'admin')
       .filter((u: any) => roleFilter === 'Tous' || u.role === roleFilter)
       .filter((u: any) => !userSearch || [u.name, u.city, u.code, u.cin, u.cnss]
-        .some(v => v?.toLowerCase().includes(userSearch.toLowerCase())))
+        .some(v => normIncludes(v, userSearch.toLowerCase())))
   , [users, roleFilter, userSearch])
 
   return (

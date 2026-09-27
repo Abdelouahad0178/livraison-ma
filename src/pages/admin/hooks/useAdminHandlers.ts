@@ -13,6 +13,7 @@ import {
   createCaisseRequest, completeRhSalaryCaisseRequest,
 } from '../../../firebase/firestore'
 import { createParcel } from '../../../firebase/parcels'
+import { printParcelTicket } from '../../../utils/printParcelTicket'
 import {
   createAgentCodRequest, addAgentCodRequestReply,
 } from '../../../firebase/agentCodRequests'
@@ -233,14 +234,11 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       const oldCodAmount = parcel.codAmount || 0
       const newCodAmount = parsePositiveNumber(form.codAmount)
       if (oldCodAmount !== newCodAmount) {
-        const codHistory = parcel.codAmountHistory || []
-        codHistory.push({
-          oldAmount: oldCodAmount,
-          newAmount: newCodAmount,
-          changedAt: now,
-          changedBy: adminEmail
-        })
-        updates.codAmountHistory = codHistory
+        // Copie (ne jamais muter le tableau du colis affiché)
+        updates.codAmountHistory = [
+          ...(Array.isArray(parcel.codAmountHistory) ? parcel.codAmountHistory : []),
+          { oldAmount: oldCodAmount, newAmount: newCodAmount, changedAt: now, changedBy: adminEmail },
+        ]
       }
 
       // Pipeline RETOUR FOND
@@ -304,14 +302,11 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       const updates: any = { codAmount: amount }
 
       if (oldAmount !== amount) {
-        const codHistory = parcel.codAmountHistory || []
-        codHistory.push({
-          oldAmount,
-          newAmount: amount,
-          changedAt: new Date().toISOString(),
-          changedBy: userName
-        })
-        updates.codAmountHistory = codHistory
+        // Copie (ne jamais muter le tableau du colis affiché)
+        updates.codAmountHistory = [
+          ...(Array.isArray(parcel.codAmountHistory) ? parcel.codAmountHistory : []),
+          { oldAmount, newAmount: amount, changedAt: new Date().toISOString(), changedBy: userName },
+        ]
       }
 
       await updateParcel(parcel.id, updates)
@@ -346,7 +341,7 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
     setNewParcelModal((m: any) => ({ ...m, loading: true, error: '' }))
     try {
       const adminEmail = auth.currentUser?.email || 'Admin'
-      await createParcel({
+      const created = await createParcel({
         senderNic: f.senderNic || '',
         sender: { name: f.senderName, tel: f.senderTel || '', city: f.senderCity || '', address: f.senderAddress || '' },
         receiver: { name: f.receiverName, tel: f.receiverTel || '', city: f.receiverCity, address: f.receiverAddress || '' },
@@ -365,6 +360,7 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
         createdByEmail: adminEmail,
       })
       setNewParcelModal(null)
+      printParcelTicket(created)
     } catch (err: any) {
       setNewParcelModal((m: any) => ({ ...m, loading: false, error: err?.message || 'Erreur lors de la création.' }))
     }
@@ -1106,6 +1102,9 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
     const getArchiveDays = (modal: any) => modal?.days === 'custom' ? parseInt(modal.customDays, 10) : Number(modal?.days || 0)
 
     const parcelDate = (p: any) => {
+      // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire — voir
+      // src/utils/dateFilter.ts pour l'explication complète de cette règle partagée.
+      if (p.workDate) return new Date(p.workDate + 'T12:00:00')
       if (p.createdAt?.toDate) return p.createdAt.toDate()
       if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
       return new Date(0)

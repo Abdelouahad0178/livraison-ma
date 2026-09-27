@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { subscribePortPayeCheque, finalizePortPayeCheque } from '../../../firebase/firestore'
 import { CheckCircle, X, AlertCircle, Package, Search, Calendar, Filter, Download, Edit2 } from 'lucide-react'
+import { normIncludes } from '../../../utils/normText'
 
 interface PortPayeChequeParcel {
   id: string
@@ -111,10 +112,10 @@ export default function PortPayeChequeTab({ agencyCity, profile }: Props) {
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase().trim()
       filtered = filtered.filter(p =>
-        p.trackingId?.toLowerCase().includes(query) ||
-        p.sender?.nic?.toLowerCase().includes(query) ||
-        p.sender?.name?.toLowerCase().includes(query) ||
-        p.receiver?.name?.toLowerCase().includes(query)
+        normIncludes(p.trackingId, query) ||
+        normIncludes(p.sender?.nic, query) ||
+        normIncludes(p.sender?.name, query) ||
+        normIncludes(p.receiver?.name, query)
       )
     }
 
@@ -122,7 +123,9 @@ export default function PortPayeChequeTab({ agencyCity, profile }: Props) {
     if (dateFrom) {
       const fromDate = new Date(dateFrom + 'T00:00:00')
       filtered = filtered.filter(p => {
-        const parcelDate = p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt)
+        // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire
+        const parcelDate = p.workDate ? new Date(p.workDate + 'T12:00:00')
+          : (p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt))
         return parcelDate >= fromDate
       })
     }
@@ -130,7 +133,9 @@ export default function PortPayeChequeTab({ agencyCity, profile }: Props) {
     if (dateTo) {
       const toDate = new Date(dateTo + 'T23:59:59')
       filtered = filtered.filter(p => {
-        const parcelDate = p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt)
+        // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire
+        const parcelDate = p.workDate ? new Date(p.workDate + 'T12:00:00')
+          : (p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt))
         return parcelDate <= toDate
       })
     }

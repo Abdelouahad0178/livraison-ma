@@ -25,6 +25,7 @@ const isPublicPath = (pathname: any) =>
 const HomePage    = lazy(() => import('./pages/HomePage'))
 const LoginPage   = lazy(() => import('./pages/LoginPage'))
 const AgentPage   = lazy(() => import('./pages/AgentPage'))
+const ChefExploitationPage = lazy(() => import('./pages/ChefExploitationPage'))
 const AdminPage   = lazy(() => import('./pages/AdminPage'))
 const TrackingPage  = lazy(() => import('./pages/TrackingPage'))
 const ClientsPage   = lazy(() => import('./pages/ClientsPage'))
@@ -255,6 +256,11 @@ function AppContent() {
           <Route path="/agent" element={
             <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole={['agent', 'chef_agence', 'aide_agent', 'agentpro']}>
               <AgentPage />
+            </PrivateRoute>
+          } />
+          <Route path="/exploitation" element={
+            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole={['chef_exploitation', 'admin']}>
+              <ChefExploitationPage />
             </PrivateRoute>
           } />
           <Route path="/clients" element={

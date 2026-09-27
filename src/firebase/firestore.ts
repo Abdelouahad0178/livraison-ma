@@ -4,6 +4,7 @@
 export {
   CITIES, TARIFS, TARIF_WEIGHT_RULES, DEFAULT_TARIFF_CONFIG, normalizeTariffConfig, calculateTariff,
   STATUSES, COD_PAYMENT_TYPES, COD_STATUS, codCollectedLabel, STATUS_COLORS,
+  codPaymentTypeOf, codPaymentTypeLabel,
   MOD_TYPES, COD_TYPE_OPTIONS, DIRECTOR_PERMISSIONS, CAISSE_CATEGORIES,
   REGLEMENT_MODES, REGLEMENT_STATUSES,
 } from './constants'
@@ -54,9 +55,9 @@ export {
 
 export {
   collectCod, collectCodAtDestination, collectCodAtSource,
-  remitCod, settleCodToSender, markCodSentToSource, confirmCodReceivedBySource,
+  remitCod, cancelCodRemise, settleCodToSender, markCodSentToSource, confirmCodReceivedBySource,
   markCodSentToChef, validateCodByChef,  // ⭐ Nouvelles fonctions
-  batchSettleCods, fetchAllAgentCodParcels,
+  batchSettleCods, fetchAllAgentCodParcels, fetchAllAgencyCodParcels,
   collectPortDu, collectPortDuCheque, addPortDuToClientAccount, markPortDuReceivedByAgent, subscribeCodParcels,
   subscribeClientPortDuTransactions, collectClientPortDu, cancelClientPortDu,
   subscribePortPayeCheque, finalizePortPayeCheque,  // 💳 Gestion ports payés/dus par chèque
@@ -122,6 +123,7 @@ export {
   updateCentralSupplierPayment, deleteCentralSupplierPayment,
   subscribeAllCentralSupplierPayments,
   markParcelsControlled, unmarkParcelsControlled,
+  markParcelsDeliveryControlled, unmarkParcelsDeliveryControlled,
 } from './central'
 
 export {

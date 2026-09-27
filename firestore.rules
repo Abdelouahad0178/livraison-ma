@@ -16,7 +16,7 @@ service cloud.firestore {
 
     function isStaff() {
       return role() == 'admin' || role() == 'directeur' || role() == 'agent'
-          || role() == 'chef_agence' || role() == 'agentpro' || role() == 'caissier'
+          || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation') || role() == 'caissier'
           || role() == 'aide_agent' || role() == 'pointeur_encaisseur'
           || role() == 'encaisseur_central' || role() == 'distributeur_especes'
           || role() == 'distributeur_cheques' || role() == 'facturier'
@@ -52,11 +52,11 @@ service cloud.firestore {
     }
 
     function isAgentOrChef() {
-      return role() == 'agent' || role() == 'chef_agence' || role() == 'agentpro';
+      return role() == 'agent' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
     }
 
     function isChefAgence() {
-      return role() == 'chef_agence' || role() == 'agentpro';
+      return role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
     }
 
     function isAideAgent() {
@@ -85,7 +85,7 @@ service cloud.firestore {
     }
 
     function isChefOfAideAgentParcelAgency() {
-      return (role() == 'chef_agence' || role() == 'agentpro')
+      return (role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation'))
         && (resource.data.agentRole == 'aide_agent' || resource.data.agentRole == 'client_portal')
         && (
           resource.data.originCity == userDoc().city
@@ -136,6 +136,20 @@ service cloud.firestore {
       ];
     }
 
+    function parcelSearchFields() {
+      // Champs dénormalisés de recherche (recalculés quand expéditeur / destinataire change)
+      return ['senderNic', 'senderTel', 'receiverTel', 'senderNameLower', 'receiverNameLower'];
+    }
+
+    function parcelBonEditFields() {
+      // Champs modifiables par le modal "Modifier l'expédition" / confirmation après saisie
+      return parcelCorrectionFields().concat(parcelSearchFields()).concat([
+        'codAmount', 'codAmountHistory', 'codStatus', 'codPaymentType',
+        'portType', 'fragile', 'notes',
+        'lastModifiedBy', 'lastModifiedByName', 'lastModifiedAt'
+      ]);
+    }
+
     function deliveryAssignmentFields() {
       return [
         'deliveryDriverId',
@@ -173,7 +187,7 @@ service cloud.firestore {
     }
 
     function isDestinationAgencyChief() {
-      return (role() == 'chef_agence' || role() == 'agentpro')
+      return (role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation'))
         && userDoc().city == resource.data.destinationCity;
     }
 
@@ -216,6 +230,40 @@ service cloud.firestore {
         || request.resource.data.portType == 'port_en_compte'
         || isAdmin();
     }
+
+    // 🔒 Pointage Encaisseur Central (Contrôle + Confirmation d'arrivée) : chaque pointage
+    // n'appartient qu'à son auteur. Poser un pointage (passer à true) est libre pour tout
+    // Encaisseur Central UNIQUEMENT si le colis n'est pas déjà pointé (premier arrivé) ;
+    // une fois posé, seul son auteur peut le reposer, le modifier ou le retirer — sinon un
+    // second utilisateur pouvait écraser silencieusement le pointage du premier en cliquant
+    // à nouveau sur "Pointer"/"Confirmer arrivée" après coup.
+    function controlOnlyKeys() {
+      return ['controlled', 'controlledBy', 'controlledById', 'controlledAt'];
+    }
+    function deliveryControlOnlyKeys() {
+      return ['deliveryControlled', 'deliveryControlledBy', 'deliveryControlledById', 'deliveryControlledAt'];
+    }
+    function isOwnControlChange() {
+      // ⚠️ resource.data.controlled LÈVE UNE ERREUR (pas juste null) si le champ n'existe pas
+      // encore sur le colis — cas du tout premier pointage. .get(clé, défaut) évite ce piège.
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return (
+        changed.hasOnly(controlOnlyKeys()) && (
+          (request.resource.data.controlled == true && resource.data.get('controlled', false) != true)
+          || resource.data.get('controlledById', null) == request.auth.uid
+        )
+      ) || (
+        changed.hasOnly(deliveryControlOnlyKeys()) && (
+          (request.resource.data.deliveryControlled == true && resource.data.get('deliveryControlled', false) != true)
+          || resource.data.get('deliveryControlledById', null) == request.auth.uid
+        )
+      );
+    }
+    function touchesOnlyControlFields() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return changed.hasOnly(controlOnlyKeys()) || changed.hasOnly(deliveryControlOnlyKeys());
+    }
+
     // Ã¢â€â‚¬Ã¢â€â‚¬ Colis : lecture publique (tracking)
     // codAmount modifiable uniquement par Admin (protection double : rÃ¨gle + code)
     match /parcels/{parcelId} {
@@ -240,9 +288,23 @@ service cloud.firestore {
       // 🔒 RÈGLE GLOBALE : Admin peut TOUJOURS modifier (même après chargement camion)
       allow update: if isAdmin();
 
+      // 🧾 RÈGLE : Facturier peut marquer un colis comme facturé et corriger le prix / type de port
+      allow update: if isFacturier()
+        && isNotBlocked()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['invoiced', 'invoiceId', 'invoicedAt', 'price', 'portType']);
+
       // 💼 RÈGLE PRIORITAIRE : Encaisseur Central peut modifier les champs de gestion centrale
-      // Sans vérifier le statut de livraison ni le verrouillage
-      allow update: if isCentralCollector();
+      // Sans vérifier le statut de livraison ni le verrouillage.
+      // ⚠️ EXCEPTION : si la mise à jour ne touche QUE les champs de pointage (contrôle /
+      // confirmation d'arrivée), elle doit en plus respecter isOwnControlChange() — sinon
+      // n'importe quel Encaisseur Central pourrait annuler le pointage d'un collègue.
+      allow update: if isCentralCollector()
+        && (!touchesOnlyControlFields() || isOwnControlChange());
+
+      // 📅 RÈGLE : Chef d'agence peut corriger la date d'expédition (expeditionDate) et le jour d'opération (workDate)
+      allow update: if isChefAgence()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['expeditionDate', 'workDate', 'createdAt', 'createdAtOriginal']);
 
       // 🖐️ RÈGLE : Chef d'agence peut modifier price, portType, codAmount (édition rapide)
       allow update: if isChefAgence()
@@ -275,9 +337,13 @@ service cloud.firestore {
       // ⭐ RÈGLE PRIORITAIRE : Retour de colis (depuis N'IMPORTE QUEL statut → Retourné)
       // 🔒 VERROUILLAGE : Refusé si colis a été chargé dans un camion (sauf admin via règle globale ci-dessus)
       // Autorise TOUTES les modifications nécessaires pour markParcelAsReturned()
+      // ⚠️ Sans la garde ci-dessous, un colis déjà "Retourné" (status inchangé par cette
+      // règle) laissait n'importe quel utilisateur signé écraser le pointage Encaisseur
+      // Central d'un autre (aucune restriction de champs sur cette règle).
       allow update: if signedIn()
         && request.resource.data.status == 'Retourné'
-        && !isParcelLocked();
+        && !isParcelLocked()
+        && (!touchesOnlyControlFields() || isOwnControlChange());
       // ⭐ RÈGLE : Réessayer livraison (Retourné → En livraison)
       // Permet de remettre un colis retourné en circulation
       // 🔒 Note: déjà protégé car on ne peut pas avoir "Retourné" ET "En transit" simultanément
@@ -290,6 +356,29 @@ service cloud.firestore {
         && resource.data.status != 'Livr\u00c3\u00a9'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(parcelCorrectionFields())
         && !isParcelLocked();
+      // ✏️ Correction complète du bon (modal "Modifier l'expédition" + confirmation après saisie)
+      // - Agent : uniquement SES bons ; Chef d'agence / Agent PRO / Chef exploitation : tous.
+      // - Jamais après chargement camion (sauf admin, règle globale) ; statut inchangé (hors liste).
+      // - COD modifiable seulement tant qu'il n'est pas encaissé.
+      // - Type de port réservé aux chefs, jamais pour sortir d'un "port_en_compte".
+      // - Colis Livré / Retourné : réservé aux chefs.
+      allow update: if isAgentOrChef()
+        && isNotBlocked()
+        && !isParcelLocked()
+        && (isChefAgence() || isParcelCreator())
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(parcelBonEditFields())
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['codAmount', 'codAmountHistory', 'codStatus', 'codPaymentType'])
+          || (resource.data.get('codCollectedAt', null) == null
+              && (resource.data.get('codStatus', null) == null || resource.data.get('codStatus', null) == 'pending'))
+        )
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['portType'])
+          || (isChefAgence()
+              && (resource.data.get('portType', '') != 'port_en_compte'
+                  || request.resource.data.get('portType', '') == 'port_en_compte'))
+        )
+        && (isChefAgence() || (resource.data.status != 'Livré' && resource.data.status != 'Retourné'));
       allow update: if signedIn()
         && keepsDeliveredStatus()
         && request.auth.uid != resource.data.agentId
@@ -316,9 +405,13 @@ service cloud.firestore {
         ]);
       // ⭐ VALIDATION ARRIVÉE RETOUR : validation arrivée colis retourné
       // Autorise mise à jour avec destinationArrivedAt (=validation retour)
+      // ⚠️ 'destinationArrivedAt' et 'history' existent déjà sur quasi tout colis déjà arrivé —
+      // cette règle ne vérifiant PAS quels champs sont modifiés, elle laissait n'importe quel
+      // utilisateur signé écraser le pointage d'un autre sur ces colis. Exclu explicitement.
       allow update: if signedIn()
         && 'destinationArrivedAt' in request.resource.data
-        && 'history' in request.resource.data;
+        && 'history' in request.resource.data
+        && !touchesOnlyControlFields();
       // RÃ©ception agence : prise en charge et arrivage de colis en transit
       allow update: if signedIn()
         && keepsDeliveredStatus()
@@ -517,7 +610,14 @@ service cloud.firestore {
           'deliveryAssignedAt',
           'deliveryAssignedBy'
         ]);
-      allow update: if isStaff() && keepsDeliveredStatus() && (
+      // ⚠️ Ce bloc est volontairement très large (retours, corrections diverses par le staff).
+      // Comme il ne restreint pas explicitement les champs 'controlled'/'deliveryControlled',
+      // il laissait n'importe quel membre du staff écraser le pointage Encaisseur Central d'un
+      // autre. Garde ajoutée : ne s'applique pas quand SEULS les champs de pointage changent
+      // (ce cas passe exclusivement par la règle Encaisseur Central plus haut, avec ownership).
+      allow update: if isStaff() && keepsDeliveredStatus()
+        && (!touchesOnlyControlFields() || isOwnControlChange())
+        && (
         isAdmin()
         || isChefOfAideAgentParcelAgency()
         || (
@@ -558,7 +658,8 @@ service cloud.firestore {
         )
       );
       // REGLE RETOUR COLIS
-      allow update: if signedIn() && request.resource.data.status == "Retourné";
+      allow update: if signedIn() && request.resource.data.status == "Retourné"
+        && !touchesOnlyControlFields();
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Villes
@@ -583,7 +684,7 @@ service cloud.firestore {
       allow read: if signedIn();
       // Seul l'Admin ou Chef d'agence de la ville peut modifier
       allow write: if isAdmin()
-        || ((role() == 'chef_agence' || role() == 'agentpro') && userCity() == cityId);
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation')) && userCity() == cityId);
       // Permettre la création si le document n'existe pas encore
       allow create: if signedIn();
     }
@@ -679,6 +780,31 @@ service cloud.firestore {
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Caisse
+    // 📤 Envois de valeurs / espèces : chef d'exploitation → validation par le chef d'agence
+    match /valeursEnvois/{envoiId} {
+      allow read: if isAdminOrDirecteur()
+        || ((role() == 'chef_agence' || role() == 'agentpro' || role() == 'chef_exploitation')
+            && resource.data.city == userCity());
+      allow create: if role() == 'chef_exploitation'
+        && request.resource.data.city == userCity()
+        && request.resource.data.status == 'envoye'
+        && request.resource.data.createdById == request.auth.uid;
+      // Annulation par son auteur, tant que l'envoi n'est pas traité
+      allow update: if role() == 'chef_exploitation'
+        && resource.data.createdById == request.auth.uid
+        && resource.data.status == 'envoye'
+        && request.resource.data.status == 'annule'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+      // Validation / rejet : chef d'agence de la ville (ou Admin) — jamais l'auteur de l'envoi
+      allow update: if (role() == 'chef_agence' || isAdmin())
+        && (isAdmin() || resource.data.city == userCity())
+        && resource.data.status == 'envoye'
+        && request.resource.data.status in ['valide', 'rejete', 'envoye']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'validatedById', 'validatedByName', 'validatedAt', 'rejectReason', 'caisseEntryIds', 'validationErrors'
+        ]);
+    }
+
     match /caisseEntries/{entryId} {
       allow read: if isAdmin()
         || (isStaff() && isNotBlocked() && (
@@ -753,7 +879,7 @@ service cloud.firestore {
           && request.resource.data.driverId == request.auth.uid
           && request.resource.data.type == 'versement'
           && request.resource.data.status == 'pending');
-      allow update, delete: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || role() == 'agentpro';
+      allow update, delete: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
     }
 
     // -- Versements Livreur -> Chef d'agence (Port Du / COD, workflow de validation)
@@ -775,7 +901,7 @@ service cloud.firestore {
           && request.resource.data.status == 'pending')
         // OU validation / rejet par chef d'agence, agent (de la meme ville), directeur ou admin
         || role() == 'admin' || role() == 'directeur'
-        || ((role() == 'chef_agence' || role() == 'agentpro' || role() == 'agent') && resource.data.city == userCity());
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation') || role() == 'agent') && resource.data.city == userCity());
       // Suppression par le créateur (livreur) si status == 'pending' OU par admin
       allow delete: if isAdmin()
         || (signedIn()
@@ -798,13 +924,13 @@ service cloud.firestore {
     // Ã¢â€â‚¬Ã¢â€â‚¬ Secteurs
     match /sectors/{sectorId} {
       allow read:  if isStaff();
-      allow write: if role() == 'admin' || role() == 'chef_agence' || role() == 'agentpro';
+      allow write: if role() == 'admin' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Bons de ramassage (lots prÃ©-imprimÃ©s)
     match /bonRamasageBatches/{batchId} {
       allow read:  if isStaff();
-      allow write: if role() == 'admin' || role() == 'chef_agence' || role() == 'agentpro';
+      allow write: if role() == 'admin' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Arrivages
@@ -821,7 +947,7 @@ service cloud.firestore {
     // Ã¢â€â‚¬Ã¢â€â‚¬ Transferts vers l'Admin
     match /adminTransfers/{id} {
       allow read:   if isStaff();
-      allow create: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || role() == 'agentpro' || role() == 'caissier';
+      allow create: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation') || role() == 'caissier';
       // Modification par le créateur si status == 'pending'
       allow update: if (signedIn()
           && resource.data.fromId == request.auth.uid
@@ -883,8 +1009,8 @@ service cloud.firestore {
           && resource.data.pointeurId == request.auth.uid
           && resource.data.agencyCity == userDoc().city
           && (resource.data.status == 'en_attente' || resource.data.status == 'encaisse'))
-        || ((role() == 'chef_agence' || role() == 'agentpro') && resource.data.agencyCity == userDoc().city)
-        || ((role() == 'chef_agence' || role() == 'agentpro')
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation')) && resource.data.agencyCity == userDoc().city)
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation'))
           && resource.data.villeExpedition == userDoc().city
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'sourceReceived', 'sourceReceivedAt', 'sourceReceivedBy', 'sourceReceivedById',
@@ -896,7 +1022,7 @@ service cloud.firestore {
         || (isPointeurEncaisseur()
           && resource.data.pointeurId == request.auth.uid
           && (resource.data.status == 'en_attente' || resource.data.status == 'encaisse'))
-        || ((role() == 'chef_agence' || role() == 'agentpro') && resource.data.agencyCity == userDoc().city);
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation')) && resource.data.agencyCity == userDoc().city);
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Rapports RÃ¨glements
@@ -914,7 +1040,7 @@ service cloud.firestore {
         || (isPointeurEncaisseur()
           && resource.data.pointeurId == request.auth.uid
           && resource.data.status == 'brouillon')
-        || ((role() == 'chef_agence' || role() == 'agentpro') && resource.data.agencyCity == userDoc().city);
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation')) && resource.data.agencyCity == userDoc().city);
       allow delete: if isAdmin()
         || (isPointeurEncaisseur()
           && resource.data.pointeurId == request.auth.uid
@@ -930,7 +1056,7 @@ service cloud.firestore {
           && request.resource.data.agencyCity == userDoc().city);
       allow update: if isAdmin()
         || (isPointeurEncaisseur() && resource.data.agencyCity == userDoc().city)
-        || ((role() == 'chef_agence' || role() == 'agentpro') && resource.data.agencyCity == userDoc().city);
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation')) && resource.data.agencyCity == userDoc().city);
       allow delete: if isAdmin()
         || (isPointeurEncaisseur()
           && resource.data.pointeurId == request.auth.uid
@@ -964,8 +1090,8 @@ service cloud.firestore {
     // (protÃ¨ge les collections non listÃ©es explicitement)
     // Encaisseur central : versements societe et paiements fournisseurs
     match /centralCodDeposits/{depositId} {
-      allow read: if isAdmin() || isCentralCollector() || role() == 'chef_agence' || role() == 'agentpro';
-      allow create: if isAdmin() || role() == 'chef_agence' || role() == 'agentpro';
+      allow read: if isAdmin() || isCentralCollector() || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+      allow create: if isAdmin() || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
       allow update: if isAdmin() || isCentralCollector();
       allow delete: if isAdmin();
     }

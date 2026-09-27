@@ -7,6 +7,7 @@ import {
   type Invoice
 } from '../../../firebase/invoices'
 import { subscribeClients } from '../../../firebase/clients'
+import { normIncludes } from '../../../utils/normText'
 
 export default function AgentInvoicesTab({ profileCity, uid }: any) {
   const [invoices, setInvoices] = useState<Invoice[]>([])
@@ -44,9 +45,9 @@ export default function AgentInvoicesTab({ profileCity, uid }: any) {
       if (searchTerm) {
         const term = searchTerm.toLowerCase()
         return (
-          inv.invoiceNumber.toLowerCase().includes(term) ||
-          inv.clientName.toLowerCase().includes(term) ||
-          inv.items.some(item => item.trackingId.toLowerCase().includes(term))
+          normIncludes(inv.invoiceNumber, term) ||
+          normIncludes(inv.clientName, term) ||
+          inv.items.some(item => normIncludes(item.trackingId, term))
         )
       }
       return true

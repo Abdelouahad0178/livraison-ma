@@ -484,7 +484,7 @@ export function printRetoursHistory(parcels: any[], agencyName: string, filters?
       <meta charset="UTF-8">
       <title>Historique des retours - ${agencyName}</title>
       <style>
-        @page { size: A4 landscape; margin: 15mm; }
+        @page { size: A4 portrait; margin: 15mm; }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
           font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;

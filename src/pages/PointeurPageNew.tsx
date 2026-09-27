@@ -15,6 +15,7 @@ import {
   FileText, AlertCircle, CheckCircle, Filter,
 } from 'lucide-react'
 import { getWorkingDateStr } from '../utils/workingDate'
+import { normIncludes } from '../utils/normText'
 
 const todayStr = () => getWorkingDateStr()
 
@@ -224,11 +225,11 @@ export default function PointeurPageNew() {
     if (search) {
       const s = search.toLowerCase()
       const match = (
-        r.trackingNumber?.toLowerCase().includes(s) ||
-        r.destinataire?.toLowerCase().includes(s) ||
-        r.expediteur?.toLowerCase().includes(s) ||
-        r.numeroPiece?.toLowerCase().includes(s) ||
-        r.banque?.toLowerCase().includes(s)
+        normIncludes(r.trackingNumber, s) ||
+        normIncludes(r.destinataire, s) ||
+        normIncludes(r.expediteur, s) ||
+        normIncludes(r.numeroPiece, s) ||
+        normIncludes(r.banque, s)
       )
       if (!match) return false
     }
@@ -268,7 +269,7 @@ export default function PointeurPageNew() {
     if (montantMax && r.montant > parseFloat(montantMax)) return false
 
     // Banque
-    if (banqueFilter && !r.banque?.toLowerCase().includes(banqueFilter.toLowerCase())) return false
+    if (banqueFilter && !normIncludes(r.banque, banqueFilter.toLowerCase())) return false
 
     return true
   })

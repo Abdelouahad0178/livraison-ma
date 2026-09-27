@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { AlertTriangle, Search, Filter, CheckCircle, XCircle, Clock, MapPin, MessageSquare, Eye, EyeOff } from 'lucide-react'
 import { getAllLostParcels, LostParcelDeclaration } from '../../../firebase/lostParcels'
+import { normIncludes } from '../../../utils/normText'
 
 interface DriverLostParcelsTabProps {
   driverUid: string
@@ -73,8 +74,8 @@ export default function DriverLostParcelsTab({ driverUid, driverName }: DriverLo
   // Filtrage
   const filtered = lostParcels.filter(lp => {
     const matchSearch = !searchTerm ||
-      lp.trackingId.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      lp.lastKnownLocation.toLowerCase().includes(searchTerm.toLowerCase())
+      normIncludes(lp.trackingId, searchTerm.toLowerCase()) ||
+      normIncludes(lp.lastKnownLocation, searchTerm.toLowerCase())
 
     const matchStatus = statusFilter === 'all' || lp.status === statusFilter
 

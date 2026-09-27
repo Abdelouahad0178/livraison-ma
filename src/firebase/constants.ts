@@ -119,6 +119,48 @@ export const COD_PAYMENT_TYPES = [
   { key: 'bon_livraison', label: 'Bon de livraison', emoji: '🧾', bg: 'bg-gray-100',   text: 'text-gray-600',   darkBg: 'bg-gray-700/40',   darkText: 'text-gray-300'   },
 ]
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Type de paiement RETOUR FOND (COD) — source de vérité unique
+// `serviceType` (choisi à la création) peut contenir plusieurs valeurs séparées
+// par des virgules (ex: 'cheque,traite'). `codPaymentType` est le type saisi à
+// l'encaissement, mais plusieurs écrans le pré-remplissent à 'especes' par
+// défaut : il ne fait donc foi que s'il est cohérent avec le service demandé.
+// ─────────────────────────────────────────────────────────────────────────────
+const COD_TYPE_ALIASES: Record<string, string> = {
+  especes: 'especes',
+  cod_especes: 'especes',
+  cheque: 'cheque',
+  cod_cheque: 'cheque',
+  traite: 'traite',
+  cod_traite: 'traite',
+  retour_bl: 'bon_livraison',
+  bon_livraison: 'bon_livraison',
+}
+
+function normalizeCodTypes(raw: any): string[] {
+  return String(raw ?? '')
+    .toLowerCase()
+    .split(',')
+    .map(s => COD_TYPE_ALIASES[s.trim()])
+    .filter(Boolean)
+}
+
+/** Type de paiement COD réel d'un colis ('especes' | 'cheque' | 'traite' | 'bon_livraison' | ''). */
+export function codPaymentTypeOf(parcel: any): string {
+  const service   = normalizeCodTypes(parcel?.serviceType)
+  const collected = normalizeCodTypes(parcel?.codPaymentType)
+  // Le type saisi à l'encaissement prime uniquement s'il fait partie du service demandé
+  if (collected.length && (service.length === 0 || service.includes(collected[0]))) return collected[0]
+  if (service.length) return service[0]
+  return collected[0] || ''
+}
+
+/** Libellé affichable du type de paiement COD (vide si inconnu). */
+export function codPaymentTypeLabel(parcel: any): string {
+  const t = codPaymentTypeOf(parcel)
+  return t ? (COD_PAYMENT_TYPES.find(x => x.key === t)?.label || t) : ''
+}
+
 export const COD_STATUS: Record<string, { label: string; bg: string; text: string; dot: string; darkBg: string; darkText: string }> = {
   pending:   { label: 'En attente',   bg: 'bg-yellow-100', text: 'text-yellow-700', dot: 'bg-yellow-500', darkBg: 'bg-yellow-900/40', darkText: 'text-yellow-300' },
   collected: { label: 'Collecté',     bg: 'bg-blue-100',   text: 'text-blue-700',   dot: 'bg-blue-500',   darkBg: 'bg-blue-900/40',   darkText: 'text-blue-300'   },

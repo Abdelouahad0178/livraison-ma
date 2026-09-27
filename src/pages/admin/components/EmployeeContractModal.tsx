@@ -188,7 +188,7 @@ export default function EmployeeContractModal({ contractModal, setContractModal 
           </div>
         </div>
 
-        <div className="px-5 py-4 border-t grid grid-cols-2 gap-3 shrink-0">
+        <div className="px-5 py-4 border-t grid grid-cols-3 gap-3 shrink-0">
           <button
             onClick={() => setContractModal(null)}
             className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition"
@@ -198,11 +198,20 @@ export default function EmployeeContractModal({ contractModal, setContractModal 
           <button
             onClick={async () => {
               const { printEmployeeContract } = await import('../../../utils/printEmployeeContract')
-              printEmployeeContract(employee, form)
+              printEmployeeContract(employee, form, '1')
             }}
             className="py-3 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white font-semibold transition flex items-center justify-center gap-2"
           >
-            <FileText className="w-4 h-4" /> Imprimer le contrat
+            <FileText className="w-4 h-4" /> Contrat BG EXPRESS
+          </button>
+          <button
+            onClick={async () => {
+              const { printEmployeeContract } = await import('../../../utils/printEmployeeContract')
+              printEmployeeContract(employee, form, '2')
+            }}
+            className="py-3 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition flex items-center justify-center gap-2"
+          >
+            <FileText className="w-4 h-4" /> Contrat BG EXPRESS 2
           </button>
         </div>
       </div>

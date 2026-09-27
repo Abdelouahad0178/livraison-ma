@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { codPaymentTypeOf } from '../firebase/constants'
 import { signOut } from 'firebase/auth'
 import { auth, db } from '../firebase/config'
 import { doc, onSnapshot } from 'firebase/firestore'
@@ -27,6 +28,7 @@ import {
 } from 'lucide-react'
 import { CAISSE_CATEGORIES, COD_PAYMENT_TYPES } from '../firebase/constants'
 import { fmt } from '../utils/formatNumber'
+import { normIncludes } from '../utils/normText'
 
 const entryDate = (e: any) => e.createdAt?.toDate ? e.createdAt.toDate() : new Date(e.createdAt || 0)
 
@@ -60,7 +62,7 @@ const fmtDate = (e: any) => {
 const matchesSearch = (item: any, query: any, fields: any) => {
   const q = query.trim().toLowerCase()
   if (!q) return true
-  return fields.some((field: any) => String(field(item) ?? '').toLowerCase().includes(q))
+  return fields.some((field: any) => normIncludes(field(item) ?? '', q))
 }
 
 const ListFilters = ({
@@ -258,7 +260,7 @@ export default function CaissierPage() {
   const entriesDateSearch = useMemo(() =>
     filterByDate(cashierEntries, datePreset, dateFrom, dateTo)
       .filter((e: any) => !search || [e.description, e.staffName, e.agentName, e.reference]
-        .some(v => v?.toLowerCase().includes(search.toLowerCase())))
+        .some(v => normIncludes(v, search.toLowerCase())))
   , [cashierEntries, datePreset, dateFrom, dateTo, search])
 
   // Entrées filtrées avec le filtre de type en plus
@@ -309,10 +311,10 @@ export default function CaissierPage() {
   , [remarks, remarkDatePreset, remarkDateFrom, remarkDateTo, remarkFilter, remarkSearch])
 
   const selectCod = (parcel: any) => {
-    const pt = COD_PAYMENT_TYPES.find(t => t.key === parcel.codPaymentType)
+    const pt = COD_PAYMENT_TYPES.find(t => t.key === codPaymentTypeOf(parcel))
     const agentName = parcel.codCollectedBy || parcel.deliveryDriverName || parcel.destinationAgentName || ''
-    const category = parcel.codPaymentType === 'cheque' ? 'cod_cheque'
-                   : parcel.codPaymentType === 'traite' ? 'cod_traite'
+    const category = codPaymentTypeOf(parcel) === 'cheque' ? 'cod_cheque'
+                   : codPaymentTypeOf(parcel) === 'traite' ? 'cod_traite'
                    : 'cod_agent'
     setEntryModal(m => ({
       ...m,

@@ -1,7 +1,19 @@
-import { useMemo, useState } from 'react'
-import { Clock, Building2, User, Calendar, Filter, TrendingUp, TrendingDown, Wallet, CheckCircle } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Clock, Building2, User, Calendar, Filter, TrendingUp, TrendingDown, Wallet, CheckCircle, RefreshCw } from 'lucide-react'
 import { doc, updateDoc } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
+import { getAgencyPortEnCompteParcels } from '../../../firebase/parcels'
+import LoadProgress from '../../../components/LoadProgress'
+import { parcelDate } from '../../../utils/dateFilter'
+import { getCurrentOperationalDay } from '../../../config/operationalDay'
+import { normName, isBilledByAgency, isCompteExpediteurType, isPortEnCompteType } from '../../../utils/billingAgency'
+
+// Normalisation pour la recherche : insensible à la casse, aux accents (COPÏMA = COPIMA) et aux espaces
+const norm = normName
+const ymd = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+// Ancien type générique 'port_en_compte' = compte EXPÉDITEUR (règle partagée avec le Facturier)
+const isCompteExpediteur = (p: any, _city?: string) => isCompteExpediteurType(p.portType)
 
 // Échéances temporaires (à déplacer dans constants.ts si besoin)
 const PORT_ECHEANCES = [
@@ -23,18 +35,45 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
   const [filterStatus, setFilterStatus] = useState<'all' | 'enCours' | 'echus'>('all')
   const [filterPaiement, setFilterPaiement] = useState<'all' | 'regle' | 'nonRegle'>('all')
   const [filterLivreur, setFilterLivreur] = useState<string>('all')
-  const [filterDateDebut, setFilterDateDebut] = useState<string>('')
-  const [filterDateFin, setFilterDateFin] = useState<string>('')
+  // 🗓️ Par défaut : le mois en cours (journées d'opération), comme le Facturier
+  const [filterDateDebut, setFilterDateDebut] = useState<string>(() => { const d = getCurrentOperationalDay(); return ymd(new Date(d.getFullYear(), d.getMonth(), 1)) })
+  const [filterDateFin, setFilterDateFin] = useState<string>(() => ymd(getCurrentOperationalDay()))
   const [searchQuery, setSearchQuery] = useState<string>('')
   const [reglementLoading, setReglementLoading] = useState<string | null>(null)
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null)
 
   const myCity = profile?.city || ''
 
+  // 💼 Chargement DÉDIÉ de tous les ports en compte de l'agence (voir getAgencyPortEnCompteParcels) :
+  // la liste temps réel de la page (allParcels) est plafonnée et exclut les archivés, elle ne sert
+  // plus qu'à superposer les dernières modifications.
+  const [loadedParcels, setLoadedParcels] = useState<any[] | null>(null)
+  const [loadingPEC, setLoadingPEC] = useState(false)
+  const [reloadPEC, setReloadPEC] = useState(0)
+  useEffect(() => {
+    if (!myCity) return
+    let cancelled = false
+    setLoadingPEC(true)
+    getAgencyPortEnCompteParcels(myCity)
+      .then(docs => { if (!cancelled) setLoadedParcels(docs) })
+      .catch(err => console.error('Ports en compte - chargement:', err))
+      .finally(() => { if (!cancelled) setLoadingPEC(false) })
+    return () => { cancelled = true }
+  }, [myCity, reloadPEC])
+
+  const sourceParcels = useMemo(() => {
+    if (!loadedParcels) return allParcels
+    const map = new Map<string, any>()
+    loadedParcels.forEach(p => map.set(p.id, p))
+    // Version temps réel prioritaire (ex. versement, changement de statut)
+    allParcels.forEach(p => { if (map.has(p.id)) map.set(p.id, { ...map.get(p.id), ...p }) })
+    return [...map.values()]
+  }, [loadedParcels, allParcels])
+
   // Liste des livreurs qui ont fait des livraisons en compte
   const livreurs = useMemo(() => {
     const livreurSet = new Set<string>()
-    allParcels.forEach(p => {
+    sourceParcels.forEach(p => {
       if (p.portDeliveredBy && p.portType === 'port_en_compte_destinataire') {
         const isMyCity = p.destinationCity === myCity
         if (isMyCity) {
@@ -43,7 +82,7 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
       }
     })
     return Array.from(livreurSet).sort()
-  }, [allParcels, myCity])
+  }, [sourceParcels, myCity])
 
   // Fonction pour verser un port en compte à l'ADMIN
   const handleReglement = async (parcelId: string) => {
@@ -51,11 +90,13 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
 
     setReglementLoading(parcelId)
     try {
-      await updateDoc(doc(db, 'parcels', parcelId), {
+      const upd = {
         portPaid: true,
         portPaidAt: new Date().toISOString(),
         portPaidBy: profile?.name || 'Chef d\'agence'
-      })
+      }
+      await updateDoc(doc(db, 'parcels', parcelId), upd)
+      setLoadedParcels(prev => prev ? prev.map(p => (p.id === parcelId ? { ...p, ...upd } : p)) : prev)
       setMsg({ type: 'success', text: '✅ Versement à l\'ADMIN enregistré avec succès !' })
       setTimeout(() => setMsg(null), 3000)
     } catch (error) {
@@ -87,24 +128,17 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
 
   // Filtrer les colis avec ports en compte de MA ville
   const portsEnCompteParcels = useMemo(() => {
-    return allParcels.filter(p => {
-      const isPortEnCompte = p.portType === 'port_en_compte_expediteur' ||
-                             p.portType === 'port_en_compte_destinataire' ||
-                             p.portType === 'port_en_compte'  // Type générique (anciens colis)
-      if (!isPortEnCompte) return false
+    return sourceParcels.filter(p => {
+      if (!isPortEnCompteType(p.portType)) return false
 
-      // Filtre par ville : seulement MA ville
-      // Port en compte expéditeur : ville d'origine = ma ville
-      // Port en compte destinataire : ville de destination = ma ville
-      // Type générique : ville d'origine OU de destination = ma ville
-      const isMyCity = (p.portType === 'port_en_compte_expediteur' && p.originCity === myCity) ||
-                       (p.portType === 'port_en_compte_destinataire' && p.destinationCity === myCity) ||
-                       (p.portType === 'port_en_compte' && (p.originCity === myCity || p.destinationCity === myCity))
-      if (!isMyCity) return false
+      // Filtre par ville : seulement les ports en compte FACTURÉS par MA ville (règle partagée
+      // utils/billingAgency, identique au Facturier) : compte expéditeur (+ ancien type générique)
+      // → agence d'origine ; compte destinataire → agence de destination.
+      if (!isBilledByAgency(p, myCity)) return false
 
       // Filtre par type
-      if (filterType === 'expediteur' && p.portType !== 'port_en_compte_expediteur') return false
-      if (filterType === 'destinataire' && p.portType !== 'port_en_compte_destinataire') return false
+      if (filterType === 'expediteur' && !isCompteExpediteur(p, myCity)) return false
+      if (filterType === 'destinataire' && isCompteExpediteur(p, myCity)) return false
 
       // Filtre par échéance
       if (filterEcheance !== 'all' && p.portEcheance !== filterEcheance) return false
@@ -122,46 +156,40 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
 
       // Filtre par date
       if (filterDateDebut || filterDateFin) {
-        const parcelDate = p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt)
+        // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire — même
+        // référence (utils/dateFilter.parcelDate) que le Facturier
+        const pDate = parcelDate(p)
 
         if (filterDateDebut) {
-          const dateDebut = new Date(filterDateDebut)
-          dateDebut.setHours(0, 0, 0, 0)
-          if (parcelDate < dateDebut) return false
+          const dateDebut = new Date(filterDateDebut + 'T00:00:00')
+          if (pDate < dateDebut) return false
         }
 
         if (filterDateFin) {
-          const dateFin = new Date(filterDateFin)
-          dateFin.setHours(23, 59, 59, 999)
-          if (parcelDate > dateFin) return false
+          const dateFin = new Date(filterDateFin + 'T23:59:59.999')
+          if (pDate > dateFin) return false
         }
       }
 
       // Recherche textuelle
       if (searchQuery.trim()) {
-        const query = searchQuery.toLowerCase()
+        const query = norm(searchQuery)
         const searchableFields = [
-          p.sender?.nic || '',
-          p.clientName || '',
-          p.sender?.name || '',
-          p.receiver?.name || '',
-          p.receiver?.tel || '',
-          p.portDeliveredBy || '',
-          p.id || '',
-          (p.price || '').toString()
-        ].join(' ').toLowerCase()
-
-        if (!searchableFields.includes(query)) return false
+          p.sender?.nic, p.trackingId, p.clientName, p.sender?.name, p.receiver?.name,
+          p.sender?.tel, p.receiver?.tel, p.portDeliveredBy, p.id, p.price,
+        ]
+        if (!searchableFields.some(v => norm(v).includes(query))) return false
       }
 
       return true
     })
-  }, [allParcels, filterType, filterEcheance, filterStatus, filterPaiement, filterLivreur, filterDateDebut, filterDateFin, searchQuery, myCity])
+  }, [sourceParcels, filterType, filterEcheance, filterStatus, filterPaiement, filterLivreur, filterDateDebut, filterDateFin, searchQuery, myCity])
 
   // Statistiques
   const stats = useMemo(() => {
-    const expediteur = portsEnCompteParcels.filter(p => p.portType === 'port_en_compte_expediteur')
-    const destinataire = portsEnCompteParcels.filter(p => p.portType === 'port_en_compte_destinataire')
+    // UNE expédition = compte 1 ; l'ancien type générique est rangé côté expéditeur s'il part de l'agence
+    const expediteur = portsEnCompteParcels.filter(p => isCompteExpediteur(p, myCity))
+    const destinataire = portsEnCompteParcels.filter(p => !isCompteExpediteur(p, myCity))
 
     const totalExpediteur = expediteur.reduce((sum, p) => sum + (parseFloat(p.price) || 0), 0)
     const totalDestinataire = destinataire.reduce((sum, p) => sum + (parseFloat(p.price) || 0), 0)
@@ -188,7 +216,7 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
       countNonRegles: nonRegles.length,
       totalNonRegles,
     }
-  }, [portsEnCompteParcels])
+  }, [portsEnCompteParcels, myCity])
 
   // Formater la date
   const formatDate = (date: Date): string => {
@@ -221,7 +249,27 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
           <p className="text-sm text-gray-600 mt-1">
             💼 Compte Expéditeur (origine) • 🖐️ Compte Destinataire (destination) • Suivez et versez à l'administration
           </p>
+          <div className="text-xs text-gray-500 mt-1 flex flex-wrap items-center gap-2">
+            <LoadProgress
+              loading={loadingPEC}
+              count={loadingPEC ? undefined : loadedParcels?.length}
+              noun="ports en compte"
+              loadedWord="chargés (toutes dates, archivés inclus)"
+              detail={loadingPEC ? "tous les ports en compte de l'agence" : undefined}
+              className="mr-2"
+            />
+            {loadingPEC
+              ? null
+              : `Période : ${filterDateDebut || filterDateFin ? `${filterDateDebut ? filterDateDebut.split('-').reverse().join('/') : '…'} → ${filterDateFin ? filterDateFin.split('-').reverse().join('/') : '…'}` : 'toutes les dates'} (journées d'opération, archivés inclus)`}
+          </div>
         </div>
+        <button
+          onClick={() => setReloadPEC(n => n + 1)}
+          disabled={loadingPEC}
+          className="px-3 py-2 rounded-lg text-xs font-bold text-purple-700 bg-purple-50 border border-purple-200 hover:bg-purple-100 disabled:opacity-50 flex items-center gap-1.5"
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${loadingPEC ? 'animate-spin' : ''}`} /> Actualiser
+        </button>
       </div>
 
       {/* Statistiques globales */}
@@ -475,11 +523,11 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
                       </td>
                       <td className="px-4 py-3">
                         <span className={`inline-flex items-center px-2 py-1 rounded-full text-xs font-medium ${
-                          parcel.portType === 'port_en_compte_expediteur'
+                          isCompteExpediteur(parcel, myCity)
                             ? 'bg-purple-100 text-purple-700'
                             : 'bg-pink-100 text-pink-700'
                         }`}>
-                          {parcel.portType === 'port_en_compte_expediteur' ? '💼 Expéditeur' : '🖐️ Destinataire'}
+                          {isCompteExpediteur(parcel, myCity) ? '💼 Expéditeur' : '🖐️ Destinataire'}
                         </span>
                       </td>
                       <td className="px-4 py-3">
@@ -561,6 +609,7 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
                       </td>
                       <td className="px-4 py-3 text-xs text-gray-600">
                         <span className="font-medium">{parcel.status}</span>
+                        {parcel.isArchived && <span className="ml-1 inline-block px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 text-[10px]">archivé</span>}
                       </td>
                     </tr>
                   )

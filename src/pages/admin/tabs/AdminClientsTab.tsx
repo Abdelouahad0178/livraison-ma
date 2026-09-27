@@ -4,6 +4,7 @@ import { subscribeClients, createClient, updateClient, Client } from '../../../f
 import { subscribeAllUsers, subscribeAllSectors } from '../../../firebase/firestore'
 import { CITIES } from '../../../firebase/constants'
 import { createClientPortalAccount } from '../../../firebase/portalAccounts'
+import { normIncludes } from '../../../utils/normText'
 // ⚠️ Import désactivé temporairement - causait un conflit d'imports Firestore (boucle infinie)
 // import { findPassageClients, deletePassageClients, type PassageClient } from '../../../utils/cleanupPassageClients'
 
@@ -70,9 +71,9 @@ export default function AdminClientsTab() {
 
   const filteredClients = clients.filter(c => {
     const matchSearch = !searchTerm ||
-      c.name?.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      normIncludes(c.name, searchTerm.toLowerCase()) ||
       c.tel?.includes(searchTerm) ||
-      c.address?.toLowerCase().includes(searchTerm.toLowerCase())
+      normIncludes(c.address, searchTerm.toLowerCase())
 
     const matchFilter = filter === 'all' ||
       (filter === 'expediteur' && c.isExpediteur) ||

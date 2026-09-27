@@ -5,6 +5,7 @@ import { useAgentCtx } from '../AgentCtx'
 import DateFilter from '../DateFilter'
 import { filterByDate } from '../../../utils/dateFilter'
 import { searchParcelByTrackingId } from '../../../firebase/parcels'
+import { normIncludes } from '../../../utils/normText'
 
 export default function DeliverySheetsTab() {
   const { profile, handlePrintTable, parcels } = useAgentCtx()
@@ -450,10 +451,10 @@ export default function DeliverySheetsTab() {
         const searchQuery = addParcelModal.search.toLowerCase()
         const filteredParcels = searchQuery
           ? availableParcels.filter(p =>
-              p.sender?.nic?.toLowerCase().includes(searchQuery) ||
-              p.trackingId?.toLowerCase().includes(searchQuery) ||
-              p.receiver?.name?.toLowerCase().includes(searchQuery) ||
-              p.sender?.name?.toLowerCase().includes(searchQuery)
+              normIncludes(p.sender?.nic, searchQuery) ||
+              normIncludes(p.trackingId, searchQuery) ||
+              normIncludes(p.receiver?.name, searchQuery) ||
+              normIncludes(p.sender?.name, searchQuery)
             )
           : availableParcels
 
