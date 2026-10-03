@@ -1,9 +1,14 @@
-import { useMemo, useState, useEffect, useRef } from 'react'
+import { useMemo, useState, useEffect, useRef, useDeferredValue, startTransition } from 'react'
+import PendingBadge from '../../../components/PendingBadge'
 import { Building2, TrendingUp, Package, Printer, Filter, X, Calendar, ChevronDown, Loader2, AlertCircle, Eye } from 'lucide-react'
 import { CITIES } from '../../../firebase/constants'
-import { collection, query, orderBy, limit, onSnapshot, startAfter, getDocs, where, Timestamp } from 'firebase/firestore'
+import { collection, query, orderBy, onSnapshot, where, Timestamp } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
-import { getOperationalDayRange } from '../../../config/operationalDay'
+import { getOperationalDayRange, getCurrentOperationalDay } from '../../../config/operationalDay'
+import { useOperationalDay } from '../../../hooks/useOperationalDay'
+import { buildDaySlices } from '../../../utils/daySlices'
+import { parcelDate } from '../../../utils/dateFilter'
+import { agencyPortAmounts, isInAgencyScope, isSentFromAgency, isReceivedInAgency, type AgencyDirection } from '../../../utils/billingAgency'
 import AdminCaisseView from '../components/AdminCaisseView'
 import HScrollArrows from '../../../components/HScrollArrows'
 import LoadProgress from '../../../components/LoadProgress'
@@ -19,25 +24,78 @@ interface Props {
   setOperationalDay: (day: Date | null) => void
 }
 
-// ⚡ Chargement optimisé
-const PAGE_SIZE = 2000 // Chargement initial : 2000 premiers colis (sans filtre)
-const FILTERED_PAGE_SIZE = 50000 // Avec filtre de date : charger tout (limite haute pour sécurité)
+// 📅 Période par défaut (« 10j ») et période maximale chargeable (Période personnalisée)
+const DEFAULT_DAYS = 10
+const MAX_DAYS = 45
+// Journées en attente de la 1re réponse serveur en même temps (écoutes temps réel jour par jour)
+const SLICE_CONCURRENCY = 12
 
-// 📊 LIMITES DE PÉRIODE (Système de filtrage robuste)
-const PERIOD_LIMITS = {
-  MAX_DAYS: 45,           // Maximum absolu supporté
-  BATCH_THRESHOLD: 31,    // Seuil pour chargement par batches
-  BATCH_SIZE: 15,         // Taille de chaque batch (jours)
-  MAX_DOCS_DIRECT: 50000  // Limite documents en chargement direct
+const DAY_MS = 24 * 60 * 60 * 1000
+const pad2 = (n: number) => String(n).padStart(2, '0')
+const fmtDay = (d: Date) => `${pad2(d.getDate())}/${pad2(d.getMonth() + 1)}/${d.getFullYear()}`
+const addDays = (d: Date, n: number) => { const x = new Date(d); x.setDate(x.getDate() + n); return x }
+
+interface Period {
+  /** Bornes EXACTES (journées d'opération 8h → 6h lendemain), utilisées pour la requête ET le filtre */
+  start: Date
+  end: Date
+  days: number
+  label: string
+  /** Dates personnalisées incohérentes (début > fin) → repli sur la période par défaut */
+  invalid: boolean
+  /** Nombre de jours demandés quand la période a été plafonnée à MAX_DAYS */
+  cappedFrom: number | null
 }
 
-// ⚠️ IMPORTANT: le filtrage final (filteredByDate) se base sur `workDate` (jour d'opération,
-// 8H → 6H du lendemain) alors que la requête Firestore filtre sur `createdAt`. Un colis créé
-// à 2H du matin peut avoir un workDate = veille, donc un `createdAt` légèrement en dehors de la
-// plage demandée. On élargit donc la plage de requête Firestore d'une marge de sécurité pour
-// ne jamais perdre de colis à cause de ce décalage, tout en gardant la plage exacte pour
-// l'affichage (periodDays) et pour le filtrage précis côté frontend.
-const DATE_QUERY_BUFFER_MS = 24 * 60 * 60 * 1000 // 1 jour de marge de chaque côté
+/**
+ * 🗓️ UNE SEULE définition de la période, partagée par le chargement Firestore et par le filtrage
+ * (avant : bornes calendaires ± 1 jour de marge pour la requête, autres bornes pour le filtre).
+ * Règles identiques à la page Chef d'agence (utils/dateFilter + AgentPage) : journées d'opération.
+ */
+function computePeriod(preset: string, dateFrom: string, dateTo: string, operationalDay: Date | null): Period {
+  const todayOp = getCurrentOperationalDay()
+  let first: Date = addDays(todayOp, -(DEFAULT_DAYS - 1))
+  let last: Date = todayOp
+  let invalid = false
+  let label = `${DEFAULT_DAYS} derniers jours`
+
+  if (preset === 'today') {
+    first = last = todayOp
+    label = "Aujourd'hui"
+  } else if (preset === 'week') {
+    first = addDays(todayOp, -6)
+    label = '7 derniers jours'
+  } else if (preset === 'month') {
+    first = new Date(todayOp.getFullYear(), todayOp.getMonth(), 1, 12)
+    label = 'Ce mois'
+  } else if (preset === 'operational') {
+    first = last = operationalDay || todayOp
+    label = "Journée d'opération"
+  } else if (preset === 'custom') {
+    const f = dateFrom ? new Date(dateFrom + 'T12:00:00') : null
+    const t = dateTo ? new Date(dateTo + 'T12:00:00') : null
+    if (f && t && f > t) {
+      invalid = true // repli sur la période par défaut (bandeau d'avertissement)
+    } else if (f || t) {
+      first = f || (t as Date)
+      last = t || (f && f > todayOp ? f : todayOp)
+      label = 'Période'
+    }
+  }
+
+  const dayCount = (a: Date, b: Date) =>
+    Math.round((getOperationalDayRange(b).start.getTime() - getOperationalDayRange(a).start.getTime()) / DAY_MS) + 1
+  let days = dayCount(first, last)
+  let cappedFrom: number | null = null
+  if (days > MAX_DAYS) {
+    cappedFrom = days
+    last = addDays(first, MAX_DAYS - 1)
+    days = MAX_DAYS
+  }
+  const start = getOperationalDayRange(first).start
+  const end = getOperationalDayRange(last).end
+  return { start, end, days, label, invalid, cappedFrom }
+}
 
 export default function AdminPortAgenciesTab({
   datePreset,
@@ -52,7 +110,7 @@ export default function AdminPortAgenciesTab({
   // États pour filtres
   const [selectedCity, setSelectedCity] = useState<string>('all') // all ou nom de ville
   const [portTypeFilter, setPortTypeFilter] = useState('all') // all, port_paye, port_du, port_en_compte_expediteur
-  const [directionFilter, setDirectionFilter] = useState('all') // all, sent (envoyées), received (reçues)
+  const [directionFilter, setDirectionFilter] = useState<string>('all') // all, sent (envoyées), received (reçues)
   const [originCityFilter, setOriginCityFilter] = useState<string>('all') // Filtre ville d'origine (pour mode "Reçues")
   const [showFilters, setShowFilters] = useState(true)
   const [viewMode, setViewMode] = useState<'theoretical' | 'physical'>('theoretical') // theoretical = tous les ports, physical = argent physique en caisse
@@ -60,93 +118,32 @@ export default function AdminPortAgenciesTab({
   // État pour la modale Caisse Agence
   const [showCaisseModal, setShowCaisseModal] = useState(false)
 
-  // États pour chargement progressif
-  const [liveParcels, setLiveParcels] = useState<any[]>([])
+  // 📅 Période active (recalculée aussi au changement de journée d'opération)
+  const { dayString: currentOpDay } = useOperationalDay()
+  const operationalDayMs = operationalDay ? operationalDay.getTime() : null
+  const period = useMemo(
+    () => computePeriod(datePreset, dateFrom, dateTo, operationalDay),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [datePreset, dateFrom, dateTo, operationalDayMs, currentOpDay]
+  )
+  const periodStartMs = period.start.getTime()
+  const periodEndMs = period.end.getTime()
+
+  // États de chargement
+  // ⚡ TEMPS RÉEL sur TOUTE la période : une écoute onSnapshot par journée d'opération (mêmes
+  // bornes que l'ancienne lecture ponctuelle jour par jour). Toute modification faite ailleurs
+  // (Chef d'agence, Agent pro, livreurs… : port encaissé, statut, prix, affectation) sur un colis
+  // de la période — y compris des journées passées — est reflétée sans recharger la page.
+  const [periodParcels, setPeriodParcels] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
-  const [refreshing, setRefreshing] = useState(false)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const [loadingAll, setLoadingAll] = useState(false)
-  const [hasMore, setHasMore] = useState(true)
-  // ⚠️ Avec le cache local Firestore (persistentLocalCache), un onSnapshot renvoie d'abord un
-  // résultat depuis le CACHE de l'appareil — potentiellement incomplet si ce cache ne contient
-  // pas encore tous les documents de la plage demandée (ex: après un changement de filtre de
-  // date) — avant que le serveur confirme. Ce flag reste true tant que le total affiché n'est
-  // pas confirmé par le serveur (même correctif que sur AgentPage.tsx / CaisseChefTab.tsx).
+  // ⚠️ Avec le cache local Firestore, un onSnapshot renvoie d'abord un résultat depuis le CACHE
+  // (potentiellement incomplet) : ce flag reste true tant que le serveur n'a pas confirmé.
   const [syncing, setSyncing] = useState(false)
-  const lastDocRef = useRef<any>(null)
-
-  // 📊 États pour système de filtrage robuste
-  const [batchProgress, setBatchProgress] = useState({
-    current: 0,
-    total: 0,
-    percentage: 0
-  })
-  const [batchLoadedCount, setBatchLoadedCount] = useState(0) // colis reçus pendant le chargement par batches
-  const [periodWarning, setPeriodWarning] = useState<string | null>(null)
-  const [periodDays, setPeriodDays] = useState<number>(0)
-  const [invalidDatesWarning, setInvalidDatesWarning] = useState(false)
-
-  // 📊 FONCTIONS UTILITAIRES - Système de filtrage robuste
-
-  /**
-   * Valide une période et détermine la stratégie de chargement
-   */
-  const validatePeriod = (dateFrom: Date, dateTo: Date) => {
-    const diffMs = dateTo.getTime() - dateFrom.getTime()
-    const diffDays = Math.ceil(diffMs / (1000 * 60 * 60 * 24))
-
-    const isValid = diffDays <= PERIOD_LIMITS.MAX_DAYS
-    const needsBatch = diffDays > PERIOD_LIMITS.BATCH_THRESHOLD
-
-    // Si dépassement, ajuster à la limite max
-    let adjustedTo = dateTo
-    if (!isValid) {
-      adjustedTo = new Date(dateFrom.getTime() + PERIOD_LIMITS.MAX_DAYS * 24 * 60 * 60 * 1000)
-    }
-
-    return { diffDays, isValid, needsBatch, adjustedTo }
-  }
-
-  /**
-   * Divise une période en batches pour chargement progressif
-   */
-  const splitPeriodIntoBatches = (startDate: Date, endDate: Date, batchSizeDays: number) => {
-    const batches: Array<{ start: Date; end: Date }> = []
-    let currentStart = new Date(startDate)
-
-    while (currentStart < endDate) {
-      const currentEnd = new Date(currentStart.getTime() + batchSizeDays * 24 * 60 * 60 * 1000)
-      const batchEnd = currentEnd > endDate ? endDate : currentEnd
-
-      batches.push({
-        start: new Date(currentStart),
-        end: new Date(batchEnd)
-      })
-
-      currentStart = new Date(batchEnd.getTime() + 1) // +1ms pour éviter duplication
-    }
-
-    return batches
-  }
-
-  /**
-   * Charge un batch spécifique de données depuis Firestore
-   */
-  const loadBatchData = async (startDate: Date, endDate: Date): Promise<any[]> => {
-    const fromTimestamp = Timestamp.fromDate(startDate)
-    const toTimestamp = Timestamp.fromDate(endDate)
-
-    const q = query(
-      collection(db, 'parcels'),
-      where('createdAt', '>=', fromTimestamp),
-      where('createdAt', '<=', toTimestamp),
-      orderBy('createdAt', 'desc'),
-      limit(PERIOD_LIMITS.MAX_DOCS_DIRECT)
-    )
-
-    const snap = await getDocs(q)
-    return snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-  }
+  const [loadedCount, setLoadedCount] = useState(0)
+  const [dayProgress, setDayProgress] = useState<{ done: number; total: number; label: string } | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  // 🔢 Génération : toute réponse d'un chargement précédent (autre période) est ignorée
+  const loadGenRef = useRef(0)
 
   // 🔄 Réinitialiser le filtre ville d'origine quand on quitte le mode "Reçues"
   useEffect(() => {
@@ -155,328 +152,125 @@ export default function AdminPortAgenciesTab({
     }
   }, [directionFilter])
 
-  // ⚡ Chargement optimisé avec VALIDATION DE PÉRIODE et BATCHES
+  // ⚡ CHARGEMENT de la période : mêmes requêtes que la page Chef d'agence (createdAt dans
+  // [début, fin] exacts de la période, archivés inclus), découpées par journée d'opération.
+  // Chaque journée est une écoute TEMPS RÉEL (onSnapshot, includeMetadataChanges) :
+  // - chargement initial : au plus SLICE_CONCURRENCY journées en attente du serveur à la fois
+  //   (la suivante démarre dès qu'une journée est confirmée par le serveur) ;
+  // - « chargé » = TOUTES les journées confirmées par le serveur (pas seulement le cache local) ;
+  // - ensuite, chaque modification (n'importe quelle page) met à jour les totaux (regroupées
+  //   toutes les ~250 ms, en transition React pour ne pas bloquer les clics).
+  // À CHAQUE changement de période : écoutes coupées, données vidées, progression affichée, aucune
+  // donnée de l'ancienne période ne peut revenir (génération).
   useEffect(() => {
-    // 🔄 CHARGEMENT INTELLIGENT :
-    // - Première visite (aucune donnée) : masquer tout avec `loading`
-    // - Changement de filtre (données existantes) : garder les données visibles avec `refreshing`
-    if (liveParcels.length === 0) {
-      setLoading(true)
-    } else {
-      setRefreshing(true)
+    const gen = ++loadGenRef.current
+    const start = new Date(periodStartMs)
+    const end = new Date(periodEndMs)
+
+    // ⚡ Données en TRANSITION : le recalcul des statistiques ne bloque pas les clics
+    startTransition(() => setPeriodParcels([]))
+    setLoading(true)
+    setSyncing(false)
+    setLoadedCount(0)
+    setLoadError(null)
+
+    // Tranches contiguës (union = exactement [start, end]), de la plus récente à la plus ancienne :
+    // la journée en cours (si incluse) démarre en premier.
+    const slices = buildDaySlices(start, end)
+    const sliceDocs: any[][] = slices.map(() => [])
+    const confirmed: boolean[] = slices.map(() => false)
+    const fromCacheFlags: boolean[] = slices.map(() => true)
+    const unsubs: (() => void)[] = []
+    let confirmedCount = 0
+    let started = 0
+    let allReady = false
+    let publishTimer: ReturnType<typeof setTimeout> | null = null
+    const isOffline = () => typeof navigator !== 'undefined' && !navigator.onLine
+
+    const total = () => sliceDocs.reduce((n, a) => n + a.length, 0)
+    const publish = () => {
+      publishTimer = null
+      if (gen !== loadGenRef.current) return
+      const merged: any[] = []
+      for (const arr of sliceDocs) for (const d of arr) merged.push(d)
+      startTransition(() => setPeriodParcels(merged))
+    }
+    const schedulePublish = () => {
+      if (publishTimer) return
+      publishTimer = setTimeout(publish, 250)
     }
 
-    // Réinitialiser les avertissements et progression
-    setPeriodWarning(null)
-    setBatchProgress({ current: 0, total: 0, percentage: 0 })
-    setBatchLoadedCount(0)
-    setInvalidDatesWarning(false)
-
-    // 🔍 Détecter si des filtres de DATE sont actifs
-    // Note: selectedCity et portTypeFilter sont appliqués côté frontend dans filteredStats
-    const hasDateFilter = datePreset !== 'all'
-    const hasFilters = hasDateFilter
-
-    // ⚠️ CORRECTIF : « Tout » est lui aussi borné (10 derniers jours, voir plus bas) mais restait
-    // plafonné à PAGE_SIZE=2000 colis TOUTES AGENCES — le réseau en crée ≈ 500/jour, donc « Tout »
-    // n'affichait que les ~4 derniers jours des 10 annoncés (et le bandeau « chargement partiel »
-    // est masqué pour 'all'). Toutes les requêtes étant bornées par des dates, on applique partout
-    // la limite haute de sécurité.
-    const effectivePageSize = FILTERED_PAGE_SIZE
-
-    console.warn(`📊 CHARGEMENT Port par Agence:`, {
-      hasFilters,
-      effectivePageSize,
-      filters: { datePreset }
-    })
-
-    // 📅 Gérer les différents filtres de date avec VALIDATION
-    const now = new Date()
-    let fromDate: Date | null = null
-    let toDate: Date | null = null
-    let queryConstraints: any[] = []
-
-    // Calculer fromDate et toDate selon le preset
-    if (datePreset === 'today') {
-      fromDate = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      toDate = new Date(now)
-    } else if (datePreset === 'week') {
-      // -6 jours (et non -7) pour couvrir exactement 7 jours EN COMPTANT aujourd'hui,
-      // même convention que la page Expéditions (AgentPage.tsx) — sinon Admin comptait
-      // un jour de plus (8 jours) pour la même période "7 jours".
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      fromDate = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000)
-      toDate = new Date(now)
-    } else if (datePreset === 'month') {
-      fromDate = new Date(now.getFullYear(), now.getMonth(), 1)
-      toDate = new Date(now)
-    } else if (datePreset === 'operational' && operationalDay) {
-      const range = getOperationalDayRange(operationalDay)
-      fromDate = range.start
-      toDate = range.end
-    } else if (datePreset === 'custom') {
-      if (dateFrom && dateTo) {
-        // 🗓️ "Période" suit la JOURNÉE D'OPÉRATION (8h → 6h lendemain), pas le jour calendaire —
-        // cohérent avec workDate et avec la page Chef d'agence. Sinon un colis saisi tôt le matin
-        // du dernier jour (encore la veille en journée d'opération) sortait à tort de la période.
-        const tempFromDate = getOperationalDayRange(new Date(dateFrom + 'T12:00:00')).start
-        const tempToDate = getOperationalDayRange(new Date(dateTo + 'T12:00:00')).end
-
-        // ⚠️ Validation: dateFrom doit être <= dateTo
-        if (tempFromDate > tempToDate) {
-          console.warn('⚠️ Date de début après date de fin - chargement période par défaut')
-          setInvalidDatesWarning(true)
-          // Charger les 10 derniers jours par défaut quand dates invalides
-          const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-          const yesterday = new Date(today.getTime() - 1 * 24 * 60 * 60 * 1000)
-          fromDate = new Date(yesterday.getTime() - 9 * 24 * 60 * 60 * 1000)
-          toDate = new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1000)
-        } else {
-          fromDate = tempFromDate
-          toDate = tempToDate
+    const startNext = () => {
+      while (started < slices.length && started - confirmedCount < SLICE_CONCURRENCY) startSlice(started++)
+    }
+    const markConfirmed = (i: number) => {
+      if (confirmed[i]) return
+      confirmed[i] = true
+      confirmedCount += 1
+      if (!allReady) {
+        setDayProgress({ done: confirmedCount, total: slices.length, label: slices[i].label })
+        startNext()
+        if (confirmedCount === slices.length) {
+          allReady = true
+          setDayProgress(null)
+          publish() // résultat complet, publié d'un seul coup (comme avant)
+          setLoading(false)
         }
-      } else {
-        // Si une seule date est présente, charger les 10 derniers jours
-        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-        const yesterday = new Date(today.getTime() - 1 * 24 * 60 * 60 * 1000)
-        fromDate = new Date(yesterday.getTime() - 9 * 24 * 60 * 60 * 1000)
-        toDate = new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1000)
       }
-    } else if (datePreset === 'all') {
-      // 📅 PÉRIODE PAR DÉFAUT : 10 derniers jours, EN INCLUANT aujourd'hui
-      // Cela assure un chargement rapide au démarrage tout en affichant les données du jour
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-      fromDate = new Date(today.getTime() - 9 * 24 * 60 * 60 * 1000) // 10 jours avant aujourd'hui (inclus)
-      toDate = new Date(now) // Maintenant (inclut les colis créés aujourd'hui)
-      console.warn('📅 datePreset="all" → Chargement des 10 derniers jours (aujourd\'hui inclus) par défaut')
     }
 
-    // 📊 VALIDATION DE PÉRIODE et CHARGEMENT PAR BATCHES
-    if (fromDate && toDate) {
-      const validation = validatePeriod(fromDate, toDate)
-      setPeriodDays(validation.diffDays)
-
-      console.warn(`📊 Validation période:`, {
-        diffDays: validation.diffDays,
-        isValid: validation.isValid,
-        needsBatch: validation.needsBatch
-      })
-
-      // ⚠️ Avertissement si période > 45 jours
-      if (!validation.isValid) {
-        const warningMsg = `⚠️ Période limitée à ${PERIOD_LIMITS.MAX_DAYS} jours (${validation.diffDays} jours demandés)`
-        setPeriodWarning(warningMsg)
-        console.warn(warningMsg)
-        toDate = validation.adjustedTo
-      }
-
-      // 🔄 CHARGEMENT PAR BATCHES si > 31 jours
-      if (validation.needsBatch && validation.isValid) {
-        console.warn(`🔄 Chargement par batches activé (${validation.diffDays} jours)`)
-
-        // Fonction de chargement asynchrone par batches
-        const loadAllBatches = async () => {
-          try {
-            // 🛡️ Marge de sécurité pour compenser le décalage workDate vs createdAt
-            const bufferedFrom = new Date(fromDate!.getTime() - DATE_QUERY_BUFFER_MS)
-            const bufferedTo = new Date(toDate!.getTime() + DATE_QUERY_BUFFER_MS)
-            const batches = splitPeriodIntoBatches(bufferedFrom, bufferedTo, PERIOD_LIMITS.BATCH_SIZE)
-            console.warn(`📦 ${batches.length} batches à charger`, batches)
-
-            setBatchProgress({ current: 0, total: batches.length, percentage: 0 })
-
-            let allData: any[] = []
-
-            for (let i = 0; i < batches.length; i++) {
-              const batch = batches[i]
-              console.warn(`📦 Chargement batch ${i + 1}/${batches.length}:`, {
-                from: batch.start.toLocaleString('fr-MA'),
-                to: batch.end.toLocaleString('fr-MA')
-              })
-
-              const batchData = await loadBatchData(batch.start, batch.end)
-              allData = [...allData, ...batchData]
-              setBatchLoadedCount(allData.length)
-
-              // Mettre à jour la progression
-              setBatchProgress({
-                current: i + 1,
-                total: batches.length,
-                percentage: Math.round(((i + 1) / batches.length) * 100)
-              })
-
-              console.warn(`✅ Batch ${i + 1}/${batches.length}: ${batchData.length} colis (total: ${allData.length})`)
-            }
-
-            // Dédupliquer par ID (au cas où)
-            const uniqueData = Array.from(
-              new Map(allData.map(item => [item.id, item])).values()
-            )
-
-            setLiveParcels(uniqueData)
-            setHasMore(false)
-            setSyncing(false) // getDocs va toujours chercher au serveur : résultat définitif
-            setLoading(false)
-            setRefreshing(false)
-            console.warn(`✅ Chargement par batches terminé: ${uniqueData.length} colis`)
-          } catch (err) {
-            console.error('❌ Erreur chargement par batches:', err)
-            setLoading(false)
-            setRefreshing(false)
+    function startSlice(i: number) {
+      const s = slices[i]
+      const q = query(
+        collection(db, 'parcels'),
+        where('createdAt', '>=', Timestamp.fromDate(s.start)),
+        where('createdAt', s.endInclusive ? '<=' : '<', Timestamp.fromDate(s.end)),
+        orderBy('createdAt', 'desc')
+        // Pas de limite : une tranche = une journée d'opération (≈ 500-1 500 colis)
+      )
+      const unsub = onSnapshot(
+        q,
+        { includeMetadataChanges: true },
+        (snap) => {
+          if (gen !== loadGenRef.current) return
+          const wasReady = allReady
+          // Pas de nouvelle liste si seules les métadonnées ont changé (ex. écriture confirmée)
+          const dataChanged = snap.docChanges().length > 0
+          if (dataChanged || !confirmed[i]) {
+            sliceDocs[i] = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
           }
+          fromCacheFlags[i] = snap.metadata.fromCache
+          // ⚠️ Badge « Synchronisation… » : au moins une journée encore servie par le cache local
+          setSyncing(fromCacheFlags.some((f, k) => f && k < started))
+          setLoadedCount(total())
+          // Résultat définitif seulement une fois confirmé par le serveur (ou hors ligne)
+          if (!snap.metadata.fromCache || isOffline()) markConfirmed(i)
+          // Après le chargement complet : chaque modification → totaux recalculés (regroupés)
+          if (wasReady && dataChanged) schedulePublish()
+        },
+        (err) => {
+          console.error(`Port par Agence - erreur temps réel (${s.label}):`, err)
+          if (gen !== loadGenRef.current) return
+          setLoadError(err?.message || 'Erreur de chargement')
+          fromCacheFlags[i] = false
+          setSyncing(fromCacheFlags.some((f, k) => f && k < started))
+          markConfirmed(i)
         }
-
-        loadAllBatches()
-        return // Pas de onSnapshot dans ce cas
-      }
+      )
+      unsubs.push(unsub)
     }
 
-    // 📅 CHARGEMENT DIRECT (≤ 31 jours ou pas de filtre de date)
-    // 🛡️ Marge de sécurité (DATE_QUERY_BUFFER_MS) appliquée sur createdAt pour compenser
-    // le décalage possible avec workDate (le filtrage exact se fait ensuite dans filteredByDate)
-    if (datePreset === 'today' && fromDate) {
-      const fromTimestamp = Timestamp.fromDate(new Date(fromDate.getTime() - DATE_QUERY_BUFFER_MS))
-      queryConstraints = [
-        where('createdAt', '>=', fromTimestamp),
-        orderBy('createdAt', 'desc'),
-        limit(effectivePageSize)
-      ]
-    } else if (datePreset === 'week' && fromDate) {
-      const fromTimestamp = Timestamp.fromDate(new Date(fromDate.getTime() - DATE_QUERY_BUFFER_MS))
-      queryConstraints = [
-        where('createdAt', '>=', fromTimestamp),
-        orderBy('createdAt', 'desc'),
-        limit(effectivePageSize)
-      ]
-    } else if (datePreset === 'month' && fromDate) {
-      const fromTimestamp = Timestamp.fromDate(new Date(fromDate.getTime() - DATE_QUERY_BUFFER_MS))
-      queryConstraints = [
-        where('createdAt', '>=', fromTimestamp),
-        orderBy('createdAt', 'desc'),
-        limit(effectivePageSize)
-      ]
-    } else if (datePreset === 'all' && fromDate && toDate) {
-      // 📅 Période par défaut (10 derniers jours) pour chargement initial rapide
-      const fromTimestamp = Timestamp.fromDate(new Date(fromDate.getTime() - DATE_QUERY_BUFFER_MS))
-      const toTimestamp = Timestamp.fromDate(new Date(toDate.getTime() + DATE_QUERY_BUFFER_MS))
-      queryConstraints = [
-        where('createdAt', '>=', fromTimestamp),
-        where('createdAt', '<=', toTimestamp),
-        orderBy('createdAt', 'desc'),
-        limit(effectivePageSize)
-      ]
-    } else if (datePreset === 'operational' && fromDate && toDate) {
-      const fromTimestamp = Timestamp.fromDate(new Date(fromDate.getTime() - DATE_QUERY_BUFFER_MS))
-      const toTimestamp = Timestamp.fromDate(new Date(toDate.getTime() + DATE_QUERY_BUFFER_MS))
-      queryConstraints = [
-        where('createdAt', '>=', fromTimestamp),
-        where('createdAt', '<=', toTimestamp),
-        orderBy('createdAt', 'desc'),
-        limit(effectivePageSize)
-      ]
-    } else if (datePreset === 'custom' && fromDate && toDate) {
-      const fromTimestamp = Timestamp.fromDate(new Date(fromDate.getTime() - DATE_QUERY_BUFFER_MS))
-      const toTimestamp = Timestamp.fromDate(new Date(toDate.getTime() + DATE_QUERY_BUFFER_MS))
-      queryConstraints = [
-        where('createdAt', '>=', fromTimestamp),
-        where('createdAt', '<=', toTimestamp),
-        orderBy('createdAt', 'desc'),
-        limit(effectivePageSize)
-      ]
-    } else {
-      // Chargement de secours (ne devrait normalement pas arriver)
-      queryConstraints = [
-        orderBy('createdAt', 'desc'),
-        limit(PAGE_SIZE) // Limité à 2000 pour éviter surcharge
-      ]
+    setDayProgress({ done: 0, total: slices.length, label: slices[0].label })
+    startNext()
+
+    return () => {
+      loadGenRef.current += 1 // ignore toute réponse tardive de cette période
+      if (publishTimer) clearTimeout(publishTimer)
+      unsubs.forEach((u) => u())
     }
-
-    const q = query(collection(db, 'parcels'), ...queryConstraints)
-
-    const unsub = onSnapshot(
-      q,
-      { includeMetadataChanges: true },
-      (snap) => {
-        const data = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-        setLiveParcels(data)
-        lastDocRef.current = snap.docs[snap.docs.length - 1] || null
-        setHasMore(snap.docs.length >= effectivePageSize)
-        setLoading(false)
-        setRefreshing(false)
-        setSyncing(snap.metadata.fromCache)
-        console.warn(`✅ Port par Agence: ${data.length} colis chargés (fromCache: ${snap.metadata.fromCache})`)
-      },
-      (err) => {
-        console.error('Erreur chargement initial:', err)
-        setLoading(false)
-        setRefreshing(false)
-        setSyncing(false)
-      }
-    )
-
-    return () => unsub()
-  }, [datePreset, dateFrom, dateTo, operationalDay])
-  // Note: selectedCity et portTypeFilter sont volontairement exclus car ils sont appliqués
-  // côté frontend dans le useMemo filteredStats. Les inclure ici causerait un rechargement
-  // inutile des données Firestore et créerait un bug nécessitant 2 clics pour filtrer.
-
-  // ⚡ Charger TOUS les colis restants en arrière-plan
-  const loadAllParcels = async () => {
-    if (!hasMore || loadingAll || !lastDocRef.current) return
-
-    setLoadingAll(true)
-    let cursor = lastDocRef.current
-    let allNewParcels: any[] = []
-
-    try {
-      while (cursor) {
-        const q = query(
-          collection(db, 'parcels'),
-          orderBy('createdAt', 'desc'),
-          startAfter(cursor),
-          limit(PAGE_SIZE)
-        )
-
-        const snap = await getDocs(q)
-        if (snap.empty) break
-
-        const batch = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
-        allNewParcels = [...allNewParcels, ...batch]
-        cursor = snap.docs[snap.docs.length - 1]
-
-        if (snap.docs.length < PAGE_SIZE) break
-      }
-
-      // Mettre à jour l'état avec tous les colis
-      setLiveParcels((prev) => {
-        const map = new Map()
-        prev.forEach((p: any) => map.set(p.id, p))
-        allNewParcels.forEach((p: any) => map.set(p.id, p))
-        return Array.from(map.values())
-      })
-
-      setHasMore(false)
-      lastDocRef.current = cursor
-    } catch (err) {
-      console.error('Erreur chargement complet:', err)
-    } finally {
-      setLoadingAll(false)
-    }
-  }
-
-  // ❌ DÉSACTIVÉ: Chargement automatique (Option 3 - charge seulement ce dont on a besoin)
-  // useEffect(() => {
-  //   if (!hasMore || loadingAll || loadingMore || !lastDocRef.current) return
-  //   if (liveParcels.length === 0) return
-  //
-  //   const timer = setTimeout(() => {
-  //     if (hasMore && !loadingAll && !loadingMore && lastDocRef.current) {
-  //       loadAllParcels()
-  //     }
-  //   }, 2000)
-  //
-  //   return () => clearTimeout(timer)
-  // }, [liveParcels.length, hasMore, loadingAll, loadingMore])
+  }, [periodStartMs, periodEndMs])
+  // Note: ville, type de port, direction et mode sont appliqués côté frontend (useMemo) : pas de
+  // rechargement Firestore pour ces filtres.
 
   // 🔒 Fonction sécurisée pour parser les nombres
   const safeParseFloat = (value: any): number => {
@@ -485,81 +279,38 @@ export default function AdminPortAgenciesTab({
     return (!isNaN(num) && isFinite(num) && num >= 0) ? num : 0
   }
 
-  const safeParseInt = (value: any, defaultValue: number = 1): number => {
-    if (value === null || value === undefined || value === '') return defaultValue
-    const num = parseInt(String(value), 10)
-    return (!isNaN(num) && isFinite(num) && num >= 0) ? num : defaultValue
-  }
-
-  // ✅ Filtrer les colis par période - UTILISE workDate (jour d'opération)
-  const parcelDate = (p: any) => {
-    // 📅 PRIORITÉ 1: workDate (jour d'opération 8H→6H du lendemain)
-    // Permet de regrouper les saisies de nuit (ex: 14/08 à 2H → workDate=13/08)
-    if (p.workDate) {
-      // workDate est au format "YYYY-MM-DD", on ajoute 12:00 pour être au milieu de la journée
-      return new Date(p.workDate + 'T12:00:00')
-    }
-
-    // 📅 FALLBACK: createdAt (pour anciens colis sans workDate)
-    if (p.createdAt?.toDate) return p.createdAt.toDate()
-    if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
-    return new Date(0)
-  }
+  // ✅ Filtrer les colis par période - parcelDate (workDate = jour d'opération, repli createdAt),
+  // mêmes bornes EXACTES que la requête et que la page Chef d'agence.
+  // 🗄️ Les colis archivés (isArchived, toujours dans 'parcels') sont INCLUS.
+  // ⚡ RÉACTIVITÉ DES BOUTONS : les filtres (période, direction, ville, type de port, mode) restent
+  // URGENTS — le bouton cliqué s'allume immédiatement et le chargement de la nouvelle période part
+  // aussitôt — tandis que les calculs lourds (statistiques par agence sur toute la période) lisent
+  // leur copie DIFFÉRÉE, recalculée en arrière-plan (interruptible). Mêmes résultats.
+  const urgentFilters = useMemo(
+    () => ({ periodStartMs, periodEndMs, directionFilter, originCityFilter, viewMode, selectedCity, portTypeFilter }),
+    [periodStartMs, periodEndMs, directionFilter, originCityFilter, viewMode, selectedCity, portTypeFilter]
+  )
+  const deferredFilters = useDeferredValue(urgentFilters)
+  const filtersPending = deferredFilters !== urgentFilters
 
   const filteredByDate = useMemo(() => {
-    if (!Array.isArray(liveParcels)) return []
+    const { periodStartMs, periodEndMs } = deferredFilters
+    const out: any[] = []
+    // Tranches disjointes : pas de doublon possible (un colis = un seul createdAt)
+    for (const p of periodParcels) {
+      const t = parcelDate(p).getTime()
+      if (t >= periodStartMs && t <= periodEndMs) out.push(p)
+    }
+    return out
+  }, [periodParcels, deferredFilters])
 
-    const now = new Date()
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    // -6 jours : même convention que le chargement Firestore ci-dessus et que AgentPage.tsx
-    const weekAgo = new Date(today.getTime() - 6 * 24 * 60 * 60 * 1000)
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-
-    return liveParcels.filter((p: any) => {
-      // 🗄️ Les colis archivés (isArchived, toujours dans 'parcels') sont INCLUS : l'archivage auto
-      // marque les livrés sans COD après 30 j et tout colis après 45 j. Les exclure faisait perdre
-      // l'essentiel des ports d'une période de plus de 30 jours (comme AgentPage / Facturier, qui
-      // les incluent désormais).
-
-      const pDate = parcelDate(p)
-
-      if (datePreset === 'today') return pDate >= today
-      if (datePreset === 'week') return pDate >= weekAgo
-      if (datePreset === 'month') return pDate >= monthStart
-      if (datePreset === 'operational' && operationalDay) {
-        // 🗓️ JOUR D'OPÉRATION : 8H → 6H lendemain
-        const range = getOperationalDayRange(operationalDay)
-        return pDate >= range.start && pDate <= range.end
-      }
-      if (datePreset === 'custom' && dateFrom && dateTo) {
-        // 📅 Validité (comparaison calendaire simple, juste pour détecter début > fin)
-        const from = new Date(dateFrom + 'T00:00:00')
-        const to = new Date(dateTo + 'T23:59:59')
-
-        // ⚠️ Dates invalides (début > fin): repli sur les 10 derniers jours,
-        // exactement comme le fait le chargement Firestore dans ce cas, pour
-        // rester cohérent entre les données chargées et les données affichées.
-        if (from > to) {
-          const yesterday = new Date(today.getTime() - 1 * 24 * 60 * 60 * 1000)
-          const fallbackFrom = new Date(yesterday.getTime() - 9 * 24 * 60 * 60 * 1000)
-          const fallbackTo = new Date(yesterday.getTime() + 24 * 60 * 60 * 1000 - 1000)
-          return pDate >= fallbackFrom && pDate <= fallbackTo
-        }
-
-        // 🗓️ Bornes réelles du filtre : JOURNÉE D'OPÉRATION (8h → 6h lendemain), pas jour
-        // calendaire — cohérent avec workDate et avec la page Chef d'agence.
-        const opFrom = getOperationalDayRange(new Date(dateFrom + 'T12:00:00')).start
-        const opTo = getOperationalDayRange(new Date(dateTo + 'T12:00:00')).end
-        return pDate >= opFrom && pDate <= opTo
-      }
-      return true // 'all'
-    })
-  }, [liveParcels, datePreset, dateFrom, dateTo, operationalDay])
+  const periodRangeText = `${fmtDay(period.start)} 08h00 → ${fmtDay(period.end)} 06h00`
 
   // ✅ Calculer les statistiques par agence
   // Mode theoretical = tous les ports (actuel)
   // Mode physical = argent réellement collecté en caisse
   const portStats = useMemo(() => {
+    const { directionFilter, originCityFilter, viewMode } = deferredFilters
     if (!Array.isArray(filteredByDate)) return []
 
     const stats: Record<string, {
@@ -570,7 +321,8 @@ export default function AdminPortAgenciesTab({
       enCompteExp: number            // 📤 En Compte Expéditeur
       enCompteDest: number           // 📥 En Compte Destinataire
       totalPort: number
-      nbExpeditions: number          // Seulement les expéditions (pas colis)
+      nbExpeditions: number          // Seulement les expéditions (pas colis) — locales comptées 2 fois en « Toutes »
+      nbUnique: number               // Expéditions distinctes (= nombre affiché sur la page Chef d'agence)
     }> = {}
 
     // Initialiser toutes les villes
@@ -584,64 +336,36 @@ export default function AdminPortAgenciesTab({
         enCompteDest: 0,
         totalPort: 0,
         nbExpeditions: 0,
+        nbUnique: 0,
       }
     })
 
     // Parcourir tous les colis filtrés par date
     filteredByDate.forEach((p: any) => {
       // ✅ Utiliser SEULEMENT originCity et destinationCity (comme dans AgentPage)
-      // Sans fallback sur sender.city ou receiver.city pour cohérence avec les données chargées
       const originCity = p.originCity
       const destCity = p.destinationCity
 
+      // 🔗 Agences concernées : ville d'expédition / de destination (et villes expéditeur /
+      // destinataire des anciens colis). Le périmètre et la répartition des ports suivent la règle
+      // PARTAGÉE avec la page Chef d'agence (utils/billingAgency) → mêmes expéditions, mêmes montants.
+      const agencyDir: AgencyDirection = directionFilter === 'sent' ? 'sent' : directionFilter === 'received' ? 'received' : 'all'
+      const matchesOriginFilter = directionFilter !== 'received' || originCityFilter === 'all' || originCity === originCityFilter
+      const involvedCities = [...new Set([originCity, p.sender?.city, destCity, p.receiver?.city])]
+        .filter((c: any) => c && stats[c]) as string[]
+
       if (viewMode === 'theoretical') {
-        // 📊 MODE THÉORIQUE : TOUS LES PORTS (actuel)
-        // ✅ NOUVEAUX PORTS : expéditeur et destinataire séparés
-        // 🔄 FALLBACK: Si nouveaux champs absents, utiliser ancien système
-        let senderPort = safeParseFloat(p.sender?.port || p.senderPort || 0)
-        let senderPortType = p.sender?.portType || p.senderPortType || 'port_paye'
-
-        let receiverPort = safeParseFloat(p.receiver?.port || p.receiverPort || 0)
-        let receiverPortType = p.receiver?.portType || p.receiverPortType || 'port_du'
-
-        // 🔄 COMPATIBILITÉ: Si pas de nouveaux ports, utiliser l'ancien p.price
-        if (senderPort === 0 && receiverPort === 0 && p.price) {
-          const price = safeParseFloat(p.price)
-          const portType = p.portType || 'port_paye'
-
-          // Ancien système : un seul port, déterminer s'il va à l'expéditeur ou destinataire
-          if (portType === 'port_paye' || portType === 'port_en_compte_expediteur' || portType === 'port_en_compte') {
-            // Port collecté à l'ORIGINE (expéditeur)
-            senderPort = price
-            senderPortType = portType
-          } else if (portType === 'port_du' || portType === 'port_du_cheque' || portType === 'port_en_compte_destinataire') {
-            // Port collecté à la DESTINATION (destinataire)
-            receiverPort = price
-            receiverPortType = portType
-          }
-        }
-
-        // 📤 PORT EXPÉDITEUR : collecté à l'agence d'ORIGINE (expéditions envoyées)
-        // Ne comptabiliser que si le filtre autorise les envoyées (all ou sent)
-        if (senderPort > 0 && originCity && stats[originCity] && (directionFilter === 'all' || directionFilter === 'sent')) {
-          if (senderPortType === 'port_paye') {
-            stats[originCity].portPaye += senderPort
-          } else if (senderPortType === 'port_en_compte_expediteur' || senderPortType === 'port_en_compte') {
-            stats[originCity].enCompteExp += senderPort
-          }
-        }
-
-        // 📥 PORT DESTINATAIRE : collecté à l'agence de DESTINATION (expéditions reçues)
-        // Ne comptabiliser que si le filtre autorise les reçues (all ou received)
-        // ET si le filtre ville d'origine est respecté (en mode received)
-        const matchesOriginFilter = directionFilter !== 'received' || originCityFilter === 'all' || originCity === originCityFilter
-        if (receiverPort > 0 && destCity && stats[destCity] && (directionFilter === 'all' || directionFilter === 'received') && matchesOriginFilter) {
-          if (receiverPortType === 'port_du') {
-            stats[destCity].portDu += receiverPort
-          } else if (receiverPortType === 'port_du_cheque') {
-            stats[destCity].portDuCheque += receiverPort
-          } else if (receiverPortType === 'port_en_compte_destinataire' || receiverPortType === 'port_en_compte') {
-            stats[destCity].enCompteDest += receiverPort
+        // 📊 MODE THÉORIQUE : ports de chaque expédition du périmètre de l'agence
+        // Port payé / En compte exp. → ORIGINE ; Port dû (espèces, chèque) / En compte dest. → DESTINATION
+        if (matchesOriginFilter) {
+          for (const c of involvedCities) {
+            if (!isInAgencyScope(p, c, agencyDir)) continue
+            const a = agencyPortAmounts(p, c)
+            stats[c].portPaye += a.portPaye
+            stats[c].portDu += a.portDu
+            stats[c].portDuCheque += a.portDuCheque
+            stats[c].enCompteExp += a.enCompteExp
+            stats[c].enCompteDest += a.enCompteDest
           }
         }
       } else {
@@ -666,39 +390,16 @@ export default function AdminPortAgenciesTab({
         }
       }
 
-      // ✅ EXPÉDITIONS : comptées selon la direction
-      const matchesOriginFilter = directionFilter !== 'received' || originCityFilter === 'all' || originCity === originCityFilter
-
-      // 🔄 Vérifier si c'est un colis retourné
-      const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
-
-      if (isReturned) {
-        // Pour un retour, compter pour l'agence qui retourne (returnToCity ou createdByCity)
-        const returnCity = p.returnToCity || p.createdByCity
-        if (returnCity && stats[returnCity]) {
-          if (directionFilter === 'all' || directionFilter === 'sent') {
-            stats[returnCity].nbExpeditions += 1
-          }
-        }
-      } else {
-        // Logique normale pour les colis non-retournés
-        // Compter les expéditions ENVOYÉES (à l'origine)
-        if (directionFilter === 'all' || directionFilter === 'sent') {
-          // Expédition créée dans une agence (y compris LOCALE, livrée dans la même ville) :
-          // ville de création = originCity, sinon agence créatrice / ville de l'expéditeur
-          const createdCity = (originCity && stats[originCity]) ? originCity
-            : [p.createdByCity, p.sender?.city, destCity && !originCity ? destCity : undefined].find((c: any) => c && stats[c])
-          if (createdCity) {
-            stats[createdCity].nbExpeditions += 1
-          }
-        }
-
-        // Compter les expéditions REÇUES (à la destination)
-        // Note: utilisation de IF indépendant (pas ELSE IF) pour que 'all' compte les deux
-        if (directionFilter === 'all' || directionFilter === 'received') {
-          if (destCity && stats[destCity] && matchesOriginFilter) {
-            stats[destCity].nbExpeditions += 1
-          }
+      // ✅ EXPÉDITIONS : même périmètre que la page Chef d'agence (envoyées depuis la ville,
+      // reçues = arrivées dans la ville ET visibles à destination ; les retours sont suivis dans
+      // l'onglet Retours). En « Toutes », une expédition LOCALE (même ville) compte 2 fois pour son
+      // agence (1 envoyée + 1 reçue) ; nbUnique la compte une seule fois (= total Chef d'agence).
+      if (matchesOriginFilter) {
+        for (const c of involvedCities) {
+          const sent = agencyDir !== 'received' && isSentFromAgency(p, c)
+          const received = agencyDir !== 'sent' && isReceivedInAgency(p, c)
+          stats[c].nbExpeditions += (sent ? 1 : 0) + (received ? 1 : 0)
+          if (sent || received) stats[c].nbUnique += 1
         }
       }
     })
@@ -718,10 +419,11 @@ export default function AdminPortAgenciesTab({
         totalPort: Math.round(totalPort * 100) / 100,
       }
     })
-  }, [filteredByDate, directionFilter, originCityFilter, viewMode])
+  }, [filteredByDate, deferredFilters])
 
   // Appliquer les filtres de ville et type de port
   const filteredStats = useMemo(() => {
+    const { selectedCity, portTypeFilter } = deferredFilters
     let filtered = portStats
 
     // Filtre par ville sélectionnée
@@ -742,14 +444,20 @@ export default function AdminPortAgenciesTab({
     }
 
     return filtered
-  }, [portStats, selectedCity, portTypeFilter])
+  }, [portStats, deferredFilters])
 
   // ✅ Calculer les totaux sur les stats FILTRÉES - 4 TYPES + EXPÉDITIONS SEULEMENT
-  // 🏙️ Expéditions LOCALES de la période (même ville d'expédition et de destination, transport entre
-  // quartiers) : dans « Port par Agence », chacune compte 2 fois pour son agence (1 envoyée + 1 reçue).
-  const localExpeditionsCount = useMemo(() => filteredByDate.filter((p: any) =>
-    !['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status) &&
-    p.originCity && p.originCity === p.destinationCity).length, [filteredByDate])
+  // 🔢 Expéditions DISTINCTES des agences affichées (même périmètre que la page Chef d'agence).
+  // En « Toutes », le total ci-dessus compte 2 fois une expédition envoyée ET reçue par les agences
+  // affichées (locales pour une agence ; aussi les inter-agences quand toutes les villes sont affichées).
+  const uniqueExpeditionsCount = useMemo(() => {
+    const { directionFilter, originCityFilter } = deferredFilters
+    const cities = filteredStats.map(s => s.city)
+    const agencyDir: AgencyDirection = directionFilter === 'sent' ? 'sent' : directionFilter === 'received' ? 'received' : 'all'
+    return filteredByDate.filter((p: any) =>
+      (directionFilter !== 'received' || originCityFilter === 'all' || p.originCity === originCityFilter) &&
+      cities.some(c => isInAgencyScope(p, c, agencyDir))).length
+  }, [filteredByDate, filteredStats, deferredFilters])
 
   const totauxFiltres = useMemo(() => {
     const totaux = filteredStats.reduce((acc, stat) => ({
@@ -775,7 +483,7 @@ export default function AdminPortAgenciesTab({
     }
   }, [filteredStats])
 
-  const hasActiveFilter = selectedCity !== 'all' || portTypeFilter !== 'all' || datePreset !== 'all' || directionFilter !== 'all' || (directionFilter === 'received' && originCityFilter !== 'all')
+  const hasActiveFilter = selectedCity !== 'all' || portTypeFilter !== 'all' || datePreset !== 'all' || directionFilter !== 'all'
 
   // 🖨️ Fonction d'impression
   const handlePrint = () => {
@@ -784,6 +492,7 @@ export default function AdminPortAgenciesTab({
 
   return (
     <>
+      <PendingBadge show={filtersPending} />
       {/* 🖨️ Styles d'impression */}
       <style>{`
         @media print {
@@ -822,100 +531,41 @@ export default function AdminPortAgenciesTab({
       `}</style>
 
       <div className="mt-4 space-y-4">
-      {/* Chargement initial */}
-      {loading && (
-        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm p-12 text-center">
-          <Loader2 className="w-12 h-12 text-purple-600 animate-spin mx-auto mb-4" />
-          <p className="text-gray-600 font-medium">Chargement des données...</p>
-        </div>
-      )}
-
       {/* ⚠️ Avertissement dates invalides */}
-      {invalidDatesWarning && (
+      {period.invalid && (
         <div className="bg-gradient-to-r from-red-50 to-rose-50 border-2 border-red-400 rounded-xl p-4 flex items-center gap-3 shadow-md print:hidden">
           <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0" />
           <div className="flex-1">
             <p className="text-sm font-bold text-red-900">⚠️ Dates invalides : la date de début doit être antérieure ou égale à la date de fin</p>
             <p className="text-xs text-red-700 mt-1">
-              Veuillez corriger les dates pour appliquer le filtre de période personnalisée.
+              Période par défaut affichée ({DEFAULT_DAYS} derniers jours). Corrigez les dates pour appliquer la période personnalisée.
             </p>
           </div>
         </div>
       )}
 
       {/* ⚠️ Avertissement période limitée */}
-      {periodWarning && (
+      {period.cappedFrom && (
         <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-2 border-orange-400 rounded-xl p-4 flex items-center gap-3 shadow-md print:hidden">
           <AlertCircle className="w-6 h-6 text-orange-600 flex-shrink-0" />
           <div className="flex-1">
-            <p className="text-sm font-bold text-orange-900">{periodWarning}</p>
+            <p className="text-sm font-bold text-orange-900">⚠️ Période limitée à {MAX_DAYS} jours ({period.cappedFrom} jours demandés)</p>
             <p className="text-xs text-orange-700 mt-1">
-              Les performances sont optimales pour des périodes de {PERIOD_LIMITS.BATCH_THRESHOLD} jours ou moins.
+              Seules les {MAX_DAYS} premières journées de la période sont chargées.
             </p>
           </div>
         </div>
       )}
 
-      {/* 📊 Barre de progression chargement par batches */}
-      {batchProgress.total > 0 && batchProgress.current < batchProgress.total && (
-        <div className="bg-gradient-to-r from-purple-50 to-blue-50 border-2 border-purple-300 rounded-xl p-4 shadow-md print:hidden">
-          <div className="flex items-center gap-3 mb-3">
-            <Loader2 className="w-5 h-5 text-purple-600 animate-spin flex-shrink-0" />
-            <div className="flex-1">
-              <p className="text-sm font-bold text-purple-900">
-                📦 Chargement par batches en cours...
-              </p>
-              <p className="text-xs text-purple-700 mt-0.5">
-                Batch {batchProgress.current} / {batchProgress.total} ({batchProgress.percentage}%)
-              </p>
-              <LoadProgress loading count={batchLoadedCount} className="mt-1" />
-            </div>
-          </div>
-          <div className="w-full bg-purple-200 rounded-full h-3 overflow-hidden">
-            <div
-              className="bg-gradient-to-r from-purple-600 to-blue-600 h-full transition-all duration-300 flex items-center justify-center"
-              style={{ width: `${batchProgress.percentage}%` }}
-            >
-              <span className="text-white text-xs font-bold">{batchProgress.percentage}%</span>
-            </div>
-          </div>
+      {/* ❌ Erreur de chargement */}
+      {loadError && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-xl p-4 flex items-center gap-3 print:hidden">
+          <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0" />
+          <p className="text-sm font-bold text-red-900">Erreur de chargement : {loadError} — les totaux peuvent être incomplets.</p>
         </div>
       )}
 
-      {/* 📊 Indicateur période sélectionnée */}
-      {periodDays > 0 && (
-        <div className="bg-gradient-to-r from-green-50 to-teal-50 border border-green-300 rounded-xl p-3 flex items-center gap-3 shadow-sm print:hidden">
-          <Calendar className="w-5 h-5 text-green-600 flex-shrink-0" />
-          <div className="flex-1">
-            <p className="text-sm font-semibold text-green-900">
-              📅 Période sélectionnée: {periodDays} jour{periodDays > 1 ? 's' : ''}
-              {datePreset === 'all' && <span className="text-green-600 ml-1">(période par défaut)</span>}
-            </p>
-            <p className="text-xs text-green-700 mt-0.5">
-              {periodDays <= PERIOD_LIMITS.BATCH_THRESHOLD
-                ? '✅ Chargement direct optimisé'
-                : `🔄 Chargement par batches (${Math.ceil(periodDays / PERIOD_LIMITS.BATCH_SIZE)} batches)`}
-            </p>
-          </div>
-        </div>
-      )}
-
-      {/* 🔄 Indicateur de rafraîchissement en arrière-plan */}
-      {refreshing && (
-        <div className="bg-gradient-to-r from-blue-50 to-purple-50 border border-blue-300 rounded-xl p-3 flex items-center gap-3 shadow-sm print:hidden">
-          <Loader2 className="w-5 h-5 text-blue-600 animate-spin flex-shrink-0" />
-          <div className="flex-1">
-            <p className="text-sm font-semibold text-blue-900">
-              🔄 Actualisation des données en cours...
-            </p>
-            <p className="text-xs text-blue-700 mt-0.5">
-              Les données actuelles restent visibles pendant le chargement
-            </p>
-          </div>
-        </div>
-      )}
-
-      {!loading && (
+      {(
         <div id="port-agence-print">
           {/* 🖨️ En-tête d'impression simplifié - visible uniquement à l'impression */}
           <div className="hidden print:block bg-white pb-4 mb-4">
@@ -945,9 +595,9 @@ export default function AdminPortAgenciesTab({
                   })}
                 </p>
               )}
-              {datePreset !== 'operational' && datePreset !== 'all' && (
+              {datePreset !== 'operational' && (
                 <p className="text-lg font-semibold text-gray-600 mt-2">
-                  Période : {dateFrom ? new Date(dateFrom).toLocaleDateString('fr-MA') : ''} - {dateTo ? new Date(dateTo).toLocaleDateString('fr-MA') : ''}
+                  Période : {period.label} — du {periodRangeText}
                 </p>
               )}
             </div>
@@ -1026,37 +676,6 @@ export default function AdminPortAgenciesTab({
               </div>
             </div>
           </div>
-
-          {/* Avertissement chargement progressif */}
-          {hasMore && datePreset !== 'all' && (
-            <div className="bg-gradient-to-r from-amber-50 to-orange-50 border-l-4 border-orange-500 rounded-lg p-4 shadow-sm print:hidden">
-              <div className="flex items-start gap-3">
-                <AlertCircle className="w-5 h-5 text-orange-600 flex-shrink-0 mt-0.5" />
-                <div className="flex-1">
-                  <p className="text-sm font-semibold text-orange-900">
-                    ⚠️ Chargement en cours : {liveParcels.length} colis chargés
-                  </p>
-                  <p className="text-xs text-orange-700 mt-1">
-                    Le filtre de date est actif mais toutes les données ne sont pas encore chargées.
-                    Les statistiques affichées sont partielles. Attendez quelques secondes pour des résultats complets.
-                  </p>
-                </div>
-                {loadingAll && (
-                  <Loader2 className="w-5 h-5 text-orange-600 animate-spin flex-shrink-0" />
-                )}
-              </div>
-            </div>
-          )}
-
-          {/* Indicateur de chargement en arrière-plan */}
-          {loadingAll && (
-            <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 flex items-center gap-3 print:hidden">
-              <Loader2 className="w-4 h-4 text-blue-600 animate-spin" />
-              <p className="text-sm text-blue-900">
-                <span className="font-semibold">Chargement en arrière-plan...</span> {liveParcels.length} colis déjà disponibles
-              </p>
-            </div>
-          )}
 
       {/* Section Filtres */}
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden print:hidden">
@@ -1372,6 +991,40 @@ export default function AdminPortAgenciesTab({
         )}
       </div>
 
+      {/* 📅 Période appliquée (mêmes bornes pour le chargement et le filtrage) */}
+      <div className="bg-gradient-to-r from-green-50 to-teal-50 border border-green-300 rounded-xl p-3 flex items-center gap-3 shadow-sm print:hidden">
+        <Calendar className="w-5 h-5 text-green-600 flex-shrink-0" />
+        <div className="flex-1">
+          <p className="text-sm font-semibold text-green-900">
+            📅 {period.label} : {period.days} journée{period.days > 1 ? 's' : ''} d'opération
+            {datePreset === 'all' && <span className="text-green-600 ml-1">(période par défaut)</span>}
+          </p>
+          <p className="text-xs text-green-700 mt-0.5">
+            🗓️ Du {periodRangeText} · archivés inclus
+          </p>
+        </div>
+      </div>
+
+      {/* ⏳ Chargement de la période : aucune donnée d'une autre période n'est affichée */}
+      {loading && (
+        <div className="bg-white rounded-2xl border border-purple-200 shadow-sm p-6 print:hidden">
+          <div className="flex items-center gap-3">
+            <Loader2 className="w-6 h-6 text-purple-600 animate-spin flex-shrink-0" />
+            <p className="text-sm font-bold text-purple-900">Chargement de la période sélectionnée…</p>
+          </div>
+          <LoadProgress
+            loading
+            count={loadedCount}
+            detail={dayProgress
+              ? `jour par jour : ${dayProgress.label} (${dayProgress.done}/${dayProgress.total} jours) — ${period.label}`
+              : `journée en cours (temps réel) — ${period.label}`}
+            className="mt-3"
+          />
+        </div>
+      )}
+
+      {!loading && (
+      <>
       {/* Carte résumé (filtré) */}
       <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-orange-200 rounded-xl p-6 shadow-lg print:bg-gray-50 print:rounded-none print:mb-6">
         <div className="flex items-center justify-between mb-4">
@@ -1382,9 +1035,9 @@ export default function AdminPortAgenciesTab({
             {/* 🗓️ "Période" est basée sur la journée d'opération (8h → 6h lendemain) : on
                 l'affiche explicitement pour que le total corresponde bien à ce qui est montré,
                 plutôt que de laisser croire à une plage calendaire simple (00:00 → 23:59). */}
-            {datePreset === 'custom' && dateFrom && dateTo && (
+            {(
               <p className="text-xs text-gray-500 mt-0.5">
-                🗓️ Journée d'opération : {new Date(dateFrom + 'T12:00:00').toLocaleDateString('fr-MA')} 08h00 → {new Date(dateTo + 'T12:00:00').toLocaleDateString('fr-MA')} +1j 06h00
+                🗓️ {period.label} — journées d'opération : {periodRangeText}
               </p>
             )}
           </div>
@@ -1397,8 +1050,7 @@ export default function AdminPortAgenciesTab({
             <Package className="w-8 h-8 text-indigo-600" />
             <div>
               <div className="text-xs text-gray-600 font-medium uppercase tracking-wide">Expéditions</div>
-              <div className="text-2xl font-black text-indigo-700">{totauxFiltres.nbExpeditions}</div>
-              {localExpeditionsCount > 0 && <div className="text-[10px] text-gray-500 leading-tight mt-0.5">dont {localExpeditionsCount} locale{localExpeditionsCount > 1 ? 's' : ''}</div>}
+              <div className="text-2xl font-black text-indigo-700">{uniqueExpeditionsCount}</div>
             </div>
           </div>
           <div className="flex items-center gap-3">
@@ -1511,6 +1163,11 @@ export default function AdminPortAgenciesTab({
                     <span className="inline-flex items-center justify-center px-3 py-1 bg-indigo-100 text-indigo-700 rounded-lg font-bold text-base">
                       {stat.nbExpeditions}
                     </span>
+                    {stat.nbExpeditions > stat.nbUnique && (
+                      <div className="text-[10px] text-gray-500 mt-1" title="Expéditions locales comptées 2 fois (1 envoyée + 1 reçue)">
+                        {stat.nbUnique} unique{stat.nbUnique > 1 ? 's' : ''}
+                      </div>
+                    )}
                   </td>
                   <td className="px-6 py-4 text-right font-bold bg-blue-50/50">
                     <span className="text-blue-700 text-lg">
@@ -1636,6 +1293,8 @@ export default function AdminPortAgenciesTab({
             </button>
           )}
         </div>
+      )}
+      </>
       )}
         </div>
       )}

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState, useMemo } from 'react'
+import { setPresenceTab } from '../services/presenceCounters'
 import { codPaymentTypeOf } from '../firebase/constants'
+import { codSplitAmount, codHasType, isMixedCod, codPartsLabel, codPartsBreakdown } from '../utils/codParts'
 import { signOut } from 'firebase/auth'
 import { doc, onSnapshot } from 'firebase/firestore'
 import { auth, db } from '../firebase/config'
@@ -81,6 +83,8 @@ export default function DirectorPage() {
 
   const [profile,       setProfile]      = useState<any>(null)
   const [mainTab,       setMainTab]      = useState('home')
+  // 👁️ Présence : onglet courant (libellé affiché dans la carte « L'œil qui ne dort pas » de l'Admin)
+  useEffect(() => { setPresenceTab(mainTab); return () => setPresenceTab('') }, [mainTab])
   const [menuOpen,      setMenuOpen]     = useState(false)
 
   // Parcels
@@ -407,8 +411,9 @@ export default function DirectorPage() {
     remisDH:     codParcels.filter(p => p.codStatus === 'remis').reduce((s,p) => s+(p.codAmount||0), 0),
     byType: COD_PAYMENT_TYPES.map(pt => ({
       ...pt,
-      total: codParcels.filter(p => codPaymentTypeOf(p) === pt.key).reduce((s,p) => s+(p.codAmount||0), 0),
-      count: codParcels.filter(p => codPaymentTypeOf(p) === pt.key).length,
+      // RF mixte : chaque part dans son type
+      total: codParcels.reduce((s,p) => s+codSplitAmount(p, pt.key, codPaymentTypeOf(p)), 0),
+      count: codParcels.filter(p => codPaymentTypeOf(p) === pt.key || codHasType(p, pt.key)).length,
     })).filter(pt => pt.total > 0),
   }), [codParcels])
 
@@ -418,8 +423,8 @@ export default function DirectorPage() {
     remisDH:     codDateFiltered.filter((p: any) => p.codStatus === 'remis').reduce((s: any,p: any) => s+(p.codAmount||0), 0),
     byType: COD_PAYMENT_TYPES.map(pt => ({
       ...pt,
-      total: codDateFiltered.filter((p: any) => codPaymentTypeOf(p) === pt.key).reduce((s: any,p: any) => s+(p.codAmount||0), 0),
-      count: codDateFiltered.filter((p: any) => codPaymentTypeOf(p) === pt.key).length,
+      total: codDateFiltered.reduce((s: any,p: any) => s+codSplitAmount(p, pt.key, codPaymentTypeOf(p)), 0),
+      count: codDateFiltered.filter((p: any) => codPaymentTypeOf(p) === pt.key || codHasType(p, pt.key)).length,
     })).filter(pt => pt.total > 0),
   }), [codDateFiltered])
 
@@ -999,18 +1004,18 @@ export default function DirectorPage() {
                             <td className="px-4 py-3"><p className="font-medium text-gray-800">{p.receiver?.name}</p><p className="text-xs text-gray-400">{p.receiver?.tel}</p></td>
                             <td className="px-4 py-3 font-semibold text-gray-700 whitespace-nowrap">{p.receiver?.city}</td>
                             <td className="px-4 py-3 text-gray-600">{p.weight} kg</td>
-                            <td className="px-4 py-3">{p.codAmount > 0 ? <span className="text-orange-600 font-bold">{p.codAmount} DH</span> : <span className="text-gray-300">—</span>}</td>
+                            <td className="px-4 py-3">{p.codAmount > 0 ? <span className="text-orange-600 font-bold">{p.codAmount} DH{isMixedCod(p) && <span className="block text-[10px] font-semibold text-orange-500">{codPartsBreakdown(p)}</span>}</span> : <span className="text-gray-300">—</span>}</td>
                             <td className="px-4 py-3">
                               {cs ? (
                                 <div>
                                   <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${p.codStatus === 'collected' && cpt ? cpt.bg+' '+cpt.text : cs.bg+' '+cs.text}`}>
                                     <span className={`w-1.5 h-1.5 rounded-full ${cs.dot}`} />
                                     {p.codStatus === 'collected'
-                                      ? <>{cpt?.emoji} {codCollectedLabel(p.codPaymentType)}</>
+                                      ? (isMixedCod(p) ? <>{codPartsLabel(p)}</> : <>{cpt?.emoji} {codCollectedLabel(p.codPaymentType)}</>)
                                       : cs.label
                                     }
                                   </span>
-                                  {p.codStatus !== 'collected' && cpt && <p className="text-[10px] text-gray-400 mt-0.5">{cpt.emoji} {cpt.label}</p>}
+                                  {p.codStatus !== 'collected' && cpt && <p className="text-[10px] text-gray-400 mt-0.5">{isMixedCod(p) ? codPartsLabel(p) : <>{cpt.emoji} {cpt.label}</>}</p>}
                                 </div>
                               ) : <span className="text-gray-300 text-xs">—</span>}
                             </td>
@@ -1097,8 +1102,8 @@ export default function DirectorPage() {
                           <td className="px-4 py-3"><span className="font-mono text-xs text-purple-600 bg-purple-50 px-2 py-0.5 rounded-lg">{p.trackingId}</span></td>
                           <td className="px-4 py-3"><p className="font-medium text-gray-800">{p.receiver?.name}</p><p className="text-xs text-gray-400">{p.receiver?.tel}</p></td>
                           <td className="px-4 py-3 font-semibold text-gray-700">{p.receiver?.city}</td>
-                          <td className="px-4 py-3"><span className="text-orange-600 font-bold text-base">{p.codAmount} DH</span></td>
-                          <td className="px-4 py-3">{cpt ? <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${cpt.bg} ${cpt.text}`}>{cpt.emoji} {cpt.label}</span> : <span className="text-gray-300 text-xs">—</span>}</td>
+                          <td className="px-4 py-3"><span className="text-orange-600 font-bold text-base">{p.codAmount} DH</span>{isMixedCod(p) && <span className="block text-[10px] font-semibold text-orange-500">{codPartsBreakdown(p)}</span>}</td>
+                          <td className="px-4 py-3">{cpt ? <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${cpt.bg} ${cpt.text}`}>{isMixedCod(p) ? codPartsLabel(p) : <>{cpt.emoji} {cpt.label}</>}</span> : <span className="text-gray-300 text-xs">—</span>}</td>
                           <td className="px-4 py-3"><span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${cs.bg} ${cs.text}`}><span className={`w-1.5 h-1.5 rounded-full ${cs.dot}`} />{cs.label}</span></td>
                           <td className="px-4 py-3 text-xs text-gray-600">{p.codCollectedBy || '—'}</td>
                           <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">{p.codCollectedAt ? new Date(p.codCollectedAt).toLocaleDateString('fr-MA') : '—'}</td>

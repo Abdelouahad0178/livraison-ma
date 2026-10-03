@@ -1,4 +1,5 @@
 import { useRef, useState, useEffect, useCallback, useMemo } from 'react'
+import { setPresenceTab } from '../services/presenceCounters'
 import { signOut } from 'firebase/auth'
 import { Suspense, lazy } from 'react'
 import { auth, db } from '../firebase/config'
@@ -20,6 +21,7 @@ import {
   confirmDeliveryWithPaperReceipt,
 } from '../firebase/signatures'
 import { STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS, codCollectedLabel, codPaymentTypeOf } from '../firebase/constants'
+import { isMixedCod, codPartsDetailLabel, codPartsBreakdown, codTypeDisplay, codHasType, codServiceLabel } from '../utils/codParts'
 import {
   Truck, LogOut, ScanLine, Search, CheckCircle,
   ArrowLeft, MapPin, Package, X, Phone, Calendar, Home, Banknote, Menu, Printer,
@@ -93,6 +95,8 @@ export default function DriverPage() {
 
   const [profile, setProfile]             = useState<any>(null)
   const [tab, setTab]                     = useState('parcels')
+  // 👁️ Présence : onglet courant (libellé affiché dans la carte « L'œil qui ne dort pas » de l'Admin)
+  useEffect(() => { setPresenceTab(tab); return () => setPresenceTab('') }, [tab])
   const [driverTab, setDriverTab]         = useState('transport') // 'transport' | 'delivery'
   const [menuOpen, setMenuOpen]           = useState(false)
 
@@ -501,7 +505,7 @@ export default function DriverPage() {
 
     // 3. Filtre par type de paiement
     if (codTypeFilter !== 'all') {
-      myCodParcels = myCodParcels.filter(p => codPaymentTypeOf(p) === codTypeFilter)
+      myCodParcels = myCodParcels.filter(p => codPaymentTypeOf(p) === codTypeFilter || codHasType(p, codTypeFilter))
     }
 
     // 4. Filtre par date
@@ -1718,13 +1722,13 @@ export default function DriverPage() {
                           </td>
                           <td className="px-4 py-3 whitespace-nowrap border-r border-gray-700">
                             <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg font-semibold ${serviceInfo.bg} ${serviceInfo.text}`}>
-                              {serviceInfo.emoji} {serviceInfo.label}
+                              {isMixedCod(parcel) ? codServiceLabel(parcel) : <>{serviceInfo.emoji} {serviceInfo.label}</>}
                             </span>
                           </td>
                           <td className="px-4 py-3 text-right font-bold whitespace-nowrap border-r border-gray-700 bg-green-900/20">
                             {parcel.codAmount && parcel.codAmount > 0 ? (
                               <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-900/50 text-green-300 rounded-lg text-sm font-black">
-                                💰 {parcel.codAmount} DH
+                                💰 {parcel.codAmount} DH{isMixedCod(parcel) && <span className="ml-1 text-[11px] font-bold">({codPartsDetailLabel(parcel)})</span>}
                               </span>
                             ) : (
                               <span className="text-gray-600">—</span>
@@ -2051,7 +2055,7 @@ export default function DriverPage() {
                               : `${st.bg} ${st.text} border-current/20`
                             return (
                               <span className={`inline-flex items-center text-[10px] px-1.5 py-0.5 rounded-md font-bold border ${lightService}`}>
-                                {st.emoji}
+                                {isMixedCod(parcel) ? '💵+' : ''}{st.emoji}
                               </span>
                             )
                           })()}
@@ -2129,7 +2133,7 @@ export default function DriverPage() {
                           const txt  = isCollected && cpt ? cpt.darkText : cs.darkText
                           return (
                             <span className={`inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-md text-[10px] font-bold ${bg} ${txt} border border-current/20`}>
-                              {cpt?.emoji || '💵'} {parcel.codAmount}DH {isCollected && '✓'}
+                              {isMixedCod(parcel) ? '💵+' : ''}{cpt?.emoji || '💵'} {parcel.codAmount}DH{isMixedCod(parcel) && <span className="ml-1 text-[11px] font-bold">({codPartsDetailLabel(parcel)})</span>} {isCollected && '✓'}
                             </span>
                           )
                         })()}
@@ -2632,13 +2636,14 @@ export default function DriverPage() {
                             </p>
                           )}
                         </div>
-                        <p className="text-green-400 font-black text-lg shrink-0">{fmt(p.codAmount)} DH</p>
+                        <p className="text-green-400 font-black text-lg shrink-0">{fmt(p.codAmount)} DH{isMixedCod(p) && <span className="block text-[11px] font-bold">{codPartsBreakdown(p)}</span>}</p>
                       </div>
 
                       {/* Type */}
                       <div className="flex items-center gap-2">
                         <span className="text-xs bg-blue-600 text-white px-2 py-1 rounded">
-                          {codPaymentTypeOf(p) === 'especes' ? '💵 Espèces' :
+                          {isMixedCod(p) ? `💵 ${codTypeDisplay(p)}` :
+                           codPaymentTypeOf(p) === 'especes' ? '💵 Espèces' :
                            codPaymentTypeOf(p) === 'cheque' ? '📋 Chèque' :
                            codPaymentTypeOf(p) === 'traite' ? '📝 Traite' :
                            codPaymentTypeOf(p) === 'bon_livraison' ? '🧾 BL' :
@@ -2783,7 +2788,7 @@ export default function DriverPage() {
                       if (!st) return null
                       return (
                         <div className={`flex items-center gap-2 rounded-xl px-3 py-2 mt-2 ${st.bg}`}>
-                          <span className={`text-sm font-bold ${st.text}`}>{st.emoji} {st.label}</span>
+                          <span className={`text-sm font-bold ${st.text}`}>{isMixedCod(scannedParcel) ? codServiceLabel(scannedParcel) : <>{st.emoji} {st.label}</>}</span>
                         </div>
                       )
                     })()}
@@ -2791,7 +2796,7 @@ export default function DriverPage() {
                     {scannedParcel.codAmount > 0 && scannedParcel.status !== 'Retourné' && (
                       <div className="flex justify-between bg-yellow-500/10 border border-yellow-500/20 rounded-xl p-2 mt-2">
                         <span className="text-yellow-400 font-semibold">💵 RETOUR FOND à collecter</span>
-                        <span className="text-yellow-300 font-bold">{scannedParcel.codAmount} DH</span>
+                        <span className="text-yellow-300 font-bold">{scannedParcel.codAmount} DH{isMixedCod(scannedParcel) && <span className="ml-1 text-[11px] font-bold">({codPartsDetailLabel(scannedParcel)})</span>}</span>
                       </div>
                     )}
                   </div>
@@ -2933,13 +2938,13 @@ export default function DriverPage() {
                               if (!st) return null
                               return (
                                 <div className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-bold border border-current/20 ${st.bg} ${st.text}`}>
-                                  {st.emoji} {st.label}
+                                  {isMixedCod(parcel) ? codServiceLabel(parcel) : <>{st.emoji} {st.label}</>}
                                 </div>
                               )
                             })()}
                             <div className="flex justify-between text-sm">
                               <span className="text-yellow-400/80">💰 RETOUR FOND</span>
-                              <span className="text-yellow-200 font-bold">{parcel.codAmount} DH</span>
+                              <span className="text-yellow-200 font-bold">{parcel.codAmount} DH{isMixedCod(parcel) && <span className="ml-1 text-[11px] font-bold">({codPartsDetailLabel(parcel)})</span>}</span>
                             </div>
                           </div>
                         )}
@@ -3249,13 +3254,13 @@ export default function DriverPage() {
                             if (!st) return null
                             return (
                               <div className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-bold ${st.bg} ${st.text}`}>
-                                {st.emoji} {st.label}
+                                {isMixedCod(parcel) ? codServiceLabel(parcel) : <>{st.emoji} {st.label}</>}
                               </div>
                             )
                           })()}
                           <div className="flex justify-between text-sm">
                             <span className="text-amber-700">💰 RETOUR FOND</span>
-                            <span className="text-amber-900 font-bold">{parcel.codAmount} DH</span>
+                            <span className="text-amber-900 font-bold">{parcel.codAmount} DH{isMixedCod(parcel) && <span className="ml-1 text-[11px] font-bold">({codPartsDetailLabel(parcel)})</span>}</span>
                           </div>
                         </div>
                       )}
@@ -3500,13 +3505,13 @@ export default function DriverPage() {
                             if (!st) return null
                             return (
                               <div className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-bold border border-current/20 ${st.bg} ${st.text}`}>
-                                {st.emoji} {st.label}
+                                {isMixedCod(statusModal.parcel) ? codServiceLabel(statusModal.parcel) : <>{st.emoji} {st.label}</>}
                               </div>
                             )
                           })()}
                           <div className="flex justify-between text-sm">
                             <span className="text-yellow-400/80">💰 RETOUR FOND</span>
-                            <span className="text-yellow-200 font-bold">{statusModal.parcel.codAmount} DH</span>
+                            <span className="text-yellow-200 font-bold">{statusModal.parcel.codAmount} DH{isMixedCod(statusModal.parcel) && <span className="ml-1 text-[11px] font-bold">({codPartsDetailLabel(statusModal.parcel)})</span>}</span>
                           </div>
                         </div>
                       )}

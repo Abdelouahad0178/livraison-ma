@@ -34,6 +34,7 @@ import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
 import { normText } from '../utils/normText'
+import { codHasType, isMixedCod, codPartsOf, codPartsBreakdown, codPartsLabel } from '../utils/codParts'
 
 const PAGE_SIZE = 800 // Chargement progressif par tranches de 800
 
@@ -387,7 +388,7 @@ export default function AnalyseurChequePage() {
 
     // Filtre type de paiement COD
     if (archivePaymentType !== 'all') {
-      filtered = filtered.filter((p: any) => codPaymentTypeOf(p) === archivePaymentType)
+      filtered = filtered.filter((p: any) => codPaymentTypeOf(p) === archivePaymentType || codHasType(p, archivePaymentType))
     }
 
     return filtered
@@ -402,7 +403,7 @@ export default function AnalyseurChequePage() {
       if (ctlPayType !== 'all') {
         const t = codPaymentTypeOf(p) || ''
         if (ctlPayType === 'none' && t) return false
-        if (ctlPayType !== 'none' && t !== ctlPayType) return false
+        if (ctlPayType !== 'none' && t !== ctlPayType && !codHasType(p, ctlPayType)) return false
       }
       if (ctlCodStatus !== 'all' && (p.codStatus || 'pending') !== ctlCodStatus) return false
       if (ctlControl === 'controlled' && !isControlled(p)) return false
@@ -467,10 +468,13 @@ export default function AnalyseurChequePage() {
       const amt = parseFloat(p.codAmount) || 0
       totalAmount += amt
       if (isControlled(p)) { controlledCount += 1; controlledAmount += amt }
-      const t = codPaymentTypeOf(p) || 'none'
-      if (!byType[t]) byType[t] = { count: 0, amount: 0 }
-      byType[t].count += 1
-      byType[t].amount += amt
+      // RF mixte : chaque part dans son type
+      const splits = isMixedCod(p) ? codPartsOf(p) : [{ type: codPaymentTypeOf(p) || 'none', amount: amt }]
+      splits.forEach(({ type: t, amount }) => {
+        if (!byType[t]) byType[t] = { count: 0, amount: 0 }
+        byType[t].count += 1
+        byType[t].amount += amount
+      })
     })
     return {
       total: ctlFiltered.length,
@@ -552,7 +556,7 @@ export default function AnalyseurChequePage() {
   const payTypeBadge = (p: any) => {
     const t = COD_PAYMENT_TYPES.find((x: any) => x.key === codPaymentTypeOf(p))
     if (!t) return <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-500">—</span>
-    return <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${t.bg} ${t.text}`}>{t.emoji} {t.label}</span>
+    return <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${t.bg} ${t.text}`}>{isMixedCod(p) ? codPartsLabel(p) : <>{t.emoji} {t.label}</>}</span>
   }
 
   const codStatusBadge = (p: any) => {
@@ -1004,7 +1008,7 @@ export default function AnalyseurChequePage() {
         <td>${p.receiver?.name || p.receiverName || '-'}</td>
         <td>${p.receiver?.tel || p.receiverTel || '-'}</td>
         <td>${parcelCity(p)}</td>
-        <td>${codPaymentTypeOf(p) ? COD_PAYMENT_TYPES[codPaymentTypeOf(p)] || codPaymentTypeOf(p) : '-'}</td>
+        <td>${isMixedCod(p) ? codPartsLabel(p, { amounts: true }) : codPaymentTypeOf(p) ? COD_PAYMENT_TYPES[codPaymentTypeOf(p)] || codPaymentTypeOf(p) : '-'}</td>
         <td style="text-align:right;font-weight:bold">${money(p.codAmount)} DH</td>
         <td style="text-align:center">${isControlled(p) ? '✓' : ''}</td>
       </tr>
@@ -1658,7 +1662,7 @@ export default function AnalyseurChequePage() {
                             <p className="font-bold text-slate-800 truncate max-w-36">{p.receiver?.name || p.receiverName || '-'}</p>
                             <p className="text-[11px] text-slate-500">{parcelCity(p)}</p>
                           </td>
-                          <td className="px-3 py-2.5 text-right font-black text-emerald-700 whitespace-nowrap">{money(p.codAmount)} DH</td>
+                          <td className="px-3 py-2.5 text-right font-black text-emerald-700 whitespace-nowrap">{money(p.codAmount)} DH{isMixedCod(p) && <div className="text-[10px] font-semibold text-slate-500">{codPartsBreakdown(p)}</div>}</td>
                           <td className="px-3 py-2.5">{payTypeBadge(p)}</td>
                           <td className="px-3 py-2.5">{codStatusBadge(p)}</td>
                           <td className="px-3 py-2.5">{statusBadge(p)}</td>
@@ -2487,7 +2491,7 @@ export default function AnalyseurChequePage() {
                                     codPaymentTypeOf(p) === 'traite' ? 'bg-indigo-100 text-indigo-700' :
                                     'bg-gray-100 text-gray-700'
                                   }`}>
-                                    {COD_PAYMENT_TYPES.find((t: any) => t.key === codPaymentTypeOf(p))?.label || codPaymentTypeOf(p)}
+                                    {isMixedCod(p) ? codPartsLabel(p, { emoji: false }) : (COD_PAYMENT_TYPES.find((t: any) => t.key === codPaymentTypeOf(p))?.label || codPaymentTypeOf(p))}
                                   </span>
                                 ) : '—'}
                               </td>

@@ -1,5 +1,7 @@
+import { openPrintWindow } from './printWindow'
 import { doc, getDoc } from 'firebase/firestore'
 import { db } from '../firebase/db'
+import { codSplitAmount, isMixedCod, codPartsBreakdown, codServiceLabel } from './codParts'
 
 export function printCharge(groups: any[], profileData: any): void {
   const printDate = new Date().toLocaleDateString('fr-MA', { day: '2-digit', month: 'long', year: 'numeric' })
@@ -95,7 +97,7 @@ export function printCharge(groups: any[], profileData: any): void {
 </body>
 </html>`
 
-  const win = window.open('', '_blank', 'width=1200,height=800')
+  const win = openPrintWindow('width=1200,height=800')
   if (win) {
     win.document.write(html)
     win.document.close()
@@ -161,7 +163,7 @@ export async function printTable(
   const rows = parcels.map((p: any, i: any) => {
     const st  = (STATUS_CSS as any)[p.status] || { bg: '#f3f4f6', col: '#374151' }
     const portLabel = (PORT_TYPE_LABEL as any)[p.portType] || (p.portType || '—')
-    const svcLabel  = (SERVICE_LABEL as any)[p.serviceType] || (p.serviceType || '—')
+    const svcLabel  = isMixedCod(p) ? codServiceLabel(p, { emoji: false }) : ((SERVICE_LABEL as any)[p.serviceType] || (p.serviceType || '—'))
     const createdAt = p.createdAt?.toDate ? p.createdAt.toDate() : (p.createdAt ? new Date(p.createdAt) : null)
     const dateStr   = createdAt ? createdAt.toLocaleDateString('fr-MA') : '—'
     const rowBg     = i % 2 === 0 ? '#ffffff' : '#f0f7ff'
@@ -184,7 +186,7 @@ export async function printTable(
     if (cols.poids) cells.push(`<td style="text-align:center;font-size:7pt">${p.weight ? p.weight + ' kg' : '—'}</td>`)
     if (cols.port) cells.push(`<td style="text-align:right;font-weight:bold;font-size:7pt">${p.price ? p.price + ' DH' : '—'}</td>`)
     if (cols.typePort) cells.push(`<td style="text-align:center;font-size:6.5pt">${portLabel}</td>`)
-    if (cols.cod) cells.push(`<td style="text-align:right;font-weight:bold;color:#ea580c;font-size:7pt">${p.codAmount > 0 ? p.codAmount + ' DH' : '—'}</td>`)
+    if (cols.cod) cells.push(`<td style="text-align:right;font-weight:bold;color:#ea580c;font-size:7pt">${p.codAmount > 0 ? p.codAmount + ' DH' : '—'}${isMixedCod(p) ? `<br><span style="font-weight:normal">${codPartsBreakdown(p)}</span>` : ''}</td>`)
     if (cols.livreur) cells.push(`<td style="font-size:6.5pt">${p.deliveryDriverName || '—'}</td>`)
 
     return `<tr style="background:${rowBg}">${cells.join('')}</tr>`
@@ -268,7 +270,7 @@ export async function printTable(
 </body>
 </html>`
 
-  const win = window.open('', '_blank', 'width=1400,height=900')
+  const win = openPrintWindow('width=1400,height=900')
   if (win) {
     win.document.write(html)
     win.document.close()
@@ -358,7 +360,7 @@ export async function printBonRamassage(nexpCodes: any[], batchRef: string, sect
 </body>
 </html>`
 
-  const win = window.open('', '_blank', 'width=900,height=1100')
+  const win = openPrintWindow('width=900,height=1100')
   if (win) { win.document.write(html); win.document.close() }
 }
 
@@ -420,7 +422,7 @@ export function printAdminExpeditions(
           ${p.price || 0} DH
         </td>
         <td style="text-align:right;font-weight:bold;color:#c2410c">
-          ${p.codAmount > 0 ? p.codAmount + ' DH' : '—'}
+          ${p.codAmount > 0 ? p.codAmount + ' DH' : '—'}${isMixedCod(p) ? `<div style="font-size:7pt;font-weight:normal">${codPartsBreakdown(p)}</div>` : ''}
         </td>
         <td>
           <span style="background-color:${status.bg};color:${status.text};padding:2px 6px;border-radius:4px;font-size:7pt;font-weight:bold;white-space:nowrap">
@@ -590,7 +592,7 @@ export function printAdminExpeditions(
 </body>
 </html>`
 
-  const win = window.open('', '_blank', 'width=1200,height=800')
+  const win = openPrintWindow('width=1200,height=800')
   if (win) {
     win.document.write(html)
     win.document.close()
@@ -604,7 +606,8 @@ export function printAdminExpeditions(
 
 export function printPortsCollectes(
   parcels: any[],
-  profileData?: any
+  profileData?: any,
+  periodNote?: string
 ): void {
   if (!parcels.length) {
     alert('Aucun port collecté à imprimer')
@@ -764,6 +767,7 @@ export function printPortsCollectes(
     <div class="header-center">
       <div class="title">ÉTAT DES PORTS COLLECTÉS</div>
       <div class="subtitle">Agence de ${profileData?.city || '—'}</div>
+      ${periodNote ? `<div class="subtitle" style="font-weight:bold;color:#15803d">${periodNote}</div>` : ''}
     </div>
     <div class="header-right">
       <div><strong>Date :</strong> ${printDate}</div>
@@ -813,7 +817,7 @@ export function printPortsCollectes(
 </body>
 </html>`
 
-  const win = window.open('', '_blank', 'width=1200,height=800')
+  const win = openPrintWindow('width=1200,height=800')
   if (win) {
     win.document.write(html)
     win.document.close()
@@ -1070,7 +1074,7 @@ export function printVersementParcels(
 </body>
 </html>`
 
-  const win = window.open('', '_blank', 'width=1200,height=800')
+  const win = openPrintWindow('width=1200,height=800')
   if (win) {
     win.document.write(html)
     win.document.close()
@@ -1244,7 +1248,7 @@ export function printDriverParcels(
 </body>
 </html>`
 
-  const win = window.open('', '_blank', 'width=1200,height=800')
+  const win = openPrintWindow('width=1200,height=800')
   if (win) {
     win.document.write(html)
     win.document.close()
@@ -1314,9 +1318,9 @@ export function printDriverExpeditionsTable(
         return badge(p.status || '—', s.bg, s.col)
       }
       case 'cod': return p.codAmount ? `${(parseFloat(p.codAmount) || 0).toFixed(2)} DH` : '—'
-      case 'especes': return (p.codAmount && (p.codPaymentType || p.serviceType) === 'especes') ? `${(parseFloat(p.codAmount) || 0).toFixed(2)} DH` : '—'
-      case 'cheque': return (p.codAmount && (p.codPaymentType || p.serviceType) === 'cheque') ? `${(parseFloat(p.codAmount) || 0).toFixed(2)} DH` : '—'
-      case 'traite': return (p.codAmount && (p.codPaymentType || p.serviceType) === 'traite') ? `${(parseFloat(p.codAmount) || 0).toFixed(2)} DH` : '—'
+      case 'especes': { const a = codSplitAmount(p, 'especes', p.codPaymentType || p.serviceType); return a ? `${a.toFixed(2)} DH` : '—' }
+      case 'cheque': { const a = codSplitAmount(p, 'cheque', p.codPaymentType || p.serviceType); return a ? `${a.toFixed(2)} DH` : '—' }
+      case 'traite': { const a = codSplitAmount(p, 'traite', p.codPaymentType || p.serviceType); return a ? `${a.toFixed(2)} DH` : '—' }
       default: return '—'
     }
   }
@@ -1336,9 +1340,10 @@ export function printDriverExpeditionsTable(
   // 🧮 Ligne de total : nombre d'expéditions + somme des montants (si la colonne est visible)
   const totalMontant = parcels.reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
   const totalCod = parcels.reduce((s: number, p: any) => s + (parseFloat(p.codAmount) || 0), 0)
-  const totalEspeces = parcels.reduce((s: number, p: any) => s + ((p.codPaymentType || p.serviceType) === 'especes' ? (parseFloat(p.codAmount) || 0) : 0), 0)
-  const totalCheque = parcels.reduce((s: number, p: any) => s + ((p.codPaymentType || p.serviceType) === 'cheque' ? (parseFloat(p.codAmount) || 0) : 0), 0)
-  const totalTraite = parcels.reduce((s: number, p: any) => s + ((p.codPaymentType || p.serviceType) === 'traite' ? (parseFloat(p.codAmount) || 0) : 0), 0)
+  // RF mixte : chaque part dans sa colonne (mono-type : inchangé)
+  const totalEspeces = parcels.reduce((s: number, p: any) => s + codSplitAmount(p, 'especes', p.codPaymentType || p.serviceType), 0)
+  const totalCheque = parcels.reduce((s: number, p: any) => s + codSplitAmount(p, 'cheque', p.codPaymentType || p.serviceType), 0)
+  const totalTraite = parcels.reduce((s: number, p: any) => s + codSplitAmount(p, 'traite', p.codPaymentType || p.serviceType), 0)
   const totalRow = `
     <tr class="total-row">
       ${cols.map((c, i) => {
@@ -1460,7 +1465,7 @@ export function printDriverExpeditionsTable(
 </body>
 </html>`
 
-  const win = window.open('', '_blank', 'width=900,height=1100')
+  const win = openPrintWindow('width=900,height=1100')
   if (win) {
     win.document.write(html)
     win.document.close()
@@ -1480,11 +1485,20 @@ export function printBilanJournee(bilanData: any[], profileData: any, dateLabel:
   const totalCollectes = bilanData.reduce((s, b) => s + b.portsCollectesMontant, 0)
   const totalManquant = bilanData.reduce((s, b) => s + b.montantManquant, 0)
   const tauxGlobal = totalAssignes > 0 ? Math.round((totalLivres / totalAssignes) * 100) : 0
+  // 💰 Colonnes COD par type (collecté / total) quand les lignes les fournissent (page Chef
+  // d'exploitation) — mêmes colonnes que le tableau affiché à l'écran.
+  const COD_TYPES: [string, string][] = [['especes', '💵 Espèces'], ['cheque', '📋 Chèque'], ['traite', '📝 Traite']]
+  const hasCod = bilanData.some(b => b && b.cod && b.codCollecte)
+  const f2 = (n: number) => (Number(n) || 0).toLocaleString('fr-MA', { minimumFractionDigits: 0, maximumFractionDigits: 2 })
+  const codTot: Record<string, number> = { especes: 0, cheque: 0, traite: 0 }
+  const codColTot: Record<string, number> = { especes: 0, cheque: 0, traite: 0 }
+  if (hasCod) for (const b of bilanData) for (const [k] of COD_TYPES) { codTot[k] += Number(b.cod?.[k]) || 0; codColTot[k] += Number(b.codCollecte?.[k]) || 0 }
+  const codCells = (b: any) => hasCod ? COD_TYPES.map(([k]) => `<td style="padding:6px;text-align:right;white-space:nowrap"><b>${f2(b.codCollecte?.[k])}</b><span style="font-size:7pt;color:#9ca3af"> / ${f2(b.cod?.[k])}</span></td>`).join('') : ''
 
   const rows = bilanData.map((b, i) => `
     <tr style="background:${i % 2 === 0 ? '#ffffff' : '#f9fafb'}">
       <td style="padding:8px;font-weight:bold;color:#111827">${b.name}</td>
-      <td style="padding:8px;text-align:center;font-weight:bold;color:#2563eb">${b.total}</td>
+      <td style="padding:8px;text-align:center;font-weight:bold;color:#2563eb">${b.total}${b.enCompteCount > 0 ? `<div style="font-size:7pt;font-weight:normal;color:#6b7280">dont ${b.enCompteCount} en compte</div>` : ''}</td>
       <td style="padding:8px;text-align:center;font-weight:bold;color:#059669">${b.livresCount}</td>
       <td style="padding:8px;text-align:center">
         <span style="padding:4px 8px;border-radius:4px;font-weight:bold;font-size:9pt;
@@ -1492,7 +1506,7 @@ export function printBilanJournee(bilanData: any[], profileData: any, dateLabel:
           ${b.tauxLivraison}%
         </span>
       </td>
-      <td style="padding:8px;text-align:center;font-weight:bold;color:#ea580c">${b.enCoursCount}</td>
+      <td style="padding:8px;text-align:center;font-weight:bold;color:#ea580c">${b.enCoursCount}${b.enAgenceCount > 0 ? `<div style="font-size:7pt;font-weight:normal;color:#6b7280">+${b.enAgenceCount} en agence</div>` : ''}</td>
       <td style="padding:8px;text-align:right">
         <div style="font-weight:bold;color:#059669">${b.portsCollectesMontant.toFixed(2)} DH</div>
         <div style="font-size:8pt;color:#6b7280">(${b.portsCollectesCount} colis)</div>
@@ -1505,6 +1519,7 @@ export function printBilanJournee(bilanData: any[], profileData: any, dateLabel:
           </div>
         ` : '<span style="color:#9ca3af">—</span>'}
       </td>
+      ${codCells(b)}
     </tr>
   `).join('')
 
@@ -1524,9 +1539,11 @@ export function printBilanJournee(bilanData: any[], profileData: any, dateLabel:
     .summary-row { background: linear-gradient(135deg, #dbeafe 0%, #e0e7ff 100%); border-top: 2px solid #2563eb; }
     .summary-row td { padding: 10px 8px; font-weight: bold; border-bottom: none; }
     @media print {
-      body { padding: 10px; }
-      @page { margin: 15mm; }
+      body { padding: 0; }
+      @page { size: A4 portrait; margin: 8mm; }
+      th { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     }
+    ${hasCod ? 'body { font-size: 7.5pt; } th { font-size: 7.5pt; padding: 6px 4px; } td { padding: 6px 4px !important; }' : ''}
   </style>
 </head>
 <body>
@@ -1561,6 +1578,7 @@ export function printBilanJournee(bilanData: any[], profileData: any, dateLabel:
         <th style="width:10%;text-align:center">En cours</th>
         <th style="width:20%;text-align:right">Collectés (DH)</th>
         <th style="width:20%;text-align:right">🚨 Livrés non encaissés</th>
+        ${hasCod ? COD_TYPES.map(([, l]) => `<th style="text-align:right">COD ${l}</th>`).join('') : ''}
       </tr>
     </thead>
     <tbody>
@@ -1573,6 +1591,7 @@ export function printBilanJournee(bilanData: any[], profileData: any, dateLabel:
         <td style="padding:10px 8px;text-align:center;color:#ea580c">${totalEnCours}</td>
         <td style="padding:10px 8px;text-align:right;color:#047857">${totalCollectes.toFixed(2)} DH</td>
         <td style="padding:10px 8px;text-align:right;color:#991b1b">${totalManquant.toFixed(2)} DH</td>
+        ${hasCod ? COD_TYPES.map(([k]) => `<td style="padding:10px 6px;text-align:right;white-space:nowrap">${f2(codColTot[k])} / ${f2(codTot[k])}</td>`).join('') : ''}
       </tr>
     </tbody>
   </table>
@@ -1584,14 +1603,14 @@ export function printBilanJournee(bilanData: any[], profileData: any, dateLabel:
     <strong>Taux %:</strong> Pourcentage de livraison (🟢 ≥80% | 🟡 50-79% | 🔴 &lt;50%) |
     <strong>En cours:</strong> Expéditions encore chez le livreur |
     <strong>Collectés:</strong> Montant des ports dûs encaissés |
-    <strong>🚨 Livrés non encaissés:</strong> Argent dû mais non collecté (ANOMALIE!)
+    <strong>🚨 Livrés non encaissés:</strong> Argent dû mais non collecté (ANOMALIE!)${hasCod ? ' | <strong>COD:</strong> collecté / total (DH) par type — colis mixte : chaque part dans sa colonne' : ''}
   </div>
 
   <script>window.onload = function(){ window.print(); }<\/script>
 </body>
 </html>`
 
-  const win = window.open('', '_blank', 'width=1200,height=800')
+  const win = openPrintWindow('width=1200,height=800')
   if (win) {
     win.document.write(html)
     win.document.close()
@@ -1732,7 +1751,7 @@ export function printInstancesRetards(instancesData: any[], profileData: any, da
 </body>
 </html>`
 
-  const win = window.open('', '_blank', 'width=1200,height=800')
+  const win = openPrintWindow('width=1200,height=800')
   if (win) {
     win.document.write(html)
     win.document.close()

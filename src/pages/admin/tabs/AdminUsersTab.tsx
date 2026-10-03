@@ -24,7 +24,7 @@ export default function AdminUsersTab({
                   <button onClick={() => setRoleFilter('Tous')}
                     className={`px-3 py-2 rounded-xl text-xs font-semibold border transition ${roleFilter === 'Tous' ? 'bg-gray-800 text-white border-gray-800' : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}`}
                   >Tous</button>
-                  {ROLES.map((r: any) => (
+                  {ROLES.filter((r: any) => r.key !== 'client').map((r: any) => (
                     <button key={r.key} onClick={() => setRoleFilter(r.key)}
                       className={`px-3 py-2 rounded-xl text-xs font-semibold border transition ${roleFilter === r.key ? `${r.badge} border-current` : 'bg-white text-gray-500 border-gray-200 hover:border-gray-300'}`}
                     >{r.emoji} {r.label}</button>
@@ -134,12 +134,12 @@ export default function AdminUsersTab({
                               }
                             </td>
                             <td className="px-4 py-3 text-xs text-gray-400">
-                              {u.createdAt ? new Date(u.createdAt).toLocaleDateString('fr-MA') : '—'}
+                              {(() => { const c: any = u.createdAt; const d = !c ? null : c.toDate ? c.toDate() : (typeof c === 'object' && typeof c.seconds === 'number') ? new Date(c.seconds * 1000) : new Date(c); return d && !isNaN(d.getTime()) ? d.toLocaleDateString('fr-MA') : '—' })()}
                             </td>
                             <td className="px-4 py-3">
                               <div className="flex items-center gap-1.5">
                                 <button
-                                  onClick={() => { setUserEditTab('access'); setPwdForm({ current: '', next: '', confirm: '', loading: false, error: '', success: '' }); setUserEdit({ id: u.id, name: u.name||'', role: u.role||'agent', city: u.city||'', code: u.code||'', tel: u.tel||'', directorPermissions: u.directorPermissions||[], cin: u.cin||'', cnss: u.cnss||'', assurance: u.assurance||'', dateEmbauche: u.dateEmbauche||'', dateSortie: u.dateSortie||'', dateNaissance: u.dateNaissance||'', salaire: u.salaire||'', adresse: u.adresse||'', situationFamiliale: u.situationFamiliale||'', contactUrgence: u.contactUrgence||'', noteRH: u.noteRH||'' }) }}
+                                  onClick={() => { setUserEditTab('access'); setPwdForm({ current: '', next: '', confirm: '', loading: false, error: '', success: '' }); setUserEdit({ id: u.id, email: u.email||'', name: u.name||'', role: u.role||'agent', city: u.city||'', code: u.code||'', tel: u.tel||'', directorPermissions: u.directorPermissions||[], cin: u.cin||'', cnss: u.cnss||'', assurance: u.assurance||'', dateEmbauche: u.dateEmbauche||'', dateSortie: u.dateSortie||'', dateNaissance: u.dateNaissance||'', salaire: u.salaire||'', adresse: u.adresse||'', situationFamiliale: u.situationFamiliale||'', contactUrgence: u.contactUrgence||'', noteRH: u.noteRH||'' }) }}
                                   className="flex items-center gap-1 text-xs text-blue-600 bg-blue-50 hover:bg-blue-100 px-2.5 py-1.5 rounded-lg transition font-medium"
                                 >
                                   <Edit2 className="w-3 h-3" /> Modifier

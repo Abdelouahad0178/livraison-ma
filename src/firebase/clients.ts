@@ -20,6 +20,7 @@ import {
 import { db } from './db'
 import { daysAgoTimestamp } from './firestoreUtils'
 import { normIncludes } from '../utils/normText'
+import { normalizeServiceType, codPaymentTypeForService } from './constants'
 
 const CLIENTS_PAGE_LIMIT = 500
 type FirestoreRow = Record<string, any> & { id: string; createdAt?: any }
@@ -486,10 +487,13 @@ export async function resolveModificationRequest(id: string, status: string, age
     const parcelRef = doc(db, 'parcels', req.parcelId)
     const update: DynamicData = {}
     switch (req.modificationType) {
-      case 'type_paiement':
-        update.serviceType = req.newValue
-        update.codPaymentType = req.newValue
+      case 'type_paiement': {
+        // UN seul type de retour de fonds ; codPaymentType toujours dérivé du serviceType
+        const st = normalizeServiceType(req.newValue)
+        update.serviceType = st
+        update.codPaymentType = codPaymentTypeForService(st) || null
         break
+      }
       case 'adresse':
         update['receiver.address'] = req.newValue
         break

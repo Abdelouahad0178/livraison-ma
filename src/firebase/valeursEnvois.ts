@@ -94,7 +94,11 @@ export async function validateEnvoi(envoi: Envoi, by: { id: string; name: string
   const now = new Date().toISOString()
 
   // 1) COD : remise chez le chef d'agence
-  for (const it of envoi.items.filter(i => i.kind === 'cod')) {
+  // Espèces d'abord : pour un RF mixte (2 lignes pour le même colis), l'entrée de caisse
+  // espèces doit être créée AVANT que la remise ne passe le colis en 'remis'.
+  const codItems = envoi.items.filter(i => i.kind === 'cod')
+    .sort((a, b) => (a.type === 'especes' ? 0 : 1) - (b.type === 'especes' ? 0 : 1))
+  for (const it of codItems) {
     try {
       const snap = await getDoc(doc(db, 'parcels', it.parcelId))
       if (!snap.exists()) { errors.push(`${it.nic} : colis introuvable`); continue }
@@ -123,7 +127,8 @@ export async function validateEnvoi(envoi: Envoi, by: { id: string; name: string
   }
 
   // 2) Ports dus (espèces) : une écriture de caisse globale, une seule fois
-  const ports = envoi.items.filter(i => i.kind === 'port_du')
+  // Seuls les ports dus ESPÈCES entrent en caisse (un port dû chèque suit le circuit des chèques)
+  const ports = envoi.items.filter(i => i.kind === 'port_du' && (i.type || 'especes') === 'especes')
   const portTotal = ports.reduce((s, i) => s + i.amount, 0)
   if (ports.length > 0 && portTotal > 0 && !(envoi.caisseEntryIds || []).some(id => id.startsWith('port:'))) {
     try {

@@ -13,6 +13,8 @@ import {
   createCaisseRequest, completeRhSalaryCaisseRequest,
 } from '../../../firebase/firestore'
 import { createParcel } from '../../../firebase/parcels'
+import { normalizeServiceType, codPaymentTypeForService, NON_COD_SERVICE_TYPES } from '../../../firebase/constants'
+import { buildCodWriteFields, validateCodChoice, isMixedCod, codDocPartOf, codCashPartOf, codEditResult } from '../../../utils/codParts'
 import { printParcelTicket } from '../../../utils/printParcelTicket'
 import {
   createAgentCodRequest, addAgentCodRequestReply,
@@ -114,7 +116,7 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       parcel,
       form: {
         status:        parcel.status         || 'Initialisé',
-        serviceType:   parcel.serviceType    || 'simple',
+        serviceType:   normalizeServiceType(parcel.serviceType) || 'simple',  // un seul type
         senderName:    parcel.sender?.name   || '',
         senderTel:     parcel.sender?.tel    || '',
         senderCity:    parcel.sender?.city   || '',
@@ -128,7 +130,10 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
         natureOfGoods: parcel.natureOfGoods  || '',
         price:         String(parcel.price   ?? ''),
         portType:      parcel.portType       || '',
-        codAmount:     String(parcel.codAmount ?? '0'),
+        // RF mixte : codAmount = part chèque/traite, codCashAmount = part espèces (total recalculé à l'enregistrement)
+        codAmount:     isMixedCod(parcel) ? String(codDocPartOf(parcel)) : String(parcel.codAmount ?? '0'),
+        codMixed:      isMixedCod(parcel),
+        codCashAmount: isMixedCod(parcel) ? String(codCashPartOf(parcel)) : '',
         codStatus:     parcel.codStatus      || 'pending',
         codSentToSource:     !!parcel.codSentToSource,
         codReceivedBySource: !!parcel.codReceivedBySource,
@@ -146,6 +151,16 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
     const { parcel, form } = adminEditModal
     const adminEmail = auth.currentUser?.email || 'Admin'
     const now = new Date().toISOString()
+    // 🔒 UN seul type de retour de fonds ; Simple / Retour BL => pas de montant RETOUR FOND
+    if (NON_COD_SERVICE_TYPES.includes(normalizeServiceType(form.serviceType)) && parsePositiveNumber(form.codAmount) > 0) {
+      setAdminEditModal((m: any) => ({ ...m, error: 'Type « ' + form.serviceType + ' » : le montant RETOUR FOND doit être 0 (choisissez Espèces, Chèque ou Traite pour un retour de fonds).' }))
+      return
+    }
+    // 💵+📋 RF mixte : Espèces + UN chèque OU UNE traite, un montant par type
+    const codChoiceError = validateCodChoice({ serviceType: normalizeServiceType(form.serviceType), codAmount: form.codAmount, cashAmount: form.codCashAmount, mixed: form.codMixed === true })
+    if (codChoiceError) { setAdminEditModal((m: any) => ({ ...m, error: codChoiceError })); return }
+    const codW = buildCodWriteFields({ serviceType: normalizeServiceType(form.serviceType) || 'simple', codAmount: form.codAmount, cashAmount: form.codCashAmount, mixed: form.codMixed === true })
+    const codTotalStr = String(codW.codAmount)
     setAdminEditModal((m: any) => ({ ...m, loading: true, error: '' }))
 
     try {
@@ -178,25 +193,23 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       track('Statut',       parcel.status,       form.status,       'status',       form.status)
       track('Type service', parcel.serviceType,   form.serviceType,  'serviceType',  form.serviceType)
 
-      // 🔄 HISTORIQUE COD: Tracer les changements de type de paiement COD
-      if (form.serviceType !== parcel.serviceType && parcel.codAmount > 0) {
-        const serviceToPaymentType = (st: string) =>
-          st === 'retour_bl' ? 'bon_livraison' : (st === 'simple' ? 'especes' : (st || 'especes'))
-
-        const oldCodType = serviceToPaymentType(parcel.serviceType)
-        const newCodType = serviceToPaymentType(form.serviceType)
-
-        if (oldCodType !== newCodType) {
-          // Ajouter à l'historique COD
-          const codHistory = parcel.codPaymentHistory || []
-          codHistory.push({
-            oldType: oldCodType,
-            newType: newCodType,
-            changedAt: now,
-            changedBy: adminEmail
-          })
-          updates.codPaymentHistory = codHistory
-          updates.codPaymentType = newCodType
+      // 🔄 codPaymentType TOUJOURS dérivé du serviceType (serviceType fait foi) + historique COD.
+      // Avant : un passage en « simple » écrivait 'especes', et un montant 0 → >0 laissait
+      // codPaymentType vide ou périmé (ex: C/Chèque enregistré « espèces »).
+      {
+        const newService = normalizeServiceType(form.serviceType) || 'simple'
+        const newCodAmt  = parsePositiveNumber(codTotalStr)
+        const alreadyCollected = ['collected', 'remis'].includes(form.codStatus) || !!parcel.codCollectedAt
+        const oldCodType = parcel.codPaymentType || null
+        const newCodType = newCodAmt > 0
+          ? (codPaymentTypeForService(newService) || oldCodType || 'especes')
+          : (alreadyCollected ? oldCodType : null)
+        if ((newCodType || null) !== oldCodType) {
+          updates.codPaymentHistory = [
+            ...(Array.isArray(parcel.codPaymentHistory) ? parcel.codPaymentHistory : []),
+            { oldType: oldCodType || '', newType: newCodType || '', changedAt: now, changedBy: adminEmail },
+          ]
+          updates.codPaymentType = newCodType || null
         }
       }
 
@@ -228,11 +241,17 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       track('Nature marchandise', parcel.natureOfGoods   || '',  form.natureOfGoods, 'natureOfGoods', form.natureOfGoods)
       track('Prix (DH)',          String(parcel.price    ?? ''), form.price,         'price',         parsePositiveNumber(form.price))
       track('Type de port',       parcel.portType        || '',  form.portType,      'portType',      form.portType)
-      track('RETOUR FOND (DH)',   String(parcel.codAmount ?? ''), form.codAmount,     'codAmount',     parsePositiveNumber(form.codAmount))
+      track('RETOUR FOND (DH)',   String(parcel.codAmount ?? ''), codTotalStr,        'codAmount',     parsePositiveNumber(codTotalStr))
+      // 💵+📋 RF mixte (part espèces) — n'écrit rien pour un colis mono-type inchangé
+      if (codW.codMixed !== (parcel.codMixed === true) || (codW.codMixed && codW.codCashAmount !== (parseFloat(parcel.codCashAmount) || 0))) {
+        updates.codMixed = codW.codMixed
+        updates.codCashAmount = codW.codCashAmount
+        changes.push({ field: 'RETOUR FOND — part espèces (mixte)', oldValue: parcel.codMixed === true ? String(parcel.codCashAmount ?? '') : '', newValue: codW.codMixed ? String(codW.codCashAmount) : '', changedAt: now, changedBy: adminEmail })
+      }
 
       // 🔄 HISTORIQUE MONTANT COD: Tracer les changements de montant
       const oldCodAmount = parcel.codAmount || 0
-      const newCodAmount = parsePositiveNumber(form.codAmount)
+      const newCodAmount = parsePositiveNumber(codTotalStr)
       if (oldCodAmount !== newCodAmount) {
         // Copie (ne jamais muter le tableau du colis affiché)
         updates.codAmountHistory = [
@@ -290,7 +309,10 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
 
   const handleSaveCodAmount = async () => {
     const { codEditModal, setCodEditModal } = s.current
-    const amount = parseFloat(codEditModal.value)
+    // 💵+📋 RF mixte : value = part chèque/traite, cashValue = part espèces → total
+    const codRes = codEditResult(codEditModal)
+    if (codRes.error) { setCodEditModal((m: any) => ({ ...m, error: codRes.error })); return }
+    const amount = codRes.total
     if (isNaN(amount) || amount < 0) { setCodEditModal((m: any) => ({ ...m, error: 'Montant invalide.' })); return }
     setCodEditModal((m: any) => ({ ...m, loading: true, error: '' }))
     try {
@@ -298,8 +320,29 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       const oldAmount = parcel.codAmount || 0
       const userName = auth.currentUser?.displayName || auth.currentUser?.email || 'Admin'
 
+      if (amount > 0 && NON_COD_SERVICE_TYPES.includes(normalizeServiceType(parcel.serviceType))) {
+        setCodEditModal((m: any) => ({ ...m, loading: false, error: `Type de service « ${parcel.serviceType} » : pas de montant RETOUR FOND. Modifiez d'abord le type de service.` }))
+        return
+      }
+
       // 🔄 HISTORIQUE COD: Enregistrer le changement de montant
       const updates: any = { codAmount: amount }
+      if (codEditModal.mixed || parcel.codMixed === true) {
+        if (codRes.mixed !== (parcel.codMixed === true) || codRes.cash !== (parseFloat(parcel.codCashAmount) || 0)) {
+          updates.codMixed = codRes.mixed
+          updates.codCashAmount = codRes.cash
+        }
+      }
+      // codPaymentType / codStatus cohérents avec serviceType (non encore encaissé)
+      const codNotCollected = !parcel.codCollectedAt && (!parcel.codStatus || parcel.codStatus === 'pending')
+      if (amount > 0) {
+        const cpt = codPaymentTypeForService(parcel.serviceType) || parcel.codPaymentType || 'especes'
+        if (cpt !== parcel.codPaymentType) updates.codPaymentType = cpt
+        if (!parcel.codStatus) updates.codStatus = 'pending'
+      } else if (codNotCollected) {
+        if (parcel.codPaymentType) updates.codPaymentType = null
+        if (parcel.codStatus === 'pending') updates.codStatus = null
+      }
 
       if (oldAmount !== amount) {
         // Copie (ne jamais muter le tableau du colis affiché)
@@ -337,6 +380,13 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
     if (!f.senderName?.trim()) { setNewParcelModal((m: any) => ({ ...m, error: 'Nom expéditeur requis.' })); return }
     if (!f.receiverName?.trim()) { setNewParcelModal((m: any) => ({ ...m, error: 'Nom destinataire requis.' })); return }
     if (!f.receiverCity?.trim()) { setNewParcelModal((m: any) => ({ ...m, error: 'Ville destinataire requise.' })); return }
+    if (NON_COD_SERVICE_TYPES.includes(normalizeServiceType(f.serviceType || 'simple')) && (parseFloat(f.codAmount) || 0) > 0) {
+      setNewParcelModal((m: any) => ({ ...m, error: 'Type « Simple » : pas de RETOUR FOND. Choisissez C/Espèces, C/Chèque ou C/Traite pour saisir un montant.' }))
+      return
+    }
+    // 💵+📋 RF mixte : chaque type coché doit avoir son montant
+    const codChoiceError = validateCodChoice({ serviceType: f.serviceType, codAmount: f.codAmount, cashAmount: f.codCashAmount, mixed: f.codMixed === true })
+    if (codChoiceError) { setNewParcelModal((m: any) => ({ ...m, error: codChoiceError })); return }
 
     setNewParcelModal((m: any) => ({ ...m, loading: true, error: '' }))
     try {
@@ -349,10 +399,10 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
         destinationCity: f.receiverCity,
         weight: parseFloat(f.weight) || 0,
         nbColis: parseInt(f.nbColis) || 1,
-        serviceType: f.serviceType || 'simple',
+        // RF : codAmount = TOTAL ; mixte → codMixed + codCashAmount (part espèces)
+        ...buildCodWriteFields({ serviceType: f.serviceType || 'simple', codAmount: f.codAmount, cashAmount: f.codCashAmount, mixed: f.codMixed === true }),
         portType: f.portType || 'port_paye',
         price: parseFloat(f.portPrice) || 0,
-        codAmount: parseFloat(f.codAmount) || 0,
         agentId: auth.currentUser?.uid || '',
         agentName: adminEmail,
         status: 'Initialisé',
@@ -574,9 +624,14 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
     setBackupMessage(null)
     try {
       const { exportSiteBackup } = await import('../../../firebase/backup')
-      const backup = await exportSiteBackup()
+      const backup = await exportSiteBackup(({ collection, index, total, docs }) =>
+        setBackupMessage({ type: 'info', text: `Export en cours… ${collection} (${index + 1}/${total}) — ${docs.toLocaleString('fr-MA')} document(s)` }))
       downloadJson('bg-express-sauvegarde-complete', backup)
-      setBackupMessage({ type: 'success', text: `Sauvegarde exportee : ${(Object.values(backup.counts) as any[]).reduce((sum: any, n: any) => sum + n, 0)} document(s).` })
+      const total = (Object.values(backup.counts) as any[]).reduce((sum: any, n: any) => sum + n, 0)
+      const failed = Object.entries(backup.errors || {})
+      setBackupMessage(failed.length
+        ? { type: 'error', text: `Sauvegarde exportée : ${total.toLocaleString('fr-MA')} document(s), mais ${failed.length} collection(s) non exportée(s) : ${failed.map(([n, e]) => `${n} (${e})`).join(', ')}` }
+        : { type: 'success', text: `Sauvegarde exportée : ${total.toLocaleString('fr-MA')} document(s).` })
     } catch (err: any) {
       setBackupMessage({ type: 'error', text: err?.message || "Erreur pendant l'export de la sauvegarde." })
     } finally {
@@ -615,8 +670,12 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
     setBackupMessage(null)
     try {
       const { importSiteBackup } = await import('../../../firebase/backup')
-      const summary = await importSiteBackup(importPreview.backup, auth.currentUser?.email || 'Admin')
-      setBackupMessage({ type: 'success', text: `Import termine : ${summary.total} document(s) fusionne(s).` })
+      const summary = await importSiteBackup(importPreview.backup, auth.currentUser?.email || 'Admin', ({ collection, index, total, docs }) =>
+        setBackupMessage({ type: 'info', text: `Import en cours… ${collection} (${index + 1}/${total}) — ${docs.toLocaleString('fr-MA')} document(s)` }))
+      const failed = Object.entries(summary.errors || {})
+      setBackupMessage(failed.length
+        ? { type: 'error', text: `Import : ${summary.total.toLocaleString('fr-MA')} document(s) fusionné(s), mais ${failed.length} collection(s) en erreur : ${failed.map(([n, e]) => `${n} (${e})`).join(', ')}` }
+        : { type: 'success', text: `Import terminé : ${summary.total.toLocaleString('fr-MA')} document(s) fusionné(s).` })
       setImportPreview(null)
     } catch (err: any) {
       setBackupMessage({ type: 'error', text: err?.message || "Erreur pendant l'import de la sauvegarde." })

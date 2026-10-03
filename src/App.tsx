@@ -13,6 +13,9 @@ const DEFAULT_OPERATION_LOCKS = {
   agencies: {},
 }
 
+// 👁️ Module de présence (chargé à la connexion seulement — pas sur les pages publiques)
+let presenceMod: typeof import('./services/presence') | null = null
+
 const normalizeRole = (value: any) => String(value || '').trim().toLowerCase()
 
 const isPublicPath = (pathname: any) =>
@@ -131,6 +134,7 @@ function AppContent() {
     let unsubLocks: any = null
     let unsubProfile: any = null
     let unsubAuth: any = null
+    let unsubBeforeAuth: any = null
     let alive = true
 
     setLoading(true)
@@ -140,6 +144,17 @@ function AppContent() {
       import('./firebase/auth'),
     ]).then(([{ onAuthStateChanged }, { auth }]) => {
       if (!alive) return
+      // 👁️ Présence : marquer hors ligne AVANT la déconnexion (après, les règles refusent l'écriture)
+      try {
+        unsubBeforeAuth = auth.beforeAuthStateChanged(async (next) => {
+          try {
+            if (!next && presenceMod) {
+              await presenceMod.markPresenceOffline()
+              presenceMod.stopPresence()
+            }
+          } catch { /* présence : jamais bloquant */ }
+        })
+      } catch { /* présence : jamais bloquant */ }
       unsubAuth = onAuthStateChanged(auth, (u) => {
       if (unsubLocks)   { unsubLocks();   unsubLocks   = null }
       if (unsubProfile) { unsubProfile(); unsubProfile = null }
@@ -173,9 +188,23 @@ function AppContent() {
               setBlockedOut(false)
 
               const normalizedRole = normalizeRole(data?.role)
+              // Mémorise le rôle pour le choix du cache Firestore au prochain chargement (firebase/db.ts)
+              try { if (normalizedRole) localStorage.setItem('bg-cache-role', String(normalizedRole)) } catch { /* */ }
               setProfile(data ? { ...data, role: normalizedRole } : data)
               setRole(normalizedRole || null)
               setLoading(false)
+
+              // 👁️ Présence temps réel (silencieux, jamais bloquant)
+              if (data) {
+                import('./services/presence')
+                  .then((mod) => { presenceMod = mod; mod.startPresence({
+                    uid: u.uid,
+                    name: data.name || data.displayName || u.email || '',
+                    role: normalizedRole,
+                    city: data.city || '',
+                  }); mod.setPresenceRoute(window.location.pathname) })
+                  .catch(() => { /* présence : jamais bloquant */ })
+              }
             },
             (err) => {
               console.warn('User profile listener permission denied:', err.code)
@@ -196,6 +225,7 @@ function AppContent() {
           setLoading(false)
         })
       } else {
+        try { presenceMod?.stopPresence() } catch { /* présence : jamais bloquant */ }
         setUserContext('')
         setUser(null)
         setProfile(null)
@@ -215,10 +245,16 @@ function AppContent() {
     return () => {
       alive = false
       if (unsubAuth) unsubAuth()
+      if (unsubBeforeAuth) { try { unsubBeforeAuth() } catch { /* */ } }
       if (unsubLocks)   unsubLocks()
       if (unsubProfile) unsubProfile()
     }
   }, [publicPath])
+
+  // 👁️ Présence : signaler la page courante à chaque changement de route
+  useEffect(() => {
+    try { presenceMod?.setPresenceRoute(location.pathname) } catch { /* présence : jamais bloquant */ }
+  }, [location.pathname])
 
   const handleBlockedAck = async () => {
     setBlockedOut(false)

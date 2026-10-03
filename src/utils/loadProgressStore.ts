@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { startTransition, useEffect, useState } from 'react'
 
 /**
  * ⏳ Petit « store » de progression de chargement, HORS de l'état React de la page.
@@ -36,11 +36,35 @@ export function createLoadProgressStore(): LoadProgressStore {
   }
 }
 
+/**
+ * ⚠️ Pas de useSyncExternalStore ici : ses mises à jour sont TOUJOURS synchrones (SyncLane) et
+ * chaque journée reçue interrompait puis faisait recommencer à zéro le recalcul en arrière-plan
+ * (useDeferredValue / startTransition) de la liste et des totaux de l'onglet Expéditions → le
+ * badge « Mise à jour… » ne disparaissait pas pendant tout le chargement et React finissait par
+ * forcer le calcul en bloquant la page. La jauge est donc mise à jour en priorité de TRANSITION
+ * (jamais devant un clic ni devant le recalcul des filtres), au plus toutes les 250 ms.
+ */
 export function useLoadProgress(store: LoadProgressStore | null | undefined): LoadProgressState {
-  return useSyncExternalStore(
-    store ? store.subscribe : noopSubscribe,
-    store ? store.get : getInitial,
-  )
+  const [state, setState] = useState<LoadProgressState>(() => (store ? store.get() : INITIAL))
+  useEffect(() => {
+    if (!store) { setState(INITIAL); return }
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let last = 0
+    const push = () => {
+      timer = null
+      last = Date.now()
+      const next = store.get()
+      startTransition(() => setState(prev => (prev === next ? prev : next)))
+    }
+    const onChange = () => {
+      if (timer) return
+      const wait = Math.max(0, THROTTLE_MS - (Date.now() - last))
+      timer = setTimeout(push, wait)
+    }
+    push()
+    const unsub = store.subscribe(onChange)
+    return () => { unsub(); if (timer) clearTimeout(timer) }
+  }, [store])
+  return state
 }
-const noopSubscribe = () => () => {}
-const getInitial = () => INITIAL
+const THROTTLE_MS = 250

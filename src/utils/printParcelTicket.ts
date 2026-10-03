@@ -1,6 +1,7 @@
 /**
  * Utilitaire pour imprimer/afficher le bon d'expédition (Bon de Ramassage)
  */
+import { isMixedCod, codPartsDetailLabel } from './codParts'
 
 export function printParcelTicket(parcel: any) {
   if (!parcel) {
@@ -85,7 +86,7 @@ export function printParcelTicket(parcel: any) {
     <div class="service-types">
       ${ALL_SERVICE_TYPES.map(st => {
         const types = (parcel.serviceType || '').split(',').filter(Boolean)
-        const isSelected = types.includes(st.key) || (st.key === 'simple' && !parcel.serviceType)
+        const isSelected = types.includes(st.key) || (st.key === 'simple' && !parcel.serviceType) || (st.key === 'especes' && isMixedCod(parcel))
         return `
           <div class="service-type">
             <span class="checkbox ${isSelected ? 'checked' : ''}">${isSelected ? '✓' : ''}</span>
@@ -173,6 +174,7 @@ export function printParcelTicket(parcel: any) {
         <div class="amount-value" style="color: ${(parcel.codAmount || 0) > 0 ? '#ea580c' : '#d1d5db'};">
           ${(parcel.codAmount || 0) > 0 ? `${parcel.codAmount} DH` : '—'}
         </div>
+        ${isMixedCod(parcel) ? `<div style="font-size:9pt;font-weight:bold;color:#c2410c">${codPartsDetailLabel(parcel)}</div>` : ''}
       </div>
     </div>
 

@@ -489,6 +489,7 @@ export default function DRFEPage() {
                         </td>
                         <td className="px-6 py-4">
                           <div className="font-bold text-green-700">{parcel.codAmount.toLocaleString()} DH</div>
+                          {(parcel as any).codAmountTotal ? <div className="text-[11px] font-semibold text-amber-700">RF mixte — total {(parcel as any).codAmountTotal.toLocaleString()} DH</div> : null}
                         </td>
                         <td className="px-6 py-4 text-sm text-gray-600">
                           {typeof parcel.createdAt === 'string'
@@ -564,6 +565,7 @@ export default function DRFEPage() {
                 <div>
                   <label className="text-xs text-gray-500 font-medium">Montant COD</label>
                   <div className="font-bold text-green-700 text-xl">{viewModal.codAmount.toLocaleString()} DH</div>
+                  {(viewModal as any).codAmountTotal ? <div className="text-[11px] font-semibold text-amber-700">RF mixte — total {(viewModal as any).codAmountTotal.toLocaleString()} DH</div> : null}
                 </div>
               </div>
 

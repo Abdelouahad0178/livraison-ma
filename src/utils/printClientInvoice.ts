@@ -138,39 +138,39 @@ export function printClientInvoice(data: ClientInvoicePrintData, opts: { summary
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body { font-family: Arial, Helvetica, sans-serif; font-size: 9pt; color: #111; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     .page { width: 100%; max-width: 186mm; margin: 0 auto; }
-    .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding-bottom: 10px; border-bottom: 2px solid #1e3a8a; }
+    .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; padding-bottom: 14px; border-bottom: 2px solid #1e3a8a; }
     .company img { height: 52px; object-fit: contain; margin-bottom: 4px; }
-    .company div { font-size: 7.5pt; line-height: 1.4; }
+    .company div { font-size: 7.5pt; line-height: 1.55; }
     .title { text-align: right; }
     .title h1 { color: #1e3a8a; font-size: 22pt; letter-spacing: 1px; }
-    .title .meta { margin-top: 4px; font-size: 9pt; line-height: 1.5; }
-    .headline { margin: 12px 0 10px; padding: 8px 10px; background: #eef2ff; border-left: 4px solid #1e3a8a; border-radius: 3px; }
+    .title .meta { margin-top: 6px; font-size: 9pt; line-height: 1.7; }
+    .headline { margin: 22px 0 16px; padding: 12px 14px; background: #eef2ff; border-left: 4px solid #1e3a8a; border-radius: 3px; }
     .headline .client { font-size: 13pt; font-weight: bold; color: #1e3a8a; }
-    .headline .period { font-size: 9.5pt; margin-top: 2px; }
-    .info { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 10px; }
-    .box { border: 1px solid #d1d5db; border-radius: 4px; padding: 6px 8px; }
-    .box .l { font-size: 7pt; color: #6b7280; text-transform: uppercase; margin-bottom: 2px; }
+    .headline .period { font-size: 9.5pt; margin-top: 5px; }
+    .info { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 22px; }
+    .box { border: 1px solid #d1d5db; border-radius: 5px; padding: 9px 12px; }
+    .box .l { font-size: 7pt; color: #6b7280; text-transform: uppercase; margin-bottom: 4px; letter-spacing: .3px; }
     .box .v { font-weight: bold; font-size: 9.5pt; }
-    table.lines { width: 100%; border-collapse: collapse; margin-top: 4px; }
+    table.lines { width: 100%; border-collapse: collapse; margin-top: 6px; }
     table.lines thead { display: table-header-group; }
-    table.lines th { background: #1e3a8a; color: #fff; padding: 5px 4px; font-size: 7.5pt; text-align: left; }
-    table.lines td { padding: 4px; border-bottom: 1px solid #e5e7eb; font-size: 8pt; vertical-align: top; }
+    table.lines th { background: #1e3a8a; color: #fff; padding: 8px 6px; font-size: 7.5pt; text-align: left; }
+    table.lines td { padding: 7px 6px; border-bottom: 1px solid #e5e7eb; font-size: 8pt; line-height: 1.4; vertical-align: top; }
     table.lines tr { page-break-inside: avoid; }
-    table.lines tfoot td { background: #f3f4f6; font-weight: bold; border-top: 2px solid #1e3a8a; font-size: 8.5pt; }
+    table.lines tfoot td { padding: 9px 6px; background: #f3f4f6; font-weight: bold; border-top: 2px solid #1e3a8a; font-size: 8.5pt; }
     .c { text-align: center; } .r { text-align: right; } .b { font-weight: bold; }
-    .summary { display: flex; justify-content: space-between; gap: 14px; margin-top: 14px; page-break-inside: avoid; }
+    .summary { display: flex; justify-content: space-between; gap: 28px; margin-top: 28px; page-break-inside: avoid; }
     .summary table { border-collapse: collapse; }
-    .summary td { padding: 4px 8px; border-bottom: 1px solid #e5e7eb; font-size: 9pt; }
+    .summary td { padding: 7px 10px; border-bottom: 1px solid #e5e7eb; font-size: 9pt; }
     .recap { flex: 1; }
-    .recap h3, .totals h3 { font-size: 9pt; color: #1e3a8a; margin-bottom: 4px; text-transform: uppercase; }
+    .recap h3, .totals h3 { font-size: 9pt; color: #1e3a8a; margin-bottom: 8px; text-transform: uppercase; letter-spacing: .4px; }
     .totals { width: 80mm; }
     .totals table { width: 100%; }
     .totals .ttc td { background: #1e3a8a; color: #fff; font-weight: bold; font-size: 11pt; }
-    .words { margin-top: 12px; padding: 8px 10px; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px; font-weight: bold; font-size: 9pt; page-break-inside: avoid; }
-    .notes { margin-top: 10px; font-size: 8.5pt; page-break-inside: avoid; }
+    .words { margin-top: 24px; padding: 12px 14px; line-height: 1.5; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 4px; font-weight: bold; font-size: 9pt; page-break-inside: avoid; }
+    .notes { margin-top: 16px; line-height: 1.5; font-size: 8.5pt; page-break-inside: avoid; }
     /* Signatures : juste sous la dernière écriture de la facture, avec la place pour le cachet */
-    .sign { display: flex; justify-content: space-between; margin-top: 14px; font-size: 8.5pt; page-break-inside: avoid; }
-    .sign div { width: 45%; border: 1px dashed #9ca3af; border-radius: 4px; padding: 4px 6px 60px; text-align: center; color: #4b5563; }
+    .sign { display: flex; justify-content: space-between; margin-top: 30px; font-size: 8.5pt; page-break-inside: avoid; }
+    .sign div { width: 45%; border: 1px dashed #9ca3af; border-radius: 4px; padding: 6px 8px 64px; text-align: center; color: #4b5563; }
     /* Pied légal : TOUJOURS en bas de la page (répété sur chaque page) ; l'espace est réservé par
        le <tfoot> de .layout pour que le contenu ne passe jamais dessous. */
     .footer { position: fixed; left: 0; right: 0; bottom: 0; background: #fff; padding-top: 6px; border-top: 1px solid #d1d5db; text-align: center; font-size: 7.5pt; color: #4b5563; }

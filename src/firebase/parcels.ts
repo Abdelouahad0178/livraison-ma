@@ -2,16 +2,22 @@
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, getDoc,
   query, where, orderBy, getDocs, onSnapshot, limit, startAfter, getCountFromServer,
-  serverTimestamp, arrayUnion, increment, writeBatch, setDoc, Timestamp, runTransaction, deleteField
+  serverTimestamp, arrayUnion, increment, writeBatch, setDoc, Timestamp, runTransaction, deleteField, documentId
 } from 'firebase/firestore'
 import type { Query, DocumentData } from 'firebase/firestore'
 import { db } from './db'
 import type { Parcel } from '../types'
-import { CITIES, STATUSES, COD_PAYMENT_TYPES, COD_STATUS, STATUS_COLORS, CAISSE_CATEGORIES, codPaymentTypeOf } from './constants'
+import {
+  CITIES, STATUSES, COD_PAYMENT_TYPES, COD_STATUS, STATUS_COLORS, CAISSE_CATEGORIES, codPaymentTypeOf,
+  normalizeServiceType, codPaymentTypeForService, sanitizeParcelCodWrite, NON_COD_SERVICE_TYPES,
+} from './constants'
 import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
+import { codPartView, isMixedCod } from '../utils/codParts'
 import { getOperationalDayString } from '../config/operationalDay'
+import { buildDaySlices, opDayOf } from '../utils/daySlices'
 import { addPayment } from './clients'
-import { normName } from '../utils/billingAgency'
+import { bumpPresence } from '../services/presenceCounters'
+import { normName, isVisibleInDestinationAgency } from '../utils/billingAgency'
 
 export const FIRESTORE_PAGE_LIMITS = {
   adminLiveParcels: 300,  // ⚡ OPTIMISATION : Réduit de 10000 à 300 pour chargement rapide
@@ -50,7 +56,6 @@ export const isInReturnCircuit = (parcel: any) => {
          parcel.status === 'Retour arrivé' ||
          parcel.status === 'Retour finalisé'
 }
-const DESTINATION_VISIBLE_STATUSES = ['En transit', 'Arrivé en agence', 'En cours de livraison', 'Livré', 'Retourné']
 
 /**
  * 📅 Calcule la date de travail (workDate) basée sur la date de création
@@ -79,19 +84,58 @@ function calculateWorkDate(timestamp?: Date | string): string {
   return getOperationalDayString(date)
 }
 
+// Règle partagée (utils/billingAgency) : même périmètre pour Chef d'agence et Admin « Port par Agence ».
 export function isParcelVisibleInDestinationAgency(parcel: Partial<Parcel> = {}) {
-  // Les retours ne vont PAS dans Arrivages, ils vont dans Retours
-  // On utilise wasReturned pour identifier les retours
-  if (parcel.wasReturned) return false
+  return isVisibleInDestinationAgency(parcel)
+}
 
-  return !!(
-    parcel.visibleInDestinationAgency ||
-    parcel.shipmentLoadedAt ||
-    parcel.destinationArrivedAt ||
-    parcel.destinationAgentId ||
-    parcel.chauffeurId ||
-    DESTINATION_VISIBLE_STATUSES.includes(parcel.status as string)
-  )
+// ── 🪶 Version allégée des expéditions (collection parcelsLite) ──────────────────────────────
+// parcelsLite/{id} = miroir de parcels/{id} SANS les champs lourds / d'audit (historique, champs de
+// recherche serveur, traçabilité…), tenu à jour par la Cloud Function syncParcelLite (liste
+// d'exclusion : functions/parcelLite.js). Les listes / filtres / totaux de l'onglet Expéditions
+// (chef d'agence, agent pro) le lisent ; le document COMPLET reste dans 'parcels' et est relu à
+// l'ouverture d'un colis (modification, historique, impression…) via ensureFullParcel(s).
+// Les écritures vont toujours dans 'parcels' (jamais dans parcelsLite : règles = lecture seule).
+export const PARCELS_LITE_COLLECTION = 'parcelsLite'
+const parcelsSource = (lite?: boolean) => collection(db, lite ? PARCELS_LITE_COLLECTION : 'parcels')
+
+/** true si l'objet vient de parcelsLite (tout colis complet porte un tableau history). */
+export function isLiteParcel(p: any): boolean {
+  return !!p && typeof p === 'object' && !!p.id && !Array.isArray(p.history)
+}
+
+/** Document COMPLET d'un colis (relu dans 'parcels' si l'objet est la version allégée). */
+export async function ensureFullParcel<T = any>(p: T): Promise<T> {
+  const anyP: any = p
+  if (!isLiteParcel(anyP)) return p
+  try {
+    const snap = await getDoc(doc(db, 'parcels', anyP.id))
+    return snap.exists() ? ({ id: snap.id, ...snap.data() } as any) : p
+  } catch (err) {
+    console.warn('ensureFullParcel:', err)
+    return p
+  }
+}
+
+/** Documents COMPLETS d'une liste de colis (lecture par lots de 30 identifiants), ordre conservé. */
+export async function ensureFullParcels(list: any[]): Promise<any[]> {
+  const items = Array.isArray(list) ? list : []
+  const ids = [...new Set(items.filter(isLiteParcel).map((p: any) => p.id as string))]
+  if (ids.length === 0) return items
+  const full = new Map<string, any>()
+  const chunks: string[][] = []
+  for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30))
+  try {
+    // 10 lots en parallèle au plus
+    for (let i = 0; i < chunks.length; i += 10) {
+      const snaps = await Promise.all(chunks.slice(i, i + 10).map(c =>
+        getDocs(query(collection(db, 'parcels'), where(documentId(), 'in', c)))))
+      snaps.forEach(s => s.docs.forEach(d => full.set(d.id, { id: d.id, ...d.data() })))
+    }
+  } catch (err) {
+    console.warn('ensureFullParcels:', err)
+  }
+  return items.map((p: any) => (p && full.has(p.id) ? full.get(p.id) : p))
 }
 
 async function ensureReceiverClientForAgency(parcel: any, parcelId: any) {
@@ -188,7 +232,21 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     ? 'En transit'
     : (hasLocalDeliveryDriver ? 'En cours de livraison'
       : (isAgentProDirectShipment ? 'Arrivé en agence' : 'Initialisé'))
-  const hasCod        = parseFloat(data.codAmount as string) > 0
+  // 🔒 UN SEUL type de retour de fonds par expédition (jamais 'traite,cheque')
+  const serviceType   = normalizeServiceType(data.serviceType) || 'oc'
+  let codAmountNum    = parseFloat(data.codAmount as string) || 0
+  if (codAmountNum > 0 && NON_COD_SERVICE_TYPES.includes(serviceType)) {
+    console.warn(`[createParcel] montant RETOUR FOND ${codAmountNum} ignoré : service "${serviceType}" sans retour de fonds`)
+    codAmountNum = 0
+  }
+  // 💵+📋 RF MIXTE : data.codAmount = TOTAL, data.codCashAmount = part espèces (serviceType chèque/traite)
+  let codCashNum      = data.codMixed === true ? (parseFloat(data.codCashAmount as string) || 0) : 0
+  if (codCashNum > 0 && (!['cheque', 'traite'].includes(codPaymentTypeForService(serviceType)) || codCashNum >= codAmountNum)) {
+    console.warn(`[createParcel] RF mixte invalide (service "${serviceType}", espèces ${codCashNum}, total ${codAmountNum}) → part espèces ignorée`)
+    codCashNum = 0
+  }
+  const codMixed      = codCashNum > 0
+  const hasCod        = codAmountNum > 0
   const loadedAt      = data.chauffeurId ? new Date().toISOString() : null
   const opDate        = data.operationDate
     ? Timestamp.fromDate(new Date(data.operationDate + 'T12:00:00'))
@@ -203,12 +261,14 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     weight:               parseFloat(data.weight as string) || 0,
     nbColis:              parseInt(data.nbColis as string) || 1,
     natureOfGoods:        data.natureOfGoods || '',
-    serviceType:          data.serviceType   || 'oc',
+    serviceType,
     customerMode:         data.customerMode  || (data.clientId ? 'client' : 'personal'),
     price:                data.price !== undefined && data.price !== null
       ? (parseFloat(data.price as string) || 0)
       : 0,
-    codAmount:            parseFloat(data.codAmount as string) || 0,
+    codAmount:            codAmountNum,
+    // RF mixte uniquement (sinon champs absents : colis identique à l'existant)
+    ...(codMixed ? { codMixed: true, codCashAmount: codCashNum } : {}),
     status:               initialStatus,
     history: [{
       status: initialStatus,
@@ -254,7 +314,8 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     deliveryMethod:       data.deliveryMethod || 'domicile',  // 🚉 Mode de livraison (gare ou domicile)
     codStatus:            hasCod ? 'pending' : null,
     // Mode de paiement COD normalisé (especes, cheque, traite, bon_livraison) — jamais une liste 'cheque,traite'
-    codPaymentType:       hasCod ? (codPaymentTypeOf({ serviceType: data.serviceType, codPaymentType: data.codPaymentType }) || 'especes') : null,
+    // Toujours dérivé du serviceType (serviceType fait foi) : jamais 'cheque' pour un colis C/Espèces
+    codPaymentType:       hasCod ? (codPaymentTypeForService(serviceType) || codPaymentTypeOf({ serviceType, codPaymentType: data.codPaymentType }) || 'especes') : null,
     codCollectedAt:       null,
     codCollectedBy:       null,
     codRemisAt:           null,
@@ -323,6 +384,7 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
       console.warn('ensureReceiverClientForAgency:', err)
     }
   }
+  bumpPresence('created')
   return { id: ref.id, ...parcel, receiverClientId }
 }
 
@@ -384,6 +446,7 @@ export async function updateParcelStatus(parcelId: string, status: string, extra
     // Écriture Firestore immédiate — pas d'attente GPS
     tx.update(parcelRef, patch)
   })
+  bumpPresence('updated')
 
   // Géolocalisation en arrière-plan (ne bloque pas la mise à jour)
   if (typeof navigator !== 'undefined' && navigator.geolocation) {
@@ -517,6 +580,8 @@ export function buildParcelCorrectionPatch(
   next: {
     sender?: any, receiver?: any, weight?: any, nbColis?: any, natureOfGoods?: any,
     serviceType?: any, price?: any, codAmount?: any, portType?: any, fragile?: any, notes?: any,
+    /** RF mixte : codAmount = TOTAL, codCashAmount = part espèces, codMixed = true (undefined = inchangé). */
+    codMixed?: boolean, codCashAmount?: any,
   },
   modifier?: { uid?: string | null, name?: string }
 ): Record<string, any> {
@@ -545,9 +610,11 @@ export function buildParcelCorrectionPatch(
   if (next.natureOfGoods !== undefined && txt(parcel.natureOfGoods) !== txt(next.natureOfGoods)) patch.natureOfGoods = txt(next.natureOfGoods)
   if (next.price !== undefined && num(parcel.price) !== num(next.price)) patch.price = num(next.price)
 
-  const oldService = parcel.serviceType || 'oc'
-  const newService = next.serviceType !== undefined ? (next.serviceType || 'oc') : oldService
-  if (newService !== oldService) {
+  // serviceType : UNE seule valeur. Un ancien colis 'traite,cheque' est ramené au premier type.
+  const rawOldService = parcel.serviceType || 'oc'
+  const oldService = normalizeServiceType(rawOldService) || 'oc'
+  const newService = next.serviceType !== undefined ? (normalizeServiceType(next.serviceType) || 'oc') : oldService
+  if (newService !== rawOldService) {
     patch.serviceType = newService
     const wasCOD = ['especes', 'cheque', 'traite', 'retour_bl'].includes(oldService)
     if (wasCOD && newService === 'simple' && modifier) {
@@ -559,7 +626,7 @@ export function buildParcelCorrectionPatch(
 
   // Montant COD : Simple / Retour BL => 0. Garder codStatus / codPaymentType cohérents.
   let newCod = next.codAmount !== undefined ? num(next.codAmount) : num(parcel.codAmount)
-  if (newService === 'simple' || newService === 'retour_bl') newCod = 0
+  if (NON_COD_SERVICE_TYPES.includes(newService)) newCod = 0
   const oldCod = num(parcel.codAmount)
   if (newCod !== oldCod) {
     patch.codAmount = newCod
@@ -570,11 +637,37 @@ export function buildParcelCorrectionPatch(
     if (newCod > 0 && !parcel.codStatus) patch.codStatus = 'pending'
     if (newCod === 0 && parcel.codStatus === 'pending') patch.codStatus = null
   }
+  // 💵+📋 RF MIXTE (Espèces + un chèque OU une traite) : codCashAmount = part espèces,
+  // codAmount = total. Passer à un type unique (ou à Espèces seul) efface la part espèces.
+  const oldMixed = parcel.codMixed === true
+  const oldCash = num(parcel.codCashAmount)
+  let newMixed = next.codMixed !== undefined ? next.codMixed === true : oldMixed
+  let newCash = next.codCashAmount !== undefined ? num(next.codCashAmount) : oldCash
+  if (!['cheque', 'traite'].includes(codPaymentTypeForService(newService)) || newCod <= 0 || newCash <= 0 || newCash >= newCod) {
+    newMixed = false
+  }
+  if (!newMixed) newCash = 0
+  if (newMixed !== oldMixed || (newMixed && newCash !== oldCash)) {
+    patch.codMixed = newMixed
+    patch.codCashAmount = newCash
+  }
+  // COD pas encore encaissé : seul cas où firestore.rules autorise codStatus / codPaymentType
+  const codNotCollected = !parcel.codCollectedAt && (!parcel.codStatus || parcel.codStatus === 'pending')
+  const expectedCpt = codPaymentTypeForService(newService)
+    || codPaymentTypeOf({ serviceType: newService, codPaymentType: parcel.codPaymentType }) || 'especes'
   if (newCod > 0 && (patch.codAmount !== undefined || patch.serviceType !== undefined)) {
-    const cpt = codPaymentTypeOf({ serviceType: newService, codPaymentType: parcel.codPaymentType }) || 'especes'
-    if (cpt !== parcel.codPaymentType) patch.codPaymentType = cpt
-  } else if (newCod === 0 && patch.codAmount !== undefined && parcel.codPaymentType && parcel.codStatus === 'pending') {
+    if (expectedCpt !== parcel.codPaymentType) patch.codPaymentType = expectedCpt
+    if (!parcel.codStatus && codNotCollected) patch.codStatus = 'pending'
+  } else if (newCod > 0 && codNotCollected && expectedCpt !== parcel.codPaymentType
+    && (next.serviceType !== undefined || next.codAmount !== undefined)) {
+    // Réaligne un colis incohérent (ex: C/Chèque enregistré avec codPaymentType 'especes')
+    // quand l'appelant touche à la partie RETOUR FOND (type ou montant).
+    patch.codPaymentType = expectedCpt
+    if (!parcel.codStatus) patch.codStatus = 'pending'
+  } else if (newCod === 0 && (patch.codAmount !== undefined || patch.serviceType !== undefined)
+    && parcel.codPaymentType && codNotCollected) {
     patch.codPaymentType = null
+    if (parcel.codStatus === 'pending') patch.codStatus = null
   }
 
   if (next.portType !== undefined && next.portType && next.portType !== (parcel.portType || '')) patch.portType = next.portType
@@ -602,7 +695,10 @@ export function describeParcelSaveError(err: any, parcel?: any): string {
 }
 
 export async function updateParcel(parcelId: string, data: Partial<Parcel> & Record<string, unknown>): Promise<void> {
+  // 🔒 Garde-fou : jamais de serviceType multiple ni de codPaymentType contradictoire
+  sanitizeParcelCodWrite(data as Record<string, any>)
   await updateDoc(doc(db, 'parcels', parcelId), data)
+  bumpPresence('updated')
   // La mise à jour du colis est déjà enregistrée : un échec de synchro des arrivages
   // (droits, réseau) ne doit pas faire croire à l'utilisateur que sa correction a échoué.
   try {
@@ -637,8 +733,24 @@ export async function markParcelAsReturned(parcel: any, extra: any = {}) {
   const returnedByDriverId = parcel.deliveryDriverId || extra.driverId || null
   const returnedByDriverName = parcel.deliveryDriverName || extra.driverName || ''
 
+  // 📸 État AVANT le retour, pour pouvoir l'annuler exactement (cancelParcelReturn)
+  const keep = (v: any) => (v === undefined ? null : v)
+  const preReturn = {
+    status: keep(parcel.status), sender: keep(parcel.sender), receiver: keep(parcel.receiver),
+    originCity: keep(parcel.originCity), destinationCity: keep(parcel.destinationCity),
+    returnToCity: keep(parcel.returnToCity), codAmount: keep(parcel.codAmount),
+    codMixed: keep(parcel.codMixed), codCashAmount: keep(parcel.codCashAmount),
+    arrivedNbColis: keep(parcel.arrivedNbColis),
+    deliveryDriverId: keep(parcel.deliveryDriverId), deliveryDriverName: keep(parcel.deliveryDriverName),
+    deliverySectorId: keep(parcel.deliverySectorId), deliverySectorCode: keep(parcel.deliverySectorCode),
+    deliverySectorName: keep(parcel.deliverySectorName), deliveryVehicleId: keep(parcel.deliveryVehicleId),
+    deliveryVehicleLabel: keep(parcel.deliveryVehicleLabel), deliveryAssignedAt: keep(parcel.deliveryAssignedAt),
+    deliveryAssignedBy: keep(parcel.deliveryAssignedBy),
+  }
+
   const updates = {
     status:          'Retourné',
+    preReturn,
     sender:          newSender,
     receiver:        newReceiver,
     // 🔍 Garder les noms normalisés cohérents avec l'échange expéditeur/destinataire
@@ -686,6 +798,46 @@ export async function markParcelAsReturned(parcel: any, extra: any = {}) {
       }
     }))
   }
+}
+
+// ↩️ ANNULER un retour (erreur de saisie) : remet le colis exactement dans son état d'avant le
+// retour (snapshot preReturn). Ancien colis sans snapshot : ré-échange expéditeur/destinataire et
+// villes, statut = dernier statut avant « Retourné » dans l'historique (le montant RF remis à 0 au
+// retour ne peut alors pas être restauré automatiquement → signalé à l'utilisateur).
+export async function cancelParcelReturn(parcel: any, by = ''): Promise<{ codRestored: boolean }> {
+  const now = new Date().toISOString()
+  const snap = parcel.preReturn
+  const RETURN_STATUSES = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
+  let updates: Record<string, any>
+  let codRestored = true
+  if (snap) {
+    updates = { ...snap }
+    if (!updates.status || RETURN_STATUSES.includes(updates.status)) updates.status = 'Arrivé en agence'
+  } else {
+    const hist = Array.isArray(parcel.history) ? parcel.history : []
+    const idx = hist.map((h: any) => h?.status).lastIndexOf('Retourné')
+    const before = idx > 0 ? hist.slice(0, idx).reverse().find((h: any) => h?.status && !RETURN_STATUSES.includes(h.status)) : null
+    updates = {
+      status: before?.status || 'Arrivé en agence',
+      sender: parcel.receiver || {}, receiver: parcel.sender || {},
+      originCity: parcel.destinationCity || '', destinationCity: parcel.originCity || '',
+      returnToCity: null,
+    }
+    codRestored = false
+  }
+  const s: any = updates.sender || {}, r: any = updates.receiver || {}
+  Object.assign(updates, {
+    senderNameNorm: normName(s.name), receiverNameNorm: normName(r.name),
+    wasReturned: false, preReturn: null, returnedAt: null, returnReason: null,
+    returnedByDriverId: null, returnedByDriverName: null,
+    returnCancelledAt: now, returnCancelledBy: by || null,
+    history: arrayUnion({ status: updates.status, timestamp: now, note: `Retour annulé${by ? ` par ${by}` : ''}` }),
+  })
+  await updateDoc(doc(db, 'parcels', parcel.id), updates)
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('parcelUpdated', { detail: { parcelId: parcel.id, updates, timestamp: now, source: 'database' } }))
+  }
+  return { codRestored }
 }
 
 // Chargement d'un colis retourné sur camion inter-villes vers la ville de l'expéditeur.
@@ -974,10 +1126,11 @@ export async function archiveAllParcels(olderThanDays = 90) {
   }
   return { archived: docs.length }
 }
-export function subscribeAllParcels(callback: any, onError: (err?: any) => void = () => {}, days = 0, pageSize = FIRESTORE_PAGE_LIMITS.adminLiveParcels) {
+export function subscribeAllParcels(callback: any, onError: (err?: any) => void = () => {}, days = 0, pageSize = FIRESTORE_PAGE_LIMITS.adminLiveParcels, lite = false) {
   // Version ORIGINALE simplifiée - celle qui marchait avant
+  // 🪶 lite : lecture de parcelsLite (onglet Expéditions agent pro « Toutes les villes »)
   const q = query(
-    collection(db, 'parcels'),
+    parcelsSource(lite),
     orderBy('createdAt', 'desc'),
     limit(pageSize)
   )
@@ -1001,12 +1154,14 @@ export function subscribeAllParcelsWithDateFilter(
     pageSize?: number
     dateFrom?: Date | null  // Date de début (inclusive)
     dateTo?: Date | null    // Date de fin (inclusive)
+    lite?: boolean          // 🪶 lire parcelsLite (version allégée) au lieu de parcels
   } = {}
 ) {
   const {
     pageSize = FIRESTORE_PAGE_LIMITS.adminLiveParcels,
     dateFrom = null,
     dateTo = null,
+    lite = false,
   } = options
 
   // Construction de la requête avec filtres de date
@@ -1027,7 +1182,7 @@ export function subscribeAllParcelsWithDateFilter(
   queryConstraints.push(orderBy('createdAt', 'desc'))
   queryConstraints.push(limit(pageSize))
 
-  const q = query(collection(db, 'parcels'), ...queryConstraints)
+  const q = query(parcelsSource(lite), ...queryConstraints)
 
   console.log(`⚡ Firestore query optimisée avec filtres:`, {
     dateFrom: dateFrom?.toLocaleDateString('fr-MA'),
@@ -1049,12 +1204,14 @@ export async function loadMoreParcelsWithDateFilter(
     pageSize?: number
     dateFrom?: Date | null
     dateTo?: Date | null
+    lite?: boolean // 🪶 parcelsLite — doit correspondre à la collection du curseur lastDoc
   } = {}
 ) {
   const {
     pageSize = 1000,
     dateFrom = null,
     dateTo = null,
+    lite = false,
   } = options
 
   if (!lastDoc) {
@@ -1077,7 +1234,7 @@ export async function loadMoreParcelsWithDateFilter(
     queryConstraints.push(startAfter(lastDoc))
     queryConstraints.push(limit(pageSize))
 
-    const q = query(collection(db, 'parcels'), ...queryConstraints)
+    const q = query(parcelsSource(lite), ...queryConstraints)
     const snap = await getDocs(q)
 
     const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
@@ -1352,8 +1509,11 @@ export function subscribeAgencyParcels(
   // 🗄️ true = garder les colis isArchived (toujours dans 'parcels'). L'onglet Expéditions du chef
   // d'agence le passe à true (comme le Facturier et l'onglet Ports en compte) : sinon une période
   // de plus de 30 jours perdait l'essentiel de ses colis (archivage auto après 30/45 jours).
-  includeArchived = false
+  includeArchived = false,
+  // 🪶 true = lire parcelsLite (version allégée, onglet Expéditions du chef d'agence / agent pro)
+  lite = false
 ) {
+  const col = parcelsSource(lite)
   let created: any[] = [], arrived: any[] = []
   let timer: ReturnType<typeof setTimeout> | undefined = undefined
   let lastCreatedDoc: any = null
@@ -1386,12 +1546,12 @@ export function subscribeAgencyParcels(
   const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
 
   const q1 = dateTo
-    ? query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('createdAt', 'desc'), limit(pageLimit))
-    : query(collection(db, 'parcels'), where('originCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
+    ? query(col, where('originCity', '==', city), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('createdAt', 'desc'), limit(pageLimit))
+    : query(col, where('originCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
 
   const q2 = dateTo
-    ? query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('createdAt', 'desc'), limit(pageLimit))
-    : query(collection(db, 'parcels'), where('destinationCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
+    ? query(col, where('destinationCity', '==', city), where('createdAt', '>=', since), where('createdAt', '<=', until), orderBy('createdAt', 'desc'), limit(pageLimit))
+    : query(col, where('destinationCity', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
 
   // ⚠️ includeMetadataChanges: true — sinon, quand le cache contient déjà les mêmes documents
   // que le serveur, Firestore ne redéclenche PAS de callback lors de la confirmation serveur
@@ -1434,80 +1594,91 @@ export function subscribeAgencyParcels(
 // - meta.complete = toutes les pages sont confirmées par le serveur et la dernière est incomplète.
 export function subscribeAgencyParcelsFull(
   city: string,
-  opts: { dateFrom?: Date | null; dateTo?: Date | null; pageSize?: number; includeArchived?: boolean },
+  opts: { dateFrom?: Date | null; dateTo?: Date | null; pageSize?: number; includeArchived?: boolean; lite?: boolean },
   onData: (parcels: any[], meta: { loaded: number; complete: boolean; fromCache: boolean }) => void,
   onError: (err?: any) => void = () => {}
 ): () => void {
+  // ⚡ Chargement JOUR PAR JOUR en PARALLÈLE (12 journées à la fois) au lieu d'une chaîne de pages
+  // successives : même ensemble de colis, résultat complet beaucoup plus rapide.
+  // - Journée(s) d'opération en cours ou à venir : écoute TEMPS RÉEL (sans limite, bornée par dates).
+  // - Journées passées : lecture ponctuelle (getAgencyParcelsDaySlice, paginée jusqu'à épuisement).
   const pageSize = opts.pageSize ?? 2000
   const includeArchived = opts.includeArchived ?? true
-  const since = Timestamp.fromDate(opts.dateFrom ?? new Date(Date.now() - 45 * 24 * 60 * 60 * 1000))
-  const until = opts.dateTo ? Timestamp.fromDate(opts.dateTo) : null
+  const lite = opts.lite ?? false // 🪶 parcelsLite (onglet Expéditions) ; Caisse / Chef d'exploitation : parcels
+  const start = opts.dateFrom ?? new Date(Date.now() - 45 * 24 * 60 * 60 * 1000)
+  const end = opts.dateTo ?? new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)
   const FIELDS = ['originCity', 'destinationCity'] as const
-  type Page = { docs: any[]; size: number; server: boolean; nextStarted: boolean; unsub: () => void }
-  const chains: Record<string, Page[]> = { originCity: [], destinationCity: [] }
-  const pushedOut = new Map<string, any>()
+  const slices = buildDaySlices(start, end)
+  const today = opDayOf(new Date())
+  const liveSlices = slices.filter(sl => sl.day >= today)
+  const pastSlices = slices.filter(sl => sl.day < today)
+
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | undefined
+  let lastEmit = 0
+  const liveDocs = new Map<string, any[]>()      // clé : jour|champ
+  const liveServer = new Map<string, boolean>()
+  const pastDocs: any[] = []
+  let pastDone = pastSlices.length === 0
+  const unsubs: (() => void)[] = []
 
-  const emit = () => {
-    clearTimeout(timer)
-    timer = setTimeout(() => {
-      if (stopped) return
-      const map = new Map<string, any>()
-      pushedOut.forEach((p, id) => map.set(id, p))
-      FIELDS.forEach(f => chains[f].forEach(pg => pg.docs.forEach(p => map.set(p.id, p))))
-      const all = [...map.values()].filter(p => includeArchived || !p.isArchived)
-      const complete = FIELDS.every(f => {
-        const c = chains[f]
-        return c.length > 0 && c.every(pg => pg.server) && c[c.length - 1].size < pageSize
-      })
-      const fromCache = FIELDS.some(f => chains[f].length === 0 || chains[f].some(pg => !pg.server))
-      onData(sortByCreatedDesc(all), { loaded: all.length, complete, fromCache })
-    }, 60)
-  }
-
-  const startPage = (field: typeof FIELDS[number], idx: number, cursor: any) => {
+  const emitNow = () => {
     if (stopped) return
-    const constraints: any[] = [
-      where(field, '==', city),
-      where('createdAt', '>=', since),
-      ...(until ? [where('createdAt', '<=', until)] : []),
-      orderBy('createdAt', 'desc'),
-      ...(cursor ? [startAfter(cursor)] : []),
-      limit(pageSize),
-    ]
-    const page: Page = { docs: [], size: 0, server: false, nextStarted: false, unsub: () => {} }
-    chains[field][idx] = page
-    page.unsub = onSnapshot(query(collection(db, 'parcels'), ...constraints), { includeMetadataChanges: true }, snap => {
-      if (stopped) return
-      // Document sorti de la page alors qu'elle reste pleine et qu'il est plus ancien que la
-      // nouvelle fin de page : il a été poussé dehors par un colis plus récent (limit), pas
-      // supprimé → on le garde, sinon il disparaîtrait entre cette page et la suivante.
-      const tail = snap.docs[snap.docs.length - 1]
-      const tailMs = tail?.data()?.createdAt?.toMillis?.() ?? 0
-      snap.docChanges().forEach(ch => {
-        if (ch.type !== 'removed' || snap.size < pageSize) return
-        const data: any = ch.doc.data()
-        const ms = data?.createdAt?.toMillis?.() ?? 0
-        if (ms && ms <= tailMs) pushedOut.set(ch.doc.id, { id: ch.doc.id, ...data })
-      })
-      snap.docs.forEach(d => pushedOut.delete(d.id))
-      page.docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
-      page.size = snap.size
-      page.server = !snap.metadata.fromCache
-      if (page.server && snap.size >= pageSize && !page.nextStarted && tail) {
-        page.nextStarted = true
-        startPage(field, idx + 1, tail)
-      }
-      emit()
-    }, err => { if (!stopped) onError(err) })
+    lastEmit = Date.now()
+    const map = new Map<string, any>()
+    pastDocs.forEach(p => map.set(p.id, p))
+    liveDocs.forEach(list => list.forEach(p => map.set(p.id, p)))
+    const all = [...map.values()].filter(p => includeArchived || !p.isArchived)
+    const liveOk = [...liveServer.values()].every(Boolean) && liveServer.size === liveSlices.length * FIELDS.length
+    onData(sortByCreatedDesc(all), { loaded: all.length, complete: liveOk && pastDone, fromCache: !liveOk })
+  }
+  // Au plus une mise à jour / 800 ms pendant la lecture des jours passés (chaque mise à jour
+  // relance les calculs de la page), immédiate (60 ms) pour le temps réel et à la fin.
+  const emit = (urgent = false) => {
+    clearTimeout(timer)
+    const wait = urgent ? 60 : Math.max(60, 800 - (Date.now() - lastEmit))
+    timer = setTimeout(emitNow, wait)
   }
 
-  FIELDS.forEach(f => startPage(f, 0, null))
+  liveSlices.forEach(sl => FIELDS.forEach(field => {
+    const key = sl.day + '|' + field
+    liveServer.set(key, false)
+    const q = query(parcelsSource(lite),
+      where(field, '==', city),
+      where('createdAt', '>=', Timestamp.fromDate(sl.start)),
+      where('createdAt', sl.endInclusive ? '<=' : '<', Timestamp.fromDate(sl.end)),
+      orderBy('createdAt', 'desc'))
+    unsubs.push(onSnapshot(q, { includeMetadataChanges: true }, snap => {
+      if (stopped) return
+      liveDocs.set(key, snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      liveServer.set(key, !snap.metadata.fromCache)
+      emit(true)
+    }, err => { if (!stopped) onError(err) }))
+  }))
+
+  if (pastSlices.length) {
+    let next = 0
+    const worker = async () => {
+      while (next < pastSlices.length && !stopped) {
+        const sl = pastSlices[next++]
+        const docs = (await Promise.all(FIELDS.map(field =>
+          getAgencyParcelsDaySlice(city, field, sl.start, sl.end, sl.endInclusive, null, pageSize, lite)))).flat()
+        if (stopped) return
+        for (const d of docs) pastDocs.push(d)
+        emit()
+      }
+    }
+    Promise.all(Array.from({ length: Math.min(12, pastSlices.length) }, worker))
+      .then(() => { if (!stopped) { pastDone = true; emit(true) } })
+      .catch(err => { if (!stopped) { pastDone = true; onError(err); emit(true) } })
+  } else {
+    emit(true)
+  }
+
   return () => {
     stopped = true
     clearTimeout(timer)
-    FIELDS.forEach(f => chains[f].forEach(pg => pg.unsub()))
+    unsubs.forEach(u => u())
   }
 }
 
@@ -1518,8 +1689,10 @@ export async function getMoreAgencyParcels(
   pageSize = 1000,
   dateFrom?: Date | null,
   dateTo?: Date | null,
-  includeArchived = false // voir subscribeAgencyParcels
+  includeArchived = false, // voir subscribeAgencyParcels
+  lite = false // 🪶 parcelsLite — doit correspondre à la collection des curseurs lastDocs
 ): Promise<{ docs: any[]; lastDocs: any; hasMore: boolean }> {
+  const col = parcelsSource(lite)
   // ⚡ OPTIMISATION : Chargement 30 jours au lieu de 365 pour performances
   const since = dateFrom ? Timestamp.fromDate(dateFrom) : daysAgoTimestamp(30)
   const until = dateTo ? Timestamp.fromDate(dateTo) : Timestamp.now()
@@ -1538,7 +1711,7 @@ export async function getMoreAgencyParcels(
     if (lastDocs.lastCreatedDoc) {
       const q1 = dateTo
         ? query(
-            collection(db, 'parcels'),
+            col,
             where('originCity', '==', city),
             where('createdAt', '>=', since),
             where('createdAt', '<=', until),
@@ -1547,7 +1720,7 @@ export async function getMoreAgencyParcels(
             limit(pageSize)
           )
         : query(
-            collection(db, 'parcels'),
+            col,
             where('originCity', '==', city),
             where('createdAt', '>=', since),
             orderBy('createdAt', 'desc'),
@@ -1568,7 +1741,7 @@ export async function getMoreAgencyParcels(
     if (lastDocs.lastArrivedDoc) {
       const q2 = dateTo
         ? query(
-            collection(db, 'parcels'),
+            col,
             where('destinationCity', '==', city),
             where('createdAt', '>=', since),
             where('createdAt', '<=', until),
@@ -1577,7 +1750,7 @@ export async function getMoreAgencyParcels(
             limit(pageSize)
           )
         : query(
-            collection(db, 'parcels'),
+            col,
             where('destinationCity', '==', city),
             where('createdAt', '>=', since),
             orderBy('createdAt', 'desc'),
@@ -1628,7 +1801,8 @@ export async function getAgencyParcelsDaySlice(
   end: Date,
   endInclusive: boolean,
   afterDoc: any = null,
-  pageSize = 2000
+  pageSize = 2000,
+  lite = false // 🪶 parcelsLite (version allégée)
 ): Promise<any[]> {
   const out: any[] = []
   let cursor: any = afterDoc
@@ -1641,7 +1815,7 @@ export async function getAgencyParcelsDaySlice(
       ...(cursor ? [startAfter(cursor)] : []),
       limit(pageSize),
     ]
-    const snap = await getDocs(query(collection(db, 'parcels'), ...constraints))
+    const snap = await getDocs(query(parcelsSource(lite), ...constraints))
     snap.docs.forEach(d => out.push({ id: d.id, ...d.data() }))
     if (snap.docs.length < pageSize) break
     cursor = snap.docs[snap.docs.length - 1]
@@ -2408,7 +2582,32 @@ export function subscribeCodParcelsEspeces(
   codStatusFilter?: 'pending' | 'collected' | 'remis',
   limitCount = 9000
 ) {
-  return subscribeCodByServiceType(where('serviceType', '==', 'especes'), callback, onError, codStatusFilter, limitCount)
+  // 💵+📋 RF MIXTE : un colis Espèces + chèque/traite (serviceType = document) apparaît AUSSI
+  // ici pour sa part espèces (codAmount = part espèces dans la vue, voir codPartView).
+  let especes: Parcel[] | null = null
+  let mixed: Parcel[] | null = null
+  let lastDoc: any = null
+  let metaEsp: CodSubscriptionMeta | undefined
+  let metaMix: CodSubscriptionMeta | undefined
+  const emit = () => {
+    if (especes === null || mixed === null) return
+    const map = new Map<string, Parcel>()
+    especes.forEach(p => map.set(p.id, p))
+    mixed.forEach(p => map.set(p.id, codPartView(p as any, 'especes') as Parcel))
+    const data = sortByCreatedDesc([...map.values()] as any[]) as Parcel[]
+    callback(data, lastDoc, { hasOlder: !!(metaEsp?.hasOlder || metaMix?.hasOlder) })
+  }
+  const unsubEsp = subscribeCodByServiceType(where('serviceType', '==', 'especes'), (data, last, meta) => {
+    especes = data; lastDoc = last; metaEsp = meta; emit()
+  }, onError, codStatusFilter, limitCount)
+  const unsubMix = subscribeCodByServiceType(where('codMixed', '==', true), (data, _last, meta) => {
+    mixed = data.filter(p => isMixedCod(p)); metaMix = meta; emit()
+  }, (err) => {
+    // Jamais bloquant pour la page espèces (ex. index en cours de création)
+    console.warn('[DRFE] RF mixtes indisponibles :', err?.message || err)
+    mixed = []; emit()
+  }, codStatusFilter, limitCount)
+  return () => { unsubEsp(); unsubMix() }
 }
 
 /**
@@ -2441,7 +2640,27 @@ export async function getMoreCodParcelsEspeces(
   const snapshot = await getDocs(q)
   const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Parcel))
   const newLastDoc = snapshot.docs[snapshot.docs.length - 1]
-  return { data, lastDoc: newLastDoc, hasMore: snapshot.docs.length === limitCount }
+  // 💵+📋 RF mixtes plus anciens : part espèces (non bloquant)
+  let mixedMore = false
+  try {
+    const qMix = query(
+      collection(db, 'parcels'),
+      where('codMixed', '==', true),
+      ...(codStatusFilter ? [where('codStatus', '==', codStatusFilter)] : []),
+      orderBy('createdAt', 'desc'),
+      startAfter(lastDoc),
+      limit(limitCount)
+    )
+    const snapMix = await getDocs(qMix)
+    mixedMore = snapMix.docs.length === limitCount
+    snapMix.docs
+      .map((d) => ({ id: d.id, ...d.data() } as any))
+      .filter((p) => isMixedCod(p) && !data.some((x) => x.id === p.id))
+      .forEach((p) => data.push(codPartView(p, 'especes') as Parcel))
+  } catch (err: any) {
+    console.warn('[DRFE] RF mixtes (charger plus) indisponibles :', err?.message || err)
+  }
+  return { data: sortByCreatedDesc(data as any[]) as Parcel[], lastDoc: newLastDoc, hasMore: snapshot.docs.length === limitCount || mixedMore }
 }
 
 /**
@@ -2453,7 +2672,10 @@ export function subscribeCodParcelsCheques(
   codStatusFilter?: 'pending' | 'collected' | 'remis',
   limitCount = 9000
 ) {
-  return subscribeCodByServiceType(where('serviceType', 'in', ['cheque', 'traite']), callback, onError, codStatusFilter, limitCount)
+  // 💵+📋 RF MIXTE : seule la part chèque/traite est présentée ici (codAmount = part document)
+  return subscribeCodByServiceType(where('serviceType', 'in', ['cheque', 'traite']), (data, last, meta) => {
+    callback(data.map(p => codPartView(p as any, 'document') as Parcel), last, meta)
+  }, onError, codStatusFilter, limitCount)
 }
 
 /**
@@ -2484,7 +2706,8 @@ export async function getMoreCodParcelsCheques(
   }
 
   const snapshot = await getDocs(q)
-  const data = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Parcel))
+  // RF mixte : part chèque/traite uniquement
+  const data = snapshot.docs.map((d) => codPartView({ id: d.id, ...d.data() } as any, 'document') as Parcel)
   const newLastDoc = snapshot.docs[snapshot.docs.length - 1]
   return { data, lastDoc: newLastDoc, hasMore: snapshot.docs.length === limitCount }
 }

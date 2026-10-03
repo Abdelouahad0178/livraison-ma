@@ -5,17 +5,30 @@ import {
   Unlock, User, X,
 } from 'lucide-react'
 import { useState, useRef, useEffect, useMemo, useDeferredValue } from 'react'
+import PendingBadge from '../../../components/PendingBadge'
 import { deleteField, Timestamp, collection, documentId, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
 import * as XLSX from 'xlsx'
 import {
   loadReturnedParcelOnTruck, validateReturnArrival, getMoreAgentParcels,
 } from '../../../firebase/firestore'
-import { isInReturnCircuit, updateParcel, buildParcelCorrectionPatch, describeParcelSaveError } from '../../../firebase/parcels'
+import { isInReturnCircuit, updateParcel, buildParcelCorrectionPatch, describeParcelSaveError, ensureFullParcel, ensureFullParcels } from '../../../firebase/parcels'
+import { reservePrintWindow, releasePrintWindow } from '../../../utils/printWindow'
+
+// 🪶 La liste vient de parcelsLite (version allégée, sans historique…) : toute ouverture d'un colis
+// (modification, historique, livraison, impression) relit d'abord le document COMPLET dans parcels.
+// Au-delà de ce nombre de lignes, « Imprimer tout » imprime la liste telle quelle (toutes les colonnes
+// imprimées sont présentes dans la version allégée) plutôt que de relire des milliers de colis.
+const PRINT_FULL_FETCH_MAX = 300
 import {
   STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS, codCollectedLabel,
-  CITIES, ALL_SERVICE_TYPES, codPaymentTypeOf,
+  CITIES, ALL_SERVICE_TYPES, codPaymentTypeOf, normalizeServiceType,
 } from '../../../firebase/constants'
+import {
+  isMixedCod, codCashPartOf, codDocPartOf, codPartsBreakdown, codPartsOf, codEditInitial,
+  codServiceLabel, codPartsLabel, codPartRows, codTotalsByType,
+  buildCodWriteFields, validateCodChoice, toggleCodService, codSelectionOf, COD_PART_EMOJI, COD_PART_LABEL,
+} from '../../../utils/codParts'
 import { useAgentCtx } from '../AgentCtx'
 import { OperationalDaySelector } from '../../../components/OperationalDaySelector'
 import QuickStatusToggles from '../../../components/QuickStatusToggles'
@@ -27,6 +40,7 @@ import { parcelDate, filterByDate } from '../../../utils/dateFilter'
 import { formatOperationalDay } from '../../../config/operationalDay'
 import { normText } from '../../../utils/normText'
 import { makeTableSearchMatcher } from '../../../utils/parcelSearch'
+import { agencyPortAmounts } from '../../../utils/billingAgency'
 
 const normalizeSearch = (value: any) => normText(value).replace(/[^a-z0-9]/g, '')
 const matchesSearch = (values: any, query: any) => {
@@ -53,6 +67,8 @@ const VALUE_TYPE_INFO: Record<string, { label: string; emoji: string }> = {
 }
 // serviceType fait foi : codPaymentType n'est retenu que s'il est cohérent (codPaymentTypeOf).
 const valueTypeOf = (p: any): string => {
+  // Ligne « part » d'un RF mixte (codPartRows) : le type de la part
+  if (p?.codPartMixed && p.codPartType && VALUE_TYPE_INFO[p.codPartType]) return p.codPartType
   const t = codPaymentTypeOf(p)
   if (t && VALUE_TYPE_INFO[t]) return t
   return p?.serviceType === 'simple' ? 'simple' : 'especes'
@@ -61,6 +77,19 @@ const valueTypeLabel = (p: any) => {
   const info = VALUE_TYPE_INFO[valueTypeOf(p)]
   return `${info.emoji} ${info.label}`
 }
+// Totaux par mode de règlement d'une liste RETOUR FOND (lignes codPartRows : un RF mixte
+// compte sa part espèces en espèces et sa part document en chèque/traite).
+const CAT_MODE_TOTAL_LABEL: Record<string, string> = {
+  especes: '💵 Total espèces', cheque: '📋 Total chèques', traite: '📝 Total traites', bon_livraison: '🧾 Total BL', simple: '📦 Total simple',
+}
+const codModeTotals = (rows: any[]): { type: string; label: string; total: number }[] => {
+  const t: Record<string, number> = {}
+  for (const r of rows || []) { const k = valueTypeOf(r); t[k] = (t[k] || 0) + (parseFloat(r?.codAmount) || 0) }
+  return ['especes', 'cheque', 'traite', 'bon_livraison', 'simple']
+    .filter(k => t[k] > 0)
+    .map(k => ({ type: k, label: CAT_MODE_TOTAL_LABEL[k], total: t[k] }))
+}
+const uniqueParcelCount = (rows: any[]) => new Set((rows || []).map((r: any, i: number) => r?.id ?? `#${i}`)).size
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -93,6 +122,7 @@ export default function ParcelsTab() {
     // Parcel data
     allDisplayParcels,
     filteredParcels,
+    parcelFiltersPending,
     parcelMovementCount,
     loadingParcels,
     syncingParcels,
@@ -438,6 +468,14 @@ export default function ParcelsTab() {
   const [bulkPortDuError, setBulkPortDuError] = useState('')
   const [isPortDuSectionOpen, setIsPortDuSectionOpen] = useState(false) // ⭐ Section fermée par défaut
 
+  // ⚡ Sélections (cases à cocher) en Set : appartenance O(1) au lieu de .includes() sur des
+  // tableaux de milliers d'identifiants (rendu des lignes, impression, export, compteurs).
+  const bulkAssignSelectedSet = useMemo(() => new Set<string>(bulkAssignSelectedIds || []), [bulkAssignSelectedIds])
+  const bulkLoadSelectedSet = useMemo(() => new Set<string>(bulkLoadSelectedIds || []), [bulkLoadSelectedIds])
+  const bulkPortDuSelectedSet = useMemo(() => new Set<string>(bulkPortDuSelectedIds), [bulkPortDuSelectedIds])
+  // 🖨️ Impression de la sélection en cours (lecture des documents complets) : bouton occupé
+  const [printSelectionBusy, setPrintSelectionBusy] = useState(false)
+
   // ⭐ Palette de couleurs pour les livreurs (12 couleurs vives)
   const DRIVER_COLORS = [
     '#FFE5E5', // Rose pâle
@@ -520,7 +558,13 @@ export default function ParcelsTab() {
   }
 
   // ⭐ Fonction helper pour calculer les résultats filtrés par la recherche tableau
-  const getTableFilteredParcels = (allParcels: any[], search: string = tableSearch) => {
+  const getTableFilteredParcels = (
+    allParcels: any[],
+    search: string = tableSearch,
+    // Valeurs de filtre à appliquer (par défaut : les valeurs courantes ; le tableau passe leur copie différée)
+    f = { parcelStatusFilter, addressFilter, nbColisFilterMin, nbColisFilterMax, codFilterMin, codFilterMax },
+  ) => {
+    const { parcelStatusFilter, addressFilter, nbColisFilterMin, nbColisFilterMax, codFilterMin, codFilterMax } = f
     // Filtrer par statut d'abord
     let filtered = allParcels
     if (parcelStatusFilter && parcelStatusFilter !== 'all') {
@@ -578,26 +622,48 @@ export default function ParcelsTab() {
   }, [filteredParcels, localParcelUpdates])
   // La saisie reste fluide : le filtrage du tableau suit la frappe en priorité basse.
   const deferredTableSearch = useDeferredValue(tableSearch)
-  const tableFilteredParcelsMemo = useMemo(
-    () => getTableFilteredParcels(mergedFilteredParcels, deferredTableSearch),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [mergedFilteredParcels, deferredTableSearch, parcelStatusFilter, addressFilter, nbColisFilterMin, nbColisFilterMax, codFilterMin, codFilterMax]
+  // ⚡ Même principe pour les filtres (statut, adresse, Nb colis, COD) : le bouton/champ réagit
+  // immédiatement, le filtrage + les totaux suivent en priorité basse (interruptible).
+  const tableFilterOpts = useMemo(
+    () => ({ parcelStatusFilter, addressFilter, nbColisFilterMin, nbColisFilterMax, codFilterMin, codFilterMax }),
+    [parcelStatusFilter, addressFilter, nbColisFilterMin, nbColisFilterMax, codFilterMin, codFilterMax]
   )
+  const deferredTableFilterOpts = useDeferredValue(tableFilterOpts)
+  const tableFilteredParcelsMemo = useMemo(
+    () => getTableFilteredParcels(mergedFilteredParcels, deferredTableSearch, deferredTableFilterOpts),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [mergedFilteredParcels, deferredTableSearch, deferredTableFilterOpts]
+  )
+  // ⏳ Résultat en cours de recalcul après un clic de filtre (le bouton est déjà sélectionné)
+  const tablePending = !!parcelFiltersPending || deferredTableFilterOpts !== tableFilterOpts || deferredTableSearch !== tableSearch
+  // ⚡ Lignes « Validation des saisies aide-agent » : mémoïsées (autrefois refiltrées à chaque rendu)
+  const aideValidationParcelsMemo = useMemo(
+    () => (profile?.role === 'chef_agence' || profile?.role === 'agentpro')
+      ? (filteredParcels || []).filter(isPendingAideParcelForAgency)
+      : [],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filteredParcels, profile?.role]
+  )
+  const aideValidationIdSet = useMemo(() => new Set<string>((aideValidationParcelsMemo || []).map((p: any) => p.id)), [aideValidationParcelsMemo])
   const tableTotals = useMemo(() => {
     const agencyCity = profile?.city
     const isDest = (p: any) => p.destinationCity === agencyCity || p.receiver?.city === agencyCity
-    const isOrig = (p: any) => p.originCity === agencyCity || p.sender?.city === agencyCity
-    const isPortDuT = (p: any) => p.portType === 'port_du' || p.portType === 'port_du_cheque'
     let totalCod = 0, totalPortDu = 0, totalPortPaye = 0, totalPortEnCompteExp = 0, totalPortEnCompteDest = 0
+    const codByType: Record<string, number> = {}
     for (const p of tableFilteredParcelsMemo) {
-      // Même ordre d'addition que les anciens reduce (résultats identiques au centime près)
       totalCod += isDest(p) ? (parseFloat(p.codAmount) || 0) : 0
-      totalPortDu += isPortDuT(p) && isDest(p) ? (parseFloat(p.price) || 0) : 0
-      totalPortPaye += p.portType === 'port_paye' && isOrig(p) ? (parseFloat(p.price) || 0) : 0
-      totalPortEnCompteExp += (p.portType === 'port_en_compte' || p.portType === 'port_en_compte_expediteur') && isOrig(p) ? (parseFloat(p.price) || 0) : 0
-      totalPortEnCompteDest += p.portType === 'port_en_compte_destinataire' && isDest(p) ? (parseFloat(p.price) || 0) : 0
+      // Répartition par mode (RF mixte : espèces + document) — mêmes lignes que le détail
+      if (isDest(p) && (parseFloat(p.codAmount) || 0) > 0) {
+        for (const r of codPartRows([p])) { const k = valueTypeOf(r); codByType[k] = (codByType[k] || 0) + (parseFloat(r.codAmount) || 0) }
+      }
+      // 🔗 Répartition des ports partagée avec Admin « Port par Agence » (utils/billingAgency)
+      const a = agencyPortAmounts(p, agencyCity)
+      totalPortDu += a.portDu + a.portDuCheque // Port dû inclut le Port dû chèque
+      totalPortPaye += a.portPaye
+      totalPortEnCompteExp += a.enCompteExp
+      totalPortEnCompteDest += a.enCompteDest
     }
-    return { totalCod, totalPortDu, totalPortPaye, totalPortEnCompteExp, totalPortEnCompteDest }
+    return { totalCod, codByType, totalPortDu, totalPortPaye, totalPortEnCompteExp, totalPortEnCompteDest }
   }, [tableFilteredParcelsMemo, profile?.city])
 
   // 📡 Période lue PONCTUELLEMENT (journées passées, voir AgentPage) : pas d'écoute temps réel sur
@@ -864,6 +930,9 @@ export default function ParcelsTab() {
     status: string
     codAmount: string
     serviceType: string
+    /** RF mixte : codAmount = part chèque/traite, codCashAmount = part espèces */
+    codMixed?: boolean
+    codCashAmount?: string
     nbColis: string
     poids: string
     contenu: string
@@ -993,7 +1062,7 @@ export default function ParcelsTab() {
       <tr class="border-b border-gray-200">
         <td class="px-3 py-2 text-xs text-gray-400 text-center">${idx + 1}</td>
         <td class="px-3 py-2 text-xs font-mono">${p.senderNic || p.sender?.nic || '-'}</td>
-        <td class="px-3 py-2 text-xs">${valueTypeLabel(p)}</td>
+        <td class="px-3 py-2 text-xs">${valueTypeLabel(p)}${p.codPartMixed ? `<div class="text-gray-500" style="font-size:9px">RF mixte · total ${(p.codAmountTotal || 0).toLocaleString('fr-MA')} DH</div>` : ''}</td>
         <td class="px-3 py-2 text-xs">${p.workDate || (p.createdAt?.toDate ? p.createdAt.toDate().toLocaleDateString('fr-FR') : '-')}</td>
         <td class="px-3 py-2 text-xs">
           <div class="font-medium">${p.senderName || p.sender?.name || '-'}</div>
@@ -1124,7 +1193,7 @@ export default function ParcelsTab() {
         <div class="info-box">
           <div>
             ${mode === 'bordereau' ? '' : `<div class="title">${title}</div>`}
-            <div class="count">${parcels.length} expédition${parcels.length > 1 ? 's' : ''}</div>
+            <div class="count">${uniqueParcelCount(parcels)} expédition${uniqueParcelCount(parcels) > 1 ? 's' : ''}</div>
           </div>
           <div style="font-size: 24px; font-weight: 800;" class="${colorClass}">
             ${total.toLocaleString('fr-MA')} DH
@@ -1149,6 +1218,11 @@ export default function ParcelsTab() {
             ${tableRows}
           </tbody>
           <tfoot>
+            ${portType === 'cod' && codModeTotals(parcels).length > 1 ? codModeTotals(parcels).map(m => `
+            <tr>
+              <td colspan="8" style="text-align: right; padding: 6px 8px; font-size: 12px; font-weight: 600;">${m.label} :</td>
+              <td style="padding: 6px 8px; font-size: 12px; font-weight: 700;">${m.total.toLocaleString('fr-MA')} DH</td>
+            </tr>`).join('') : ''}
             <tr class="total-row">
               <td colspan="8" style="text-align: right;">TOTAL:</td>
               <td class="${colorClass}" style="font-size: 16px;">${total.toLocaleString('fr-MA')} DH</td>
@@ -1215,6 +1289,8 @@ export default function ParcelsTab() {
                 // La douchette finit toujours par Entrée → corriger AZERTY→QWERTY ici
                 const fixed = needsAzertyFix(search) ? azertyFix(search) : search
                 if (fixed !== search) setSearch(fixed)
+                // ⏎ Entrée : recherche immédiate, même pour un N° EXP de moins de 7 chiffres
+                window.dispatchEvent(new CustomEvent('force-search', { detail: fixed }))
               }
             }}
             className="w-full bg-gradient-to-r from-blue-50 to-purple-50 border-2 border-blue-300 pl-12 pr-32 py-3.5 rounded-xl text-sm font-medium text-gray-800 placeholder-gray-500 focus:border-blue-500 focus:bg-white focus:shadow-lg focus:outline-none transition-all"
@@ -1468,7 +1544,7 @@ export default function ParcelsTab() {
                           <div className="flex items-center gap-2 mt-1">
                             {parcel.codAmount > 0 && (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-xs font-bold">
-                                💰 COD: {parcel.codAmount} DH
+                                💰 COD: {parcel.codAmount} DH{isMixedCod(parcel) && ` (${codPartsBreakdown(parcel)})`}
                               </span>
                             )}
                             {parcel.price > 0 && (
@@ -1838,6 +1914,12 @@ export default function ParcelsTab() {
                       </button>
                       {/* ⚠️ Les données affichées viennent du cache local le temps que le
                           serveur confirme — évite de croire le total "final" trop tôt. */}
+                      {tablePending && !loadingParcels && (
+                        <span className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-blue-50 text-blue-600 text-[11px] font-semibold">
+                          <span className="w-2 h-2 rounded-full bg-blue-400 animate-pulse" />
+                          Mise à jour…
+                        </span>
+                      )}
                       {syncingParcels && (
                         <span className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-amber-50 text-amber-600 text-[11px] font-semibold">
                           <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
@@ -1944,11 +2026,9 @@ export default function ParcelsTab() {
           // ⚡ Set d'ids : l'ancien .some() imbriqué était O(sélection × colis)
           const selectedCount = bulkLoadSelectedIds.filter((id: any) => loadableIdSet.has(id)).length
           const allSelected = loadableParcels.length > 0 && selectedCount === loadableParcels.length
-          const aideValidationParcels = (profile?.role === 'chef_agence' || profile?.role === 'agentpro')
-            ? filteredParcels.filter(isPendingAideParcelForAgency)
-            : []
+          const aideValidationParcels = aideValidationParcelsMemo
 
-          const selectedAideCount = selectedAideEntryIds.filter((id: any) => aideValidationParcels.some((p: any) => p.id === id)).length
+          const selectedAideCount = selectedAideEntryIds.filter((id: any) => aideValidationIdSet.has(id)).length
           const allAideSelected = aideValidationParcels.length > 0 && selectedAideCount === aideValidationParcels.length
           return (
             <div className="space-y-3">
@@ -1984,8 +2064,21 @@ export default function ParcelsTab() {
                   {/* Boutons imprimer */}
                   {bulkAssignSelectedIds.length > 0 && (
                     <button
+                      disabled={printSelectionBusy}
                       onClick={() => {
-                        const parcelsToPrint = filteredParcels.filter((p: any) => bulkAssignSelectedIds.includes(p.id))
+                        if (printSelectionBusy) return
+                        // ⚡ Set (O(1)) : l'ancien .includes() parcourait toute la sélection pour
+                        // CHACUNE des milliers d'expéditions filtrées (gel de l'interface).
+                        const selSet = bulkAssignSelectedSet
+                        let parcelsToPrint = filteredParcels.filter((p: any) => selSet.has(p.id))
+                        // Sélection faite sur des lignes déjà affichées mais pas (encore) dans la
+                        // liste filtrée courante : on les retrouve dans toutes les expéditions chargées.
+                        if (parcelsToPrint.length < selSet.size) {
+                          const found = new Set(parcelsToPrint.map((p: any) => p.id))
+                          const extra = (allDisplayParcels || []).filter((p: any) => selSet.has(p.id) && !found.has(p.id))
+                          if (extra.length) parcelsToPrint = [...parcelsToPrint, ...extra]
+                        }
+                        if (parcelsToPrint.length === 0) return
 
                         // Trouver le livreur soit via le filtre, soit via les colis sélectionnés
                         let selectedDriver = driverFilter !== 'all'
@@ -2010,13 +2103,21 @@ export default function ParcelsTab() {
                           sectorCode: selectedDriver.sectorCode,
                         } : undefined
 
-                        handlePrintTable(parcelsToPrint, selectedDriver?.name || (driverFilter === 'unassigned' ? `En gare - ${profile?.city || ''}` : undefined), visibleColumns, printOrientation, driverInfo)
+                        // 🖨️ Fenêtre ouverte TOUT DE SUITE (dans le clic) : après la lecture des
+                        // documents complets, le bloqueur de pop-up empêchait l'impression.
+                        reservePrintWindow()
+                        setPrintSelectionBusy(true)
+                        ensureFullParcels(parcelsToPrint)
+                          .then(full =>
+                            handlePrintTable(full, selectedDriver?.name || (driverFilter === 'unassigned' ? `En gare - ${profile?.city || ''}` : undefined), visibleColumns, printOrientation, driverInfo))
+                          .catch((err: any) => { console.error('Impression sélection:', err); alert(`❌ Erreur impression: ${err?.message || err}`) })
+                          .finally(() => { releasePrintWindow(); setPrintSelectionBusy(false) })
                       }}
-                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-orange-600 text-white hover:bg-orange-700 transition"
+                      className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-orange-600 text-white hover:bg-orange-700 disabled:opacity-60 disabled:cursor-wait transition"
                       title="Imprimer uniquement les colis sélectionnés"
                     >
                       <Printer className="w-3.5 h-3.5" />
-                      Sélection ({bulkAssignSelectedIds.length})
+                      {printSelectionBusy ? 'Préparation…' : `Sélection (${bulkAssignSelectedIds.length})`}
                     </button>
                   )}
 
@@ -2065,7 +2166,10 @@ export default function ParcelsTab() {
 
                       console.log('driverInfo final:', driverInfo)
 
-                      handlePrintTable(filteredParcels, selectedDriver?.name || (driverFilter === 'unassigned' ? `En gare - ${profile?.city || ''}` : undefined), visibleColumns, printOrientation, driverInfo)
+                      reservePrintWindow() // 🖨️ ouverte dans le clic (voir utils/printWindow)
+                      ;(filteredParcels.length <= PRINT_FULL_FETCH_MAX ? ensureFullParcels(filteredParcels) : Promise.resolve(filteredParcels)).then(list =>
+                        handlePrintTable(list, selectedDriver?.name || (driverFilter === 'unassigned' ? `En gare - ${profile?.city || ''}` : undefined), visibleColumns, printOrientation, driverInfo))
+                        .finally(() => releasePrintWindow())
                     }}
                     disabled={filteredParcels.length === 0}
                     className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition"
@@ -2203,9 +2307,7 @@ export default function ParcelsTab() {
                           const destCity = p.destinationCity || p.receiver?.city
                           return destCity === destinationCityFilter
                         })
-                        const citySelectedCount = bulkLoadSelectedIds.filter((id: any) =>
-                          cityLoadables.some((p: any) => p.id === id)
-                        ).length
+                        const citySelectedCount = cityLoadables.reduce((n: number, p: any) => n + (bulkLoadSelectedSet.has(p.id) ? 1 : 0), 0)
                         const allCitySelected = cityLoadables.length > 0 && citySelectedCount === cityLoadables.length
                         return (
                           <button
@@ -2262,7 +2364,7 @@ export default function ParcelsTab() {
                         onClick={() => {
                           // ✅ CORRECTION: Utiliser allDisplayParcels au lieu de loadableParcels
                           // pour inclure TOUS les parcels, même ceux filtrés après sélection
-                          const selectedParcels = allDisplayParcels.filter((p: any) => bulkLoadSelectedIds.includes(p.id))
+                          const selectedParcels = allDisplayParcels.filter((p: any) => bulkLoadSelectedSet.has(p.id))
 
                           if (selectedParcels.length === 0) {
                             alert('Aucune expédition sélectionnée à exporter')
@@ -2472,7 +2574,7 @@ export default function ParcelsTab() {
                           onClick={() => {
                             // ✅ CORRECTION: Utiliser allDisplayParcels au lieu de filteredParcels
                             // pour inclure TOUS les parcels sélectionnés, même si les filtres ont changé
-                            const selectedParcels = allDisplayParcels.filter((p: any) => bulkAssignSelectedIds.includes(p.id))
+                            const selectedParcels = allDisplayParcels.filter((p: any) => bulkAssignSelectedSet.has(p.id))
 
                             if (selectedParcels.length === 0) {
                               alert('Aucune expédition sélectionnée à exporter')
@@ -2711,6 +2813,8 @@ export default function ParcelsTab() {
         })()}
         </>)}
 
+        {/* ⏳ Indicateur flottant (position fixe : la mise en page ne bouge pas) pendant le recalcul */}
+        <PendingBadge show={tablePending && !loadingParcels} />
         {(loadingParcels ? (
           <div className="flex justify-center py-12">
             <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
@@ -2744,7 +2848,18 @@ export default function ParcelsTab() {
           // RETOUR FOND (COD) / Port dû / En compte dest. : à la DESTINATION ; Port payé / En compte exp. : à l'ORIGINE.
           // ⚠️ Port dû inclut 'port_du_cheque'. ⚡ Totaux mémoïsés (tableTotals) : recalculés seulement si la liste change.
           const isPortDuType = (p: any) => p.portType === 'port_du' || p.portType === 'port_du_cheque'
-          const { totalCod, totalPortDu, totalPortPaye, totalPortEnCompteExp, totalPortEnCompteDest } = tableTotals
+          const { totalCod: totalCodAll, codByType, totalPortDu, totalPortPaye, totalPortEnCompteExp, totalPortEnCompteDest } = tableTotals
+          // Types de valeur filtrés (Encaiss.) : un RF mixte ne compte que la part du/des type(s) choisi(s).
+          const activeCodTypes: string[] | null = encaissementTypesFilter.length > 0
+            ? encaissementTypesFilter
+            : ['especes', 'cheque', 'traite'].includes(encaissementFilter) ? [encaissementFilter] : null
+          const codTypeEntries = Object.entries(codByType as Record<string, number>)
+            .filter(([k, v]) => v > 0 && (!activeCodTypes || activeCodTypes.includes(k)))
+            .sort(([a], [b]) => ['especes', 'cheque', 'traite', 'bon_livraison', 'simple'].indexOf(a) - ['especes', 'cheque', 'traite', 'bon_livraison', 'simple'].indexOf(b))
+          const totalCod = activeCodTypes ? codTypeEntries.reduce((s, [, v]) => s + v, 0) : totalCodAll
+          const codHeaderBreakdown = codTypeEntries.length > 1
+            ? codTypeEntries.map(([k, v]) => `${VALUE_TYPE_INFO[k]?.emoji || ''} ${v.toLocaleString('fr-MA')}`).join(' · ')
+            : ''
 
           // 🔎 Détail cliquable de chaque solde : la liste ouverte doit correspondre
           // exactement au total affiché, donc on repart de parcelsForTotals.
@@ -2770,7 +2885,7 @@ export default function ParcelsTab() {
             : `RETOUR FOND Clients — Valeurs à encaisser à la livraison (${agencyCity || 'agence'})`
           const openDetails = (key: string) => {
             const defs: Record<string, { title: string; amountKey: string; filter: (p: any) => boolean }> = {
-              cod:            { title: codTitle, amountKey: 'codAmount', filter: p => isDestination(p) && (parseFloat(p.codAmount) || 0) > 0 },
+              cod:            { title: codTitle, amountKey: 'codAmount', filter: p => isDestination(p) && (parseFloat(p.codAmount) || 0) > 0 && (!activeCodTypes || !p.codPartMixed || activeCodTypes.includes(p.codPartType)) },
               port_paye:      { title: `Ports Payés — Expéditions envoyées depuis ${agencyCity || 'l\'agence'}`,               amountKey: 'price',     filter: p => p.portType === 'port_paye' && isOrigin(p) },
               port_du:        { title: `Ports Dûs — Expéditions à encaisser à la livraison (${agencyCity || 'agence'})`,       amountKey: 'price',     filter: p => isPortDuType(p) && isDestination(p) },
               en_compte_exp:  { title: `Ports en Compte Expéditeur — Facturés au client expéditeur`,                           amountKey: 'price', filter: p => (p.portType === 'port_en_compte' || p.portType === 'port_en_compte_expediteur') && isOrigin(p) },
@@ -2782,7 +2897,9 @@ export default function ParcelsTab() {
             const driverLabel = driverFilter === 'unassigned' ? `En gare - ${profile?.city || ''}`
               : driverFilter !== 'all' ? availableDrivers.find((d: any) => d.id === driverFilter)?.name : null
             const titleWithDriver = driverLabel ? `${def.title} — Livreur : ${driverLabel}` : def.title
-            setPortDetailsModal({ open: true, portType: key, title: `${titleWithDriver} — ${periodLabel}`, amountKey: def.amountKey, parcels: parcelsForTotals.filter(def.filter) })
+            // RETOUR FOND : un colis mixte = une ligne par part (💵 espèces / 📋 chèque ou 📝 traite)
+            const source = key === 'cod' ? codPartRows(parcelsForTotals.filter(isDestination)) : parcelsForTotals
+            setPortDetailsModal({ open: true, portType: key, title: `${titleWithDriver} — ${periodLabel}`, amountKey: def.amountKey, parcels: source.filter(def.filter) })
           }
 
           return viewMode === 'table' ? (
@@ -2818,6 +2935,7 @@ export default function ParcelsTab() {
                       <Banknote className="w-4 h-4 text-green-600 shrink-0" />
                       <span className="text-xs text-gray-600 whitespace-nowrap">Total RETOUR FOND :</span>
                       <span className="text-sm font-black text-green-700">{totalCod.toLocaleString('fr-MA')} DH</span>
+                      {codHeaderBreakdown && <span className="text-[11px] font-semibold text-green-700 whitespace-nowrap">({codHeaderBreakdown})</span>}
                     </button>
                     <button onClick={() => openDetails('port_paye')}
                       className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-blue-50 transition cursor-pointer shrink-0" title="Voir et imprimer le détail">
@@ -3056,7 +3174,7 @@ export default function ParcelsTab() {
                       const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
                       const isFromMyCity = (parcel.originCity === profile?.city || parcel.sender?.city === profile?.city)
                       const isAssignable = (profile?.role === 'chef_agence' || profile?.role === 'agentpro')
-                      const assignSelected = bulkAssignSelectedIds.includes(parcel.id)
+                      const assignSelected = bulkAssignSelectedSet.has(parcel.id)
 
                       return (
                         <tr
@@ -3123,7 +3241,7 @@ export default function ParcelsTab() {
 
                                   if (!isPortDu || !isDestinationAgency || !notDelivered) return null
 
-                                  const portDuSelected = bulkPortDuSelectedIds.includes(parcel.id)
+                                  const portDuSelected = bulkPortDuSelectedSet.has(parcel.id)
                                   return (
                                     <input
                                       type="checkbox"
@@ -3307,11 +3425,13 @@ export default function ParcelsTab() {
                                       if (parcel.status === 'Livré') {
                                         // Revenir au statut précédent (chercher le dernier statut qui n'est pas "Livré")
                                         let previousStatus = 'En cours de livraison'
-                                        if (parcel.history && parcel.history.length > 0) {
+                                        // 🪶 historique absent de la version allégée → relu dans le document complet
+                                        const hist: any[] = ((await ensureFullParcel(parcel)) as any).history || []
+                                        if (hist.length > 0) {
                                           // Parcourir l'historique en sens inverse pour trouver le dernier statut différent de "Livré"
-                                          for (let i = parcel.history.length - 1; i >= 0; i--) {
-                                            if (parcel.history[i].status && parcel.history[i].status !== 'Livré') {
-                                              previousStatus = parcel.history[i].status
+                                          for (let i = hist.length - 1; i >= 0; i--) {
+                                            if (hist[i].status && hist[i].status !== 'Livré') {
+                                              previousStatus = hist[i].status
                                               break
                                             }
                                           }
@@ -3373,6 +3493,34 @@ export default function ParcelsTab() {
                                   {parcel.status || 'Initialisé'}
                                 </span>
                               )}
+                              {/* 🖐️ Éditer : à côté du statut */}
+                              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                                <button
+                                  onClick={() => ensureFullParcel(parcel).then((parcel: any) => setQuickEditModal({
+                                    open: true,
+                                    parcel,
+                                    price: parcel.price?.toString() || '',
+                                    portType: parcel.portType || '',
+                                    status: parcel.status || '',
+                                    codAmount: isMixedCod(parcel) ? String(codDocPartOf(parcel)) : (parcel.codAmount?.toString() || ''),
+                                    codMixed: isMixedCod(parcel),
+                                    codCashAmount: isMixedCod(parcel) ? String(codCashPartOf(parcel)) : '',
+                                    serviceType: normalizeServiceType(parcel.serviceType) || '',
+                                    nbColis: parcel.nbColis?.toString() || '',
+                                    poids: parcel.poids?.toString() || '',
+                                    contenu: parcel.contenu || '',
+                                    remarque: parcel.remarque || '',
+                                    loading: false,
+                                    error: ''
+                                  }))}
+                                  tabIndex={-1}
+                                  className="px-2.5 py-1.5 rounded-lg bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white shadow-sm hover:shadow-md transition-all transform hover:scale-105 flex items-center gap-1"
+                                  title="Édition complète"
+                                >
+                                  <span className="text-base">🖐️</span>
+                                  <span className="font-semibold text-xs">Éditer</span>
+                                </button>
+                              )}
                             </div>
                           </td>
                           {visibleColumns.expediteur && (
@@ -3429,7 +3577,7 @@ export default function ParcelsTab() {
                             <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
                               {parcel.serviceType === 'simple' || !parcel.serviceType ? (
                                 <button
-                                  onClick={() => setHistoryModal({ open: true, parcel })}
+                                  onClick={() => ensureFullParcel(parcel).then((parcel: any) => setHistoryModal({ open: true, parcel }))}
                                   className="flex flex-col gap-0.5 text-left hover:bg-gray-50 px-2 py-1 rounded-lg transition-colors"
                                   title="Cliquez pour voir l'historique des modifications"
                                 >
@@ -3442,7 +3590,7 @@ export default function ParcelsTab() {
                                 </button>
                               ) : (
                                 <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-purple-100 text-purple-700 rounded-lg font-semibold">
-                                  {serviceType?.emoji} {serviceType?.label}
+                                  {isMixedCod(parcel) ? codServiceLabel(parcel) : <>{serviceType?.emoji} {serviceType?.label}</>}
                                 </span>
                               )}
                             </td>
@@ -3513,16 +3661,20 @@ export default function ParcelsTab() {
                                       {parcel.codDocumentStatus === 'cheque_encours' && '⏳ Chèque encours'}
                                       {parcel.codDocumentStatus === 'traite_recu' && '✅ Traite reçue'}
                                       {parcel.codDocumentStatus === 'traite_encours' && '⏳ Traite encours'}
+                                      {isMixedCod(parcel) && ` (${codDocPartOf(parcel).toLocaleString('fr-MA')} DH)`}
                                     </span>
                                   )}
                                   <div className="inline-flex items-center gap-2">
                                     <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-100 text-green-800 rounded-lg text-sm font-black">
                                       💰 {parcel.codAmount} DH
                                     </span>
+                                    {isMixedCod(parcel) && (
+                                      <span className="text-[10px] font-semibold text-green-700 whitespace-nowrap" title="Retour de fonds mixte">{codPartsBreakdown(parcel)}</span>
+                                    )}
                                     <button
                                       onClick={(e) => {
                                         e.stopPropagation()
-                                        setCodEditModal({ parcel, value: parcel.codAmount || 0, loading: false, error: '' })
+                                        ensureFullParcel(parcel).then((parcel: any) => setCodEditModal({ parcel, ...codEditInitial(parcel), loading: false, error: '' }))
                                       }}
                                       className="hover:scale-125 transition-transform cursor-pointer text-lg"
                                       title={`Modifier COD (role: ${profile?.role})`}
@@ -3609,31 +3761,6 @@ export default function ParcelsTab() {
 
                               {/* Boutons Éditer et Supprimer */}
                               <div className="flex items-center justify-center gap-1.5">
-                                {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
-                                  <button
-                                    onClick={() => setQuickEditModal({
-                                      open: true,
-                                      parcel,
-                                      price: parcel.price?.toString() || '',
-                                      portType: parcel.portType || '',
-                                      status: parcel.status || '',
-                                      codAmount: parcel.codAmount?.toString() || '',
-                                      serviceType: parcel.serviceType || '',
-                                      nbColis: parcel.nbColis?.toString() || '',
-                                      poids: parcel.poids?.toString() || '',
-                                      contenu: parcel.contenu || '',
-                                      remarque: parcel.remarque || '',
-                                      loading: false,
-                                      error: ''
-                                    })}
-                                    tabIndex={-1}
-                                    className="px-4 py-2 rounded-lg bg-gradient-to-r from-green-500 to-green-600 hover:from-green-600 hover:to-green-700 text-white shadow-md hover:shadow-lg transition-all transform hover:scale-105 flex items-center gap-2"
-                                    title="Édition complète"
-                                  >
-                                    <span className="text-lg">🖐️</span>
-                                    <span className="font-semibold text-sm">Éditer</span>
-                                  </button>
-                                )}
                                 {isOwn && (
                                   <button
                                     onClick={() => handleDeleteClick(parcel)}
@@ -3747,6 +3874,7 @@ export default function ParcelsTab() {
                     <Banknote className="w-4 h-4 text-green-600 shrink-0" />
                     <span className="text-xs text-gray-600 whitespace-nowrap">Total RETOUR FOND :</span>
                     <span className="text-sm font-black text-green-700">{totalCod.toLocaleString('fr-MA')} DH</span>
+                    {codHeaderBreakdown && <span className="text-[11px] font-semibold text-green-700 whitespace-nowrap">({codHeaderBreakdown})</span>}
                   </button>
                   <button onClick={() => openDetails('port_paye')}
                     className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-blue-50 transition cursor-pointer shrink-0" title="Voir et imprimer le détail">
@@ -3786,7 +3914,7 @@ export default function ParcelsTab() {
                 const isAideManagedByChef = !isParcelCreator(parcel) && isChefAgencyAideParcel(parcel)
                 const sc    = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
                 const canLoadTransport = canLoadTransportParcel(parcel)
-                const bulkSelected = bulkLoadSelectedIds.includes(parcel.id)
+                const bulkSelected = bulkLoadSelectedSet.has(parcel.id)
                 const canSelectAideValidation = (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && isPendingAideParcelForAgency(parcel)
                 const aideValidationSelected = selectedAideEntryIds.includes(parcel.id)
 
@@ -3834,7 +3962,7 @@ export default function ParcelsTab() {
 
                   {/* ⭐ NOUVEAU: Checkbox personnalisé pour assignation livreur */}
                   {hasAssignCheckbox && (() => {
-                    const assignSelected = bulkAssignSelectedIds.includes(parcel.id)
+                    const assignSelected = bulkAssignSelectedSet.has(parcel.id)
                     const isFocused = focusedIndex === currentCheckboxIndex
                     return (
                       <div
@@ -3882,7 +4010,7 @@ export default function ParcelsTab() {
 
                     if (!isPortDu || !isDestinationAgency || !notDelivered) return null
 
-                    const portDuSelected = bulkPortDuSelectedIds.includes(parcel.id)
+                    const portDuSelected = bulkPortDuSelectedSet.has(parcel.id)
                     return (
                       <label
                         onClick={e => e.stopPropagation()}
@@ -3992,7 +4120,7 @@ export default function ParcelsTab() {
                         }
                         return (
                           <span className={`inline-flex items-center gap-0.5 text-xs px-1.5 py-0.5 rounded-full font-semibold ${colors[stDef.key] || 'bg-gray-100 text-gray-600'} shrink-0`}>
-                            {stDef.emoji} {stDef.label}
+                            {isMixedCod(parcel) ? codServiceLabel(parcel) :<>{stDef.emoji} {stDef.label}</>}
                           </span>
                         )
                       })()}
@@ -4026,11 +4154,11 @@ export default function ParcelsTab() {
                         {parcel.codAmount > 0 && (
                           <>
                             <span className="text-gray-400">•</span>
-                            <span className="text-orange-600 font-bold">RF {parcel.codAmount} DH</span>
+                            <span className="text-orange-600 font-bold">RF {parcel.codAmount} DH{isMixedCod(parcel) && <span className="font-semibold text-orange-500"> ({codPartsBreakdown(parcel)})</span>}</span>
                             <button
                               onClick={(e) => {
                                 e.stopPropagation()
-                                setCodEditModal({ parcel, value: parcel.codAmount || 0, loading: false, error: '' })
+                                ensureFullParcel(parcel).then((parcel: any) => setCodEditModal({ parcel, ...codEditInitial(parcel), loading: false, error: '' }))
                               }}
                               className="p-0.5 rounded hover:bg-orange-50 text-gray-400 hover:text-orange-500 transition shrink-0"
                               title={`Modifier COD (role: ${profile?.role})`}
@@ -4187,11 +4315,11 @@ export default function ParcelsTab() {
                         const dispBg  = isCollected && cpt ? cpt.bg   : cs.bg
                         const dispTxt = isCollected && cpt ? cpt.text : cs.text
                         const lbl = isCollected
-                          ? codCollectedLabel(codPaymentTypeOf(parcel))
+                          ? (isMixedCod(parcel) ? `Collecté (${codPartsLabel(parcel, { emoji: false })})` : codCollectedLabel(codPaymentTypeOf(parcel)))
                           : cs.label
                         return (
                           <div className={`mt-1.5 inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${dispBg} ${dispTxt} border border-current/20`}>
-                            {emoji} RETOUR FOND {parcel.codAmount} DH — {lbl}
+                            {isMixedCod(parcel) ? '💵+' : ''}{emoji} RETOUR FOND {parcel.codAmount} DH{isMixedCod(parcel) ? ` (${codPartsBreakdown(parcel)})` : ''} — {lbl}
                           </div>
                         )
                       })()}
@@ -4584,7 +4712,7 @@ export default function ParcelsTab() {
                           </p>
                           <div className="grid grid-cols-2 gap-2">
                             <button
-                              onClick={() => setDeliveryModal({
+                              onClick={() => ensureFullParcel(parcel).then((parcel: any) => setDeliveryModal({
                                 open: true,
                                 parcel,
                                 sectorId: parcel.deliverySectorId || '',
@@ -4592,7 +4720,7 @@ export default function ParcelsTab() {
                                 vehicleId: parcel.deliveryVehicleId || '',
                                 loading: false,
                                 error: '',
-                              })}
+                              }))}
                               className="flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold py-2 rounded-lg transition"
                             >
                               <Truck className="w-3.5 h-3.5" /> {parcel.deliveryDriverId ? 'Changer livreur' : 'Livreur local'}
@@ -5023,8 +5151,23 @@ export default function ParcelsTab() {
                     return (
                   <div className="col-span-2">
                     {(() => null)()}
+                    {editForm.codMixed === true && (
+                      <div className="mb-2">
+                        <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5">💵 Montant espèces (DH)</label>
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.5"
+                          placeholder="Montant espèces (DH)"
+                          value={editForm.codCashAmount || ''}
+                          onChange={ef('codCashAmount')}
+                          disabled={!codEditable}
+                          className={`${inputCls} ${!codEditable ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''} font-bold text-green-700`}
+                        />
+                      </div>
+                    )}
                     <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1.5 flex items-center gap-2">
-                      RETOUR FOND (COD)
+                      {editForm.codMixed === true ? (editForm.serviceType === 'traite' ? '📝 Montant traite (DH)' : '📋 Montant chèque (DH)') : 'RETOUR FOND (COD)'}
                       {isCodType && <span className="normal-case text-green-600 font-bold">← saisissez le montant</span>}
                       {!codEditable && <Lock className="w-3.5 h-3.5 text-gray-400" />}
                     </label>
@@ -5041,6 +5184,11 @@ export default function ParcelsTab() {
                       />
                       {!codEditable && <Lock className="absolute right-3 top-3 w-4 h-4 text-gray-400" />}
                     </div>
+                    {editForm.codMixed === true && (
+                      <p className="mt-1 text-xs font-bold text-gray-600">
+                        Total retour de fonds : {((parseFloat(editForm.codCashAmount) || 0) + (parseFloat(editForm.codAmount) || 0)).toLocaleString('fr-MA')} DH
+                      </p>
+                    )}
                   </div>
                     )
                   })()}
@@ -5154,10 +5302,15 @@ export default function ParcelsTab() {
                     <button
                       type="button"
                       key={st.key}
-                      onClick={() => canEditField('serviceType') && setEditForm((p: any) => ({ ...p, serviceType: st.key, codAmount: st.key === 'simple' || st.key === 'retour_bl' ? 0 : p.codAmount }))}
+                      onClick={() => canEditField('serviceType') && setEditForm((p: any) => (
+                        // 💵+📋 Espèces combinable avec UN chèque OU UNE traite ; les autres types sont exclusifs
+                        ['especes', 'cheque', 'traite', 'simple'].includes(st.key)
+                          ? toggleCodService(p, st.key)
+                          : { ...p, serviceType: st.key, codMixed: false, codCashAmount: '', codAmount: st.key === 'retour_bl' ? 0 : p.codAmount }
+                      ))}
                       disabled={!canEditField('serviceType')}
                       className={`py-2 rounded-xl border-2 text-xs font-bold transition ${
-                        (editForm?.serviceType || 'oc') === st.key
+                        codSelectionOf({ serviceType: editForm?.serviceType || 'oc', codMixed: editForm?.codMixed }).includes(st.key)
                           ? 'bg-blue-600 border-blue-500 text-white'
                           : canEditField('serviceType')
                             ? 'bg-gray-50 border-gray-200 text-gray-500 hover:border-gray-300'
@@ -5574,11 +5727,20 @@ export default function ParcelsTab() {
               <div className="min-w-0 flex-1">
                 <h3 className="font-bold text-xl text-gray-800 break-words">{portDetailsModal.title}</h3>
                 <p className="text-sm text-gray-500 mt-1">
-                  {portDetailsModal.parcels.length} expédition{portDetailsModal.parcels.length > 1 ? 's' : ''} • Total: {' '}
+                  {uniqueParcelCount(portDetailsModal.parcels)} expédition{uniqueParcelCount(portDetailsModal.parcels) > 1 ? 's' : ''} • Total: {' '}
                   <span className={`font-black ${detailColor}`}>
                     {detailTotal().toLocaleString('fr-MA')} DH
                   </span>
                 </p>
+                {portDetailsModal.portType === 'cod' && codModeTotals(portDetailsModal.parcels).length > 1 && (
+                  <div className="flex flex-wrap gap-2 mt-2 text-xs">
+                    {codModeTotals(portDetailsModal.parcels).map(m => (
+                      <span key={m.type} className="px-2 py-0.5 rounded-full bg-gray-100 text-gray-700 font-semibold">
+                        {m.label} : <span className="font-black">{m.total.toLocaleString('fr-MA')} DH</span>
+                      </span>
+                    ))}
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-2 shrink-0 relative">
                 <button
@@ -5646,7 +5808,7 @@ export default function ParcelsTab() {
                     </thead>
                     <tbody>
                       {portDetailsModal.parcels.map((p: any, idx: number) => (
-                        <tr key={p.id || idx} className="border-b border-gray-100 hover:bg-gray-50 transition">
+                        <tr key={p.codPartMixed ? `${p.id}-${p.codPartType}` : (p.id || idx)} className="border-b border-gray-100 hover:bg-gray-50 transition">
                           <td className="px-4 py-3 text-center text-xs text-gray-400">{idx + 1}</td>
                           <td className="px-4 py-3 font-mono text-xs">{p.senderNic || p.sender?.nic || '-'}</td>
                           <td className="px-4 py-3 text-xs">
@@ -5658,6 +5820,9 @@ export default function ParcelsTab() {
                             }`}>
                               {valueTypeLabel(p)}
                             </span>
+                            {p.codPartMixed && (
+                              <div className="text-[10px] text-gray-500 mt-0.5" title="Retour de fonds mixte">RF mixte · total {(p.codAmountTotal || 0).toLocaleString('fr-MA')} DH</div>
+                            )}
                           </td>
                           <td className="px-4 py-3 text-xs text-gray-600">
                             {p.workDate || (p.createdAt?.toDate ? p.createdAt.toDate().toLocaleDateString('fr-FR') : '-')}
@@ -5681,6 +5846,12 @@ export default function ParcelsTab() {
                       ))}
                     </tbody>
                     <tfoot className="bg-gray-50 sticky bottom-0">
+                      {portDetailsModal.portType === 'cod' && codModeTotals(portDetailsModal.parcels).length > 1 && codModeTotals(portDetailsModal.parcels).map(m => (
+                        <tr key={m.type}>
+                          <td colSpan={8} className="px-4 py-1.5 text-right text-xs font-semibold text-gray-600">{m.label} :</td>
+                          <td className="px-4 py-1.5 text-right text-xs font-bold text-gray-700">{m.total.toLocaleString('fr-MA')} DH</td>
+                        </tr>
+                      ))}
                       <tr>
                         <td colSpan={8} className="px-4 py-3 text-right font-bold text-gray-700">TOTAL:</td>
                         <td className="px-4 py-3 text-right">
@@ -5899,6 +6070,7 @@ export default function ParcelsTab() {
                       ...m,
                       serviceType: newServiceType,
                       codAmount: newServiceType === 'simple' || newServiceType === '' || newServiceType === 'retour_bl' ? '0' : m.codAmount,
+                      ...((newServiceType === 'cheque' || newServiceType === 'traite') ? {} : { codMixed: false, codCashAmount: '' }),
                       error: ''
                     }))
                   }}
@@ -5909,7 +6081,6 @@ export default function ParcelsTab() {
                   <option value="especes">💵 Espèces</option>
                   <option value="cheque">📝 Chèque</option>
                   <option value="traite">📄 Traite</option>
-                  <option value="virement">🏦 Virement</option>
                   <option value="retour_bl">🧾 Retour BL</option>
                 </select>
               </div>
@@ -5929,13 +6100,13 @@ export default function ParcelsTab() {
                 </select>
               </div>
 
-              {/* Montant COD - Affiché uniquement pour especes, cheque, traite, virement */}
+              {/* Montant COD - Affiché uniquement pour especes, cheque, traite */}
               {quickEditModal.serviceType &&
                quickEditModal.serviceType !== '' &&
                quickEditModal.serviceType !== 'simple' &&
                quickEditModal.serviceType !== 'retour_bl' && (
                 <div>
-                  <label className="block text-xs font-bold text-gray-700 mb-2">💵 Montant COD (DH)</label>
+                  <label className="block text-xs font-bold text-gray-700 mb-2">{quickEditModal.codMixed ? (quickEditModal.serviceType === 'traite' ? '📝 Montant traite (DH)' : '📋 Montant chèque (DH)') : '💵 Montant COD (DH)'}</label>
                   <input
                     type="number"
                     value={quickEditModal.codAmount || ''}
@@ -5943,6 +6114,29 @@ export default function ParcelsTab() {
                     className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-green-500"
                     placeholder="Ex: 150"
                   />
+                  {(quickEditModal.serviceType === 'cheque' || quickEditModal.serviceType === 'traite') && (
+                    <label className="mt-1.5 flex items-center gap-1.5 text-xs font-semibold text-green-800 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={quickEditModal.codMixed === true}
+                        onChange={e => { const on = e.target.checked; setQuickEditModal(m => ({ ...m, codMixed: on, codCashAmount: on ? m.codCashAmount : '', error: '' })) }}
+                      />
+                      💵 + Espèces (retour de fonds mixte)
+                    </label>
+                  )}
+                </div>
+              )}
+              {quickEditModal.codMixed === true && (quickEditModal.serviceType === 'cheque' || quickEditModal.serviceType === 'traite') && (
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-2">💵 Montant espèces (DH)</label>
+                  <input
+                    type="number"
+                    value={quickEditModal.codCashAmount || ''}
+                    onChange={e => setQuickEditModal(m => ({ ...m, codCashAmount: e.target.value, error: '' }))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-green-500"
+                    placeholder="Ex: 1200"
+                  />
+                  <p className="mt-1 text-xs font-bold text-gray-600">Total : {((parseFloat(quickEditModal.codCashAmount || '') || 0) + (parseFloat(quickEditModal.codAmount) || 0)).toLocaleString('fr-MA')} DH</p>
                 </div>
               )}
 
@@ -6020,6 +6214,11 @@ export default function ParcelsTab() {
               <button
                 onClick={async () => {
                   const { parcel, price, portType, status, codAmount, serviceType, nbColis, poids, contenu, remarque } = quickEditModal
+                  // 💵+📋 RF mixte : chaque type coché doit avoir son montant
+                  const qMixed = quickEditModal.codMixed === true && (serviceType === 'cheque' || serviceType === 'traite')
+                  const codChoiceError = validateCodChoice({ serviceType, codAmount, cashAmount: quickEditModal.codCashAmount, mixed: qMixed })
+                  if (codChoiceError) { setQuickEditModal(m => ({ ...m, error: codChoiceError })); return }
+                  const qCod = buildCodWriteFields({ serviceType, codAmount, cashAmount: quickEditModal.codCashAmount, mixed: qMixed })
 
                   setQuickEditModal(m => ({ ...m, loading: true, error: '' }))
                   try {
@@ -6041,8 +6240,9 @@ export default function ParcelsTab() {
                     //    codPaymentType cohérents avec serviceType (serviceType fait foi).
                     const next: any = {}
                     if (serviceType && serviceType !== parcel.serviceType) next.serviceType = serviceType
-                    const finalCodAmount = serviceType === 'simple' || serviceType === 'retour_bl' ? '0' : codAmount
+                    const finalCodAmount = serviceType === 'simple' || serviceType === 'retour_bl' ? '0' : String(qCod.codAmount) // TOTAL
                     if (num(finalCodAmount) !== num(parcel.codAmount)) next.codAmount = finalCodAmount
+                    if (qCod.codMixed || fresh.codMixed === true) { next.codMixed = qCod.codMixed; next.codCashAmount = qCod.codCashAmount }
                     if (num(price) !== num(parcel.price)) next.price = price
                     if (txt(nbColis) && txt(nbColis) !== txt(parcel.nbColis)) next.nbColis = nbColis
                     if (portType && portType !== parcel.portType) next.portType = portType
@@ -6317,9 +6517,22 @@ export default function ParcelsTab() {
                   {codEditModal.error}
                 </div>
               )}
+              {codEditModal.mixed && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">💵 Montant espèces (DH)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    value={codEditModal.cashValue}
+                    onChange={(e) => setCodEditModal({ ...codEditModal, cashValue: e.target.value })}
+                    className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-orange-500"
+                  />
+                </div>
+              )}
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Montant COD (DH)
+                  {codEditModal.mixed ? (codEditModal.parcel?.serviceType === 'traite' ? '📝 Montant traite (DH)' : '📋 Montant chèque (DH)') : 'Montant COD (DH)'}
                 </label>
                 <input
                   type="number"

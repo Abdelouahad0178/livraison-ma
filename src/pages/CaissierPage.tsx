@@ -1,5 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
+import { setPresenceTab } from '../services/presenceCounters'
 import { codPaymentTypeOf } from '../firebase/constants'
+import { isMixedCod, codDocPartOf, codPartsDetailLabel, codPartsLabel } from '../utils/codParts'
 import { signOut } from 'firebase/auth'
 import { auth, db } from '../firebase/config'
 import { doc, onSnapshot } from 'firebase/firestore'
@@ -142,6 +144,8 @@ export default function CaissierPage() {
   const [entries,       setEntries]       = useState<any[]>([])
   const [pendingCods,   setPendingCods]   = useState<any[]>([])
   const [tab,           setTab]           = useState('home')
+  // 👁️ Présence : onglet courant (libellé affiché dans la carte « L'œil qui ne dort pas » de l'Admin)
+  useEffect(() => { setPresenceTab(tab); return () => setPresenceTab('') }, [tab])
   const [entryModal,    setEntryModal]    = useState(EMPTY_MODAL)
   const [typeFilter,    setTypeFilter]    = useState('all')
   const [datePreset,    setDatePreset]    = useState('all')
@@ -319,11 +323,12 @@ export default function CaissierPage() {
     setEntryModal(m => ({
       ...m,
       category,
-      amount:       String(parcel.codAmount),
+      // RF mixte : pré-rempli avec la part chèque/traite ; la part espèces se saisit séparément (cod_agent)
+      amount:       String(isMixedCod(parcel) ? codDocPartOf(parcel) : parcel.codAmount),
       description:  `RETOUR FOND remis - ${parcel.trackingId} (${parcel.receiver?.name || ''})`,
       reference:    parcel.trackingId,
       agentName,
-      note:         pt ? `Paiement : ${pt.label}` : '',
+      note:         isMixedCod(parcel) ? `RF mixte : ${codPartsDetailLabel(parcel)}` : (pt ? `Paiement : ${pt.label}` : ''),
       codParcelId:  parcel.id,
       error:        '',
     }))
@@ -1896,7 +1901,7 @@ export default function CaissierPage() {
                               <span className="font-mono text-xs font-bold text-gray-700">{p.trackingId}</span>
                               {pt && (
                                 <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full ${pt.bg} ${pt.text}`}>
-                                  {pt.emoji} {pt.label}
+                                  {isMixedCod(p) ? codPartsLabel(p) : <>{pt.emoji} {pt.label}</>}
                                 </span>
                               )}
                             </div>

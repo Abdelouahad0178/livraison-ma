@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, startTransition } from 'react'
 import { subscribeAgencyParcelsFull } from '../firebase/parcels'
 
 /**
@@ -26,7 +26,9 @@ export function useAgencyParcelsFull(
 
   useEffect(() => {
     if (!enabled || !city) return
-    setParcels([])
+    // ⚡ Listes en TRANSITION : le recalcul (soldes, totaux) qu'elles déclenchent ne bloque pas
+    // les clics sur les filtres (le bouton cliqué s'allume immédiatement). Mêmes données.
+    startTransition(() => setParcels([]))
     setLoaded(0)
     setLoading(true)
     setInitialLoading(true)
@@ -34,7 +36,7 @@ export function useAgencyParcelsFull(
       city,
       { dateFrom: fromMs ? new Date(fromMs) : null, dateTo: toMs ? new Date(toMs) : null },
       (data, meta) => {
-        setParcels(data)
+        startTransition(() => setParcels(data))
         setLoaded(meta.loaded)
         setLoading(!meta.complete)
         setInitialLoading(false)

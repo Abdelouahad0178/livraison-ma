@@ -1,4 +1,5 @@
-import { useState, useEffect, useMemo, useRef, useDeferredValue } from 'react'
+import { useState, useEffect, useMemo, useRef, useDeferredValue, startTransition } from 'react'
+import PendingBadge from '../components/PendingBadge'
 import { makeFacturierSearchMatcher } from '../utils/parcelSearch'
 import { subscribeAllParcels, getParcelsPage, getParcelsByCreatedAtRange } from '../firebase/parcels'
 import { Search, Printer, FileSpreadsheet, Edit2, Check, X, FileText, Database, Download, MapPin, User, Receipt, RefreshCw } from 'lucide-react'
@@ -19,6 +20,7 @@ import {
   type Invoice, type InvoiceItem,
 } from '../firebase/invoices'
 import { subscribeClients } from '../firebase/clients'
+import { isMixedCod, codPartsBreakdown, codPartsDetailLabel } from '../utils/codParts'
 import { normName, billingAgencyOf, isBilledByAgency, isCompteExpediteurType, isPortEnCompteType } from '../utils/billingAgency'
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -126,7 +128,7 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
   const [portTypeFilter, setPortTypeFilter] = useState<PortFilter>('all')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [billingFilter, setBillingFilter] = useState<BillingFilter>('all')
-  const [datePreset, setDatePreset] = useState<DateFilterPreset>('month')
+  const [datePreset, setDatePreset] = useState<DateFilterPreset>('week') // démarre sur 7 jours
   const [dateFrom, setDateFrom] = useState('')
   const [dateTo, setDateTo] = useState('')
   const [operationalDay, setOperationalDay] = useState<Date | null>(() => getCurrentOperationalDay())
@@ -156,7 +158,7 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
   useEffect(() => {
     const unsubscribe = subscribeAllParcels(
       (docs: any[], lastSnap: any) => {
-        setLiveParcels(docs)
+        startTransition(() => setLiveParcels(docs))
         setLoading(false)
         setError(null)
         if (!lastPageDocRef.current) lastPageDocRef.current = lastSnap
@@ -187,12 +189,12 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
     try {
       const page = await getParcelsPage(lastPageDocRef.current, PAGE_SIZE)
       const pageDocs = page.docs
-      setMoreParcels(prev => {
+      startTransition(() => setMoreParcels(prev => {
         const map = new Map()
         prev.forEach((p: any) => map.set(p.id, p))
         pageDocs.forEach((p: any) => map.set(p.id, p))
         return [...map.values()]
-      })
+      }))
       if (page.lastDocSnap) lastPageDocRef.current = page.lastDocSnap
       if (!page.hasMore) setHasMore(false)
     } catch (err) {
@@ -224,12 +226,12 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
         const pageDocs = page.docs
         loaded += pageDocs.length
         setLoadAllProgress(loaded)
-        setMoreParcels(prev => {
+        startTransition(() => setMoreParcels(prev => {
           const map = new Map()
           prev.forEach((p: any) => map.set(p.id, p))
           pageDocs.forEach((p: any) => map.set(p.id, p))
           return [...map.values()]
-        })
+        }))
         cursor = page.lastDocSnap
         more = page.hasMore && !!page.lastDocSnap
         safety += 1
@@ -265,7 +267,7 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
     const slices = buildDaySlices(start, end, period.from, period.to)
     setRangeLoading(true)
     setRangeLoadedCount(0)
-    setRangeParcels([])
+    startTransition(() => setRangeParcels([]))
     setRangeDayProgress({ done: 0, total: slices.length, label: slices[0]?.label || '' })
     ;(async () => {
       let loaded = 0
@@ -281,23 +283,27 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
         pending = []
         lastFlush = Date.now()
         shown += docs.length
-        setRangeParcels(prev => {
+        startTransition(() => setRangeParcels(prev => {
           const map = new Map<string, any>()
           prev.forEach(p => map.set(p.id, p))
           docs.forEach(p => map.set(p.id, p))
           return [...map.values()]
-        })
+        }))
       }
       try {
-        for (let i = 0; i < slices.length; i++) {
-          const s = slices[i]
-          if (reqId !== rangeReqRef.current) return
-          setRangeDayProgress({ done: i, total: slices.length, label: s.label })
-          const docs = await getParcelsByCreatedAtRange(s.start, s.end, 1000, undefined, !s.endInclusive)
-          if (reqId !== rangeReqRef.current) return
-          loaded += docs.length
-          setRangeLoadedCount(loaded)
-          if (docs.length) {
+        // ⚡ 12 journées lues EN PARALLÈLE : résultat complet ~5 fois plus rapide
+        let nextIdx = 0, doneDays = 0
+        const worker = async () => {
+          while (nextIdx < slices.length) {
+            const s = slices[nextIdx++]
+            if (reqId !== rangeReqRef.current) return
+            const docs = await getParcelsByCreatedAtRange(s.start, s.end, 1000, undefined, !s.endInclusive)
+            if (reqId !== rangeReqRef.current) return
+            loaded += docs.length
+            doneDays += 1
+            setRangeLoadedCount(loaded)
+            setRangeDayProgress({ done: doneDays, total: slices.length, label: s.label })
+            if (docs.length) {
             for (const d of docs) pending.push(d)
             // Intervalle ADAPTATIF : plus la liste est grande, plus chaque mise à jour coûte (filtres,
             // suggestions, totaux, tableau) → on espace les ajouts (0,8 s au début → 4 s au-delà de ~13 000).
@@ -306,8 +312,11 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
             // énorme et fige la page → le reste est gardé en réserve et ajouté EN UNE FOIS à la fin
             // (le bandeau de progression, lui, continue d'avancer jour par jour).
             if (shown < 3000 && Date.now() - lastFlush >= 800) flush()
+            }
           }
         }
+        await Promise.all(Array.from({ length: Math.min(12, slices.length) }, worker)) // 12 journées en parallèle
+        if (reqId !== rangeReqRef.current) return
         flush()
         if (reqId === rangeReqRef.current) setError(null)
       } catch (err: any) {
@@ -350,7 +359,17 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
   // ⚡ La saisie reste fluide : les filtres suivent la frappe en priorité basse (même résultat final).
   const deferredSearch = useDeferredValue(search)
   const deferredClientQuery = useDeferredValue(clientQuery)
+  // ⚡ RÉACTIVITÉ DES BOUTONS : les filtres (période, ville, type de port, statut, facturation, rôle
+  // client) restent URGENTS — le bouton cliqué s'allume tout de suite et le chargement de la
+  // nouvelle période démarre aussitôt — mais le filtrage/les suggestions/les totaux lisent leur copie
+  // DIFFÉRÉE, recalculée en arrière-plan de façon interruptible. Mêmes résultats.
+  const urgentFilters = useMemo(
+    () => ({ rangeMode, datePreset, dateFrom, dateTo, operationalDay, cityFilter, portTypeFilter, statusFilter, billingFilter, clientRole }),
+    [rangeMode, datePreset, dateFrom, dateTo, operationalDay, cityFilter, portTypeFilter, statusFilter, billingFilter, clientRole]
+  )
+  const deferredFilters = useDeferredValue(urgentFilters)
   const baseFiltered = useMemo(() => {
+    const { rangeMode, datePreset, dateFrom, dateTo, operationalDay, cityFilter, portTypeFilter, statusFilter, billingFilter } = deferredFilters
     const source = rangeMode ? rangeParcels : parcels
     const byDate = filterByDate(source, datePreset, dateFrom, dateTo, parcelDate, operationalDay ?? undefined)
     const term = norm(deferredSearch)
@@ -381,10 +400,11 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
       if (searchMatch && !searchMatch(p)) return false
       return true
     })
-  }, [rangeMode, rangeParcels, parcels, datePreset, dateFrom, dateTo, operationalDay, deferredSearch, profileCity, cityFilter, portTypeFilter, statusFilter, billingFilter, invoicedMap]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [deferredFilters, rangeParcels, parcels, deferredSearch, profileCity, invoicedMap]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 2) Suggestions de clients (noms trouvés sur la période + fiche clients)
   const clientOptions = useMemo(() => {
+    const { clientRole } = deferredFilters
     const counts = new Map<string, { name: string; count: number }>()
     baseFiltered.forEach((p: any) => {
       new Set(clientNamesOf(p, clientRole).map(n => n.trim())).forEach(name => {
@@ -400,7 +420,7 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
       if (k && !counts.has(k)) counts.set(k, { name: String(c.name).trim(), count: 0 })
     })
     return [...counts.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-  }, [baseFiltered, clients, clientRole])
+  }, [baseFiltered, clients, deferredFilters])
   const clientOptionKeys = useMemo(() => new Set(clientOptions.map(o => norm(o.name))), [clientOptions])
 
   // 3) Filtre client : correspondance exacte si le nom vient de la liste, sinon « contient »
@@ -410,6 +430,7 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
   const fClientExact = !!fClientKey && clientOptionKeys.has(fClientKey)
   const filteredParcels = useMemo(() => {
     const clientKey = fClientKey, clientExact = fClientExact
+    const { clientRole } = deferredFilters
     if (!clientKey) {
       // Sans client : le rôle garde son sens historique (qui paie le port en compte)
       if (clientRole === 'expediteur') return baseFiltered.filter((p: any) => p.portType !== 'port_en_compte_destinataire')
@@ -419,11 +440,14 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
     return baseFiltered.filter((p: any) =>
       clientNamesOf(p, clientRole).some(n => (clientExact ? norm(n) === clientKey : norm(n).includes(clientKey)))
     )
-  }, [baseFiltered, fClientKey, fClientExact, clientRole])
+  }, [baseFiltered, fClientKey, fClientExact, deferredFilters])
 
   // ⚡ Le tableau (jusqu'à 500 lignes) se redessine en priorité BASSE : les clics sur les filtres
   // et la saisie restent fluides pendant le chargement ; même contenu une fois à jour.
   const tableParcels = useDeferredValue(filteredParcels)
+  // ⏳ Liste/totaux pas encore à jour du dernier filtre cliqué ou saisi
+  const filtersPending = deferredFilters !== urgentFilters || deferredSearch !== search
+    || deferredClientQuery !== clientQuery || tableParcels !== filteredParcels
 
   // Réinitialisations quand les filtres changent
   useEffect(() => {
@@ -520,6 +544,7 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
       'Type Port': portLabel(parcel.portType),
       'Montant Port (DH)': priceOf(parcel),
       'CRBT (DH)': codOf(parcel),
+      ...(isMixedCod(parcel) ? { 'CRBT détail': codPartsDetailLabel(parcel) } : {}),
       'Date': fr(opDateStr(parcel)) || '-',
       'Statut': parcel.status || '-',
       'Facture': invoiceOf(parcel) || '',
@@ -793,6 +818,7 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
         </div>
       )}
 
+      <PendingBadge show={filtersPending} />
       {/* ── Bandeau de chargement ── */}
       {rangeMode ? (
         <section className="bg-white rounded-xl border border-gray-200 shadow-sm p-4 flex items-center justify-between gap-4">
@@ -967,7 +993,7 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
                           </div>
                         )}
                       </td>
-                      <td className="px-3 py-3 text-sm text-right text-gray-600 whitespace-nowrap">{codOf(parcel) ? `${codOf(parcel).toLocaleString()} DH` : '-'}</td>
+                      <td className="px-3 py-3 text-sm text-right text-gray-600 whitespace-nowrap">{codOf(parcel) ? `${codOf(parcel).toLocaleString()} DH` : '-'}{isMixedCod(parcel) && <div className="text-[10px] text-gray-500">{codPartsBreakdown(parcel)}</div>}</td>
                       <td className="px-3 py-3 text-sm text-gray-600 whitespace-nowrap">{fr(opDateStr(parcel)) || '-'}</td>
                       <td className="px-3 py-3 text-sm text-gray-600">{parcel.status}</td>
                       <td className="px-3 py-3 text-xs">

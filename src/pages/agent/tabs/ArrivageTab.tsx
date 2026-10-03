@@ -5,6 +5,7 @@ import {
   Save, RotateCcw, Edit2, Clock, Eye, Printer, Trash2,
 } from 'lucide-react'
 import { CITIES, ALL_SERVICE_TYPES } from '../../../firebase/constants'
+import { isMixedCod, codServiceLabel } from '../../../utils/codParts'
 import DateFilter from '../DateFilter'
 import { useAgentCtx } from '../AgentCtx'
 import { db } from '../../../firebase/db'
@@ -1045,7 +1046,7 @@ export default function ArrivageTab() {
                                             <div className="flex-1 min-w-0">
                                               <div className="flex items-center gap-1.5 flex-wrap">
                                                 <span className="text-xs font-mono font-bold text-blue-600">{d.trackingId || d.parcelId}</span>
-                                                {st && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 font-semibold">{st.emoji} {st.label}</span>}
+                                                {st && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600 font-semibold">{isMixedCod(d) ? codServiceLabel(d) : <>{st.emoji} {st.label}</>}</span>}
                                               </div>
                                               <p className="text-xs text-gray-500 truncate">
                                                 {d.receiverName || '—'} · {d.originCity || '—'}

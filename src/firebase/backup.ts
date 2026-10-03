@@ -1,4 +1,4 @@
-import { addDoc, collection, doc, getDocs, Timestamp, writeBatch } from 'firebase/firestore'
+import { addDoc, collection, doc, documentId, getDocs, limit, orderBy, query, startAfter, Timestamp, writeBatch } from 'firebase/firestore'
 import { db } from './db'
 export { BACKUP_COLLECTIONS } from './backupCollections'
 import { BACKUP_COLLECTIONS } from './backupCollections'
@@ -29,17 +29,43 @@ function reviveBackupValue(value: any): any {
   return value
 }
 
-export async function exportSiteBackup() {
-  const collections = {}
-  const counts = {}
+const errorText = (err: any) =>
+  err?.code === 'permission-denied' ? 'accès refusé par les règles' : (err?.message || String(err))
 
-  for (const name of BACKUP_COLLECTIONS) {
-    const snap = await getDocs(collection(db, name))
-    ;(collections as any)[name] = snap.docs.map(d => ({
-      id: d.id,
-      data: serializeBackupValue(d.data()),
-    }))
-    ;(counts as any)[name] = snap.size
+/** Lit TOUTE une collection par pages (ordre par identifiant) : pas de requête géante unique
+ *  (≈45 000 expéditions) qui faisait échouer ou figer l'export. */
+async function readCollectionPaged(name: string, onProgress?: (n: number) => void, pageSize = 1000) {
+  const out: { id: string; data: any }[] = []
+  let last: any = null
+  for (let guard = 0; guard < 1000; guard++) {
+    const q = query(collection(db, name), orderBy(documentId()), ...(last ? [startAfter(last)] : []), limit(pageSize))
+    const snap = await getDocs(q)
+    snap.docs.forEach(d => out.push({ id: d.id, data: serializeBackupValue(d.data()) }))
+    onProgress?.(out.length)
+    if (snap.docs.length < pageSize) break
+    last = snap.docs[snap.docs.length - 1]
+  }
+  return out
+}
+
+export type BackupProgress = (info: { collection: string; index: number; total: number; docs: number }) => void
+
+export async function exportSiteBackup(onProgress?: BackupProgress) {
+  const collections: Record<string, any[]> = {}
+  const counts: Record<string, number> = {}
+  const errors: Record<string, string> = {}
+
+  for (let i = 0; i < BACKUP_COLLECTIONS.length; i++) {
+    const name = BACKUP_COLLECTIONS[i]
+    try {
+      const docs = await readCollectionPaged(name, n => onProgress?.({ collection: name, index: i, total: BACKUP_COLLECTIONS.length, docs: n }))
+      collections[name] = docs
+      counts[name] = docs.length
+    } catch (err: any) {
+      // Une collection illisible ne bloque plus toute la sauvegarde : elle est signalée.
+      console.error(`Sauvegarde - collection ${name}:`, err)
+      errors[name] = errorText(err)
+    }
   }
 
   return {
@@ -48,39 +74,54 @@ export async function exportSiteBackup() {
     exportedAt: new Date().toISOString(),
     collections,
     counts,
+    errors,
   }
 }
 
-export async function importSiteBackup(backup: any, importedBy = 'Admin') {
+export async function importSiteBackup(backup: any, importedBy = 'Admin', onProgress?: BackupProgress) {
   if (!backup || backup.schema !== 'firestore-backup-v1' || !backup.collections) {
     throw new Error('Fichier de sauvegarde invalide.')
   }
 
-  const summary = { collections: {}, total: 0 }
+  const summary: { collections: Record<string, number>; total: number; errors: Record<string, string> } = { collections: {}, total: 0, errors: {} }
   const importedAt = new Date().toISOString()
+  const entries = Object.entries(backup.collections).filter(([name, docs]) => BACKUP_COLLECTIONS.includes(name) && Array.isArray(docs)) as [string, any[]][]
 
-  for (const [name, docs] of Object.entries(backup.collections)) {
-    if (!BACKUP_COLLECTIONS.includes(name) || !Array.isArray(docs)) continue
-
-    ;(summary.collections as any)[name] = docs.length
-    summary.total += docs.length
-
-    for (let i = 0; i < docs.length; i += 450) {
-      const batch = writeBatch(db)
-      docs.slice(i, i + 450).forEach(item => {
-        if (!item?.id || !item.data) return
-        batch.set(doc(db, name, item.id), reviveBackupValue(item.data), { merge: true })
-      })
-      await batch.commit()
+  for (let c = 0; c < entries.length; c++) {
+    const [name, docs] = entries[c]
+    let written = 0
+    try {
+      // 400 écritures par lot (limite Firestore : 500)
+      for (let i = 0; i < docs.length; i += 400) {
+        const batch = writeBatch(db)
+        let n = 0
+        docs.slice(i, i + 400).forEach(item => {
+          if (!item?.id || !item.data) return
+          batch.set(doc(db, name, item.id), reviveBackupValue(item.data), { merge: true })
+          n++
+        })
+        if (n) await batch.commit()
+        written += n
+        onProgress?.({ collection: name, index: c, total: entries.length, docs: written })
+      }
+    } catch (err: any) {
+      console.error(`Import - collection ${name}:`, err)
+      summary.errors[name] = errorText(err)
     }
+    summary.collections[name] = written
+    summary.total += written
   }
 
-  await addDoc(collection(db, 'backupImports'), {
-    importedAt,
-    importedBy,
-    sourceExportedAt: backup.exportedAt || null,
-    summary,
-  })
+  try {
+    await addDoc(collection(db, 'backupImports'), {
+      importedAt,
+      importedBy,
+      sourceExportedAt: backup.exportedAt || null,
+      summary,
+    })
+  } catch (err) {
+    console.warn('Journal des imports non enregistré:', err)
+  }
 
   return summary
 }

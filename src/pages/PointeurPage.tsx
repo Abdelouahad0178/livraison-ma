@@ -27,6 +27,7 @@ import {
   ArrowRight, Package, ShieldCheck,
 } from 'lucide-react'
 import { normIncludes } from '../utils/normText'
+import { isMixedCod, codDocPartOf, codCashPartOf, codPartsBreakdown } from '../utils/codParts'
 
 const todayStr = () => new Date().toISOString().split('T')[0]
 
@@ -361,7 +362,9 @@ export default function PointeurPage() {
     return true
   })
   const codNonPointed = codParcels.filter(p => isChequeOrTraiteParcel(p) && !pointedParcelIds.has(p.id))
-  const codTotalNonPointe = codNonPointed.reduce((s, p) => s + (p.codAmount || 0), 0)
+  // RF mixte : le pointeur ne traite que la part chèque/traite (la part espèces va en caisse)
+  const docAmt = (p: any) => isMixedCod(p) ? codDocPartOf(p) : (p.codAmount || 0)
+  const codTotalNonPointe = codNonPointed.reduce((s, p) => s + docAmt(p), 0)
 
   // ⭐ COD réceptionnés à envoyer au chef d'agence (chèques/traites seulement)
   const isCash = (p: any) => ['especes', 'cod_especes'].includes(p.codPaymentType || p.serviceType)
@@ -370,10 +373,10 @@ export default function PointeurPage() {
     p.codStatus === 'remis' &&
     !p.codSentToChef &&  // ⭐ Pas encore envoyé au chef
     !p.codSenderPaid &&
-    !p.centralDeposited &&
+    (!p.centralDeposited || isMixedCod(p)) &&
     !isCash(p)
   )
-  const totDstEnvoy = dst_aEnvoyer.reduce((s, p) => s + parseFloat(p.codAmount || 0), 0)
+  const totDstEnvoy = dst_aEnvoyer.reduce((s, p) => s + (parseFloat(docAmt(p)) || 0), 0)
 
   // ⭐ COD envoyés au chef et traités (envoyés à l'agence source)
   const dst_envoyes = codParcels.filter(p =>
@@ -432,7 +435,7 @@ export default function PointeurPage() {
         destinataireTel: parcel.receiver?.tel      || '',
         villeExpedition: parcel.originCity         || parcel.sender?.city || '',
         modeReglement:   mode,
-        montant:         String(parcel.codAmount   || ''),
+        montant:         String((isMixedCod(parcel) ? codDocPartOf(parcel) : parcel.codAmount) || ''),
         notes:           parcel.deliveryDriverName ? `Livreur : ${parcel.deliveryDriverName}` : '',
       },
       loading: false, error: '',
@@ -706,7 +709,7 @@ export default function PointeurPage() {
       await markCodRefundedToClient(parcel.id, name, uid)
       await createCaisseEntry({
         type: 'sortie', category: 'remboursement_cod',
-        amount: parseFloat(parcel.codAmount) || 0,
+        amount: isMixedCod(parcel) ? codCashPartOf(parcel) : (parseFloat(parcel.codAmount) || 0),
         description: `Remboursement RETOUR FOND — colis retourné ${parcel.trackingId} (${parcel.sender?.name || ''})`,
         reference: parcel.trackingId,
         agentId: uid, agentName: name,
@@ -1377,7 +1380,7 @@ export default function PointeurPage() {
               <div className="bg-amber-50 border border-amber-200 rounded-2xl p-4">
                 <p className="text-xs text-amber-600 font-semibold">Chèques/traites validés par le chef</p>
                 <p className="text-2xl font-black text-amber-700 mt-1">{codFromLivreur.length}</p>
-                <p className="text-xs text-amber-500 mt-0.5">{fmtAmount(codFromLivreur.reduce((s, p) => s + (p.codAmount || 0), 0))} DH</p>
+                <p className="text-xs text-amber-500 mt-0.5">{fmtAmount(codFromLivreur.reduce((s, p) => s + docAmt(p), 0))} DH</p>
               </div>
               <div className="bg-green-50 border border-green-200 rounded-2xl p-4">
                 <p className="text-xs text-green-600 font-semibold">Port dû direct chef</p>
@@ -1409,7 +1412,7 @@ export default function PointeurPage() {
                           <p className="text-xs text-indigo-600 mt-0.5">🚴 {p.deliveryDriverName || p.codCollectedBy || '—'}</p>
                         </div>
                         <div className="text-right shrink-0">
-                          <p className="text-base font-black text-amber-700">{fmtAmount(p.codAmount)} DH</p>
+                          <p className="text-base font-black text-amber-700">{fmtAmount(p.codAmount)} DH</p>{isMixedCod(p) && <p className="text-[10px] font-semibold text-amber-600">{codPartsBreakdown(p)}</p>}
                           <button
                             onClick={() => handleOpenFormFromCod(p)}
                             className="mt-1 flex items-center gap-1 text-xs bg-amber-500 hover:bg-amber-600 text-white px-2.5 py-1.5 rounded-lg font-semibold transition"
@@ -1582,7 +1585,7 @@ export default function PointeurPage() {
                             </div>
                           </div>
                           <div className="text-right shrink-0">
-                            <p className="text-lg font-black text-orange-600">{fmtAmount(p.codAmount)} DH</p>
+                            <p className="text-lg font-black text-orange-600">{fmtAmount(p.codAmount)} DH</p>{isMixedCod(p) && <p className="text-[10px] font-semibold text-orange-500">{codPartsBreakdown(p)}</p>}
                             <button onClick={() => handleSendToChef(p)} disabled={isSending}
                               className="mt-2 flex items-center gap-1.5 text-xs bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white px-3 py-1.5 rounded-xl font-bold transition">
                               {isSending ? (
@@ -1733,7 +1736,7 @@ export default function PointeurPage() {
                           </div>
                         </div>
                         <div className="text-right shrink-0">
-                          <p className={`text-lg font-black ${mi.text}`}>{fmtAmount(p.codAmount)} DH</p>
+                          <p className={`text-lg font-black ${mi.text}`}>{fmtAmount(p.codAmount)} DH</p>{isMixedCod(p) && <p className="text-[10px] font-semibold text-gray-500">{codPartsBreakdown(p)}</p>}
                           <p className="text-xs text-gray-400">{mi.label}</p>
                         </div>
                       </div>

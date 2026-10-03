@@ -4,13 +4,18 @@ import {
   serverTimestamp, arrayUnion, increment, writeBatch, setDoc, Timestamp, runTransaction, deleteField
 } from 'firebase/firestore'
 import { db } from './db'
-import { COD_STATUS, COD_PAYMENT_TYPES, STATUSES } from './constants'
+import { bumpPresence } from '../services/presenceCounters'
+import { COD_STATUS, COD_PAYMENT_TYPES, STATUSES, sanitizeParcelCodWrite } from './constants'
 import { findOrCreateClientForReceiver } from './clients'
 
 type DynamicData = Record<string, any>
 type FirestoreRow = DynamicData & { id: string }
 
 const rowFromDoc = (d: { id: string; data: () => DynamicData }): FirestoreRow => ({ id: d.id, ...d.data() })
+
+/** Type de valeur encaissé : celui du service demandé (un colis C/Chèque n'est jamais encaissé « espèces »). */
+const coherentCodPaymentType = (parcel: DynamicData, paymentType: string): string =>
+  sanitizeParcelCodWrite({ codPaymentType: paymentType }, parcel?.serviceType).codPaymentType
 
 export async function collectCod(
   parcelId: string,
@@ -28,12 +33,13 @@ export async function collectCod(
     }
     tx.update(ref, {
       codStatus:      'collected',
-      codPaymentType: paymentType,
+      codPaymentType: coherentCodPaymentType(data, paymentType),
       codCollectedAt: new Date().toISOString(),
       codCollectedBy: collectedBy,
       ...extraFields,
     })
   })
+  bumpPresence('cod')
 }
 
 // Collecte directe par l'agence destination (client vient sur place) — passe directement à 'remis'
@@ -69,13 +75,14 @@ export async function collectCodAtDestination(parcelId: string, paymentType: str
 
     tx.update(ref, {
       codStatus:      'remis',
-      codPaymentType:  paymentType,
+      codPaymentType:  coherentCodPaymentType(data, paymentType),
       codCollectedAt:  now,
       codCollectedBy:  collectedBy,
       codRemisAt:      now,
       codRemisBy:      collectedBy,
     })
   })
+  bumpPresence('cod')
 }
 
 // Collecte directe par l'agence source (client vient sur place) — bypass étapes destination
@@ -94,7 +101,7 @@ export async function collectCodAtSource(parcelId: string, paymentType: string, 
 
     tx.update(ref, {
       codStatus:              'collected',
-      codPaymentType:          paymentType,
+      codPaymentType:          coherentCodPaymentType(data, paymentType),
       codCollectedAt:          now,
       codCollectedBy:          collectedBy,
       codSentToSource:         true,
@@ -105,6 +112,7 @@ export async function collectCodAtSource(parcelId: string, paymentType: string, 
       codReceivedBySourceAt:   now,
     })
   })
+  bumpPresence('cod')
 }
 export async function remitCod(parcelId: string, remittedBy: string, extraFields: DynamicData = {}): Promise<void> {
   await runTransaction(db, async tx => {

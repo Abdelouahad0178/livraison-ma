@@ -82,7 +82,11 @@ export default function AdminEditParcelModal({
                 <div className="relative">
                   <select
                     value={adminEditModal.form.serviceType}
-                    onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, serviceType: e.target.value } }))}
+                    onChange={e => {
+                      // Un seul type ; Simple / Retour BL => pas de RETOUR FOND
+                      const st = e.target.value
+                      setAdminEditModal((m: any) => ({ ...m, error: '', form: { ...m.form, serviceType: st, codAmount: st === 'simple' || st === 'retour_bl' ? '0' : m.form.codAmount, ...((st === 'cheque' || st === 'traite') ? {} : { codMixed: false, codCashAmount: '' }) } }))
+                    }}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm appearance-none bg-white focus:outline-none focus:border-purple-400"
                   >
                     {['simple','especes','cheque','traite','retour_bl'].map(t => <option key={t} value={t}>{t}</option>)}
@@ -205,10 +209,26 @@ export default function AdminEditParcelModal({
                 </div>
               </div>
               <div>
-                <label className="block text-xs text-gray-500 mb-1">RETOUR FOND (DH)</label>
+                <label className="block text-xs text-gray-500 mb-1">{adminEditModal.form.codMixed ? (adminEditModal.form.serviceType === 'traite' ? '📝 Montant traite (DH)' : '📋 Montant chèque (DH)') : 'RETOUR FOND (DH)'}</label>
                 <input type="number" min="0" step="0.01" value={adminEditModal.form.codAmount}
                   onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, codAmount: e.target.value } }))}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400" />
+                {(adminEditModal.form.serviceType === 'cheque' || adminEditModal.form.serviceType === 'traite') && (
+                  <label className="mt-1 flex items-center gap-1.5 text-[11px] font-semibold text-green-800 cursor-pointer">
+                    <input type="checkbox" checked={adminEditModal.form.codMixed === true}
+                      onChange={e => { const on = e.target.checked; setAdminEditModal((m: any) => ({ ...m, error: '', form: { ...m.form, codMixed: on, codCashAmount: on ? m.form.codCashAmount : '' } })) }} />
+                    💵 + Espèces (RF mixte)
+                  </label>
+                )}
+                {adminEditModal.form.codMixed === true && (
+                  <div className="mt-1">
+                    <label className="block text-xs text-gray-500 mb-1">💵 Montant espèces (DH)</label>
+                    <input type="number" min="0" step="0.01" value={adminEditModal.form.codCashAmount}
+                      onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, codCashAmount: e.target.value } }))}
+                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400" />
+                    <div className="text-[11px] font-bold text-gray-600 mt-1">Total : {((parseFloat(adminEditModal.form.codAmount) || 0) + (parseFloat(adminEditModal.form.codCashAmount) || 0)).toLocaleString('fr-MA')} DH</div>
+                  </div>
+                )}
               </div>
               <div className="col-span-2">
                 <label className="block text-xs text-gray-500 mb-1">Nature marchandise</label>

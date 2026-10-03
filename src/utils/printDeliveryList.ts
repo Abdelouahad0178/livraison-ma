@@ -1,3 +1,5 @@
+import { isMixedCod, codPartsBreakdown } from './codParts'
+
 type DynamicData = Record<string, any>
 
 type DeliveryGroup = DynamicData & {
@@ -53,7 +55,7 @@ export function printDeliveryList(groups: DeliveryGroup[], profile: DynamicData 
         <td>${esc(p.deliverySectorName || p.deliverySectorCode || '-')}</td>
         <td>${esc(p.natureOfGoods || '-')}</td>
         <td class="center">${esc(p.nbColis || 1)}</td>
-        <td class="money">${fmtMoney(p.codAmount || 0)}</td>
+        <td class="money">${fmtMoney(p.codAmount || 0)}${isMixedCod(p) ? `<div class="muted">${esc(codPartsBreakdown(p))}</div>` : ''}</td>
         <td class="money">${p.portType === 'port_du' ? fmtMoney(p.price || 0) : '-'}</td>
         <td class="status">${esc(p.status || '-')}</td>
         <td>${fmtDate(p.deliveryAssignedAt || p.updatedAt || p.createdAt)}</td>

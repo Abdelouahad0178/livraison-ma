@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { AlertTriangle, Search, Filter, Trash2, CheckCircle, XCircle } from 'lucide-react'
-import { getAllLostParcels, deleteLostParcel, LostParcelDeclaration } from '../../../firebase/lostParcels'
+import { subscribeAllLostParcels, deleteLostParcel, LostParcelDeclaration } from '../../../firebase/lostParcels'
 import { normIncludes } from '../../../utils/normText'
 
 export default function AdminLostParcelsTab() {
@@ -11,22 +11,18 @@ export default function AdminLostParcelsTab() {
   const [deleting, setDeleting] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
 
+  // ⚡ Temps réel : toute déclaration / réponse d'agence / suppression apparaît immédiatement
   useEffect(() => {
-    loadLostParcels()
-  }, [])
-
-  const loadLostParcels = async () => {
     setLoading(true)
-    try {
-      const all = await getAllLostParcels()
-      all.sort((a, b) => b.declaredAt.toMillis() - a.declaredAt.toMillis())
-      setLostParcels(all)
-    } catch (error) {
-      console.error('Erreur:', error)
-    } finally {
-      setLoading(false)
-    }
-  }
+    return subscribeAllLostParcels(
+      (all) => {
+        all.sort((a, b) => (b.declaredAt?.toMillis?.() || 0) - (a.declaredAt?.toMillis?.() || 0))
+        setLostParcels(all)
+        setLoading(false)
+      },
+      () => setLoading(false)
+    )
+  }, [])
 
   const handleDelete = async (lp: LostParcelDeclaration) => {
     if (confirmDelete !== lp.id) {
@@ -38,7 +34,6 @@ export default function AdminLostParcelsTab() {
     try {
       await deleteLostParcel(lp.id, lp.parcelId)
       setConfirmDelete(null)
-      await loadLostParcels()
       alert('✅ Supprimé')
     } catch (error: any) {
       alert('❌ ' + error.message)

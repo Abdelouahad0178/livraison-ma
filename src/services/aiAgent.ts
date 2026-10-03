@@ -73,6 +73,7 @@ TU DOIS EXTRAIRE LES DONNÉES MÊME SI C'EST EN ARABE PUR !
 فاس = Fès
 طنجة = Tanger
 أكادير = Agadir
+أيت ملول = Ait Melloul
 مكناس = Meknès
 وجدة = Oujda
 

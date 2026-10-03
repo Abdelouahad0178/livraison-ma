@@ -256,34 +256,23 @@ export async function getUnbilledParcelsForClient(
   }
 }
 
-// Marquer des colis comme facturés
-export async function markParcelsAsInvoiced(parcelIds: string[], invoiceId: string): Promise<void> {
-  const batch = writeBatch(db)
-
-  parcelIds.forEach(parcelId => {
-    const parcelRef = doc(db, 'parcels', parcelId)
-    batch.update(parcelRef, {
-      invoiced: true,
-      invoiceId: invoiceId,
-      invoicedAt: Timestamp.now(),
-    })
-  })
-
-  await batch.commit()
+// ⚠️ Un WriteBatch Firestore est limité à 500 écritures : une facture de 591 expéditions faisait
+// échouer tout le lot (colis jamais marqués, annulation/suppression en erreur). Découpage par 400.
+async function updateParcelsInChunks(parcelIds: string[], data: Record<string, any>): Promise<void> {
+  const ids = [...new Set(parcelIds.filter(Boolean))]
+  for (let k = 0; k < ids.length; k += 400) {
+    const batch = writeBatch(db)
+    ids.slice(k, k + 400).forEach(id => batch.update(doc(db, 'parcels', id), data))
+    await batch.commit()
+  }
 }
 
-// Démarquer des colis comme non facturés (en cas d'annulation de facture)
+// Marquer des colis comme facturés
+export async function markParcelsAsInvoiced(parcelIds: string[], invoiceId: string): Promise<void> {
+  await updateParcelsInChunks(parcelIds, { invoiced: true, invoiceId, invoicedAt: Timestamp.now() })
+}
+
+// Démarquer des colis comme non facturés (en cas d'annulation / suppression de facture)
 export async function unmarkParcelsAsInvoiced(parcelIds: string[]): Promise<void> {
-  const batch = writeBatch(db)
-
-  parcelIds.forEach(parcelId => {
-    const parcelRef = doc(db, 'parcels', parcelId)
-    batch.update(parcelRef, {
-      invoiced: false,
-      invoiceId: null,
-      invoicedAt: null,
-    })
-  })
-
-  await batch.commit()
+  await updateParcelsInChunks(parcelIds, { invoiced: false, invoiceId: null, invoicedAt: null })
 }

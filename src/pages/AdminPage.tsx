@@ -1,7 +1,9 @@
 import { lazy, Suspense, useEffect, useRef, useState, useMemo } from 'react'
+import { setPresenceTab } from '../services/presenceCounters'
 import { codPaymentTypeOf } from '../firebase/constants'
+import { codSplitAmount, codHasType, isMixedCod, codPartsLabel } from '../utils/codParts'
 import { signOut, createUserWithEmailAndPassword, signOut as fbSignOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth'
-import { collection, doc, setDoc, getDoc, getDocs, writeBatch, query, where } from 'firebase/firestore'
+import { collection, doc, setDoc, getDoc, getDocs, writeBatch, query, where, onSnapshot } from 'firebase/firestore'
 import { auth, authSecondary, db } from '../firebase/config'
 import { useNavigate } from 'react-router-dom'
 import { useFuseSearch } from '../hooks/useFuseSearch'
@@ -31,6 +33,7 @@ import {
   searchParcels,
 } from '../firebase/firestore'
 import { deleteParcel, getRealParcelsStats } from '../firebase/parcels'
+import { useLiveParcelPatches } from '../hooks/useLiveParcelPatches'
 import {
   createAgentCodRequest, subscribeAllAgentCodRequests, addAgentCodRequestReply, resolveAgentCodRequest,
 } from '../firebase/agentCodRequests'
@@ -343,8 +346,10 @@ export default function AdminPage() {
 
   // Main tab
   const [mainTab, setMainTab] = useState('home')
+  // 👁️ Présence : onglet courant (libellé affiché dans la carte « L'œil qui ne dort pas » de l'Admin)
+  useEffect(() => { setPresenceTab(mainTab); return () => setPresenceTab('') }, [mainTab])
   const [menuOpen, setMenuOpen] = useState(false)
-  const [adminDatePreset, setAdminDatePreset] = useState('all')
+  const [adminDatePreset, setAdminDatePreset] = useState('all') // « Tout » = 50 expéditions les plus récentes au démarrage
   const [adminDateFrom,   setAdminDateFrom]   = useState('')
   const [adminDateTo,     setAdminDateTo]     = useState('')
 
@@ -547,12 +552,11 @@ export default function AdminPage() {
   const setDateFrom = setAdminDateFrom
   const setDateTo = setAdminDateTo
   // codDatePreset, codDateFrom, codDateTo and their setters are now independent states (defined above)
-  const usersDatePreset = adminDatePreset
-  const usersDateFrom = adminDateFrom
-  const usersDateTo = adminDateTo
-  const setUsersDatePreset = setAdminDatePreset
-  const setUsersDateFrom = setAdminDateFrom
-  const setUsersDateTo = setAdminDateTo
+  // 👥 Utilisateurs : filtre de date PROPRE à l'onglet, « Tout » par défaut (la liste des comptes ne
+  // doit pas dépendre de la période des expéditions)
+  const [usersDatePreset, setUsersDatePreset] = useState('all')
+  const [usersDateFrom, setUsersDateFrom] = useState('')
+  const [usersDateTo, setUsersDateTo] = useState('')
   const activityDatePreset = adminDatePreset
   const activityDateFrom = adminDateFrom
   const activityDateTo = adminDateTo
@@ -859,14 +863,49 @@ export default function AdminPage() {
     }
   }
 
-  // Charger les vrais compteurs au montage uniquement (économie forfait gratuit)
+  // Compteurs globaux (agrégations count(), ~5 requêtes) — TEMPS RÉEL MAÎTRISÉ :
+  // - chargés au montage ;
+  // - puis, tant que l'onglet Accueil est affiché (et la fenêtre visible), écoute du document
+  //   stats/global (maintenu par la Cloud Function onParcelWrite à CHAQUE écriture de colis) :
+  //   1 lecture par modification. Toute modification déclenche un nouveau comptage, au plus une
+  //   fois par minute (les agrégations sont facturées ~1 lecture / 1 000 entrées d'index).
   const loadRealStats = async () => {
+    lastStatsLoadRef.current = Date.now()
     const stats = await getRealParcelsStats()
     setRealStats(stats)
   }
+  const lastStatsLoadRef = useRef(0)
   useEffect(() => {
     loadRealStats()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  useEffect(() => {
+    if (mainTab !== 'home') return
+    const MIN_INTERVAL = 60_000
+    let timer: ReturnType<typeof setTimeout> | null = null
+    let first = true
+    const schedule = () => {
+      if (timer) return
+      const wait = Math.max(0, lastStatsLoadRef.current + MIN_INTERVAL - Date.now())
+      timer = setTimeout(() => {
+        timer = null
+        if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+        loadRealStats()
+      }, wait)
+    }
+    const unsub = onSnapshot(
+      doc(db, 'stats', 'global'),
+      () => {
+        if (first) { first = false; if (Date.now() - lastStatsLoadRef.current > MIN_INTERVAL) schedule(); return }
+        schedule()
+      },
+      (err) => console.error('stats/global:', err)
+    )
+    const onVisible = () => { if (document.visibilityState === 'visible' && Date.now() - lastStatsLoadRef.current > MIN_INTERVAL) schedule() }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => { unsub(); if (timer) clearTimeout(timer); document.removeEventListener('visibilitychange', onVisible) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mainTab])
 
   // Subscriptions lazy � ddémarrent seulement � la premi�re visite de l'onglet
   const _lazyStarted = useRef<any>({})
@@ -1028,10 +1067,17 @@ export default function AdminPage() {
     }, operationalDay)
   , [allParcels, adminDatePreset, adminDateFrom, adminDateTo, operationalDay])
 
+  // Date de création d'un compte : chaîne ISO OU Timestamp Firestore (56 comptes) — new Date(Timestamp)
+  // donnait « Invalid Date », et ces comptes passaient tous les filtres de date.
+  const userCreatedDate = (u: any): Date | null => {
+    const c = u?.createdAt
+    if (!c) return null
+    const d = c.toDate ? c.toDate() : (typeof c === 'object' && typeof c.seconds === 'number') ? new Date(c.seconds * 1000) : new Date(c)
+    return isNaN(d.getTime()) ? null : d
+  }
   const periodUsers = useMemo(() =>
-    filterByDate(users, adminDatePreset, adminDateFrom, adminDateTo, (u: any) =>
-      u.createdAt ? new Date(u.createdAt) : new Date(0), operationalDay)
-  , [users, adminDatePreset, adminDateFrom, adminDateTo, operationalDay])
+    filterByDate(users, usersDatePreset as any, usersDateFrom, usersDateTo, (u: any) => userCreatedDate(u) || new Date(0), operationalDay)
+  , [users, usersDatePreset, usersDateFrom, usersDateTo, operationalDay])
 
   const periodDirectorLogs = useMemo(() =>
     filterByDate(directorLogs, adminDatePreset, adminDateFrom, adminDateTo, (l: any) =>
@@ -1090,8 +1136,9 @@ export default function AdminPage() {
       regleDH:     codDateFiltered.filter((p: any) => p.codSenderPaid).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
       byType: COD_PAYMENT_TYPES.map(pt => ({
         ...pt,
-        total: codDateFiltered.filter((p: any) => codPaymentTypeOf(p) === pt.key).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
-        count: codDateFiltered.filter((p: any) => codPaymentTypeOf(p) === pt.key).length,
+        // RF mixte : chaque part dans son type
+        total: codDateFiltered.reduce((s: number,p: any) => s+codSplitAmount(p, pt.key, codPaymentTypeOf(p)), 0),
+        count: codDateFiltered.filter((p: any) => codPaymentTypeOf(p) === pt.key || codHasType(p, pt.key)).length,
       })).filter(pt => pt.total > 0),
     }
   }, [codDateFiltered])
@@ -1109,7 +1156,10 @@ export default function AdminPage() {
 
   const filteredUsers = useMemo(() => {
     if (!Array.isArray(periodUsers)) return []
-    const roleOk = (u: any) => roleFilter === 'Tous' || u.role === roleFilter
+    // 👥 Page Utilisateurs = POSTES du personnel uniquement : les comptes clients (client,
+    // client-expediteur / portail) n'y apparaissent pas (ils sont gérés dans l'onglet Clients).
+    const isClientAccount = (u: any) => u.role === 'client' || u.role === 'client-expediteur'
+    const roleOk = (u: any) => !isClientAccount(u) && (roleFilter === 'Tous' || u.role === roleFilter)
     const searchOk = (u: any) => !userSearch || [u.name, u.email, u.city, u.code, u.cin, u.cnss, u.tel].some(v => normIncludes(v, userSearch.toLowerCase()))
     return periodUsers.filter((u: any) => roleOk(u) && searchOk(u))
   }, [periodUsers, roleFilter, userSearch])
@@ -1232,7 +1282,7 @@ export default function AdminPage() {
     })) : [],
     cod: Array.isArray(filteredCod) ? filteredCod.map((p: any) => ({
       tracking: p.trackingId, destinataire: p.receiver?.name, ville: p.receiver?.city,
-      montant: p.codAmount, statut: p.codStatus, mode: codPaymentTypeOf(p),
+      montant: p.codAmount, statut: p.codStatus, mode: isMixedCod(p) ? codPartsLabel(p, { emoji: false, amounts: true }) : codPaymentTypeOf(p),
     })) : [],
     retours: Array.isArray(returnParcels) ? returnParcels.map((p: any) => ({ tracking: p.trackingId, status: p.status, motif: p.returnReason, destinataire: p.receiver?.name })) : [],
     agences: Array.isArray(agencyStats) ? agencyStats.map((a: any) => ({ ville: a.city, entrants: a.incoming.length, sortants: a.outgoing.length, livres: a.delivered.length, retours: a.returned.length })) : [],
@@ -1264,13 +1314,22 @@ export default function AdminPage() {
     detailedResults: fuseDetailedResults,
     isSearching: fuseIsSearching,
     totalResults: fuseTotalResults,
+    forceSearch: fuseForceSearch,
   } = useFuseSearch({
     items: periodParcels || [],
     keys: scopedSearchKeys,
     threshold: ADMIN_SEARCH_CONFIG.threshold,
     debounceMs: ADMIN_SEARCH_CONFIG.debounceMs,
     limit: ADMIN_SEARCH_CONFIG.limit,
+    shouldSearch: shouldTriggerSearch, // 7 chiffres / 3 lettres avant toute recherche
   })
+
+  // ⏎ Entrée dans la zone de recherche : recherche immédiate (N° EXP de moins de 7 chiffres)
+  useEffect(() => {
+    const onForce = () => { try { fuseForceSearch?.() } catch { /* */ } }
+    window.addEventListener('force-search', onForce)
+    return () => window.removeEventListener('force-search', onForce)
+  }, [fuseForceSearch])
 
   // ✅ Alias pour compatibilité avec le reste du code
   const search = fuseSearchValue
@@ -1292,8 +1351,8 @@ export default function AdminPage() {
   // Recherche dans TOUTE la base Firestore, pas seulement les 50 colis chargés
   useEffect(() => {
     const query = fuseDebouncedSearch.trim()
-    // Vérifier si la recherche doit être déclenchée (5 chiffres ou 3 lettres min)
-    if (!shouldTriggerSearch(query)) {
+    // Terme déjà « complet » (7 chiffres / 3 lettres) ou forcé par Entrée
+    if (!query) {
       setServerSearchResults(null)
       setIsServerSearching(false)
       return
@@ -1451,6 +1510,46 @@ export default function AdminPage() {
     }
     return filtered.slice(0, displayLimit)
   }, [filtered, displayLimit, datePreset, cityFilter, statusFilter, serviceTypeFilter, portTypeFilter, driverFilter])
+
+  // ⚡ TEMPS RÉEL des colis lus en PONCTUEL (pages « Charger plus » = moreParcels, résultats de
+  // recherche serveur) : écoute par paquets de 30 identifiants (useLiveParcelPatches). Les lignes
+  // AFFICHÉES passent en priorité, puis le reste des pages chargées (COD, retours, alertes… les
+  // utilisent aussi). Les colis déjà couverts par l'écoute principale (liveParcels) sont exclus.
+  // Plafond : 3 000 colis suivis. Désactivé en mode « rechargement manuel ».
+  const liveIdSet = useMemo(() => new Set(liveParcels.map((p: any) => p.id)), [liveParcels])
+  const patchIds = useMemo(() => {
+    const out: string[] = []
+    // Résultats venant de parcels_archive (isArchived = collection d'origine) : rien à écouter
+    const seen = new Set<string>((serverSearchResults || []).filter((r: any) => r.isArchived === true).map((r: any) => r.id))
+    const push = (p: any) => {
+      const id = p?.id
+      if (!id || liveIdSet.has(id) || seen.has(id)) return
+      seen.add(id)
+      out.push(id)
+    }
+    displayedFiltered.forEach(push)
+    moreParcels.forEach(push)
+    serverSearchResults?.forEach(push)
+    return out
+  }, [displayedFiltered, moreParcels, serverSearchResults, liveIdSet])
+  useLiveParcelPatches(patchIds, (updates) => {
+    // Données fraîches du serveur (remplacement complet : un champ supprimé ailleurs, ex. livreur
+    // désaffecté, disparaît aussi ici). null = colis supprimé → retiré de la liste.
+    const apply = (list: any[], keepArchiveFlag: boolean) => {
+      let changed = false
+      const out: any[] = []
+      for (const p of list) {
+        if (!updates.has(p.id)) { out.push(p); continue }
+        changed = true
+        const fresh = updates.get(p.id)
+        if (fresh) out.push(keepArchiveFlag ? { ...fresh, isArchived: p.isArchived } : fresh)
+      }
+      return changed ? out : list
+    }
+    setMoreParcels(prev => apply(prev, false))
+    // Recherche serveur : isArchived y indique la COLLECTION d'origine (parcels / parcels_archive)
+    setServerSearchResults(prev => (prev ? apply(prev, true) : prev))
+  }, { enabled: autoReloadEnabled })
 
   // 🏙️ Expéditions LOCALES parmi les résultats filtrés : même ville d'expédition et de destination
   // (transport entre quartiers). Elles expliquent l'écart avec les pages d'agence, où une expédition
@@ -2527,8 +2626,19 @@ export default function AdminPage() {
               {codEditModal.error && (
                 <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {codEditModal.error}</div>
               )}
+              {codEditModal.mixed && (
+                <div>
+                  <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">💵 Montant espèces (DH)</label>
+                  <input
+                    type="number" min="0" step="0.01"
+                    value={codEditModal.cashValue}
+                    onChange={e => setCodEditModal((m: any) => ({ ...m, cashValue: e.target.value }))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-orange-400 focus:outline-none bg-gray-50 focus:bg-white transition font-bold text-green-700"
+                  />
+                </div>
+              )}
               <div>
-                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">Montant RETOUR FOND (DH)</label>
+                <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1.5">{codEditModal.mixed ? (codEditModal.parcel?.serviceType === 'traite' ? '📝 Montant traite (DH)' : '📋 Montant chèque (DH)') : 'Montant RETOUR FOND (DH)'}</label>
                 <input
                   type="number" min="0" step="0.01"
                   value={codEditModal.value}
@@ -2634,7 +2744,7 @@ export default function AdminPage() {
               <div className="grid grid-cols-3 gap-3">
                 <div><label className="text-xs font-semibold text-gray-500 block mb-1">Poids (kg)</label><input type="number" min="0" step="0.1" value={newParcelModal.form.weight} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, weight: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
                 <div><label className="text-xs font-semibold text-gray-500 block mb-1">Nb Colis</label><input type="number" min="1" value={newParcelModal.form.nbColis} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, nbColis: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
-                <div><label className="text-xs font-semibold text-gray-500 block mb-1">Type</label><select value={newParcelModal.form.serviceType} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, serviceType: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full"><option value="simple">Simple</option><option value="especes">C/Espèces</option><option value="cheque">C/Chèque</option></select></div>
+                <div><label className="text-xs font-semibold text-gray-500 block mb-1">Type</label><select value={newParcelModal.form.serviceType} onChange={e => { const st = e.target.value; setNewParcelModal((m: any) => ({ ...m, error: '', form: { ...m.form, serviceType: st, codAmount: st === 'simple' ? '' : m.form.codAmount, ...((st === 'cheque' || st === 'traite') ? {} : { codMixed: false, codCashAmount: '' }) } })) }} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full"><option value="simple">Simple</option><option value="especes">C/Espèces</option><option value="cheque">C/Chèque</option><option value="traite">C/Traite</option></select></div>
               </div>
 
               {/* Port */}
@@ -2646,8 +2756,22 @@ export default function AdminPage() {
                 <input type="number" min="0" step="0.01" placeholder="Montant port (DH)" value={newParcelModal.form.portPrice} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, portPrice: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" />
               </div>
 
-              {/* RETOUR FOND */}
-              <div><label className="text-xs font-semibold text-gray-500 block mb-1">RETOUR FOND (DH)</label><input type="number" min="0" step="0.01" value={newParcelModal.form.codAmount} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, codAmount: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
+              {/* RETOUR FOND (mixte possible : Espèces + chèque OU traite) */}
+              {(newParcelModal.form.serviceType === 'cheque' || newParcelModal.form.serviceType === 'traite') && (
+                <label className="flex items-center gap-2 text-xs font-semibold text-green-800 bg-green-50 border border-green-200 rounded-xl px-3 py-2 cursor-pointer">
+                  <input type="checkbox" checked={newParcelModal.form.codMixed === true} onChange={e => { const on = e.target.checked; setNewParcelModal((m: any) => ({ ...m, error: '', form: { ...m.form, codMixed: on, codCashAmount: on ? m.form.codCashAmount : '' } })) }} />
+                  💵 + Espèces (retour de fonds mixte : espèces + {newParcelModal.form.serviceType === 'traite' ? 'traite' : 'chèque'})
+                </label>
+              )}
+              <div className={newParcelModal.form.codMixed === true ? 'grid grid-cols-2 gap-3' : ''}>
+                {newParcelModal.form.codMixed === true && (
+                  <div><label className="text-xs font-semibold text-gray-500 block mb-1">💵 Montant espèces (DH)</label><input type="number" min="0" step="0.01" value={newParcelModal.form.codCashAmount || ''} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, codCashAmount: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
+                )}
+                <div><label className="text-xs font-semibold text-gray-500 block mb-1">{newParcelModal.form.codMixed === true ? (newParcelModal.form.serviceType === 'traite' ? '📝 Montant traite (DH)' : '📋 Montant chèque (DH)') : 'RETOUR FOND (DH)'}</label><input type="number" min="0" step="0.01" value={newParcelModal.form.codAmount} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, codAmount: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
+              </div>
+              {newParcelModal.form.codMixed === true && (
+                <div className="text-xs font-bold text-gray-700">Total retour de fonds : {((parseFloat(newParcelModal.form.codCashAmount) || 0) + (parseFloat(newParcelModal.form.codAmount) || 0)).toLocaleString('fr-MA')} DH</div>
+              )}
 
               {/* Actions */}
               <div className="grid grid-cols-2 gap-3 pt-4 border-t">

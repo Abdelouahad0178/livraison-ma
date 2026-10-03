@@ -46,6 +46,9 @@ interface ClientPortalInput {
   natureOfGoods?: string
   serviceType?: string
   codAmount?: number
+  /** RF mixte : codAmount = TOTAL, codCashAmount = part espèces */
+  codMixed?: boolean
+  codCashAmount?: number
   portType?: string
   price?: number
 }
@@ -60,6 +63,7 @@ export async function createClientPortalParcel(data: ClientPortalInput) {
     natureOfGoods: data.natureOfGoods,
     serviceType: data.serviceType || 'especes',
     codAmount: data.codAmount || 0,
+    ...(data.codMixed ? { codMixed: true, codCashAmount: data.codCashAmount || 0 } : {}),
     portType: data.portType || 'port_en_compte_expediteur',
     price: data.price || 0,
     clientId: data.clientId,

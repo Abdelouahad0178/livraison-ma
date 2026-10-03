@@ -1,7 +1,8 @@
 import { lazy, Suspense, useState, useEffect, useRef } from 'react'
 import { Calendar, Search, X, Plus, MapPin, ChevronDown, Check, MessageCircle, Printer } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
-import { CITIES, ALL_SERVICE_TYPES } from '../../../firebase/constants'
+import { CITIES, ALL_SERVICE_TYPES, normalizeServiceType } from '../../../firebase/constants'
+import { codSelectionOf, toggleCodService, isMixedCod, codCashPartOf, codDocPartOf, codPartsDetailLabel } from '../../../utils/codParts'
 import type { Client } from '../../../firebase/clients'
 // Autocomplétion et reconnaissance vocale désactivées pour optimiser performances
 // import ClientAutocomplete from '../../../components/ClientAutocomplete'
@@ -30,7 +31,7 @@ const getEmptyForm = () => ({
   senderName: '', senderNic: '', senderAddress: '', senderTel: '', senderCity: '',
   receiverName: '', receiverAddress: '', receiverTel: '', receiverCity: '', receiverClientId: '',
   weight: '', nbColis: '0', natureOfGoods: 'Colis', natureOfGoodsCustomPrice: '', codAmount: '',
-  serviceType: 'simple', hasRetourBL: false, shipmentMode: 'personal',
+  serviceType: 'simple', codMixed: false, codCashAmount: '', hasRetourBL: false, shipmentMode: 'personal',
   portType: 'port_du', portPayeMethod: '', portPayeMontant: '',
   portPrice: '',
   clientId: '', clientName: '', autoDebit: false,
@@ -74,6 +75,8 @@ export default function NewTab() {
   const [isConfirmed, setIsConfirmed] = useState(false)
   const [confirmSaving, setConfirmSaving] = useState(false)
   const [confirmError, setConfirmError] = useState('')
+  // 💵+📋 Types de retour de fonds cochés (Espèces + chèque/traite possible)
+  const codSelection = codSelectionOf(form)
 
 
   // Ref pour le champ N EXP et le conteneur du ticket
@@ -551,6 +554,7 @@ export default function NewTab() {
         natureOfGoods: editableParcel.natureOfGoods,
         price:         editableParcel.price,
         codAmount:     editableParcel.codAmount,
+        ...(editableParcel.codMixed === true ? { codMixed: true, codCashAmount: editableParcel.codCashAmount } : {}),
       }, { uid: auth.currentUser?.uid || null, name: profile?.name || 'Agent' })
       if (Object.keys(patch).length > 0 && original?.id) {
         setConfirmSaving(true)
@@ -798,6 +802,39 @@ export default function NewTab() {
                     className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none disabled:bg-gray-100 disabled:cursor-not-allowed"
                   />
                 </div>
+                {editableParcel.codMixed === true ? (
+                  <div className="col-span-full grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">💵 Montant espèces (DH)</label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={editableParcel.codCashAmount || 0}
+                        onChange={(e) => {
+                          const cash = parseFloat(normalizeDecimal(e.target.value)) || 0
+                          const docPart = codDocPartOf(editableParcel)
+                          setEditableParcel({ ...editableParcel, codCashAmount: cash, codAmount: cash + docPart })
+                        }}
+                        className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-semibold text-gray-700 mb-1">{editableParcel.serviceType === 'traite' ? '📝 Montant traite (DH)' : '📋 Montant chèque (DH)'}</label>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={Math.max(0, (parseFloat(editableParcel.codAmount) || 0) - (parseFloat(editableParcel.codCashAmount) || 0))}
+                        onChange={(e) => {
+                          const docPart = parseFloat(normalizeDecimal(e.target.value)) || 0
+                          const cash = parseFloat(editableParcel.codCashAmount) || 0
+                          setEditableParcel({ ...editableParcel, codAmount: cash + docPart })
+                        }}
+                        className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
+                      />
+                    </div>
+                    <div className="col-span-2 text-xs font-bold text-gray-700">Total retour fond : {(parseFloat(editableParcel.codAmount) || 0).toLocaleString('fr-MA')} DH</div>
+                  </div>
+                ) : (
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Retour fond (DH)</label>
                   <input
@@ -811,6 +848,7 @@ export default function NewTab() {
                     className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
                   />
                 </div>
+                )}
               </div>
             </div>
           </div>
@@ -889,7 +927,7 @@ export default function NewTab() {
           <div className="flex gap-4 px-3 py-1.5 border-b border-gray-200 bg-gray-50">
             {ALL_SERVICE_TYPES.filter(t => t.key !== 'retour_bl').map(st => {
               const types = createdParcel.serviceType?.split(',').filter(Boolean) || []
-              const isSelected = types.includes(st.key)
+              const isSelected = types.includes(st.key) || (st.key === 'especes' && isMixedCod(createdParcel))
               return (
                 <label key={st.key} className="flex items-center gap-1 text-[10px] font-semibold">
                   <span className={`w-3 h-3 border border-gray-400 rounded-sm flex items-center justify-center text-[8px] ${isSelected ? 'bg-blue-600 border-blue-600 text-white' : ''}`}>
@@ -965,6 +1003,9 @@ export default function NewTab() {
               <div className={`font-bold text-sm ${createdParcel.codAmount > 0 ? 'text-orange-600' : 'text-gray-300'}`}>
                 {createdParcel.codAmount > 0 ? `${createdParcel.codAmount} DH` : '—'}
               </div>
+              {isMixedCod(createdParcel) && (
+                <div className="text-[9px] font-semibold text-orange-700">{codPartsDetailLabel(createdParcel)}</div>
+              )}
             </div>
           </div>
 
@@ -1422,49 +1463,23 @@ export default function NewTab() {
         <div className="bg-green-50 border border-green-200 rounded-lg p-3">
           <h3 className="text-xs font-bold text-green-700 mb-2 flex items-center gap-1.5">
             <span className="text-base">🏷️</span> Type de service
+            <span className="ml-auto text-[10px] font-semibold text-green-800 bg-white border border-green-200 rounded-full px-2 py-0.5">
+              ☝️ Espèces + un chèque ou une traite possibles
+            </span>
           </h3>
           <div className="grid grid-cols-4 gap-2 mb-2">
             {SERVICE_TYPES.map(st => {
-              const types = form.serviceType?.split(',').filter(Boolean) || []
-              const isSelected = types.includes(st.key)
-              const canMultiSelect = st.key === 'cheque' || st.key === 'traite'
+              // 💵+📋 RF MIXTE : Espèces peut s'ajouter à UN chèque OU UNE traite.
+              // Chèque et Traite restent exclusifs ; Simple exclut tout retour de fonds.
+              const isSelected = codSelection.includes(st.key)
 
               return (
                 <button
                   type="button"
+                  role="checkbox"
+                  aria-checked={isSelected}
                   key={st.key}
-                  onClick={() => setForm((p: any) => {
-                    const currentTypes = p.serviceType?.split(',').filter(Boolean) || []
-                    let newTypes: string[]
-
-                    if (st.key === 'simple' || st.key === 'especes') {
-                      // Simple/Espèces: désélectionner tout et sélectionner uniquement celui-ci
-                      newTypes = [st.key]
-                    } else if (st.key === 'cheque' || st.key === 'traite') {
-                      // Chèque/Traite: gestion multi-sélection
-                      const hasSimpleOrEspeces = currentTypes.some((t: string) => t === 'simple' || t === 'especes')
-                      if (hasSimpleOrEspeces) {
-                        // Si simple/especes est sélectionné, le remplacer par cheque/traite
-                        newTypes = [st.key]
-                      } else if (isSelected) {
-                        // Décocher
-                        newTypes = currentTypes.filter((t: string) => t !== st.key)
-                        if (newTypes.length === 0) newTypes = ['simple'] // Par défaut simple si tout décoché
-                      } else {
-                        // Cocher (ajouter à la liste)
-                        newTypes = [...currentTypes.filter((t: string) => t === 'cheque' || t === 'traite'), st.key]
-                      }
-                    } else {
-                      newTypes = [st.key]
-                    }
-
-                    const newServiceType = newTypes.join(',')
-                    return {
-                      ...p,
-                      serviceType: newServiceType,
-                      codAmount: newTypes.every(t => t === 'simple') ? '' : p.codAmount
-                    }
-                  })}
+                  onClick={() => setForm((p: any) => toggleCodService(p, st.key))}
                   onKeyDown={handleKeyNav}
                   className={`flex flex-col items-center justify-center py-2 rounded-lg border text-xs font-bold transition ${
                     isSelected
@@ -1472,9 +1487,11 @@ export default function NewTab() {
                       : 'bg-white border-gray-200 text-gray-600'
                   }`}
                 >
-                  <span className="text-lg">{st.emoji}</span>
+                  <span className="flex items-center gap-1">
+                    <span className={`inline-block w-3 h-3 rounded-full border-2 ${isSelected ? 'border-white bg-white shadow-[inset_0_0_0_2px_#16a34a]' : 'border-gray-300 bg-white'}`} />
+                    <span className="text-lg">{st.emoji}</span>
+                  </span>
                   <span className="mt-0.5">{st.label}</span>
-                  {canMultiSelect && isSelected && <span className="text-[10px] mt-0.5">✓</span>}
                 </button>
               )
             })}
@@ -1490,7 +1507,7 @@ export default function NewTab() {
               />
               <span className="font-medium text-gray-700">🧾 Retour BL</span>
             </label>
-            {form.serviceType !== 'simple' && !form.serviceType?.includes('simple') && (
+            {normalizeServiceType(form.serviceType) !== 'simple' && !form.codMixed && (
               <input
                 id="codAmount"
                 type="text"
@@ -1506,6 +1523,40 @@ export default function NewTab() {
               />
             )}
           </div>
+          {form.codMixed && (
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              <label className="text-[11px] font-semibold text-green-800">
+                💵 Montant espèces (DH)
+                <input
+                  id="codCashAmount"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder="Montant espèces (DH)"
+                  value={form.codCashAmount || ''}
+                  onChange={(e) => setForm({ ...form, codCashAmount: normalizeDecimal(e.target.value) })}
+                  onKeyDown={handleKeyNav}
+                  className={inputCls}
+                />
+              </label>
+              <label className="text-[11px] font-semibold text-green-800">
+                {form.serviceType === 'traite' ? '📝 Montant traite (DH)' : '📋 Montant chèque (DH)'}
+                <input
+                  id="codAmount"
+                  type="text"
+                  inputMode="decimal"
+                  placeholder={form.serviceType === 'traite' ? 'Montant traite (DH)' : 'Montant chèque (DH)'}
+                  value={form.codAmount}
+                  onChange={(e) => setForm({ ...form, codAmount: normalizeDecimal(e.target.value) })}
+                  onKeyDown={handleKeyNav}
+                  className={inputCls}
+                />
+              </label>
+              <div className="col-span-2 text-xs font-bold text-green-900 bg-white border border-green-200 rounded-lg px-2 py-1">
+                Total retour de fonds : {((parseFloat(form.codCashAmount) || 0) + (parseFloat(form.codAmount) || 0)).toLocaleString('fr-MA')} DH
+                <span className="font-normal text-gray-600"> (💵 {(parseFloat(form.codCashAmount) || 0).toLocaleString('fr-MA')} + {form.serviceType === 'traite' ? '📝' : '📋'} {(parseFloat(form.codAmount) || 0).toLocaleString('fr-MA')})</span>
+              </div>
+            </div>
+          )}
         </div>
 
         <button type="submit" disabled={loading}

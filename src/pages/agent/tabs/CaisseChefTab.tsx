@@ -1,7 +1,8 @@
-import { useState, useMemo, useEffect } from 'react'
+import { useState, useMemo, useEffect, useDeferredValue, startTransition } from 'react'
+import PendingBadge from '../../../components/PendingBadge'
 import {
   Wallet, TrendingUp, AlertCircle, User, Package, Clock, Check, X,
-  Send, Eye, ChevronDown, ChevronUp, Search, Calendar, Filter, Banknote, Printer
+  Send, Eye, Search, Calendar, Filter, Banknote, Printer
 } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import DateFilter from '../DateFilter'
@@ -24,11 +25,16 @@ import { collection, query, where, onSnapshot, documentId } from 'firebase/fires
 import { db } from '../../../firebase/db'
 import { shouldTriggerSearch } from '../../../utils/searchUtils'
 import { printPortsCollectes, printVersementParcels, printDriverExpeditionsTable, printBilanJournee, printInstancesRetards } from '../../../utils/agentPrintUtils'
-import { getOperationalDay, isInOperationalDay, getCurrentOperationalDay, getOperationalDayRange, getOperationalDayString, formatOperationalDay } from '../../../config/operationalDay'
 import HScrollArrows from '../../../components/HScrollArrows'
+import DriverCaisseCard from '../../../components/caisse/DriverCaisseCard'
 import { printFeuilleDeCharge } from '../../../utils/printFeuilleDeCharge'
 import { useGarePending } from '../../exploitation/useGarePending'
-import { isGarePending, arrivalDateOf, firestoreBoundsFor } from '../../exploitation/caisseRules'
+import { useDepotIds } from '../../exploitation/useDepotIds'
+import {
+  firestoreBoundsFor, caisseFilterByDate, safeParseAmount, computeCaisseView,
+  caisseCodAmountOfType, caisseCodTotals, CAISSE_DEFAULT_PRESET, caisseDefaultOperationalDay, CAISSE_STATUS_OPTIONS,
+} from '../../../utils/agencyCaisseRules'
+import { isMixedCod, codPartsBreakdown, codCashPartOf, codDocPartOf, codEditResult } from '../../../utils/codParts'
 
 // Types
 interface DelayReason {
@@ -36,88 +42,8 @@ interface DelayReason {
   label: string
 }
 
-// 🗓️ Conversion robuste vers Date (Timestamp Firestore, Date, string, number)
-const toDate = (v: any): Date | null => {
-  if (v === null || v === undefined || v === '') return null
-  if (typeof v?.toDate === 'function') return v.toDate()
-  if (v instanceof Date) return isNaN(v.getTime()) ? null : v
-  if (typeof v?.seconds === 'number') return new Date(v.seconds * 1000)
-  if (typeof v === 'number') return new Date(v)
-  if (typeof v === 'string') {
-    // workDate est au format 'YYYY-MM-DD' : on le place à midi LOCAL pour
-    // éviter le décalage UTC qui ferait basculer la date d'un jour.
-    if (/^\d{4}-\d{2}-\d{2}$/.test(v)) return new Date(v + 'T12:00:00')
-    const d = new Date(v)
-    return isNaN(d.getTime()) ? null : d
-  }
-  return null
-}
-
-// ⚠️ Copies LOCALES et indépendantes des fonctions équivalentes de utils/dateFilter.ts,
-// volontairement dupliquées ici plutôt qu'importées : Caisse Agence et Expéditions doivent
-// pouvoir faire évoluer leur propre filtre de date chacune de leur côté, sans qu'une
-// modification sur l'une ne se répercute silencieusement sur l'autre — même si leur logique
-// se ressemble aujourd'hui.
-
-// Date de référence d'un colis pour cette page : la journée d'opération (8h → 6h le
-// lendemain) via workDate, désormais fiable (voir calculateWorkDate dans firebase/parcels.ts).
-// Priorité identique à ParcelsTab/AgentPage et à AdminPortAgenciesTab.
-const caisseParcelDate = (p: any): Date => {
-  if (p?.workDate) return new Date(p.workDate + 'T12:00:00')
-  const ca = p?.createdAt as { toDate?: () => Date } | undefined | null
-  if (ca?.toDate) return ca.toDate()
-  const ts = p?.history?.[0]?.timestamp
-  if (ts) return new Date(ts)
-  return new Date(0)
-}
-
-// Filtre une liste par preset de date pour cette page (même logique que filterByDate à ce jour).
-const caisseFilterByDate = <T,>(
-  list: T[],
-  preset: any,
-  from?: string | null,
-  to?: string | null,
-  getDate: (item: T) => Date = caisseParcelDate as unknown as (item: T) => Date,
-  operationalDay?: Date,
-): T[] => {
-  if (preset === 'all') return list
-  const now = new Date()
-  const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
-  let start: Date | null = null
-  let end: Date = endOfToday
-  if (preset === 'today') {
-    const range = getOperationalDayRange(getCurrentOperationalDay())
-    start = range.start
-    end = range.end
-  } else if (preset === 'week') {
-    // 🕐 7 derniers JOURS D'OPÉRATION (cohérent avec caisseParcelDate qui priorise workDate)
-    const todayOp = getCurrentOperationalDay()
-    const weekAgoOp = new Date(todayOp); weekAgoOp.setDate(weekAgoOp.getDate() - 6)
-    start = getOperationalDayRange(weekAgoOp).start
-    end = getOperationalDayRange(todayOp).end
-  } else if (preset === 'month') {
-    const todayOp = getCurrentOperationalDay()
-    const firstOfMonth = new Date(todayOp.getFullYear(), todayOp.getMonth(), 1)
-    start = getOperationalDayRange(firstOfMonth).start
-    end = getOperationalDayRange(todayOp).end
-  } else if (preset === 'operational' && operationalDay) {
-    const range = getOperationalDayRange(operationalDay)
-    start = range.start
-    end = range.end
-  } else if (preset === 'day') {
-    start = from ? new Date(from) : null
-    if (start) { start.setHours(0, 0, 0, 0); end = new Date(from + 'T23:59:59') }
-  } else if (preset === 'custom') {
-    start = from ? new Date(from + 'T00:00:00') : null
-    end = to ? new Date(to + 'T23:59:59') : endOfToday
-  }
-  return list.filter(item => {
-    const d = getDate(item)
-    if (start && d < start) return false
-    if (end && d > end) return false
-    return true
-  })
-}
+// ⚖️ Date de référence, filtre de date et TOUS les calculs de cette page : module partagé
+// src/utils/agencyCaisseRules.ts — la MÊME source que la page Chef d'exploitation.
 
 const DELAY_REASONS: DelayReason[] = [
   { key: 'client_absent', label: 'Client absent' },
@@ -139,14 +65,19 @@ export default function CaisseChefTab() {
   const [activeTab, setActiveTab] = useState<'livreurs' | 'journee' | 'instances' | 'versements' | 'historique'>('livreurs')
 
   // Filtres date
-  const [datePreset, setDatePreset] = useState<any>('all')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  // ⚡ RÉACTIVITÉ DES BOUTONS : les valeurs « …Ui » sont URGENTES (bouton/sélecteur mis à jour
+  // immédiatement, chargement Firestore lancé aussitôt) ; les calculs lourds (soldes, livreurs,
+  // totaux) utilisent les copies DIFFÉRÉES (mêmes noms qu'avant), recalculées en arrière-plan.
+  // 📅 Journée de collecte ouverte (clic sur une carte « Collectes par jour »)
+  const [collecteDay, setCollecteDay] = useState<any>(null)
+  const [datePresetUi, setDatePreset] = useState<any>(CAISSE_DEFAULT_PRESET)
+  const [dateFromUi, setDateFrom] = useState('')
+  const [dateToUi, setDateTo] = useState('')
   // 🗓️ Journée d'opération (8h → 6h lendemain) — remplace "Jour précis" sur cette page
-  const [operationalDay, setOperationalDay] = useState<Date | null>(null)
+  const [operationalDayUi, setOperationalDay] = useState<Date | null>(() => caisseDefaultOperationalDay())
   const handleDatePresetChange = (key: any) => {
     // Au premier passage sur "Journée d'opération", initialiser sur aujourd'hui
-    if (key === 'operational' && !operationalDay) setOperationalDay(new Date())
+    if (key === 'operational' && !operationalDayUi) setOperationalDay(new Date())
     setDatePreset(key)
   }
 
@@ -162,7 +93,7 @@ export default function CaisseChefTab() {
   // totaux (ports à collecter, collectés, versements) étaient faux. Désormais : bornes Firestore
   // exactes pour chaque preset (firestoreBoundsFor, sur-ensemble du filtre client), chargement
   // jusqu'à épuisement en temps réel, archivés inclus, 45 jours pour les filtres larges.
-  const caisseBounds = firestoreBoundsFor(datePreset, dateFrom, dateTo, operationalDay)
+  const caisseBounds = firestoreBoundsFor(datePresetUi, dateFromUi, dateToUi, operationalDayUi)
   const caisseFromMs = caisseBounds.from ? caisseBounds.from.getTime() : 0
   const caisseToMs = caisseBounds.to ? caisseBounds.to.getTime() : 0
   const isChefCaisse = profile?.role === 'chef_agence' && !!profile?.city
@@ -183,7 +114,7 @@ export default function CaisseChefTab() {
     const onErr = (err: any) => console.error('CaisseChefTab chargement retours:', err)
     const unsubReturns = subscribeAgencyReturnParcels(
       profile.city,
-      (data: any) => setCaisseReturnParcels(data),
+      (data: any) => startTransition(() => setCaisseReturnParcels(data)),
       onErr,
       caisseFromMs ? new Date(caisseFromMs) : null,
       caisseToMs ? new Date(caisseToMs) : null,
@@ -200,8 +131,17 @@ export default function CaisseChefTab() {
   }, [caisseParcels, caisseReturnParcels])
 
   // Filtres
-  const [driverFilter, setDriverFilter] = useState('all')
-  const [statusFilter, setStatusFilter] = useState('all')
+  const [driverFilterUi, setDriverFilter] = useState('all')
+  const [statusFilterUi, setStatusFilter] = useState('all')
+  // Copies DIFFÉRÉES des filtres (lues par tous les calculs) — un seul objet pour qu'elles
+  // changent ensemble dans le même rendu d'arrière-plan.
+  const urgentCaisseFilters = useMemo(
+    () => ({ datePreset: datePresetUi, dateFrom: dateFromUi, dateTo: dateToUi, operationalDay: operationalDayUi, driverFilter: driverFilterUi, statusFilter: statusFilterUi }),
+    [datePresetUi, dateFromUi, dateToUi, operationalDayUi, driverFilterUi, statusFilterUi]
+  )
+  const deferredCaisseFilters = useDeferredValue(urgentCaisseFilters)
+  const { datePreset, dateFrom, dateTo, operationalDay, driverFilter, statusFilter } = deferredCaisseFilters
+  const caisseFiltersPending = deferredCaisseFilters !== urgentCaisseFilters
   const [searchQuery, setSearchQuery] = useState('')
   const [includeArchived, setIncludeArchived] = useState(false)
   const [searchResults, setSearchResults] = useState<any[] | null>(null)
@@ -269,6 +209,9 @@ export default function CaisseChefTab() {
     price: string
     portType: string
     codAmount: string
+    /** RF mixte : codAmount = part chèque/traite, codCashAmount = part espèces */
+    codMixed?: boolean
+    codCashAmount?: string
     loading: boolean
     error: string
   }>({
@@ -469,848 +412,31 @@ export default function CaisseChefTab() {
     })
   }, [searchResults, statusFilter, modifiedParcels])
 
-  // 🔒 Fonction sécurisée pour parser les montants
-  const safeParseAmount = (value: any): number => {
-    if (value === null || value === undefined || value === '') return 0
-    const num = parseFloat(String(value).replace(',', '.'))
-    return (!isNaN(num) && isFinite(num) && num >= 0) ? num : 0
-  }
-
-  // 🗓️ Prédicat de filtrage de date PARTAGÉ (dataSource + filteredDrivers)
-  // Presets supportés (identiques à DateFilter.tsx) :
-  // 'all' | 'today' | 'week' | 'month' | 'day' | 'custom'
-  const passesDateFilter = useMemo(() => {
-    return (p: any): boolean => {
-      if (!datePreset || datePreset === 'all') return true
-
-      // 🚨 EXCEPTION (filets larges uniquement : "7 jours" / "Ce mois") : les ports dûs NON
-      // COLLECTÉS restent visibles même hors période, pour ne jamais perdre de vue un montant
-      // en attente ancien. Sur un filtre EXPLICITE (Aujourd'hui, Journée d'opération, Jour
-      // précis, Période) l'utilisateur a délibérément choisi une date ou une plage — l'exception
-      // ne doit pas s'appliquer, sinon elle noie ce choix précis sous tous les ports dûs anciens
-      // (ex: "Période" du 08/09 au 08/09 affichait quand même tout).
-      const isExplicitDateFilter = ['today', 'operational', 'day', 'custom'].includes(datePreset)
-      const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
-      const isNotCollected = !p.portStatus // portStatus est défini quand le port est collecté
-      if (isPortDu && isNotCollected && !isExplicitDateFilter) {
-        return true // Toujours afficher les ports dûs non collectés (filets larges)
-      }
-
-      // 🗓️ TOUS les presets (Aujourd'hui, 7 jours, Ce mois, Journée d'opération, Période...)
-      // filtrent sur la même base logique que l'onglet Expéditions : la date de création,
-      // pas la date d'assignation au livreur. Sinon, un colis créé le 8 mais assigné le 9
-      // apparaît "du 9" ici et "du 8" côté Expéditions — deux pages, deux réponses pour ce que
-      // le chef croit être la même question. (Fonctions locales à cette page, voir plus haut.)
-      const d = caisseParcelDate(p)
-      // Aucune date exploitable → on inclut par défaut (ne pas masquer l'expédition)
-      if (!d) return true
-      // 🏬 « En gare » : même filtre de date que les autres livreurs (date de CRÉATION / jour d'opération)
-      return caisseFilterByDate([d], datePreset, dateFrom, dateTo, (x) => x, operationalDay || undefined).length > 0
-    }
-  }, [datePreset, dateFrom, dateTo, operationalDay, profile?.city])
-
-  // 🏬 Colis arrivés en attente en gare, chargés indépendamment de la fenêtre de dates
+  // 🏬 Colis arrivés en attente en gare (hors fenêtre de dates) + comptes « Livreur en gare »
   const garePending = useGarePending(profile?.city)
-
-  // 🔄 Source de données fusionnée (allDisplayParcels + searchResults + cache modifications)
-  const dataSource = useMemo(() => {
-    console.log('📊 [dataSource] RECALCUL:', {
-      'allDisplayParcels.length': allDisplayParcels?.length || 0,
-      'searchResults': searchResults?.length || 0,
-      'modifiedParcels': Object.keys(modifiedParcels).length,
-      'dateFilter': datePreset
-    })
-
-    // 🔍 En mode recherche, utiliser UNIQUEMENT searchResults (même si vide,
-    // pour ne pas retomber sur allDisplayParcels et fausser les stats)
-    // Sinon, utiliser allDisplayParcels
-    let source = searchResults !== null
-      ? [...searchResults]
-      : [...(allDisplayParcels || [])]
-
-    // 🗓️ Appliquer le filtre de date (sauf en mode recherche)
-    // ⚠️ IMPORTANT: Si datePreset === 'all', ne PAS filtrer pour afficher TOUTES les données disponibles
-    if (searchResults === null && datePreset !== 'all') {
-      // ✅ Même prédicat que filteredDrivers (deliveryAssignedAt → workDate → createdAt)
-      source = source.filter(passesDateFilter)
-      console.log(`🗓️ Après filtre de date '${datePreset}': ${source.length} expéditions`)
-    }
-    // En gare : colis arrivés en attente, ajoutés même hors fenêtre de dates (jamais masqués)
-    if (searchResults === null) {
-      const known = new Set(source.map((p: any) => p.id))
-      garePending.forEach((p: any) => { if (!known.has(p.id) && (datePreset === 'all' || passesDateFilter(p))) source.push(p) })
-    }
-
-    // Appliquer le cache des modifications locales EN DERNIER (priorité absolue)
-    // Cela garantit que les modifications utilisateur sont toujours visibles
-    source = source.map((p: any) => {
-      const modified = modifiedParcels[p.id]
-      return modified ? { ...p, ...modified } : p
-    })
-
-    console.log('✅ [dataSource] RÉSULTAT:', {
-      'source.length': source.length,
-      'parcels avec portStatus collected': source.filter((p: any) => p.portStatus === 'collected').length
-    })
-
-    return source
-  }, [allDisplayParcels, searchResults, modifiedParcels, datePreset, dateFrom, dateTo, passesDateFilter, garePending])
-
-  // Calcul des statistiques
-  const stats = useMemo(() => {
-    console.log('📈 [stats] RECALCUL:', {
-      'dataSource.length': dataSource.length,
-      'adminTransfers.length': adminTransfers.length,
-      'profile.city': profile?.city
-    })
-
-    // Ports à collecter (port_du non encaissés, livrés ou en cours de livraison, SAUF retournés)
-    const portsACollecter = dataSource.filter((p: any) =>
-      p.portType === 'port_du' &&
-      !p.portStatus &&
-      (p.status === 'En cours de livraison' || p.status === 'Livré') &&
-      p.status?.toLowerCase().trim() !== 'retourné' &&
-      p.destinationCity === profile?.city
-    )
-
-    // Ports collectés (ceux avec portStatus 'collected' ou 'received', SAUF retours)
-    const portsCollectes = dataSource.filter((p: any) => {
-      const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
-      return p.portType === 'port_du' &&
-        !p.portPayeMethod &&
-        (p.portStatus === 'collected' || p.portStatus === 'received') &&
-        p.destinationCity === profile?.city &&
-        !isReturned
-    })
-
-    // 🆕 Ports payés ramassés localement (à recevoir du livreur)
-    // ⚠️ UNIQUEMENT les colis CRÉÉS dans cette agence (createdByCity)
-    const portsPayesARecevoir = dataSource.filter((p: any) => {
-      const isPortPaye = p.portType === 'port_paye' && !p.portPayeMethod
-      const isFromMyCity = p.originCity === profile?.city // originCity = agence qui crée l'expédition
-      const isCollected = p.portStatus === 'collected' || !p.portStatus
-
-      // Nouveau système : a pickupDriverId
-      // Ancien système : en "En cours de ramassage" (avant migration)
-      const isLocalPickup = p.pickupDriverId || p.status === 'En cours de ramassage'
-
-      return isPortPaye && isFromMyCity && isCollected && isLocalPickup
-    })
-
-    // 🆕 Ports payés reçus par le chef (ramassage local uniquement)
-    // ⚠️ UNIQUEMENT les colis CRÉÉS dans cette agence (createdByCity)
-    const portsPayesRecus = dataSource.filter((p: any) => {
-      const isPortPaye = p.portType === 'port_paye' && !p.portPayeMethod
-      const isFromMyCity = p.originCity === profile?.city // originCity = agence qui crée l'expédition
-      const isReceived = p.portStatus === 'received'
-
-      // Si reçu : compter tous les ports payés de cette ville (peu importe le statut actuel)
-      // L'argent est déjà dans la caisse du chef
-      return isPortPaye && isFromMyCity && isReceived
-    })
-
-    // Expéditions en retard (en cours de livraison depuis >24h)
-    const now = new Date()
-    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-    const enRetard = dataSource.filter((p: any) => {
-      if (p.status !== 'En cours de livraison') return false
-      if (!p.deliveryAssignedAt) return false
-      const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
-      return assignedDate < oneDayAgo && p.destinationCity === profile?.city
-    })
-
-    // Solde à verser (total collecté - total versé)
-    const totalCollecte = portsCollectes.reduce((sum: number, p: any) =>
-      sum + safeParseAmount(p.price), 0
-    )
-
-    // 🆕 Solde disponible = Ports dus collectés + Ports payés reçus (argent physiquement chez le chef)
-    // ⚠️ PAS besoin de déduire totalVerse car les ports versés sont DÉJÀ EXCLUS de portsCollectes
-    const montantPortsPayesARecevoir = portsPayesARecevoir.reduce((sum: number, p: any) =>
-      sum + safeParseAmount(p.price), 0
-    )
-    const montantPortsPayesRecus = portsPayesRecus.reduce((sum: number, p: any) =>
-      sum + safeParseAmount(p.price), 0
-    )
-    const soldeAVerser = Math.max(0, totalCollecte + montantPortsPayesRecus)
-
-    console.log('✅ [stats] RÉSULTAT:', {
-      'portsACollecter': portsACollecter.length,
-      'portsCollectes': portsCollectes.length,
-      'portsPayesARecevoir': portsPayesARecevoir.length,
-      'portsPayesRecus': portsPayesRecus.length,
-      'totalCollecte': totalCollecte,
-      'montantPortsPayesARecevoir': montantPortsPayesARecevoir,
-      'montantPortsPayesRecus': montantPortsPayesRecus,
-      'soldeAVerser (Collectés + Reçus)': soldeAVerser
-    })
-
-    return {
-      portsACollecterCount: portsACollecter.length,
-      portsACollecterMontant: portsACollecter.reduce((sum: number, p: any) =>
-        sum + safeParseAmount(p.price), 0
-      ),
-      portsCollectes: portsCollectes.length,
-      portsCollectesMontant: totalCollecte,
-      portsPayesARecevoirCount: portsPayesARecevoir.length,
-      portsPayesARecevoirMontant: montantPortsPayesARecevoir,
-      portsPayesRecusCount: portsPayesRecus.length,
-      portsPayesRecusMontant: montantPortsPayesRecus,
-      enRetardCount: enRetard.length,
-      soldeAVerser,
-    }
-  }, [dataSource, adminTransfers, profile?.city, searchResults])
-
-  // 💰 Solde de caisse global (sans filtre de date)
-  const soldeCaisseGlobal = useMemo(() => {
-    // Utiliser allDisplayParcels (toutes les données) au lieu de dataSource (filtré)
-    // ⚠️ APPLIQUER modifiedParcels pour refléter les collectes en temps réel
-    // ⚠️ FUSIONNER extraCollectedParcels (vieux colis collectés en mode recherche)
-    const base = allDisplayParcels || []
-    const extra = Object.values(extraCollectedParcels)
-    const merged = [...base, ...extra]
-
-
-    const allParcels = merged.map((p: any) => {
-      const modified = modifiedParcels[p.id]
-      return modified ? { ...p, ...modified } : p
-    })
-
-    // Ports dus collectés (TOUS, sans filtre date, SAUF retours et SAUF déjà versés)
-    const portsCollectes = allParcels.filter((p: any) => {
-      const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
-      const isAlreadyTransferred = p.portAdminTransferred || p.adminTransferred // Déjà versé à l'admin
-      const passes = p.portType === 'port_du' &&
-        !p.portPayeMethod &&
-        (p.portStatus === 'collected' || p.portStatus === 'received') &&
-        p.destinationCity === profile?.city &&
-        !isReturned &&
-        !isAlreadyTransferred // 🆕 Exclure les ports déjà versés
-
-      return passes
-    })
-
-    // Ports payés reçus (TOUS, sans filtre date) - ramassage local
-    // ⚠️ UNIQUEMENT les colis CRÉÉS dans cette agence (createdByCity)
-    const portsPayesRecus = allParcels.filter((p: any) => {
-      const isPortPaye = p.portType === 'port_paye' && !p.portPayeMethod
-      const isFromMyCity = p.originCity === profile?.city // originCity = agence qui crée l'expédition
-      const isReceived = p.portStatus === 'received'
-
-      // Si reçu : compter tous les ports payés de cette ville
-      return isPortPaye && isFromMyCity && isReceived
-    })
-
-    const totalCollecte = portsCollectes.reduce((sum: number, p: any) =>
-      sum + safeParseAmount(p.price), 0
-    )
-
-    const montantRecus = portsPayesRecus.reduce((sum: number, p: any) =>
-      sum + safeParseAmount(p.price), 0
-    )
-
-    // ⚠️ PAS besoin de déduire totalVerse car les ports versés sont DÉJÀ EXCLUS de portsCollectes
-    return Math.max(0, totalCollecte + montantRecus)
-  }, [allDisplayParcels, profile?.city, adminTransfers, modifiedParcels, extraCollectedParcels])
-
-  // 💰 Solde d'un livreur spécifique (sans filtre de date)
-  const soldeLivreur = useMemo(() => {
-    if (driverFilter === 'all') return 0
-
-    // ⚠️ APPLIQUER modifiedParcels pour refléter les collectes en temps réel
-    // ⚠️ FUSIONNER extraCollectedParcels (vieux colis collectés en mode recherche)
-    const base = allDisplayParcels || []
-    const extra = Object.values(extraCollectedParcels)
-    const merged = [...base, ...extra]
-
-    const allParcels = merged.map((p: any) => {
-      const modified = modifiedParcels[p.id]
-      return modified ? { ...p, ...modified } : p
-    })
-
-    // Ports dus collectés par CE livreur (TOUS, sans filtre date, SAUF retours et SAUF déjà versés)
-    const portsCollectes = allParcels.filter((p: any) => {
-      const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
-      const isAlreadyTransferred = p.portAdminTransferred || p.adminTransferred
-      return p.portType === 'port_du' &&
-        !p.portPayeMethod &&
-        (p.portStatus === 'collected' || p.portStatus === 'received') &&
-        p.destinationCity === profile?.city &&
-        p.deliveryDriverId === driverFilter &&
-        !isReturned &&
-        !isAlreadyTransferred
-    })
-
-    // Ports payés REÇUS ramassés par CE livreur (TOUS, sans filtre date)
-    // ⚠️ UNIQUEMENT les colis CRÉÉS dans cette agence (createdByCity)
-    const portsPayesRecus = allParcels.filter((p: any) => {
-      const isPortPaye = p.portType === 'port_paye' && !p.portPayeMethod
-      const isFromMyCity = p.originCity === profile?.city // originCity = agence qui crée l'expédition
-      const isReceived = p.portStatus === 'received'
-
-      // Nouveau système : utiliser pickupDriverId
-      // Ancien système : utiliser deliveryDriverId (pas de pickupDriverId sur anciennes données)
-      const isThisDriver = p.pickupDriverId === driverFilter ||
-        (!p.pickupDriverId && p.deliveryDriverId === driverFilter)
-
-      return isPortPaye && isFromMyCity && isReceived && isThisDriver
-    })
-
-    const totalCollecte = portsCollectes.reduce((sum: number, p: any) =>
-      sum + safeParseAmount(p.price), 0
-    )
-
-    const totalPortsPayesRecus = portsPayesRecus.reduce((sum: number, p: any) =>
-      sum + safeParseAmount(p.price), 0
-    )
-
-    // Solde = ce que le livreur a DONNÉ au chef (collectés + reçus)
-    return totalCollecte + totalPortsPayesRecus
-  }, [allDisplayParcels, driverFilter, profile?.city, modifiedParcels, extraCollectedParcels])
-
-  // Liste des ports collectés pour impression (RESPECTE LES FILTRES DE DATE)
-  const portsCollectesForPrint = useMemo(() => {
-    // ⚠️ Utiliser dataSource qui contient déjà les filtres de date appliqués
-    const base = dataSource || []
-    const extra = Object.values(extraCollectedParcels)
-    const merged = [...base, ...extra]
-
-    const allParcels = merged.map((p: any) => {
-      const modified = modifiedParcels[p.id]
-      return modified ? { ...p, ...modified } : p
-    })
-
-    return allParcels.filter((p: any) => {
-      const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
-      const isAlreadyTransferred = p.portAdminTransferred || p.adminTransferred
-      return p.portType === 'port_du' &&
-        !p.portPayeMethod &&
-        (p.portStatus === 'collected' || p.portStatus === 'received') &&
-        p.destinationCity === profile?.city &&
-        !isReturned &&
-        !isAlreadyTransferred // 🆕 Exclure les ports déjà versés
-    })
-  }, [dataSource, profile?.city, modifiedParcels, extraCollectedParcels])
-
-  // Liste des livreurs actifs
-  const drivers = useMemo(() => {
-    // 🔧 Merger extraCollectedParcels avec dataSource pour inclure les colis collectés en mode recherche
-    const extraParcels = Object.values(extraCollectedParcels)
-    const allParcels = [...dataSource, ...extraParcels]
-
-    const driversMap = new Map()
-
-    allParcels.forEach((p: any) => {
-      // Exclure les expéditions retournées
-      const isReturned = p.returnedAt || p.wasReturned || p.status === 'Retourné'
-
-      // Déterminer le livreur selon le type d'opération
-      const isLocalPickup = p.status === 'En cours de ramassage' &&
-        (p.createdByCity === profile?.city || p.originCity === profile?.city)
-
-      // 🆕 CORRECTION: Inclure aussi les ports payés locaux reçus (peu importe destination)
-      const isLocalPortPayeReceived = p.portType === 'port_paye' &&
-        !p.portPayeMethod &&
-        (p.createdByCity === profile?.city || p.originCity === profile?.city) &&
-        p.portStatus === 'received'
-
-      // Pour ramassage local OU port payé local reçu : utiliser pickupDriverId
-      // Pour livraison : utiliser deliveryDriverId
-      const driverId = (isLocalPickup || isLocalPortPayeReceived) ? p.pickupDriverId : p.deliveryDriverId
-      const driverName = (isLocalPickup || isLocalPortPayeReceived) ? p.pickupDriverName : p.deliveryDriverName
-
-      // Inclure dans la liste du livreur si:
-      // 1. Destination = ma ville (livraison) OU
-      // 2. Ramassage local (createdBy/origin = ma ville ET status = "En cours de ramassage") OU
-      // 3. Port payé local reçu (peu importe destination)
-      const isInMyCity = p.destinationCity === profile?.city
-
-      if (driverId && (isInMyCity || isLocalPickup || isLocalPortPayeReceived) && !isReturned) {
-        if (!driversMap.has(driverId)) {
-          driversMap.set(driverId, {
-            id: driverId,
-            name: driverName,
-            parcels: [],
-          })
-        }
-        driversMap.get(driverId).parcels.push(p)
-      }
-    })
-
-    // Ajouter les expéditions sans livreur (reçues OU locales, non assignées)
-    // TOUTES les expéditions non retournées dans la ville, même celles livrées ou en cours
-    const unknownParcels = allParcels.filter((p: any) => {
-      // Inclure si:
-      // 1. Destination = ma ville OU
-      // 2. Ramassage local (createdBy/origin = ma ville ET status = "En cours de ramassage") OU
-      // 3. Port payé local reçu SANS pickupDriverId (ancien système)
-      const isInMyCity = p.destinationCity === profile?.city
-      const isLocalPickup = p.status === 'En cours de ramassage' &&
-        (p.createdByCity === profile?.city || p.originCity === profile?.city)
-
-      // 🆕 CORRECTION: Inclure les ports payés locaux reçus SANS pickupDriverId
-      // Ces expéditions ont été créées avant la migration et n'ont pas de pickupDriverId
-      const isLocalPortPayeReceivedNoPickup = p.portType === 'port_paye' &&
-        !p.portPayeMethod &&
-        (p.createdByCity === profile?.city || p.originCity === profile?.city) &&
-        p.portStatus === 'received' &&
-        !p.pickupDriverId  // Pas de livreur de ramassage assigné
-
-      // Vérifier qu'aucun livreur LOCAL n'est assigné (ni ramassage ni livraison).
-      // ⚠️ chauffeurId (transport inter-agences) est volontairement ignoré ici : un colis
-      // encore en transit ou tout juste arrivé en agence, sans livreur local, doit rester
-      // "Non assigné (en gare)" quel que soit son statut de transport — seul un livreur
-      // local encaisse le port dû, pas le chauffeur qui l'a transporté.
-      const hasNoDriver = !p.deliveryDriverId && !p.pickupDriverId
-
-      return (
-        (hasNoDriver && (isInMyCity || isLocalPickup)) || isLocalPortPayeReceivedNoPickup
-      ) &&
-        !(p.returnedAt || p.wasReturned || p.status === 'Retourné')  // Exclure seulement les retournées
-    })
-
-    if (unknownParcels.length > 0) {
-      driversMap.set('unknown', {
-        id: 'unknown',
-        name: `En gare - ${profile?.city || ''}`,
-        parcels: unknownParcels,
-      })
-    }
-
-    // 🏬 « En gare - <ville> » = UN SEUL groupe : on fusionne le compte « Livreur en gare » de la ville
-    // (nom « En gare - <ville> ») avec les colis sans livreur, sinon deux lignes identiques s'affichent.
-    const gareName = `En gare - ${profile?.city || ''}`
-    const unknownGroup = driversMap.get('unknown')
-    if (unknownGroup) {
-      for (const [id, g] of [...driversMap.entries()]) {
-        if (id !== 'unknown' && g.name === gareName) {
-          const seenIds = new Set(unknownGroup.parcels.map((p: any) => p.id))
-          g.parcels.forEach((p: any) => { if (!seenIds.has(p.id)) unknownGroup.parcels.push(p) })
-          driversMap.delete(id)
-        }
-      }
-    }
-
-    return Array.from(driversMap.values()).map(driver => {
-      // 🔧 Appliquer modifiedParcels pour refléter les changements optimistes
-      const parcelsWithModifications = driver.parcels.map((p: any) => {
-        const modified = modifiedParcels[p.id]
-        return modified ? { ...p, ...modified } : p
-      })
-
-      // Séparer les ports dû pour les calculs de collecte
-      // IMPORTANT: Le livreur livre TOUTES les expéditions (port payé + port dû)
-      // mais ne collecte de l'argent QUE pour les ports dû
-
-      // LOGIQUE ROBUSTE : Une expédition est PORT DÛ si :
-      // 1. portType === 'port_du' (exclu automatiquement port_en_compte_destinataire) ET
-      // 2. portPayeMethod n'est PAS défini (sinon c'est un port payé)
-      // Note: Les clients en compte (port_en_compte_*) sont traités comme port payé
-      const portDuParcels = parcelsWithModifications.filter((p: any) =>
-        p.portType === 'port_du' && !p.portPayeMethod
-      )
-
-      // Calculs par livreur - basés uniquement sur les ports dû
-      const assignedToday = parcelsWithModifications.filter((p: any) => {
-        // Colis sans date d'assignation = considérés comme assignés aujourd'hui
-        if (!p.deliveryAssignedAt) return true
-
-        const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
-        const today = new Date()
-        today.setHours(0, 0, 0, 0)
-        return assignedDate >= today
-      })
-
-      // CORRECTION: Double-vérification explicite pour exclure les ports payés ET retournés
-      // Pour "Non assigné", tous les ports dus non collectés sont "À collecter"
-      // Pour les assignés, seulement ceux "En cours de livraison" ou "Livré"
-      const portsACollecter = portDuParcels.filter((p: any) => {
-        const isReturned = p.returnedAt || p.wasReturned || p.status === 'Retourné'
-        const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
-
-        if (isReturned || isCollected) return false
-
-        // Si "Non assigné", tous les ports dus non collectés/retournés sont à collecter
-        if (driver.id === 'unknown') return true
-
-        // Si assigné, inclure "Arrivé en agence", "En cours de livraison" et "Livré"
-        return p.status === 'Arrivé en agence' || p.status === 'En cours de livraison' || p.status === 'Livré'
-      })
-
-      // Ports collectés = ceux avec portStatus 'collected' ou 'received', SAUF retours et déjà versés
-      const portsCollectes = portDuParcels.filter((p: any) => {
-        const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
-        const isAlreadyTransferred = p.portAdminTransferred || p.adminTransferred
-        return (p.portStatus === 'collected' || p.portStatus === 'received') && !isReturned && !isAlreadyTransferred
-      })
-
-      // 🆕 Ports payés par ce livreur (afficher TOUS, compter uniquement ramassage local)
-      const portsPayesParcels = parcelsWithModifications.filter((p: any) =>
-        p.portType === 'port_paye' &&
-        !p.portPayeMethod
-      )
-      // Compter uniquement les ramassages locaux pour les statistiques
-      // ⚠️ UNIQUEMENT les colis CRÉÉS dans cette agence (createdByCity)
-      const portsPayesARecevoir = portsPayesParcels.filter((p: any) => {
-        const isFromMyCity = p.originCity === profile?.city // originCity = agence qui crée l'expédition
-        const isCollected = p.portStatus === 'collected' || !p.portStatus
-
-        // Nouveau système : a pickupDriverId
-        // Ancien système : en "En cours de ramassage" (avant migration)
-        const isLocalPickup = p.pickupDriverId || p.status === 'En cours de ramassage'
-
-        return isFromMyCity && isCollected && isLocalPickup
-      })
-      const portsPayesRecus = portsPayesParcels.filter((p: any) => {
-        const isFromMyCity = p.originCity === profile?.city // originCity = agence qui crée l'expédition
-        const isReceived = p.portStatus === 'received'
-
-        // Si reçu : compter tous les ports payés CRÉÉS dans cette ville
-        return isFromMyCity && isReceived
-      })
-
-      const now = new Date()
-      const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-      const enRetard = portDuParcels.filter((p: any) => {
-        if (p.portType !== 'port_du') return false  // Vérification explicite
-        if (p.status !== 'En cours de livraison') return false
-        if (!p.deliveryAssignedAt) return false
-        const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
-        return assignedDate < oneDayAgo
-      })
-
-      return {
-        ...driver,
-        // Garder TOUTES les expéditions (port payé + port dû) avec modifications optimistes
-        parcels: parcelsWithModifications,
-        // Ajouter les ports dû séparément pour référence
-        portDuParcels: portDuParcels,
-        // Ajouter les ports payés séparément
-        portsPayesParcels: portsPayesParcels,
-        assignedTodayCount: assignedToday.length,
-        portsACollecterCount: portsACollecter.length,
-        portsACollecterMontant: portsACollecter.reduce((sum: number, p: any) =>
-          sum + safeParseAmount(p.price), 0
-        ),
-        portsCollectesCount: portsCollectes.length,
-        portsCollectesMontant: portsCollectes.reduce((sum: number, p: any) =>
-          sum + safeParseAmount(p.price), 0
-        ),
-        portsPayesARecevoirCount: portsPayesARecevoir.length,
-        portsPayesARecevoirMontant: portsPayesARecevoir.reduce((sum: number, p: any) =>
-          sum + safeParseAmount(p.price), 0
-        ),
-        portsPayesRecusCount: portsPayesRecus.length,
-        portsPayesRecusMontant: portsPayesRecus.reduce((sum: number, p: any) =>
-          sum + safeParseAmount(p.price), 0
-        ),
-        enRetardCount: enRetard.length,
-      }
-    }).sort((a, b) => a.name.localeCompare(b.name))
-  }, [dataSource, agentEntries, profile?.city, extraCollectedParcels, modifiedParcels])
-
-  // Filtrer les livreurs
-  const filteredDrivers = useMemo(() => {
-    console.error('🔍 [filteredDrivers] DÉBUT:', {
-      'Drivers total': drivers.length,
-      'datePreset': datePreset,
-      'searchResults': searchResults ? searchResults.length : 'null',
-      'Total parcels dans drivers': drivers.reduce((sum, d) => sum + d.parcels.length, 0)
-    })
-
-    let result = drivers
-
-    // 🔍 En mode recherche, NE PAS filtrer par date - montrer tous les résultats
-    const inSearchMode = searchResults !== null
-
-    // Filtrer les colis de chaque livreur par date d'assignation
-    result = result.map(driver => {
-      const filteredParcels = driver.parcels.filter((p: any) => {
-        // 🔍 En mode recherche, montrer TOUS les résultats sans filtre de date
-        if (inSearchMode) return true
-
-        // ✅ EXACTEMENT le même prédicat que dataSource :
-        // deliveryAssignedAt → workDate → createdAt, presets 'all'/'today'/
-        // 'week'/'month'/'day'/'custom'. Les expéditions non assignées
-        // (livreur "Non assigné") passent donc par workDate/createdAt.
-        return passesDateFilter(p)
-      })
-
-      // Appliquer le filtre de statut de collecte
-      // ✅ En mode normal ET en mode recherche, le filtre s'applique
-      let statusFilteredParcels = filteredParcels
-      if (statusFilter !== 'all') {
-        const now = new Date()
-        const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-
-        statusFilteredParcels = filteredParcels.filter((p: any) => {
-          const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
-          const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
-          const isReturned = p.status?.toLowerCase().trim() === 'retourné'
-          // ⚠️ "Arrivé en agence" inclus : un colis non assigné "en gare" (bucket "Non assigné")
-          // dont le port dû n'est pas encore collecté doit apparaître dans "À collecter", pas
-          // seulement les colis déjà en cours de livraison ou livrés.
-          const isInDelivery = p.status === 'En cours de livraison' || p.status === 'Livré' || p.status === 'Arrivé en agence'
-
-          let isLate = false
-          if (isPortDu && p.status === 'En cours de livraison' && p.deliveryAssignedAt) {
-            const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
-            isLate = assignedDate < oneDayAgo
-          }
-
-          switch (statusFilter) {
-            case 'a_collecter':
-              // "Non assigné" : même règle large que le badge portsACollecter plus bas — tout
-              // port dû non collecté et non retourné compte, peu importe son statut exact
-              // (il peut être "en gare" avant même d'être marqué "Arrivé en agence").
-              if (driver.id === 'unknown') return isPortDu && !p.portStatus && !isReturned
-              return isPortDu && !p.portStatus && isInDelivery && !isReturned
-            case 'collecte':
-              return isPortDu && isCollected
-            case 'en_compte':
-          return String(p.portType || '').startsWith('port_en_compte') && !(p.returnedAt || p.wasReturned || p.status === 'Retourné')
-        case 'ramasse':
-          return p.portType === 'port_paye' && !p.portPayeMethod && !(p.returnedAt || p.wasReturned || p.status === 'Retourné')
-        case 'en_retard':
-              return isPortDu && isLate && !isReturned
-            default:
-              return true
-          }
-        })
-      }
-
-      // Recalculer les statistiques pour les colis filtrés
-      // IMPORTANT: Filtrer uniquement les ports dus (même logique que drivers)
-      const filteredPortDuParcels = statusFilteredParcels.filter((p: any) =>
-        p.portType === 'port_du' && !p.portPayeMethod
-      )
-
-      const assignedToday = statusFilteredParcels.filter((p: any) => {
-        // Colis sans date d'assignation = considérés comme assignés aujourd'hui
-        if (!p.deliveryAssignedAt) return true
-
-        const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
-        const today = new Date()
-        today.setHours(0, 0, 0, 0)
-        return assignedDate >= today
-      })
-
-      const portsACollecter = filteredPortDuParcels.filter((p: any) => {
-        const isReturned = p.returnedAt || p.wasReturned || p.status === 'Retourné'
-        const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
-
-        if (isReturned || isCollected) return false
-
-        // Si "Non assigné", tous les ports dus non collectés/retournés sont à collecter
-        if (driver.id === 'unknown') return true
-
-        // Si assigné, inclure "Arrivé en agence", "En cours de livraison" et "Livré"
-        return p.status === 'Arrivé en agence' || p.status === 'En cours de livraison' || p.status === 'Livré'
-      })
-
-      // Ports collectés = ceux avec portStatus 'collected' ou 'received', SAUF retours et déjà versés
-      const portsCollectes = filteredPortDuParcels.filter((p: any) => {
-        const isReturned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
-        const isAlreadyTransferred = p.portAdminTransferred || p.adminTransferred
-        return (p.portStatus === 'collected' || p.portStatus === 'received') && !isReturned && !isAlreadyTransferred
-      })
-
-      const now = new Date()
-      const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-      const enRetard = filteredPortDuParcels.filter((p: any) => {
-        if (p.portType !== 'port_du') return false  // Vérification explicite
-        if (p.portPayeMethod) return false          // Exclure ports payés
-        if (p.status !== 'En cours de livraison') return false
-        if (!p.deliveryAssignedAt) return false
-        const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
-        return assignedDate < oneDayAgo
-      })
-
-      return {
-        ...driver,
-        parcels: statusFilteredParcels,
-        assignedTodayCount: assignedToday.length,
-        portsACollecterCount: portsACollecter.length,
-        portsACollecterMontant: portsACollecter.reduce((sum: number, p: any) =>
-          sum + safeParseAmount(p.price), 0
-        ),
-        portsCollectesCount: portsCollectes.length,
-        portsCollectesMontant: portsCollectes.reduce((sum: number, p: any) =>
-          sum + safeParseAmount(p.price), 0
-        ),
-        enRetardCount: enRetard.length,
-      }
-    }).filter(d => d.parcels.length > 0) // Ne garder que les livreurs avec des colis dans la période
-
-    if (driverFilter !== 'all') {
-      result = result.filter(d => d.id === driverFilter)
-    }
-
-    // Note: searchQuery est utilisé pour la recherche serveur, pas pour filtrer
-    // la liste normale des livreurs. Donc on ne filtre PAS par searchQuery ici.
-
-    console.error('🔍 [filteredDrivers] FIN:', {
-      'Drivers après filtrage': result.length,
-      'Total parcels après': result.reduce((sum, d) => sum + d.parcels.length, 0),
-      'Détail': result.map(d => ({ nom: d.name, parcels: d.parcels.length }))
-    })
-
-    return result
-  }, [drivers, driverFilter, statusFilter, searchQuery, searchResults, datePreset, dateFrom, dateTo, passesDateFilter, agentEntries])
-
-  // Stats filtrées (selon filtres actifs)
-  const filteredStats = useMemo(() => {
-    // Agréger toutes les stats des drivers filtrés
-    const totalACollecter = filteredDrivers.reduce((sum, d) => sum + d.portsACollecterCount, 0)
-    const montantACollecter = filteredDrivers.reduce((sum, d) => sum + d.portsACollecterMontant, 0)
-    const totalCollectes = filteredDrivers.reduce((sum, d) => sum + d.portsCollectesCount, 0)
-    const montantCollectes = filteredDrivers.reduce((sum, d) => sum + d.portsCollectesMontant, 0)
-    const totalPortsPayesARecevoir = filteredDrivers.reduce((sum, d) => sum + (d.portsPayesARecevoirCount || 0), 0)
-    const montantPortsPayesARecevoir = filteredDrivers.reduce((sum, d) => sum + (d.portsPayesARecevoirMontant || 0), 0)
-    const totalPortsPayesRecus = filteredDrivers.reduce((sum, d) => sum + (d.portsPayesRecusCount || 0), 0)
-    const montantPortsPayesRecus = filteredDrivers.reduce((sum, d) => sum + (d.portsPayesRecusMontant || 0), 0)
-    const totalEnRetard = filteredDrivers.reduce((sum, d) => sum + d.enRetardCount, 0)
-
-    // 🆕 Calcul du solde disponible (argent physiquement chez le chef) :
-    // - Si TOUS les livreurs : (Collectés + Reçus) - Versements admin
-    // - Si UN livreur : SEULEMENT ses collectés (les reçus sont globaux, pas par livreur)
-    // 🔍 En mode recherche, ne PAS déduire les versements admin (ils ne
-    // correspondent pas forcément aux colis recherchés)
-    const inSearchMode = searchResults !== null
-    let soldeAVerser
-
-    if (driverFilter === 'all') {
-      // Tous les livreurs : collectés + reçus
-      // ⚠️ PAS besoin de déduire totalVerse car les ports versés sont DÉJÀ EXCLUS du calcul
-      soldeAVerser = Math.max(0, montantCollectes + montantPortsPayesRecus)
-    } else {
-      // Un livreur spécifique : SEULEMENT ses collectés (pas les reçus)
-      soldeAVerser = Math.max(0, montantCollectes)
-    }
-
-    return {
-      portsACollecterCount: totalACollecter,
-      portsACollecterMontant: montantACollecter,
-      portsCollectes: totalCollectes,
-      portsCollectesMontant: montantCollectes,
-      portsPayesARecevoirCount: totalPortsPayesARecevoir,
-      portsPayesARecevoirMontant: montantPortsPayesARecevoir,
-      portsPayesRecusCount: totalPortsPayesRecus,
-      portsPayesRecusMontant: montantPortsPayesRecus,
-      enRetardCount: totalEnRetard,
-      soldeAVerser,
-    }
-  }, [filteredDrivers, driverFilter, adminTransfers, searchResults])
-
-  // 📊 Bilan de journée par livreur (pour onglet "Journée")
-  // ⚠️ Calculé sur les colis de chaque livreur filtrés par la PÉRIODE uniquement — jamais par le
-  // filtre de statut (À collecter / Collecté / En retard). Avant, il partait de filteredDrivers :
-  // avec « À collecter » actif, "Assignés" affichait le reste à collecter (ex. 8), "Livrés" et
-  // "En cours" ne comptaient que ces colis-là, et "Collectés" tombait à 0.
-  const bilanJournee = useMemo(() => {
-    const inSearchMode = searchResults !== null
-    const returned = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
-    return drivers
-      .filter(d => d.id !== 'unknown' && (driverFilter === 'all' || d.id === driverFilter)) // "Non assigné" n'a rien d'assigné
-      .map(d => {
-        const parcels = d.parcels.filter((p: any) => inSearchMode || passesDateFilter(p))
-        const portDu = parcels.filter((p: any) => p.portType === 'port_du' && !p.portPayeMethod)
-        const livres = parcels.filter((p: any) => p.status === 'Livré')
-        const enCours = parcels.filter((p: any) => p.status === 'En cours de livraison')
-        // 🚨 ANOMALIE: livré mais port dû non encaissé
-        const livresNonCollectes = portDu.filter((p: any) => p.status === 'Livré' && !p.portStatus)
-        const montantManquant = livresNonCollectes.reduce((s: number, p: any) => s + safeParseAmount(p.price), 0)
-        // Ports collectés : mêmes règles que les totaux livreur
-        const collectes = portDu.filter((p: any) =>
-          (p.portStatus === 'collected' || p.portStatus === 'received') &&
-          !returned.includes(p.status) && !(p.portAdminTransferred || p.adminTransferred))
-        const total = parcels.length
-        // Ports en compte (client en compte) : assignés au livreur mais hors « ports dus / payés »
-        const enCompteCount = parcels.filter((p: any) => !(p.portType === 'port_du' && !p.portPayeMethod) && !(p.portType === 'port_paye' && !p.portPayeMethod)).length
-        const enAgenceCount = parcels.filter((p: any) => p.status === 'Arrivé en agence').length
-        return {
-          id: d.id,
-          name: d.name,
-          total,
-          enCompteCount,
-          enAgenceCount,
-          livresCount: livres.length,
-          enCoursCount: enCours.length,
-          tauxLivraison: total ? Math.round(livres.length / total * 100) : 0,
-          livresNonCollectes,
-          montantManquant,
-          portsCollectesCount: collectes.length,
-          portsCollectesMontant: collectes.reduce((sum: number, p: any) => sum + safeParseAmount(p.price), 0),
-        }
-      })
-      .filter(b => b.total > 0)
-  }, [drivers, driverFilter, searchResults, passesDateFilter])
-
-  // 🕰️ Instances / Retards: ports dûs non collectés triés par ancienneté
-  const instances = useMemo(() => {
-    const now = Date.now()
-    const src = dataSource.filter((p: any) => {
-      const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
-      const notCollected = !p.portStatus
-      const notReturned = !['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
-      const enCours = p.status === 'En cours de livraison' || p.status === 'Arrivé en agence'
-      // Filtre par livreur
-      const matchesDriver = driverFilter === 'all' || p.deliveryDriverId === driverFilter
-      return isPortDu && notCollected && notReturned && enCours &&
-        p.destinationCity === profile?.city && matchesDriver
-    })
-    return src.map((p: any) => {
-      const ref = caisseParcelDate(p)
-      const ageJours = ref ? Math.floor((now - ref.getTime()) / 86400000) : 0
-      const delay = deliveryDelays.find((d: any) => d.parcelId === p.id && !d.resolvedAt)
-      const bucket = ageJours >= 30 ? '30j+' : ageJours >= 7 ? '7-30j' : ageJours >= 1 ? '1-7j' : '<24h'
-      const driver = drivers.find(d => d.id === p.deliveryDriverId)
-      return { parcel: p, ageJours, delay, bucket, driver, driverName: driver?.name || '—' }
-    }).sort((a, b) => b.ageJours - a.ageJours) // Plus ancien en premier
-  }, [dataSource, deliveryDelays, profile?.city, drivers, driverFilter])
-
-  // 📊 Ventilation des collectes par jour opérationnel (14 derniers jours)
-  const collectesParJour = useMemo(() => {
-    const map = new Map<string, { count: number; montant: number }>()
-    const src = [...(allDisplayParcels || []), ...Object.values(extraCollectedParcels)]
-      .map((p: any) => modifiedParcels[p.id] ? { ...p, ...modifiedParcels[p.id] } : p)
-    src.forEach((p: any) => {
-      if (p.portType !== 'port_du' || p.portPayeMethod) return
-      if (p.portStatus !== 'collected' && p.portStatus !== 'received') return
-      if (p.destinationCity !== profile?.city) return
-      // Filtre par livreur
-      if (driverFilter !== 'all' && p.deliveryDriverId !== driverFilter) return
-      const d = toDate(p.portCollectedAt) ?? toDate(p.portReceivedAt)
-      if (!d) return
-      const key = getOperationalDayString(d)   // ✅ journée 8h→6h
-      const cur = map.get(key) || { count: 0, montant: 0 }
-      map.set(key, { count: cur.count + 1, montant: cur.montant + safeParseAmount(p.price) })
-    })
-    return [...map.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14)
-  }, [allDisplayParcels, extraCollectedParcels, modifiedParcels, profile?.city, driverFilter])
-
-  // 📅 Label de la période sélectionnée
-  const periodLabel = useMemo(() => {
-    if (datePreset === 'operational' && operationalDay) return formatOperationalDay(operationalDay, true)
-    if (datePreset === 'today') return "Aujourd'hui"
-    if (datePreset === 'week') return '7 derniers jours'
-    if (datePreset === 'month') return 'Ce mois'
-    if (datePreset === 'day' && dateFrom) return new Date(dateFrom).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })
-    if (datePreset === 'custom' && dateFrom && dateTo) {
-      return `${new Date(dateFrom).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })} - ${new Date(dateTo).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short', year: 'numeric' })}`
-    }
-    return 'Toutes périodes'
-  }, [datePreset, dateFrom, dateTo, operationalDay])
-
-  // 🏷️ Label du statut sélectionné (pour titre d'impression clair)
-  const statusFilterLabel = useMemo(() => {
-    if (statusFilter === 'a_collecter') return 'À collecter'
-    if (statusFilter === 'collecte') return 'Collecté'
-    if (statusFilter === 'en_retard') return 'En retard'
-    if (statusFilter === 'en_compte') return 'En compte'
-    if (statusFilter === 'ramasse') return 'Ramassé'
-    return 'Tous statuts'
-  }, [statusFilter])
+  const depotIds = useDepotIds(profile?.city)
+
+  // ⚖️ TOUS les calculs de l'écran (source datée, soldes, livreurs, totaux, bilan, instances,
+  // collectes par jour) : computeCaisseView (src/utils/agencyCaisseRules.ts), la MÊME fonction que
+  // la page Chef d'exploitation — même agence + mêmes filtres ⇒ mêmes nombres sur les deux pages.
+  const caisseView = useMemo(() => computeCaisseView({
+    city: profile?.city || '',
+    allDisplayParcels,
+    garePending,
+    datePreset, dateFrom, dateTo, operationalDay,
+    driverFilter, statusFilter,
+    searchResults,
+    modifiedParcels,
+    extraCollectedParcels,
+    depotIds,
+    deliveryDelays,
+  }), [allDisplayParcels, garePending, datePreset, dateFrom, dateTo, operationalDay, driverFilter, statusFilter,
+    searchResults, modifiedParcels, extraCollectedParcels, depotIds, deliveryDelays, profile?.city])
+  const {
+    stats, soldeCaisseGlobal, soldeLivreur, portsCollectesForPrint, drivers, filteredDrivers,
+    bilanJournee, instances, collectesParJour, periodLabel, statusFilterLabel,
+  } = caisseView
+  const filteredStats = caisseView.filteredStats
 
   // Toggle expansion d'un livreur
   const toggleDriver = (driverId: string) => {
@@ -1928,6 +1054,7 @@ export default function CaisseChefTab() {
 
   return (
     <div className="space-y-4">
+      <PendingBadge show={caisseFiltersPending} />
       {/* En-tête avec statistiques */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
         {/* Ports à collecter */}
@@ -2031,11 +1158,14 @@ export default function CaisseChefTab() {
               const d = new Date(dateStr)
               const dayLabel = d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
               return (
-                <div key={dateStr} className="bg-white border border-green-200 rounded-lg p-3 text-center">
+                <button type="button" key={dateStr} onClick={() => setCollecteDay({ dateStr, dayLabel, ...data })}
+                  title="Voir le détail et imprimer"
+                  className="bg-white border border-green-200 rounded-lg p-3 text-center hover:border-green-400 hover:shadow-md hover:-translate-y-0.5 transition cursor-pointer">
                   <div className="text-xs font-semibold text-gray-600 mb-1">{dayLabel}</div>
                   <div className="text-lg font-bold text-green-700">{data.count}</div>
                   <div className="text-xs text-gray-500 mt-1">{data.montant.toFixed(0)} DH</div>
-                </div>
+                  <div className="text-[10px] text-green-600 mt-1 font-semibold">👁 Détail</div>
+                </button>
               )
             })}
           </div>
@@ -2045,6 +1175,76 @@ export default function CaisseChefTab() {
           </div>
         </div>
       )}
+
+      {/* 📅 Détail d'une journée de collecte (clic sur une carte) */}
+      {collecteDay && (() => {
+        const list = [...(collecteDay.parcels || [])].sort((a: any, b: any) => String(a.deliveryDriverName || '').localeCompare(String(b.deliveryDriverName || '')))
+        const byDriver = new Map<string, { n: number; m: number }>()
+        list.forEach((p: any) => { const k = p.deliveryDriverName || p.portCollectedBy || '—'; const c = byDriver.get(k) || { n: 0, m: 0 }; c.n++; c.m += Number(p.price) || 0; byDriver.set(k, c) })
+        const fullDay = new Date(collecteDay.dateStr + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
+        return (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-3" onClick={() => setCollecteDay(null)}>
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
+              <div className="flex items-center justify-between gap-3 px-5 py-4 border-b bg-gradient-to-r from-green-50 to-emerald-50 rounded-t-2xl">
+                <div>
+                  <h3 className="font-bold text-gray-900">Ports collectés — journée du {fullDay}</h3>
+                  <p className="text-xs text-gray-600">{collecteDay.count} colis · <b className="text-green-700">{collecteDay.montant.toFixed(2)} DH</b> · {byDriver.size} livreur(s)</p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => printPortsCollectes(list, profile, `Journée d'opération du ${fullDay}`)}
+                    className="inline-flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-3 py-2 rounded-lg">
+                    <Printer className="w-4 h-4" /> Imprimer
+                  </button>
+                  <button onClick={() => setCollecteDay(null)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500" title="Fermer">✕</button>
+                </div>
+              </div>
+              <div className="px-5 py-3 flex flex-wrap gap-2 border-b">
+                {[...byDriver.entries()].map(([name, v]) => (
+                  <span key={name} className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-full px-2.5 py-1">
+                    {name} : <b>{v.n}</b> · {v.m.toFixed(0)} DH
+                  </span>
+                ))}
+              </div>
+              <div className="overflow-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 text-xs text-gray-600 sticky top-0">
+                    <tr>
+                      <th className="px-3 py-2 text-left">#</th>
+                      <th className="px-3 py-2 text-left">N° EXP</th>
+                      <th className="px-3 py-2 text-left">Expéditeur</th>
+                      <th className="px-3 py-2 text-left">Destinataire</th>
+                      <th className="px-3 py-2 text-left">Livreur</th>
+                      <th className="px-3 py-2 text-left">Collecté par</th>
+                      <th className="px-3 py-2 text-left">Heure</th>
+                      <th className="px-3 py-2 text-right">Port dû</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {list.map((p: any, i: number) => {
+                      const at = p.portCollectedAt?.toDate ? p.portCollectedAt.toDate() : p.portCollectedAt ? new Date(p.portCollectedAt) : null
+                      return (
+                        <tr key={p.id} className={i % 2 ? 'bg-gray-50/60' : ''}>
+                          <td className="px-3 py-1.5 text-gray-400">{i + 1}</td>
+                          <td className="px-3 py-1.5 font-mono font-semibold text-blue-700">{p.sender?.nic || p.senderNic || p.trackingId}</td>
+                          <td className="px-3 py-1.5">{p.sender?.name || '—'}</td>
+                          <td className="px-3 py-1.5">{p.receiver?.name || '—'}</td>
+                          <td className="px-3 py-1.5">{p.deliveryDriverName || '—'}</td>
+                          <td className="px-3 py-1.5 text-gray-600">{p.portCollectedBy || '—'}</td>
+                          <td className="px-3 py-1.5 text-gray-600">{at && !isNaN(at.getTime()) ? at.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
+                          <td className="px-3 py-1.5 text-right font-bold text-green-700">{(Number(p.price) || 0).toFixed(2)} DH</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                  <tfoot className="bg-green-50 font-bold">
+                    <tr><td colSpan={7} className="px-3 py-2">TOTAL — {collecteDay.count} colis</td><td className="px-3 py-2 text-right text-green-800">{collecteDay.montant.toFixed(2)} DH</td></tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Bouton d'impression des ports collectés */}
       {portsCollectesForPrint.length > 0 && (
@@ -2136,15 +1336,15 @@ export default function CaisseChefTab() {
         <div className="space-y-4">
           {/* Filtre date */}
           <DateFilter
-            value={datePreset}
+            value={datePresetUi}
             onChange={handleDatePresetChange}
-            from={dateFrom}
+            from={dateFromUi}
             onFromChange={setDateFrom}
-            to={dateTo}
+            to={dateToUi}
             onToChange={setDateTo}
             tone="blue"
             operationalMode
-            operationalDay={operationalDay}
+            operationalDay={operationalDayUi}
             onOperationalDayChange={setOperationalDay}
           />
 
@@ -2155,7 +1355,7 @@ export default function CaisseChefTab() {
 
               {/* Filtre par livreur */}
               <select
-                value={driverFilter}
+                value={driverFilterUi}
                 onChange={(e) => setDriverFilter(e.target.value)}
                 className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
               >
@@ -2167,16 +1367,11 @@ export default function CaisseChefTab() {
 
               {/* Filtre par statut de collecte */}
               <select
-                value={statusFilter}
+                value={statusFilterUi}
                 onChange={(e) => setStatusFilter(e.target.value)}
                 className="border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-blue-500"
               >
-                <option value="all">Tous les statuts</option>
-                <option value="a_collecter">📦 À collecter</option>
-                <option value="collecte">✅ Collecté</option>
-                <option value="en_retard">⏰ En retard</option>
-                <option value="en_compte">🏦 En compte</option>
-                <option value="ramasse">📬 Ramassé (port payé)</option>
+                {CAISSE_STATUS_OPTIONS.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
               </select>
 
               {/* Recherche */}
@@ -2440,7 +1635,9 @@ export default function CaisseChefTab() {
                                           parcel: parcel,
                                           price: String(parcel.price || ''),
                                           portType: parcel.portType || '',
-                                          codAmount: String(parcel.codAmount || ''),
+                                          codAmount: isMixedCod(parcel) ? String(codDocPartOf(parcel)) : String(parcel.codAmount || ''),
+                                          codMixed: isMixedCod(parcel),
+                                          codCashAmount: isMixedCod(parcel) ? String(codCashPartOf(parcel)) : '',
                                           loading: false,
                                           error: ''
                                         })}
@@ -2498,112 +1695,16 @@ export default function CaisseChefTab() {
               )}
 
             {filteredDrivers.map(driver => (
-              <div key={driver.id} className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-                {/* En-tête livreur */}
-                <div
-                  onClick={() => toggleDriver(driver.id)}
-                  className="p-4 flex items-center justify-between cursor-pointer hover:bg-gray-50 transition"
-                >
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
-                      <User className="w-5 h-5 text-blue-600" />
-                    </div>
-                    <div>
-                      <h3 className="font-semibold text-gray-900">{driver.name}</h3>
-                      <p className="text-xs text-gray-500">
-                        {/* Total = ports dus + ports payés ramassés (deux catégories distinctes,
-                            "expéditions" reste donc le terme correct pour la somme). */}
-                        {/* Même total que l'onglet Journée : TOUS les colis assignés au livreur sur la période,
-                            dont les ports en compte (avant, ils n'étaient pas comptés ici). */}
-                        {(() => {
-                          // Filtre de statut actif (À collecter / Collecté / En retard / En compte / Ramassé) :
-                          // le nombre affiché = celui des lignes réellement listées sous ce livreur, pour rester
-                          // cohérent avec la carte « À collecter » du haut (ex. 81 ici + 12 ailleurs = 93).
-                          if (statusFilter !== 'all') {
-                            const n = driver.parcels.length
-                            return `${n} expédition${n > 1 ? 's' : ''} (${statusFilterLabel.toLowerCase()})`
-                          }
-                          const b = bilanJournee.find(x => x.id === driver.id)
-                          const base = driver.portDuParcels.length + driver.portsPayesParcels.length
-                          // Groupe « En gare » (absent du bilan) : toutes ses expéditions, ports en compte inclus,
-                          // exactement le nombre affiché par le filtre « 🏬 En gare » de l'onglet Expéditions.
-                          const total = b ? b.total : (driver.id === 'unknown' ? driver.parcels.length : base)
-                          return `${total} expéditions${total > base ? ` (dont ${total - base} en compte)` : ''}`
-                        })()}
-                        {statusFilter === 'all' && driver.portsPayesParcels.length > 0 && ` -${driver.portsPayesParcels.length} ramassés-`}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-4">
-                    {/* Statistiques */}
-                    <div className="hidden md:flex items-center gap-4 text-sm">
-                      <div className="text-center">
-                        <div className="text-blue-600 font-bold">{driver.portsACollecterCount}</div>
-                        <div className="text-xs text-gray-500">À collecter</div>
-                      </div>
-                      <div className="text-center">
-                        <div className="text-green-600 font-bold">{driver.portsCollectesCount}</div>
-                        <div className="text-xs text-gray-500">Collectés</div>
-                      </div>
-                      {driver.portsPayesARecevoirCount > 0 && (
-                        <div className="text-center">
-                          <div className="text-indigo-600 font-bold">{driver.portsPayesARecevoirCount}</div>
-                          <div className="text-xs text-gray-500">Ramassés</div>
-                        </div>
-                      )}
-                      {driver.enRetardCount > 0 && (
-                        <div className="text-center">
-                          <div className="text-amber-600 font-bold">{driver.enRetardCount}</div>
-                          <div className="text-xs text-gray-500">En retard</div>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Montants */}
-                    <div className="text-right">
-                      <div className="font-bold text-gray-900">
-                        {fmtAmt(driver.portsACollecterMontant)} DH
-                      </div>
-                      <div className="text-xs text-green-600">
-                        +{fmtAmt(driver.portsCollectesMontant)} DH
-                      </div>
-                      {driver.portsPayesARecevoirMontant > 0 && (
-                        <div className="text-xs text-indigo-600">
-                          +{fmtAmt(driver.portsPayesARecevoirMontant)} DH
-                        </div>
-                      )}
-                    </div>
-
-                    {/* Bouton impression : reprend exactement les colonnes cochées par le chef
-                        d'agence (sélecteur "Colonnes" ci-dessus), toujours en portrait. */}
-                    <button
-                      onClick={(e) => {
-                        e.stopPropagation()
-                        if (!driver.parcels || driver.parcels.length === 0) {
-                          alert('⚠️ Aucune expédition pour ce livreur')
-                          return
-                        }
-                        printFeuilleDeCharge(driver.name, profile?.city || '', driver.parcels, profile?.name || '', periodLabel, statusFilterLabel)
-                      }}
-                      className="px-3 py-2 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 transition text-xs font-semibold flex items-center gap-1.5 shadow-sm"
-                      title="Imprimer les expéditions de ce livreur (colonnes sélectionnées, portrait)"
-                    >
-                      <Printer className="w-3.5 h-3.5" />
-                      Imprimer
-                    </button>
-
-                    {/* Icône expansion */}
-                    {expandedDrivers.has(driver.id) ? (
-                      <ChevronUp className="w-5 h-5 text-gray-400" />
-                    ) : (
-                      <ChevronDown className="w-5 h-5 text-gray-400" />
-                    )}
-                  </div>
-                </div>
-
-                {/* Détails des expéditions */}
-                {expandedDrivers.has(driver.id) && (
+              <DriverCaisseCard
+                key={driver.id}
+                driver={driver}
+                statusFilter={statusFilter}
+                statusFilterLabel={statusFilterLabel}
+                open={expandedDrivers.has(driver.id)}
+                onToggle={() => toggleDriver(driver.id)}
+                onPrint={() => printFeuilleDeCharge(driver.name, profile?.city || '', driver.parcels, profile?.name || '', periodLabel, statusFilterLabel)}
+              >
+                {/* Détails des expéditions (en-tête : composant partagé DriverCaisseCard) */}
                   <div className="border-t border-gray-200 bg-gray-50 p-4">
                     <HScrollArrows>
                       <table className="w-full text-sm">
@@ -2757,21 +1858,22 @@ export default function CaisseChefTab() {
                                   {driverTableColumns.cod && (
                                     <td className="py-2 px-3 text-right font-semibold text-gray-900">
                                       {parcel.codAmount ? `${fmtAmt(parcel.codAmount)} DH` : '-'}
+                                      {isMixedCod(parcel) && <div className="text-[10px] font-semibold text-gray-500">{codPartsBreakdown(parcel)}</div>}
                                     </td>
                                   )}
                                   {driverTableColumns.especes && (
                                     <td className="py-2 px-3 text-right text-green-700">
-                                      {(parcel.codAmount && (parcel.codPaymentType || parcel.serviceType) === 'especes') ? `${fmtAmt(parcel.codAmount)} DH` : '-'}
+                                      {caisseCodAmountOfType(parcel, 'especes') ? `${fmtAmt(caisseCodAmountOfType(parcel, 'especes'))} DH` : '-'}
                                     </td>
                                   )}
                                   {driverTableColumns.cheque && (
                                     <td className="py-2 px-3 text-right text-blue-700">
-                                      {(parcel.codAmount && (parcel.codPaymentType || parcel.serviceType) === 'cheque') ? `${fmtAmt(parcel.codAmount)} DH` : '-'}
+                                      {caisseCodAmountOfType(parcel, 'cheque') ? `${fmtAmt(caisseCodAmountOfType(parcel, 'cheque'))} DH` : '-'}
                                     </td>
                                   )}
                                   {driverTableColumns.traite && (
                                     <td className="py-2 px-3 text-right text-indigo-700">
-                                      {(parcel.codAmount && (parcel.codPaymentType || parcel.serviceType) === 'traite') ? `${fmtAmt(parcel.codAmount)} DH` : '-'}
+                                      {caisseCodAmountOfType(parcel, 'traite') ? `${fmtAmt(caisseCodAmountOfType(parcel, 'traite'))} DH` : '-'}
                                     </td>
                                   )}
                                   <td className="py-2 px-3 text-center">
@@ -2855,7 +1957,9 @@ export default function CaisseChefTab() {
                                               parcel: parcel,
                                               price: String(parcel.price || ''),
                                               portType: parcel.portType || '',
-                                              codAmount: String(parcel.codAmount || ''),
+                                              codAmount: isMixedCod(parcel) ? String(codDocPartOf(parcel)) : String(parcel.codAmount || ''),
+                                              codMixed: isMixedCod(parcel),
+                                              codCashAmount: isMixedCod(parcel) ? String(codCashPartOf(parcel)) : '',
                                               loading: false,
                                               error: ''
                                             })}
@@ -2886,22 +1990,22 @@ export default function CaisseChefTab() {
                             {driverTableColumns.status && <td className="py-2 px-3"></td>}
                             {driverTableColumns.cod && (
                               <td className="py-2 px-3 text-right text-blue-900">
-                                {fmtAmt(driver.parcels.reduce((s: number, p: any) => s + (parseFloat(p.codAmount) || 0), 0))} DH
+                                {fmtAmt(caisseCodTotals(driver.parcels).total)} DH
                               </td>
                             )}
                             {driverTableColumns.especes && (
                               <td className="py-2 px-3 text-right text-green-700">
-                                {fmtAmt(driver.parcels.reduce((s: number, p: any) => s + ((p.codPaymentType || p.serviceType) === 'especes' ? (parseFloat(p.codAmount) || 0) : 0), 0))} DH
+                                {fmtAmt(caisseCodTotals(driver.parcels).especes)} DH
                               </td>
                             )}
                             {driverTableColumns.cheque && (
                               <td className="py-2 px-3 text-right text-blue-700">
-                                {fmtAmt(driver.parcels.reduce((s: number, p: any) => s + ((p.codPaymentType || p.serviceType) === 'cheque' ? (parseFloat(p.codAmount) || 0) : 0), 0))} DH
+                                {fmtAmt(caisseCodTotals(driver.parcels).cheque)} DH
                               </td>
                             )}
                             {driverTableColumns.traite && (
                               <td className="py-2 px-3 text-right text-indigo-700">
-                                {fmtAmt(driver.parcels.reduce((s: number, p: any) => s + ((p.codPaymentType || p.serviceType) === 'traite' ? (parseFloat(p.codAmount) || 0) : 0), 0))} DH
+                                {fmtAmt(caisseCodTotals(driver.parcels).traite)} DH
                               </td>
                             )}
                             <td className="py-2 px-3"></td>
@@ -2916,8 +2020,7 @@ export default function CaisseChefTab() {
                       </div>
                     )}
                   </div>
-                )}
-              </div>
+              </DriverCaisseCard>
             ))}
             </div>
           )}
@@ -3366,15 +2469,15 @@ export default function CaisseChefTab() {
         <div className="space-y-4">
           {/* Filtre date */}
           <DateFilter
-            value={datePreset}
+            value={datePresetUi}
             onChange={handleDatePresetChange}
-            from={dateFrom}
+            from={dateFromUi}
             onFromChange={setDateFrom}
-            to={dateTo}
+            to={dateToUi}
             onToChange={setDateTo}
             tone="blue"
             operationalMode
-            operationalDay={operationalDay}
+            operationalDay={operationalDayUi}
             onOperationalDayChange={setOperationalDay}
           />
 
@@ -3613,9 +2716,21 @@ export default function CaisseChefTab() {
                 </select>
               </div>
 
+              {/* RF mixte : part espèces */}
+              {quickEditModal.codMixed && (
+                <div>
+                  <label className="block text-xs font-bold text-gray-700 mb-2">💵 Montant espèces (DH)</label>
+                  <input
+                    type="number"
+                    value={quickEditModal.codCashAmount || ''}
+                    onChange={e => setQuickEditModal(m => ({ ...m, codCashAmount: e.target.value, error: '' }))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-green-500"
+                  />
+                </div>
+              )}
               {/* Montant COD */}
               <div>
-                <label className="block text-xs font-bold text-gray-700 mb-2">💵 Montant COD (DH)</label>
+                <label className="block text-xs font-bold text-gray-700 mb-2">{quickEditModal.codMixed ? (quickEditModal.parcel?.serviceType === 'traite' ? '📝 Montant traite (DH)' : '📋 Montant chèque (DH)') : '💵 Montant COD (DH)'}</label>
                 <input
                   type="number"
                   value={quickEditModal.codAmount}
@@ -3658,7 +2773,14 @@ export default function CaisseChefTab() {
                       updates.portType = quickEditModal.portType
                     }
 
-                    if (quickEditModal.codAmount !== String(quickEditModal.parcel.codAmount || '')) {
+                    if (quickEditModal.codMixed) {
+                      // RF mixte : total = chèque/traite + espèces
+                      const res = codEditResult({ value: quickEditModal.codAmount, cashValue: quickEditModal.codCashAmount, mixed: true })
+                      if (res.error) { setQuickEditModal(m => ({ ...m, loading: false, error: res.error || '' })); return }
+                      if (res.total !== (parseFloat(quickEditModal.parcel.codAmount) || 0)) updates.codAmount = res.total
+                      if (!res.mixed) { updates.codMixed = false; updates.codCashAmount = 0 }
+                      else if (res.cash !== (parseFloat(quickEditModal.parcel.codCashAmount) || 0)) updates.codCashAmount = res.cash
+                    } else if (quickEditModal.codAmount !== String(quickEditModal.parcel.codAmount || '')) {
                       updates.codAmount = parseFloat(quickEditModal.codAmount) || 0
                     }
 

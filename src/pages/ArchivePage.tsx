@@ -9,6 +9,7 @@ import {
   ChevronLeft, ChevronRight, Search, Archive, Calendar, X, Package, RefreshCw,
 } from 'lucide-react'
 import { normIncludes } from '../utils/normText'
+import { isMixedCod, codServiceLabel } from '../utils/codParts'
 
 const PAGE_SIZE = 25
 const MONTH_NAMES = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Aoû', 'Sep', 'Oct', 'Nov', 'Déc']
@@ -380,7 +381,7 @@ export default function ArchivePage() {
                           {p.status}
                         </span>
                         {svc && (
-                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${svc.color}`}>{svc.label}</span>
+                          <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${svc.color}`}>{isMixedCod(p) ? codServiceLabel(p, { emoji: false }) : svc.label}</span>
                         )}
                       </div>
                       <span className="text-[10px] text-gray-400 shrink-0">{formatDate(p.createdAt)}</span>

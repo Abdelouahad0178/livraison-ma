@@ -10,6 +10,7 @@ import { useBarcodeScanner } from '../hooks/useBarcodeScanner'
 import LiveClock from '../components/LiveClock'
 import CompanyContact from '../components/CompanyContact'
 import { normIncludes } from '../utils/normText'
+import { isMixedCod, codPartsBreakdown, codPartsDetailLabel } from '../utils/codParts'
 
 // ⚡ Les colis déjà remis (Livré) ne sont chargés que sur cette fenêtre (en jours).
 // Les colis à traiter (Arrivé en agence / En livraison) restent chargés sans limite de date.
@@ -574,7 +575,7 @@ export default function DriverGarePage() {
                               {p.codAmount > 0 && (
                                 <span className="px-2 py-0.5 bg-green-900/30 text-green-400 rounded-full border border-green-700 flex items-center gap-1">
                                   <Banknote className="w-3 h-3" />
-                                  {p.codAmount} DH
+                                  {p.codAmount} DH{isMixedCod(p) && ` (${codPartsBreakdown(p)})`}
                                 </span>
                               )}
                               {p.portType === 'port_du' && p.portStatus !== 'collected' && (
@@ -649,7 +650,7 @@ export default function DriverGarePage() {
                               {p.codAmount > 0 && (
                                 <span className="px-2 py-0.5 bg-green-900/30 text-green-400 rounded-full border border-green-700 flex items-center gap-1">
                                   <Banknote className="w-3 h-3" />
-                                  {p.codAmount} DH
+                                  {p.codAmount} DH{isMixedCod(p) && ` (${codPartsBreakdown(p)})`}
                                 </span>
                               )}
                             </div>
@@ -726,7 +727,7 @@ export default function DriverGarePage() {
                             <Banknote className="w-4 h-4" />
                             RETOUR FOND à collecter
                           </span>
-                          <span className="text-green-300 font-bold">{signatureModal.parcel.codAmount} DH</span>
+                          <span className="text-green-300 font-bold">{signatureModal.parcel.codAmount} DH{isMixedCod(signatureModal.parcel) && ` (${codPartsDetailLabel(signatureModal.parcel)})`}</span>
                         </div>
                       )}
                       {signatureModal.parcel.portType === 'port_du' && signatureModal.parcel.portStatus !== 'collected' && (

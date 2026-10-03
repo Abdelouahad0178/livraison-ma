@@ -69,7 +69,10 @@ service cloud.firestore {
     }
 
     function isNotBlocked() {
-      return userDoc().blocked != true;
+      // ⚠️ .get() : la plupart des fiches utilisateur n'ont PAS de champ 'blocked' ;
+      // userDoc().blocked levait alors une erreur d'évaluation et REFUSAIT toute règle
+      // utilisant isNotBlocked() (ex. correction du bon par agent / chef d'agence).
+      return userDoc().get('blocked', false) != true;
     }
 
     function userCity() {
@@ -111,6 +114,8 @@ service cloud.firestore {
         'customerMode',
         'price',
         'codAmount',
+        'codMixed',
+        'codCashAmount',
         'agentId',
         'agentName',
         'originCity',
@@ -145,6 +150,8 @@ service cloud.firestore {
       // Champs modifiables par le modal "Modifier l'expédition" / confirmation après saisie
       return parcelCorrectionFields().concat(parcelSearchFields()).concat([
         'codAmount', 'codAmountHistory', 'codStatus', 'codPaymentType',
+        // RF mixte (Espèces + chèque/traite) : mêmes droits que codAmount
+        'codMixed', 'codCashAmount',
         'portType', 'fragile', 'notes',
         'lastModifiedBy', 'lastModifiedByName', 'lastModifiedAt'
       ]);
@@ -243,6 +250,25 @@ service cloud.firestore {
     function deliveryControlOnlyKeys() {
       return ['deliveryControlled', 'deliveryControlledBy', 'deliveryControlledById', 'deliveryControlledAt'];
     }
+    // ⚡ Chemin rapide Chef d'agence / Agent Pro / Chef d'exploitation : mêmes conditions que la
+    // branche « agent / chef » du grand bloc staff (plus bas), mais évaluée EN PREMIER et avec les
+    // champs modifiés calculés une seule fois (limite Firestore de 1000 expressions par requête).
+    function chefFastPathUpdate() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      // Ordre « du moins cher au plus cher » : un refus est décidé tôt, sans épuiser le budget
+      // d'expressions nécessaire aux autres règles (correction du bon, etc.).
+      return !changed.hasAny(['codAmount', 'codMixed', 'codCashAmount'])
+        && (
+          !changed.hasAny(protectedParcelBonFields())
+          || resource.data.agentId == request.auth.uid
+        )
+        && !changed.hasAny(aideAgentValidationFields())
+        && isChefAgence()
+        && (!changed.hasAny(deliveryAssignmentFields()) || resource.data.agentId == request.auth.uid || isDestinationAgencyChief())
+        && keepsDeliveredStatus()
+        && (!touchesOnlyControlFields() || isOwnControlChange());
+    }
+
     function isOwnControlChange() {
       // ⚠️ resource.data.controlled LÈVE UNE ERREUR (pas juste null) si le champ n'existe pas
       // encore sur le colis — cas du tout premier pointage. .get(clé, défaut) évite ce piège.
@@ -288,6 +314,87 @@ service cloud.firestore {
       // 🔒 RÈGLE GLOBALE : Admin peut TOUJOURS modifier (même après chargement camion)
       allow update: if isAdmin();
 
+      // ⚡ Chef d'agence / Agent Pro / Chef d'exploitation : statut, remarques, etc. (voir chefFastPathUpdate)
+      // ⚡ (déplacée en tête, peu coûteuse) Validation arrivée / colis déjà arrivés — comportement inchangé
+      allow update: if signedIn()
+        && 'destinationArrivedAt' in request.resource.data
+        && 'history' in request.resource.data
+        && !touchesOnlyControlFields();
+      allow update: if chefFastPathUpdate();
+      // ↩️ Annulation d'un retour (chefs) : seulement depuis un colis marqué retourné, vers un état
+      // non retourné, avec les seuls champs du retour.
+      allow update: if resource.data.get('wasReturned', false) == true
+        && request.resource.data.get('wasReturned', true) == false
+        && isChefAgence()
+        && !(request.resource.data.status in ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé', 'Livré'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'history', 'sender', 'receiver', 'senderNameNorm', 'receiverNameNorm',
+          'originCity', 'destinationCity', 'returnToCity', 'codAmount', 'codMixed', 'codCashAmount',
+          'arrivedNbColis', 'wasReturned', 'preReturn', 'returnedAt', 'returnReason',
+          'returnedByDriverId', 'returnedByDriverName', 'returnCancelledAt', 'returnCancelledBy',
+          'deliveryDriverId', 'deliveryDriverName', 'deliverySectorId', 'deliverySectorCode',
+          'deliverySectorName', 'deliveryVehicleId', 'deliveryVehicleLabel', 'deliveryAssignedAt',
+          'deliveryAssignedBy'
+        ]);
+      // ⚡ Chef de l'agence d'un colis saisi par un aide agent / portail client (même règle que le grand
+      // bloc staff), évaluée tôt : test du agentRole d'abord (le moins coûteux).
+      allow update: if (resource.data.get('agentRole', '') == 'aide_agent' || resource.data.get('agentRole', '') == 'client_portal')
+        && isChefOfAideAgentParcelAgency()
+        && keepsDeliveredStatus()
+        && (!touchesOnlyControlFields() || isOwnControlChange());
+
+      // ⚡ Placée EN TÊTE (limite de 1000 expressions) : encaissement / statut par le livreur assigné.
+      // Livreur local assignÃ© : statut, encaissement, refus et signature uniquement sur ses colis
+      allow update: if isAssignedDeliveryWorker()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'history',
+          'deliveredAt',
+          'signatureMethod',
+          'portDuReceivedMethod',
+          'lastLocation',
+          'codStatus',
+          'codPaymentType',
+          'codCollectedAt',
+          'codCollectedBy',
+          'codCaisseEntryId',
+          'portStatus',
+          'portCollectedBy',
+          'portCollectedById',
+          'portCollectedAt',
+          'signatureToken',
+          'signatureTokenCreatedAt',
+          'signatureConfirmedAt',
+          'returnSignatureToken',
+          'returnSignatureTokenCreatedAt',
+          'returnSignatureConfirmedAt',
+          'deliveryDriverId',
+          'deliveryDriverName',
+          'deliverySectorId',
+          'deliverySectorCode',
+          'deliverySectorName',
+          'deliveryVehicleId',
+          'deliveryVehicleLabel',
+          'deliveryAssignedAt',
+          'deliveryAssignedBy',
+          'deliveryRejectedAt',
+          'deliveryRejectedById',
+          'deliveryRejectedBy'
+        ]);
+
+      // ⚡ Placée EN TÊTE : Firestore arrête l'évaluation après 1000 expressions ; plus bas, cette règle
+      // n'était jamais atteinte sur certains colis (« Missing or insufficient permissions » à l'assignation).
+      // Assignation livraison locale : seuls les champs livraison sont modifiÃ©s
+      allow update: if signedIn()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'deliveryDriverId', 'deliveryDriverName',
+          'deliverySectorId', 'deliverySectorCode', 'deliverySectorName',
+          'deliveryVehicleId', 'deliveryVehicleLabel',
+          'deliveryAssignedAt', 'deliveryAssignedBy'
+        ]);
+
       // 🧾 RÈGLE : Facturier peut marquer un colis comme facturé et corriger le prix / type de port
       allow update: if isFacturier()
         && isNotBlocked()
@@ -310,7 +417,7 @@ service cloud.firestore {
       allow update: if isChefAgence()
         && keepsDeliveredStatus()
         && !isParcelLocked()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['price', 'portType', 'codAmount']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['price', 'portType', 'codAmount', 'codMixed', 'codCashAmount']);
 
       // 💰 RÈGLE : Chef d'agence peut collecter/décollecterports (Port dû et Port payé)
       allow update: if isChefAgence()
@@ -368,7 +475,7 @@ service cloud.firestore {
         && (isChefAgence() || isParcelCreator())
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(parcelBonEditFields())
         && (
-          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['codAmount', 'codAmountHistory', 'codStatus', 'codPaymentType'])
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['codAmount', 'codAmountHistory', 'codStatus', 'codPaymentType', 'codMixed', 'codCashAmount'])
           || (resource.data.get('codCollectedAt', null) == null
               && (resource.data.get('codStatus', null) == null || resource.data.get('codStatus', null) == 'pending'))
         )
@@ -408,10 +515,7 @@ service cloud.firestore {
       // ⚠️ 'destinationArrivedAt' et 'history' existent déjà sur quasi tout colis déjà arrivé —
       // cette règle ne vérifiant PAS quels champs sont modifiés, elle laissait n'importe quel
       // utilisateur signé écraser le pointage d'un autre sur ces colis. Exclu explicitement.
-      allow update: if signedIn()
-        && 'destinationArrivedAt' in request.resource.data
-        && 'history' in request.resource.data
-        && !touchesOnlyControlFields();
+      // (règle « validation arrivée retour » déplacée en tête du bloc, voir plus haut)
       // RÃ©ception agence : prise en charge et arrivage de colis en transit
       allow update: if signedIn()
         && keepsDeliveredStatus()
@@ -420,15 +524,6 @@ service cloud.firestore {
           'destinationAgentId', 'destinationAgentName', 'arrivedNbColis',
           'chefPointedAt', 'chefPointedBy', 'chefPointedById', 'chefPointedSource',
           'history'
-        ]);
-      // Assignation livraison locale : seuls les champs livraison sont modifiÃ©s
-      allow update: if signedIn()
-        && keepsDeliveredStatus()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'deliveryDriverId', 'deliveryDriverName',
-          'deliverySectorId', 'deliverySectorCode', 'deliverySectorName',
-          'deliveryVehicleId', 'deliveryVehicleLabel',
-          'deliveryAssignedAt', 'deliveryAssignedBy'
         ]);
       // ⭐ Staff : générer token de signature (agents, chauffeurs, etc.)
       allow update: if signedIn()
@@ -461,41 +556,6 @@ service cloud.firestore {
           'returnSignatureConfirmedAt',
           'signatureMethod',
           'history'
-        ]);
-      // Livreur local assignÃ© : statut, encaissement, refus et signature uniquement sur ses colis
-      allow update: if isAssignedDeliveryWorker()
-        && keepsDeliveredStatus()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'status',
-          'history',
-          'lastLocation',
-          'codStatus',
-          'codPaymentType',
-          'codCollectedAt',
-          'codCollectedBy',
-          'codCaisseEntryId',
-          'portStatus',
-          'portCollectedBy',
-          'portCollectedById',
-          'portCollectedAt',
-          'signatureToken',
-          'signatureTokenCreatedAt',
-          'signatureConfirmedAt',
-          'returnSignatureToken',
-          'returnSignatureTokenCreatedAt',
-          'returnSignatureConfirmedAt',
-          'deliveryDriverId',
-          'deliveryDriverName',
-          'deliverySectorId',
-          'deliverySectorCode',
-          'deliverySectorName',
-          'deliveryVehicleId',
-          'deliveryVehicleLabel',
-          'deliveryAssignedAt',
-          'deliveryAssignedBy',
-          'deliveryRejectedAt',
-          'deliveryRejectedById',
-          'deliveryRejectedBy'
         ]);
       // Pointeur-Encaisseur : rÃ©ception port dÃ» versÃ© par un livreur
       allow update: if isPointeurEncaisseur()
@@ -537,7 +597,7 @@ service cloud.firestore {
       // Permet de mettre Ã  jour les champs de traÃ§age COD sans toucher aux donnÃ©es sensibles du bon.
       allow update: if isAgentOrChef()
         && keepsDeliveredStatus()
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['codAmount'])
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['codAmount', 'codMixed', 'codCashAmount'])
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(protectedParcelBonFields())
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(deliveryAssignmentFields())
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(aideAgentValidationFields());
@@ -546,7 +606,7 @@ service cloud.firestore {
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys()
            .hasOnly([
-             'receiver', 'serviceType', 'codPaymentType', 'codAmount', 'status',
+             'receiver', 'serviceType', 'codPaymentType', 'codAmount', 'codMixed', 'codCashAmount', 'status',
              'modificationHistory', 'lastModificationRequestId',
              'lastModificationAt', 'lastModificationBy', 'lastModificationByRole'
            ]);
@@ -638,10 +698,10 @@ service cloud.firestore {
           && isParcelCreator()
           && (resource.data.validatedByChef != true || resource.data.aideEditUnlocked == true)
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny(aideAgentValidationFields())
-          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'codAmount'])
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'codAmount', 'codMixed', 'codCashAmount'])
         )
         || (
-          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['codAmount'])
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['codAmount', 'codMixed', 'codCashAmount'])
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny(aideAgentValidationFields())
           && !isAideAgent()
           && (
@@ -915,6 +975,11 @@ service cloud.firestore {
       allow write: if isAdminOrDirecteur();
     }
 
+    // 💾 Journal des imports de sauvegarde (page Admin)
+    match /backupImports/{id} {
+      allow read, create: if isAdmin();
+    }
+
     match /directorLogs/{id} {
       allow read:   if isAdminOrDirecteur();
       allow create: if isStaff();
@@ -1181,6 +1246,17 @@ service cloud.firestore {
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // VERSION ALLÉGÉE DES EXPÉDITIONS (parcelsLite) — miroir de parcels sans les champs lourds
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Écrit UNIQUEMENT par la Cloud Function syncParcelLite (Admin SDK) : aucune écriture client.
+    // Lecture : staff (dont facturier) — jamais plus large que parcels (pas de get public).
+    // ⚠️ Bloc séparé : le bloc parcels est proche de la limite de 1000 expressions.
+    match /parcelsLite/{parcelId} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // ARCHIVES COLIS (parcels_archive)
     // ═══════════════════════════════════════════════════════════════════════════
     match /parcels_archive/{parcelId} {
@@ -1231,9 +1307,31 @@ service cloud.firestore {
         || (isChefAgence() && resource.data.city == userCity());
     }
 
-    match /{document=**} {
-      allow read:  if isStaff();
-      allow write: if isAdmin();
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 👁️ PRÉSENCE TEMPS RÉEL (presence/{uid}) — « L'œil qui ne dort pas » (Admin)
+    // Chaque utilisateur n'écrit QUE sa propre fiche (heartbeat). Lecture : Admin/Directeur
+    // (+ l'utilisateur lui-même pour la remise à zéro quotidienne des compteurs).
+    // Bloc séparé (hors /parcels) : pas d'impact sur la limite d'expressions des colis.
+    // ═══════════════════════════════════════════════════════════════════════════
+    match /presence/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdminOrDirecteur());
+      allow create, update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.uid == uid
+        && request.resource.data.keys().hasOnly([
+          'uid', 'name', 'role', 'city', 'currentPage', 'pageLabel', 'tab',
+          'online', 'visible', 'lastSeen', 'idleSec', 'lastActivityAt', 'sessionStart',
+          'device', 'day', 'firstSeenToday', 'activity15', 'activityMinute',
+          'actionsToday', 'parcelsCreatedToday', 'parcelsUpdatedToday', 'codCollectedToday'
+        ]);
+      allow delete: if isAdmin();
+    }
+
+    // Règle par défaut — la collection presence est exclue (lecture réservée Admin/Directeur ci-dessus)
+    match /{coll}/{document=**} {
+      allow read:  if coll != 'presence' && isStaff();
+      // parcelsLite : écrit uniquement par la Cloud Function syncParcelLite (Admin SDK)
+      allow write: if coll != 'presence' && coll != 'parcelsLite' && isAdmin();
     }
   }
 }

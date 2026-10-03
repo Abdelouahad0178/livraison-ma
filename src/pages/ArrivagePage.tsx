@@ -10,6 +10,7 @@ import {
   Search, X, RotateCcw, Save, CheckCircle, User, UserCheck,
 } from 'lucide-react'
 import { normIncludes } from '../utils/normText'
+import { isMixedCod, codServiceLabel } from '../utils/codParts'
 
 const SERVICE_TYPE_DISPLAY = {
   simple:    { label: 'Simple',    emoji: '📦', bg: 'bg-gray-100',    text: 'text-gray-600'   },
@@ -630,7 +631,7 @@ export default function ArrivagePage() {
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-1.5 flex-wrap">
                                     <span className="text-xs font-mono font-bold text-blue-400">{d.trackingId}</span>
-                                    {st && <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${st.bg} ${st.text}`}>{st.emoji} {st.label}</span>}
+                                    {st && <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${st.bg} ${st.text}`}>{isMixedCod(d) ? codServiceLabel(d) : <>{st.emoji} {st.label}</>}</span>}
                                     {d.addedDuringPointage && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-purple-900/60 text-purple-300 font-semibold">+Ajouté</span>}
                                   </div>
                                   <p className="text-xs text-gray-300 font-medium truncate">{d.receiverName || '—'}</p>
@@ -698,7 +699,7 @@ export default function ArrivagePage() {
                                 <div className="flex-1 min-w-0">
                                   <div className="flex items-center gap-1.5 flex-wrap">
                                     <span className="text-xs font-mono font-bold text-blue-400">{d.trackingId || d.parcelId}</span>
-                                    {st && <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${st.bg} ${st.text}`}>{st.emoji} {st.label}</span>}
+                                    {st && <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${st.bg} ${st.text}`}>{isMixedCod(d) ? codServiceLabel(d) : <>{st.emoji} {st.label}</>}</span>}
                                   </div>
                                   <p className="text-xs text-gray-400 truncate">{d.receiverName || '—'} · {d.originCity || '—'}</p>
                                 </div>
@@ -1023,7 +1024,7 @@ export default function ArrivagePage() {
                                   if (!st) return null
                                   return (
                                     <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-semibold ${st.bg} ${st.text}`}>
-                                      {st.emoji} {st.label}
+                                      {isMixedCod(parcel) ? codServiceLabel(parcel) : <>{st.emoji} {st.label}</>}
                                     </span>
                                   )
                                 })()}
@@ -1346,7 +1347,7 @@ export default function ArrivagePage() {
                                         <span className="text-xs font-mono font-bold text-blue-400">{d.trackingId}</span>
                                         {st && (
                                           <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${st.bg} ${st.text}`}>
-                                            {st.emoji} {st.label}
+                                            {isMixedCod(d) ? codServiceLabel(d) : <>{st.emoji} {st.label}</>}
                                           </span>
                                         )}
                                         {d.addedDuringPointage && (
@@ -1407,7 +1408,7 @@ export default function ArrivagePage() {
                                           <span className="text-xs font-mono font-bold text-blue-400">{d.trackingId || d.parcelId}</span>
                                           {st && (
                                             <span className={`text-[9px] px-1.5 py-0.5 rounded-full font-semibold ${st.bg} ${st.text}`}>
-                                              {st.emoji} {st.label}
+                                              {isMixedCod(d) ? codServiceLabel(d) : <>{st.emoji} {st.label}</>}
                                             </span>
                                           )}
                                         </div>

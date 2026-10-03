@@ -32,7 +32,9 @@ interface DateFilterProps {
   onFromChange?: (v: string) => void
   to?: string
   onToChange?: (v: string) => void
-  tone?: 'blue' | 'green' | 'amber'
+  tone?: 'blue' | 'green' | 'amber' | 'violet'
+  /** Sans cadre (carte) : à intégrer dans un panneau existant. Par défaut : cadre blanc habituel. */
+  bare?: boolean
   /** Remplace "Jour précis" par "Journée d'opération" (8h → 6h lendemain). */
   operationalMode?: boolean
   operationalDay?: Date | null
@@ -41,13 +43,13 @@ interface DateFilterProps {
 
 export default function DateFilter({
   value, onChange, from, onFromChange, to, onToChange, tone = 'blue',
-  operationalMode = false, operationalDay, onOperationalDayChange,
+  operationalMode = false, operationalDay, onOperationalDayChange, bare = false,
 }: DateFilterProps) {
-  const activeCls = tone === 'green' ? 'bg-green-600 text-white' : tone === 'amber' ? 'bg-amber-500 text-white' : 'bg-blue-600 text-white'
-  const focusCls  = tone === 'green' ? 'focus:border-green-500' : tone === 'amber' ? 'focus:border-amber-500' : 'focus:border-blue-500'
+  const activeCls = tone === 'green' ? 'bg-green-600 text-white' : tone === 'amber' ? 'bg-amber-500 text-white' : tone === 'violet' ? 'bg-violet-600 text-white shadow-sm' : 'bg-blue-600 text-white'
+  const focusCls  = tone === 'green' ? 'focus:border-green-500' : tone === 'amber' ? 'focus:border-amber-500' : tone === 'violet' ? 'focus:border-violet-500' : 'focus:border-blue-500'
   const presets = operationalMode ? OPERATIONAL_FILTER_PRESETS : FILTER_PRESETS
   return (
-    <div className="bg-white border border-gray-200 rounded-xl p-3 space-y-2">
+    <div className={bare ? 'space-y-2' : 'bg-white border border-gray-200 rounded-xl p-3 space-y-2'}>
       <div className="flex items-center gap-2 flex-wrap">
         <Calendar className="w-4 h-4 text-gray-400 shrink-0" />
         {presets.map(({ key, label }) => (

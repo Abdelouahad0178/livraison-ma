@@ -74,7 +74,7 @@ export default function AdminInvoicesTab({ uid, userName }: any) {
       await deleteInvoice(invoice.id!)
     } catch (error) {
       console.error('Erreur suppression facture:', error)
-      alert('Erreur lors de la suppression')
+      alert(`Erreur lors de la suppression : ${(error as any)?.code === 'permission-denied' ? 'droits insuffisants' : (error as any)?.message || error}`)
     }
   }
 
@@ -99,7 +99,7 @@ export default function AdminInvoicesTab({ uid, userName }: any) {
       await cancelInvoice(invoice.id!)
     } catch (error) {
       console.error('Erreur annulation facture:', error)
-      alert('Erreur lors de l\'annulation')
+      alert(`Erreur lors de l'annulation : ${(error as any)?.code === 'permission-denied' ? 'droits insuffisants' : (error as any)?.message || error}`)
     }
   }
 

@@ -5,6 +5,7 @@ import {
   serverTimestamp, arrayUnion, increment, writeBatch, setDoc, Timestamp, runTransaction, deleteField
 } from 'firebase/firestore'
 import { db } from './db'
+import { bumpPresence } from '../services/presenceCounters'
 import { CITIES, STATUSES } from './constants'
 import { daysAgoTimestamp } from './firestoreUtils'
 import { isParcelVisibleInDestinationAgency } from './parcels'
@@ -235,6 +236,7 @@ export async function assignDeliveryDriver(parcelId: any, deliveryDriverId: any,
     deliveryAssignedBy:   extra.deliveryAssignedBy   || '',
   }
   await updateDoc(doc(db, 'parcels', parcelId), patch)
+  bumpPresence('updated')
 }
 export async function rejectDeliveryAssignment(parcelId: any, driverId: any, driverName: any, note = '') {
   const now = new Date().toISOString()

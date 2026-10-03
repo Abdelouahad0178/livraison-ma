@@ -1,5 +1,5 @@
 import { db } from './db'
-import { collection, doc, setDoc, updateDoc, getDoc, getDocs, query, where, Timestamp, serverTimestamp, arrayUnion } from 'firebase/firestore'
+import { collection, doc, setDoc, updateDoc, getDoc, getDocs, query, where, Timestamp, serverTimestamp, arrayUnion, onSnapshot } from 'firebase/firestore'
 
 export interface LostParcelMessage {
   id: string
@@ -177,6 +177,20 @@ export async function getAllLostParcels(): Promise<LostParcelDeclaration[]> {
     id: doc.id,
     ...doc.data()
   } as LostParcelDeclaration))
+}
+
+/**
+ * ⚡ Toutes les déclarations de perte en TEMPS RÉEL (page Admin) — petite collection.
+ */
+export function subscribeAllLostParcels(
+  callback: (items: LostParcelDeclaration[]) => void,
+  onError?: (err: any) => void
+): () => void {
+  return onSnapshot(
+    query(collection(db, 'lostParcels')),
+    snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as LostParcelDeclaration))),
+    err => { console.error('subscribeAllLostParcels:', err); onError?.(err) }
+  )
 }
 
 /**

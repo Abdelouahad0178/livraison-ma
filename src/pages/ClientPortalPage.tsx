@@ -35,6 +35,7 @@ import {
 } from 'lucide-react'
 import { fmt } from '../utils/formatNumber'
 import { normIncludes } from '../utils/normText'
+import { isMixedCod, codTypeDisplay, codPartsBreakdown, buildCodWriteFields, validateCodChoice } from '../utils/codParts'
 
 
 const asDate = (value: any) => value?.toDate ? value.toDate() : new Date(value || 0)
@@ -47,6 +48,7 @@ const MOD_STATUS = {
 }
 
 const codPaymentLabel = (parcel: any) => {
+  if (isMixedCod(parcel)) return `${codTypeDisplay(parcel)} (${codPartsBreakdown(parcel)})`
   const type = COD_PAYMENT_TYPES.find(t => t.key === (parcel.codPaymentType || parcel.serviceType))
   return type ? type.label : '-'
 }
@@ -82,6 +84,8 @@ export default function ClientPortalPage() {
     natureOfGoods: 'Colis',
     serviceType: 'simple',
     codAmount: '',
+    codMixed: false,
+    codCashAmount: '',
     portType: 'port_en_compte_expediteur',
   })
   const [parcelSending, setParcelSending] = useState(false)
@@ -267,6 +271,10 @@ export default function ClientPortalPage() {
       setParcelError('Destinataire, telephone, adresse et ville sont obligatoires.')
       return
     }
+    // 💵+📋 RF mixte (espèces + chèque OU traite) : un montant par type
+    const portalMixed = parcelForm.codMixed === true && ['cheque', 'traite'].includes(parcelForm.serviceType)
+    const codChoiceError = validateCodChoice({ serviceType: parcelForm.serviceType, codAmount: parcelForm.codAmount, cashAmount: parcelForm.codCashAmount, mixed: portalMixed })
+    if (codChoiceError) { setParcelError(codChoiceError); return }
     setParcelSending(true)
     try {
       const parcel = await createClientPortalParcel({
@@ -289,8 +297,9 @@ export default function ClientPortalPage() {
         weight: parseFloat(parcelForm.weight) || 0,
         nbColis: parseInt(parcelForm.nbColis) || 1,
         natureOfGoods: parcelForm.natureOfGoods.trim(),
-        serviceType: parcelForm.serviceType,
-        codAmount: parcelForm.serviceType === 'simple' || parcelForm.serviceType === 'retour_bl' ? 0 : (parseFloat(parcelForm.codAmount) || 0),
+        ...(parcelForm.serviceType === 'simple' || parcelForm.serviceType === 'retour_bl'
+          ? { serviceType: parcelForm.serviceType, codAmount: 0 }
+          : buildCodWriteFields({ serviceType: parcelForm.serviceType, codAmount: parcelForm.codAmount, cashAmount: parcelForm.codCashAmount, mixed: portalMixed })),
         portType: parcelForm.portType,
         price: portalPrice,
       })
@@ -304,6 +313,8 @@ export default function ClientPortalPage() {
         natureOfGoods: 'Colis',
         serviceType: 'simple',
         codAmount: '',
+        codMixed: false,
+        codCashAmount: '',
         portType: 'port_en_compte_expediteur',
       })
       setParcelSuccess(`Demande envoyee a l'agence de ${clientCity}. Reference: ${parcel.trackingId}`)
@@ -722,13 +733,24 @@ export default function ClientPortalPage() {
                           <option value="retour_bl">Retour bon livraison</option>
                         </select>
                         {parcelForm.serviceType !== 'simple' && parcelForm.serviceType !== 'retour_bl' ? (
-                          <input type="number" min="0" value={parcelForm.codAmount} onChange={pf('codAmount')} placeholder="Montant Retour Fond (DH)" className={inputCls} />
+                          <input type="number" min="0" value={parcelForm.codAmount} onChange={pf('codAmount')} placeholder={parcelForm.codMixed && ['cheque', 'traite'].includes(parcelForm.serviceType) ? (parcelForm.serviceType === 'traite' ? 'Montant traite (DH)' : 'Montant chèque (DH)') : 'Montant Retour Fond (DH)'} className={inputCls} />
                         ) : (
                           <div className="rounded-xl bg-blue-50 border border-blue-100 px-3.5 py-3 text-sm font-bold text-blue-700 flex items-center">
                             Port : {fmt(portalPrice)} DH
                           </div>
                         )}
                       </div>
+                      {['cheque', 'traite'].includes(parcelForm.serviceType) && (
+                        <div className="mt-3 grid sm:grid-cols-2 gap-3 items-center">
+                          <label className="flex items-center gap-2 text-sm font-semibold text-green-800">
+                            <input type="checkbox" checked={parcelForm.codMixed === true} onChange={e => { const on = e.target.checked; setParcelForm(prev => ({ ...prev, codMixed: on, codCashAmount: on ? prev.codCashAmount : '' })) }} />
+                            💵 + Espèces (retour de fonds mixte)
+                          </label>
+                          {parcelForm.codMixed && (
+                            <input type="number" min="0" value={parcelForm.codCashAmount} onChange={pf('codCashAmount')} placeholder="Montant espèces (DH)" className={inputCls} />
+                          )}
+                        </div>
+                      )}
                       {parcelForm.serviceType !== 'simple' && parcelForm.serviceType !== 'retour_bl' && (
                         <div className="mt-3 rounded-xl bg-blue-50 border border-blue-100 px-4 py-3 text-sm font-bold text-blue-700">
                           Prix port estimé : {fmt(portalPrice)} DH

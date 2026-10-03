@@ -1,4 +1,6 @@
+import { openPrintWindow } from './printWindow'
 import { codPaymentTypeOf } from '../firebase/constants'
+import { isMixedCod, codPartsOf } from './codParts'
 import { fmt } from './formatNumber'
 import { parcelDate } from './dateFilter'
 
@@ -40,10 +42,13 @@ export function printFeuilleDeCharge(driverName: string, city: string, parcels: 
   const totalDu = dus.reduce((n, p) => n + amt(p), 0)
   const codByType: Record<string, { n: number; amount: number }> = {}
   sorted.filter(p => codOf(p) > 0).forEach(p => {
-    const t = codPaymentTypeOf(p) || 'especes'
-    codByType[t] = codByType[t] || { n: 0, amount: 0 }
-    codByType[t].n++
-    codByType[t].amount += codOf(p)
+    // RF mixte : le livreur encaisse les DEUX parts (espèces + chèque/traite)
+    const parts = isMixedCod(p) ? codPartsOf(p) : [{ type: codPaymentTypeOf(p) || 'especes', amount: codOf(p) }]
+    parts.forEach(({ type: t, amount }) => {
+      codByType[t] = codByType[t] || { n: 0, amount: 0 }
+      codByType[t].n++
+      codByType[t].amount += amount
+    })
   })
   const totalCod = Object.values(codByType).reduce((n, v) => n + v.amount, 0)
 
@@ -59,6 +64,12 @@ export function printFeuilleDeCharge(driverName: string, city: string, parcels: 
     if (c <= 0) return '<span class="muted">—</span>'
     const t = codPaymentTypeOf(p) || 'especes'
     const sep = compact ? ' ' : ''
+    if (isMixedCod(p)) {
+      // RF mixte : total + détail par type (le livreur doit collecter les deux)
+      const detail = codPartsOf(p).slice().sort((a, b) => (a.type === 'especes' ? -1 : 1) - (b.type === 'especes' ? -1 : 1))
+        .map(x => `<span class="tag cod-${x.type}">${esc(TYPE_LABEL[x.type] || x.type)} ${fmt(x.amount)}</span>`).join(sep || ' ')
+      return `<span class="amt cod">${fmt(c)} DH</span>${sep}${detail}`
+    }
     return `<span class="amt cod">${fmt(c)} DH</span>${sep}<span class="tag cod-${t}">${esc(TYPE_LABEL[t] || t)}</span>`
   }
 
@@ -169,6 +180,6 @@ ${roomy ? 'tbody td{padding:3px 4px}' : ''}
 <div class="signs"><div>Livreur : ${esc(driverName)}<br><small>Signature</small></div><div>Chef d'exploitation${preparedBy ? ' : ' + esc(preparedBy) : ''}<br><small>Signature</small></div><div>Cachet de l'agence</div></div>
 <div class="foot">BG EXPRESS — Feuille de charge générée le ${new Date().toLocaleString('fr-FR')}</div>
 <script>window.onload=function(){window.print()}<\/script></body></html>`
-  const w = window.open('', '_blank', 'width=900,height=1100')
+  const w = openPrintWindow('width=900,height=1100')
   if (w) { w.document.write(html); w.document.close() }
 }

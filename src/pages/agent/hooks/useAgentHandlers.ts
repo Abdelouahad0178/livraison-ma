@@ -33,8 +33,9 @@ import { createBankDeposit } from '../../../firebase/bankDeposits'
 import { createParticularPortalAccount } from '../../../firebase/portalAccounts'
 import { printCharge, printTable, printBonRamassage } from '../../../utils/agentPrintUtils'
 import { printFeuilleDeCharge } from '../../../utils/printFeuilleDeCharge'
-import { ALL_SERVICE_TYPES, codPaymentTypeOf } from '../../../firebase/constants'
-import { buildParcelCorrectionPatch, describeParcelSaveError } from '../../../firebase/parcels'
+import { ALL_SERVICE_TYPES, codPaymentTypeOf, normalizeServiceType, codPaymentTypeForService } from '../../../firebase/constants'
+import { buildCodWriteFields, validateCodChoice, codCashPartOf, codDocPartOf, isMixedCod, codPartsDetailLabel, codEditResult } from '../../../utils/codParts'
+import { buildParcelCorrectionPatch, describeParcelSaveError, ensureFullParcel, ensureFullParcels } from '../../../firebase/parcels'
 import { showToast } from '../../../utils/toast'
 
 // ALL_SERVICE_TYPES importé depuis constants.ts
@@ -88,9 +89,23 @@ export const codCaisseCategory = (parcel: any) => {
   return 'cod_agent'
 }
 
+/**
+ * Le RETOUR FOND comporte-t-il une part ESPÈCES ? (espèces seules, ou RF mixte
+ * Espèces + chèque/traite). Montant de cette part : codCashPartOf(parcel).
+ */
 export const isCash = (parcel: any) => {
   const pt = codPaymentTypeOf(parcel) || 'especes'
-  return !['cheque', 'traite', 'bon_livraison', 'retour_bl'].includes(pt)
+  return !['cheque', 'traite', 'bon_livraison', 'retour_bl'].includes(pt) || isMixedCod(parcel)
+}
+
+/**
+ * Le RETOUR FOND comporte-t-il une VALEUR DOCUMENT (chèque / traite / BL) à faire suivre
+ * physiquement ? Pour un colis mono-type : exactement l'inverse de isCash (comportement
+ * historique). Un RF mixte est à la fois isCash ET hasDocValue.
+ */
+export const hasDocValue = (parcel: any) => {
+  const pt = codPaymentTypeOf(parcel) || 'especes'
+  return ['cheque', 'traite', 'bon_livraison', 'retour_bl'].includes(pt)
 }
 
 export const isRetourFondValue = (parcel: any) => {
@@ -127,8 +142,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       setBulkLoadError('Entrez le nom du chauffeur.')
       return
     }
+    // ⚡ Index par id (O(1)) au lieu d'un .find() sur toute la liste pour chaque id sélectionné
+    const loadableById = new Map<any, any>((loadableParcels || []).map((p: any) => [p.id, p]))
     const selectedParcels = bulkLoadSelectedIds
-      .map((id: any) => loadableParcels.find((p: any) => p.id === id))
+      .map((id: any) => loadableById.get(id))
       .filter(Boolean)
     if (selectedParcels.length === 0) {
       setBulkLoadError('Sélectionnez au moins un colis à charger.')
@@ -162,8 +179,9 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       console.log('❌ Pas de livreur sélectionné')
       return
     }
+    const assignableById = new Map<any, any>((assignableParcels || []).map((p: any) => [p.id, p]))
     const selectedParcels = bulkAssignSelectedIds
-      .map((id: any) => assignableParcels.find((p: any) => p.id === id))
+      .map((id: any) => assignableById.get(id))
       .filter(Boolean)
 
     console.log('🔍 DEBUG handleBulkAssignDriver:', {
@@ -322,19 +340,21 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     setCodCollectModal((m: any) => ({ ...m, loading: true }))
     try {
       const NON_CASH = ['cheque', 'traite', 'bon_livraison', 'retour_bl']
-      const contractedType = serviceToPaymentType(parcel.serviceType)
-      const effectivePaymentType = NON_CASH.includes(contractedType) ? contractedType : paymentType
+      // Type de valeur = celui du service demandé (espèces / chèque / traite / BL) : jamais un autre
+      const contractedType = codPaymentTypeForService(parcel.serviceType)
+      const effectivePaymentType = contractedType || paymentType
       const isSourceAgent = uid === parcel.agentId
       if (isSourceAgent) {
         await collectCodAtSource(parcel.id, effectivePaymentType, name)
       } else {
         await collectCodAtDestination(parcel.id, effectivePaymentType, name)
       }
-      const isEspeces = !NON_CASH.includes(effectivePaymentType)
+      // RF mixte : la part espèces entre en caisse, le chèque/la traite suit le circuit document
+      const isEspeces = !NON_CASH.includes(effectivePaymentType) || isMixedCod(parcel)
       if (isEspeces) {
         await createCaisseEntry({
           type: 'entree', category: 'cod_agence',
-          amount: parcel.codAmount,
+          amount: isMixedCod(parcel) ? codCashPartOf(parcel) : parcel.codAmount,
           description: `RETOUR FOND espèces collecté — ${parcel.trackingId} (${parcel.receiver?.name})`,
           reference: parcel.trackingId,
           agentId: uid,
@@ -629,7 +649,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       if (isCash(parcel)) {
         await createCaisseEntry({
           type: 'sortie', category: 'cod_regle_expediteur',
-          amount: parseFloat(parcel.codAmount) || 0,
+          amount: codCashPartOf(parcel),
           description: `RETOUR FOND espèces réglé expéditeur — ${parcel.trackingId} (${parcel.sender?.name || ''})`,
           reference: parcel.trackingId,
           agentId: uid || '', agentName: name, city: profile?.city || '',
@@ -710,7 +730,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         await Promise.all(espacesParcels.map((parcel: any) =>
           createCaisseEntry({
             type: 'sortie', category: 'cod_regle_expediteur',
-            amount: parseFloat(parcel.codAmount) || 0,
+            amount: codCashPartOf(parcel),
             description: `RETOUR FOND espèces réglé expéditeur — ${parcel.trackingId} (${parcel.sender?.name || ''})`,
             reference: parcel.trackingId,
             agentId: uid || '', agentName: name, city: profile?.city || '',
@@ -784,7 +804,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const name = profile?.name || 'Chef agence'
     const city = profile?.city || ''
     const list  = getCentralDepositEligibleCods(eligibleParcels)
-    const total = list.reduce((sum: any, p: any) => sum + (parseFloat(p.codAmount) || 0), 0)
+    // Part ESPÈCES uniquement (RF mixte : le chèque/la traite suit le circuit document)
+    const total = list.reduce((sum: any, p: any) => sum + codCashPartOf(p), 0)
     if (list.length === 0 || total <= 0) return
     setCentralDepositState({ loading: true, error: '', success: '' })
     try {
@@ -829,7 +850,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       if (isCash(parcel) && !parcel.codCaisseEntryId) {
         codCaisseEntryId = await createCaisseEntry({
           type: 'entree', category: 'cod_agent',
-          amount: parseFloat(parcel.codAmount) || 0,
+          amount: codCashPartOf(parcel),
           description: `RETOUR FOND espèces réceptionné du livreur — ${parcel.trackingId} (${parcel.receiver?.name || ''})`,
           reference: parcel.trackingId,
           agentId: uid, agentName: name, city: profile?.city || '',
@@ -891,7 +912,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       if (isCash(parcel) && !entryId) {
         entryId = await createCaisseEntry({
           type: 'entree', category: 'cod_agent',
-          amount: parseFloat(parcel.codAmount) || 0,
+          amount: codCashPartOf(parcel),
           description: `RETOUR FOND espèces reçu du livreur — ${parcel.trackingId} (${parcel.receiver?.name || ''})`,
           reference: parcel.trackingId,
           agentId: uid, agentName: name, city: profile?.city || '',
@@ -974,7 +995,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 
   const handleMarkSentToSource = async (parcel: any) => {
     const { profile, setCodSending, setCentralDepositState } = s.current
-    if (isCash(parcel)) {
+    if (!hasDocValue(parcel)) {
       setCentralDepositState({
         loading: false,
         error:   "Les RETOUR FOND espèces se versent au compte société, pas à l'agence source.",
@@ -1141,7 +1162,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
           receivedBy:    name,
           receivedById:  uid,
           modeReglement: paymentType,
-          montant:       parseFloat(parcel.codAmount) || 0,
+          montant:       isMixedCod(parcel) ? codDocPartOf(parcel) : (parseFloat(parcel.codAmount) || 0),
           banque:        chequeDetails.banque || '',
           numeroPiece:   chequeDetails.chequeNum || '',
           dateEcheance:  chequeDetails.echeance || '',
@@ -1152,7 +1173,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       if (paymentType === 'especes') {
         await createCaisseEntry({
           type: 'entree', category: 'cod_agent',
-          amount: parseFloat(parcel.codAmount) || 0,
+          amount: isMixedCod(parcel) ? codCashPartOf(parcel) : (parseFloat(parcel.codAmount) || 0),
           description: `RETOUR FOND espèces reçu agence dest. — ${parcel.trackingId} (${parcel.receiver?.name || ''})`,
           reference: parcel.trackingId,
           agentId: uid, agentName: name, city: profile?.city || '',
@@ -1250,7 +1271,13 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     }, 500)
   }
 
-  const handlePrintCharge = (groups: any, profileData: any) => printCharge(groups, profileData)
+  // 🪶 Documents COMPLETS pour l'impression (la liste peut être la version allégée)
+  const handlePrintCharge = async (groups: any, profileData: any) => {
+    const list = Array.isArray(groups) ? groups : []
+    const fullGroups = await Promise.all(list.map(async (g: any) =>
+      Array.isArray(g?.parcels) ? { ...g, parcels: await ensureFullParcels(g.parcels) } : g))
+    return printCharge(fullGroups, profileData)
+  }
 
   const handlePrintTable = async (
     parcelsArg: any,
@@ -1350,7 +1377,9 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   const handlePrintBonRamassage = async (nexpCodes: any, batchRef: any, sectorCode: any, chauffeurName: any) =>
     printBonRamassage(nexpCodes, batchRef, sectorCode, chauffeurName)
 
-  const handlePrintTicket = async (parcel: any) => {
+  const handlePrintTicket = async (parcelArg: any) => {
+    // 🪶 Ticket imprimé à partir du document COMPLET (la liste peut être la version allégée)
+    const parcel: any = await ensureFullParcel(parcelArg)
     const [{ default: JsBarcode }, { default: QRCodeForPrint }, { createRoot }, { flushSync }] = await Promise.all([
       import('jsbarcode'),
       import('../../../components/QRCodeSvg'),
@@ -1393,7 +1422,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       // Cas spécial: Retour BL se base sur hasRetourBL au lieu de serviceType
       const isChecked = st.key === 'retour_bl'
         ? (parcel.hasRetourBL === true)
-        : (parcel.serviceType === st.key)
+        : (parcel.serviceType === st.key || (st.key === 'especes' && isMixedCod(parcel)))
       return `
       <label style="display:flex;align-items:center;gap:4px;font-size:9pt;font-weight:600">
         <span style="width:12px;height:12px;border:1px solid #9ca3af;border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:8px;${isChecked ? 'background:#2563eb;border-color:#2563eb;color:white' : ''}">${isChecked ? '✓' : ''}</span>
@@ -1456,6 +1485,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         <td style="width:33%">
           <div style="font-size:8pt;color:#9ca3af;text-transform:uppercase">RETOUR FOND</div>
           <div style="font-weight:bold;font-size:12pt;color:${parcel.codAmount > 0 ? '#ea580c' : '#d1d5db'}">${parcel.codAmount > 0 ? parcel.codAmount + ' DH' : '—'}</div>
+          ${isMixedCod(parcel) ? `<div style="font-size:8pt;font-weight:bold;color:#c2410c">${codPartsDetailLabel(parcel)}</div>` : ''}
         </td>
       </tr>
     </table>
@@ -1678,6 +1708,16 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       setError('Veuillez saisir un nom de client ou sélectionner un client existant.')
       return
     }
+    // 💵+📋 RF mixte : chaque type coché doit avoir son montant (> 0)
+    const codChoiceError = validateCodChoice({
+      serviceType: form.serviceType, codAmount: form.codAmount,
+      cashAmount: form.codCashAmount, mixed: form.codMixed === true,
+    })
+    if (codChoiceError) {
+      setError('⚠️ ' + codChoiceError)
+      s.current.submissionInProgress = false
+      return
+    }
     setLoading(true)
     try {
       if (!auth.currentUser) {
@@ -1752,8 +1792,13 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         weight:        form.weight,
         nbColis:       form.nbColis,
         natureOfGoods: form.natureOfGoods === 'Autres' ? (form.natureOfGoodsCustomPrice || 'Autres') : form.natureOfGoods,
-        serviceType:   form.serviceType,
-        codAmount:     form.serviceType === 'simple' || form.serviceType === 'retour_bl' ? 0 : (parseFloat(form.codAmount) || 0),
+        // RF : codAmount = TOTAL ; mixte (Espèces + chèque/traite) → codMixed + codCashAmount
+        ...(form.serviceType === 'simple' || form.serviceType === 'retour_bl'
+          ? { serviceType: form.serviceType, codAmount: 0 }
+          : buildCodWriteFields({
+              serviceType: form.serviceType, codAmount: form.codAmount,
+              cashAmount: form.codCashAmount, mixed: form.codMixed === true,
+            })),
         price,
         portType:        autoPortType,
         portPayeMethod:  autoPortType === 'port_paye' ? (form.portPayeMethod || 'espece') : '',
@@ -1850,7 +1895,9 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     }
   }
 
-  const openEditModal = (parcel: any) => {
+  const openEditModal = async (parcelArg: any) => {
+    // 🪶 Liste « version allégée » (parcelsLite) : le modal travaille sur le document COMPLET
+    const parcel: any = await ensureFullParcel(parcelArg)
     const { setEditingParcel, setEditForm, setEditError } = s.current
     setEditingParcel(parcel)
     setEditForm({
@@ -1867,9 +1914,12 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       nbColis:         parcel.nbColis           ?? 1,
       natureOfGoods:   ['Palette','Colis','Bagages','Autres'].includes(parcel.natureOfGoods) ? parcel.natureOfGoods : (parcel.natureOfGoods ? 'Autres' : ''),
       natureOfGoodsCustom: ['Palette','Colis','Bagages','Autres'].includes(parcel.natureOfGoods) ? '' : (parcel.natureOfGoods || ''),
-      codAmount:       parcel.codAmount         ?? 0,
+      // RF mixte : codAmount = part chèque/traite, codCashAmount = part espèces (total recalculé)
+      codAmount:       isMixedCod(parcel) ? codDocPartOf(parcel) : (parcel.codAmount ?? 0),
+      codMixed:        isMixedCod(parcel),
+      codCashAmount:   isMixedCod(parcel) ? codCashPartOf(parcel) : '',
       price:           parcel.price             ?? '',
-      serviceType:     parcel.serviceType       || 'oc',
+      serviceType:     normalizeServiceType(parcel.serviceType) || 'oc',  // un seul type (jamais 'traite,cheque')
       portType:        parcel.portType          || '',
       fragile:         !!parcel.fragile,
       notes:           parcel.notes             || '',
@@ -1934,6 +1984,11 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       return !dest || profile.city === dest
     }
 
+    // 💵+📋 RF mixte : Espèces + UN chèque OU UNE traite, un montant par type
+    const codChoiceError = validateCodChoice({ serviceType: normalizeServiceType(editForm.serviceType), codAmount: editForm.codAmount, cashAmount: editForm.codCashAmount, mixed: editForm.codMixed === true })
+    if (codChoiceError) { setEditError(codChoiceError); return }
+    const editCod = buildCodWriteFields({ serviceType: normalizeServiceType(editForm.serviceType) || 'oc', codAmount: editForm.codAmount, cashAmount: editForm.codCashAmount, mixed: editForm.codMixed === true })
+
     setEditLoading(true)
     setEditError('')
     let detailsSaved = false
@@ -1968,7 +2023,9 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
           natureOfGoods: nextNature,
           serviceType:   editForm.serviceType || 'oc',
           price:         parsePositiveNumber(editForm.price),
-          codAmount:     editForm.codAmount,
+          codAmount:     editCod.codAmount,        // TOTAL
+          codMixed:      editCod.codMixed,
+          codCashAmount: editCod.codCashAmount,
           portType:      editForm.portType,
           fragile:       editForm.fragile,
           notes:         editForm.notes,
@@ -1989,7 +2046,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         // 💰 Partie RETOUR FOND / type de service : recalculée à partir du colis relu en base,
         // pour que l'ancien montant de l'historique et le codPaymentType soient ceux de Firestore
         // (l'objet ouvert dans le modal peut être périmé).
-        const COD_KEYS = ['serviceType', 'codAmount', 'codAmountHistory', 'codStatus', 'codPaymentType', 'lastModifiedBy', 'lastModifiedByName', 'lastModifiedAt']
+        const COD_KEYS = ['serviceType', 'codAmount', 'codAmountHistory', 'codStatus', 'codPaymentType', 'codMixed', 'codCashAmount', 'lastModifiedBy', 'lastModifiedByName', 'lastModifiedAt']
         if (COD_KEYS.some(k => k in detailsPatch)) {
           const snap = await getDoc(doc(db, 'parcels', editingParcel.id))
           if (snap.exists()) {
@@ -1997,6 +2054,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
             const codPatch = buildParcelCorrectionPatch(fresh, {
               serviceType: 'serviceType' in detailsPatch ? detailsPatch.serviceType : undefined,
               codAmount:   'codAmount' in detailsPatch ? detailsPatch.codAmount : undefined,
+              codMixed:      editCod.codMixed,
+              codCashAmount: editCod.codCashAmount,
             }, { uid: auth.currentUser?.uid || null, name: profile?.name || 'Utilisateur' })
             COD_KEYS.forEach(k => { delete detailsPatch[k] })
             COD_KEYS.forEach(k => { if (k in codPatch) detailsPatch[k] = codPatch[k] })
@@ -2050,7 +2109,13 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const { codEditModal, setCodEditModal } = s.current
     if (!codEditModal) return null
 
-    const amount = parseFloat(String(codEditModal.value ?? '').replace(',', '.'))
+    // 💵+📋 RF mixte : value = part chèque/traite, cashValue = part espèces → total
+    const codRes = codEditResult({ ...codEditModal, value: String(codEditModal.value ?? '').replace(',', '.'), cashValue: String(codEditModal.cashValue ?? '').replace(',', '.') })
+    if (codRes.error) {
+      setCodEditModal((m: any) => ({ ...m, error: codRes.error }))
+      return null
+    }
+    const amount = codRes.total
     if (isNaN(amount) || amount < 0) {
       setCodEditModal((m: any) => ({ ...m, error: 'Montant invalide.' }))
       return null
@@ -2073,7 +2138,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 
       // Patch immuable (pas de push dans parcel.codAmountHistory) : codAmount +
       // codAmountHistory + codStatus/codPaymentType cohérents avec serviceType.
-      const updates: any = buildParcelCorrectionPatch(fresh, { codAmount: amount }, { uid: auth.currentUser?.uid || null, name: userName })
+      const updates: any = buildParcelCorrectionPatch(fresh, {
+        codAmount: amount,
+        ...(codEditModal.mixed || fresh.codMixed === true ? { codMixed: codRes.mixed, codCashAmount: codRes.cash } : {}),
+      }, { uid: auth.currentUser?.uid || null, name: userName })
 
       if (Object.keys(updates).length > 0) {
         await updateParcel(parcel.id, updates)

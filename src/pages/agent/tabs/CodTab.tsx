@@ -7,6 +7,7 @@ import { useAgentCtx } from '../AgentCtx'
 import { filterByDate } from '../../../utils/dateFilter'
 import { fmt, fmtFixed as fmtAmt } from '../../../utils/formatNumber'
 import { normText } from '../../../utils/normText'
+import { codPartsOf, codHasType, codAmountOfType, codCashPartOf, isMixedCod, codPartsBreakdown, codServiceLabel, codPartsLabel } from '../../../utils/codParts'
 
 const DELAY_REASON_LABELS: Record<string, string> = {
   client_absent: 'Client absent',
@@ -23,6 +24,8 @@ const RETARD_NON_REGLE_H = 24 * 7 // Valeurs reçues de l'agence dest. mais exp�
 
 // Type de valeur : helper partagé (voir src/firebase/constants.ts)
 const codTypeOf = (p: any): string => codPaymentTypeOf(p) || 'especes'
+// Le colis relève-t-il du type k ? (type principal, ou part d'un RF mixte Espèces + document)
+const inType = (p: any, k: string): boolean => codTypeOf(p) === k || codHasType(p, k)
 const VALUE_TYPES = [
   { key: 'especes', label: 'Espèces', emoji: '💵', ring: 'border-green-200',  on: 'bg-green-600 border-green-600 text-white',   text: 'text-green-700',  soft: 'bg-green-50' },
   { key: 'cheque',  label: 'Chèques', emoji: '📋', ring: 'border-blue-200',   on: 'bg-blue-600 border-blue-600 text-white',     text: 'text-blue-700',   soft: 'bg-blue-50' },
@@ -161,6 +164,7 @@ export default function CodTab() {
     openReceiveModal,
     isRetourFondValue,
     isCash,
+    hasDocValue,
     getCentralDepositEligibleCods,
   } = useAgentCtx()
 
@@ -384,25 +388,27 @@ export default function CodTab() {
     const base: Record<string, { count: number; total: number; solde: number }> = {}
     VALUE_TYPES.forEach(t => { base[t.key] = { count: 0, total: 0, solde: 0 } })
     valueTypeSource.forEach((p: any) => {
-      const k = codTypeOf(p)
-      if (!base[k]) base[k] = { count: 0, total: 0, solde: 0 }
-      const amt = parseFloat(p.codAmount) || 0
-      base[k].count += 1
-      base[k].total += amt
-      if (!p.codSenderPaid) base[k].solde += amt   // solde = pas encore réglé à l'expéditeur
+      // RF mixte : chaque part (espèces / chèque / traite) compte dans son type
+      const parts = codPartsOf(p)
+      ;(parts.length ? parts : [{ type: codTypeOf(p), amount: 0 }]).forEach(({ type: k, amount: amt }) => {
+        if (!base[k]) base[k] = { count: 0, total: 0, solde: 0 }
+        base[k].count += 1
+        base[k].total += amt
+        if (!p.codSenderPaid) base[k].solde += amt   // solde = pas encore réglé à l'expéditeur
+      })
     })
     return base
   }, [valueTypeSource])
 
   const filteredCodParcels = valueTypeFilter === 'all'
     ? driverFilteredCodParcels
-    : driverFilteredCodParcels.filter((p: any) => codTypeOf(p) === valueTypeFilter)
+    : driverFilteredCodParcels.filter((p: any) => inType(p, valueTypeFilter))
 
   // ── Perspective AGENT SOURCE (j'ai créé le colis) ──
   const src = filteredCodParcels.filter(p => p.agentId === uid || isChefAgencyCodSource(p))
   const src_enCours    = src.filter(p => ['pending','collected'].includes(p.codStatus || 'pending') && !['Livré', 'Retourné à l\'expéditeur'].includes(p.status))
   const src_collected  = src.filter(p => p.codStatus === 'collected' && ['Livré', 'Retourné à l\'expéditeur'].includes(p.status) && !p.codSentToSource && !p.codReceivedBySource && !p.codSenderPaid)
-  const src_remisAgent = src.filter(p => p.codStatus === 'remis' && !p.codSentToSource && !p.codReceivedBySource && !p.codSenderPaid && !p.centralDeposited && !isCash(p) && !['Livré', 'Retourné à l\'expéditeur'].includes(p.status))
+  const src_remisAgent = src.filter(p => p.codStatus === 'remis' && !p.codSentToSource && !p.codReceivedBySource && !p.codSenderPaid && (!p.centralDeposited || isMixedCod(p)) && hasDocValue(p) && !['Livré', 'Retourné à l\'expéditeur'].includes(p.status))
   const src_enRoute    = src.filter(p => p.codSentToSource && !p.codReceivedBySource && !p.codSenderPaid)
   const src_aConfirmer = src.filter(p => p.codReceivedBySource && !p.codSenderPaid)
   const src_regle      = src.filter(p => p.codSenderPaid)
@@ -412,9 +418,11 @@ export default function CodTab() {
   // Étape 2b : livreur a collecté → chef d'agence doit valider client par client
   const dst_collected  = dst.filter(p => p.codStatus === 'collected' && !p.codSenderPaid)
   // ⭐ Étape 3.5 : COD envoyés par le pointeur au chef (en attente de validation + envoi)
-  const dst_fromPointeur = dst.filter(p => p.codSentToChef && !p.codSentToSource && !p.codSenderPaid && !isCash(p))
+  // (hasDocValue : chèque / traite / BL, y compris le document d'un RF mixte)
+  const dst_fromPointeur = dst.filter(p => p.codSentToChef && !p.codSentToSource && !p.codSenderPaid && hasDocValue(p))
   // Étape 3 → 4 : réceptionné, doit envoyer à agence source
-  const dst_aEnvoyer   = dst.filter(p => p.codStatus === 'remis' && !p.codSentToSource && !p.codSenderPaid && !p.centralDeposited && !isCash(p))
+  // RF mixte : la part espèces versée au compte société n'empêche pas l'envoi du document
+  const dst_aEnvoyer   = dst.filter(p => p.codStatus === 'remis' && !p.codSentToSource && !p.codSenderPaid && (!p.centralDeposited || isMixedCod(p)) && hasDocValue(p))
   // Étape 4 : envoyé, en attente de confirmation source
   const dst_envoye     = dst.filter(p => p.codSentToSource && !p.codReceivedBySource && !p.codSenderPaid)
   // ⭐ SUIVI PAIEMENT CLIENT : TOUS les COD collectés dans cette ville, peu importe leur traitement
@@ -427,9 +435,10 @@ export default function CodTab() {
   const centralDepositEligible = (isAgencyManager
     ? getCentralDepositEligibleCods(filteredCodParcels)
     : []) as any[]
-  const centralDepositTotal = centralDepositEligible.reduce((s,p) => s + parseFloat(p.codAmount||0), 0)
+  // Versement société = part ESPÈCES uniquement (RF mixte : le document suit son circuit)
+  const centralDepositTotal = centralDepositEligible.reduce((s,p) => s + codCashPartOf(p), 0)
   const centralDepositSelected = centralDepositEligible.filter(p => centralDepositSelectedIds.includes(p.id))
-  const centralDepositSelectedTotal = centralDepositSelected.reduce((s,p) => s + parseFloat(p.codAmount||0), 0)
+  const centralDepositSelectedTotal = centralDepositSelected.reduce((s,p) => s + codCashPartOf(p), 0)
   const centralDepositAllSelected = centralDepositEligible.length > 0 && centralDepositSelected.length === centralDepositEligible.length
   const centralPending = filteredCodParcels.filter(p => p.centralDeposited && !p.codSenderPaid)
 
@@ -455,7 +464,7 @@ export default function CodTab() {
     const sum = (arr: any[]) => arr.reduce((s, p) => s + parseFloat(p.codAmount || 0), 0)
     // Détail par type de valeur de ce que le livreur détient (espèces = risque réel, chèque/traite = documents)
     const splitByType = (arr: any[]) => VALUE_TYPES
-      .map(t => { const items = arr.filter((p: any) => codTypeOf(p) === t.key); return { ...t, count: items.length, montant: sum(items) } })
+      .map(t => { const items = arr.filter((p: any) => inType(p, t.key)); return { ...t, count: items.length, montant: items.reduce((s: number, p: any) => s + codAmountOfType(p, t.key), 0) } })
       .filter(t => t.count > 0)
     return [...map.values()]
       .map(r => {
@@ -531,7 +540,7 @@ export default function CodTab() {
     if (!list.length || bulkReceiving) return
     const total = list.reduce((s: number, p: any) => s + (parseFloat(p.codAmount || 0) || 0), 0)
     const detail = VALUE_TYPES
-      .map(t => ({ t, n: list.filter((p: any) => codTypeOf(p) === t.key).length, m: list.filter((p: any) => codTypeOf(p) === t.key).reduce((s: number, p: any) => s + (parseFloat(p.codAmount || 0) || 0), 0) }))
+      .map(t => ({ t, n: list.filter((p: any) => inType(p, t.key)).length, m: list.reduce((s: number, p: any) => s + codAmountOfType(p, t.key), 0) }))
       .filter(x => x.n > 0)
       .map(x => `  ${x.t.emoji} ${x.t.label} : ${x.n} · ${fmt(x.m)} DH`)
       .join('\n')
@@ -562,9 +571,9 @@ export default function CodTab() {
   const nic = (p: any) => p.senderNic || p.sender?.nic || p.trackingId || '—'
   const printedAt = () => new Date().toLocaleString('fr-MA', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })
 
-  const typeLabelOf = (p: any) => VALUE_TYPES.find(t => t.key === codTypeOf(p))?.label || 'Espèces'
-  const sumType = (arr: any[], k: string) => arr.filter((p: any) => codTypeOf(p) === k).reduce((s, p) => s + (parseFloat(p.codAmount || 0) || 0), 0)
-  const cntType = (arr: any[], k: string) => arr.filter((p: any) => codTypeOf(p) === k).length
+  const typeLabelOf = (p: any) => isMixedCod(p) ? codPartsLabel(p, { emoji: false, amounts: true }) : (VALUE_TYPES.find(t => t.key === codTypeOf(p))?.label || 'Espèces')
+  const sumType = (arr: any[], k: string) => arr.reduce((s, p) => s + codAmountOfType(p, k), 0)
+  const cntType = (arr: any[], k: string) => arr.filter((p: any) => inType(p, k)).length
 
   const handlePrintByDriver = () => {
     const allChez = byDriver.flatMap(r => r.chezLivreur)
@@ -638,7 +647,7 @@ export default function CodTab() {
           <div className="flex items-center gap-1.5 flex-wrap mb-1">
             <span className="font-mono text-[11px] font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100">{p.trackingId}</span>
             <span className="text-[10px] px-2 py-0.5 rounded-full font-semibold bg-amber-50 text-amber-700 border border-amber-100">
-              {cpt?.emoji || st?.emoji || '💵'} {cpt?.label || st?.label || 'Espèces'}
+              {isMixedCod(p) ? codPartsLabel(p) : <>{cpt?.emoji || st?.emoji || '💵'} {cpt?.label || st?.label || 'Espèces'}</>}
             </span>
             {badge}
           </div>
@@ -649,6 +658,7 @@ export default function CodTab() {
         </div>
         <div className="text-right shrink-0 flex flex-col items-end gap-1.5">
           <p className="text-base font-black text-amber-600">{fmtAmt(p.codAmount)} DH</p>
+          {isMixedCod(p) && <p className="text-[10px] font-semibold text-amber-700">{codPartsBreakdown(p)}</p>}
           {action}
         </div>
       </div>
@@ -1061,7 +1071,7 @@ export default function CodTab() {
                           <span className="font-mono font-bold text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg border border-blue-100 shrink-0">{nic(p)}</span>
                           <span className="flex-1 min-w-0 truncate text-gray-700">{p.sender?.name || '—'} → {p.receiver?.name || '—'}</span>
                           <span className={`px-2 py-0.5 rounded-full font-bold shrink-0 ${cls}`}>{s}</span>
-                          <span className="font-black text-gray-800 shrink-0">{fmtAmt(p.codAmount)} DH</span>
+                          <span className="font-black text-gray-800 shrink-0">{fmtAmt(p.codAmount)} DH{isMixedCod(p) && <span className="block text-[10px] font-semibold text-amber-700">{codPartsBreakdown(p)}</span>}</span>
                           {collectable ? (
                             <button onClick={() => handleCollectSingle(p)} disabled={busy || bulkBusy}
                               className="shrink-0 flex items-center gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white px-2.5 py-1 rounded-lg font-bold transition">
@@ -1224,7 +1234,7 @@ export default function CodTab() {
       {/* Versés au compte société — en attente chèque central */}
       {view === 'flux' && centralPending.length > 0 && (
         <SectionCard icon="🏦" title="Versés — en attente chèque central" count={centralPending.length}
-          total={centralPending.reduce((s,p)=>s+parseFloat(p.codAmount||0),0)} accent="border-l-emerald-500">
+          total={centralPending.reduce((s,p)=>s+codCashPartOf(p),0)} accent="border-l-emerald-500">
           {centralPending.slice(0, 12).map(p => (
             <PRow key={p.id} p={p}
               badge={<span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 font-semibold border border-emerald-100">Versé société</span>}
@@ -1675,7 +1685,7 @@ export default function CodTab() {
                       <span className="font-mono text-[11px] font-bold text-gray-400">{p.trackingId}</span>
                       <p className="text-sm font-semibold text-gray-800 truncate">{p.sender?.name || '—'}</p>
                       <p className="text-[11px] text-gray-400">
-                        {st?.emoji || '💵'} {st?.label || ''} · Payé le {fmtDate(p.codSenderPaidAt)}
+                        {isMixedCod(p) ? codServiceLabel(p) : <>{st?.emoji || '💵'} {st?.label || ''}</>} · Payé le {fmtDate(p.codSenderPaidAt)}
                       </p>
                     </div>
                     <div className="text-right shrink-0">
@@ -1818,7 +1828,7 @@ export default function CodTab() {
                     <div className="flex-1 min-w-0">
                       <span className="font-mono text-[11px] font-bold text-gray-400">{p.trackingId}</span>
                       <p className="text-sm font-semibold text-gray-800 truncate">{p.sender?.name || '—'}</p>
-                      <p className="text-[11px] text-gray-400">{st?.emoji || '💵'} {st?.label || ''} · réglé le {fmtDate(p.codSenderPaidAt)}</p>
+                      <p className="text-[11px] text-gray-400">{isMixedCod(p) ? codServiceLabel(p) : <>{st?.emoji || '💵'} {st?.label || ''}</>} · réglé le {fmtDate(p.codSenderPaidAt)}</p>
                     </div>
                     <div className="text-right shrink-0">
                       <p className="font-black text-green-600">{fmtAmt(p.codAmount)} DH</p>

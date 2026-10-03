@@ -392,6 +392,28 @@ exports.onParcelWrite = onDocumentWritten('parcels/{parcelId}', async (event) =>
   await batch.commit()
 })
 
+// ── Version allégée des expéditions : parcels/{id} → parcelsLite/{id} ───────
+// Miroir sans les champs lourds (historique, audit…) lu par les listes de l'onglet Expéditions.
+// - Suppression du colis → suppression du miroir.
+// - Écriture ignorée si la projection allégée n'a pas changé (ex. ajout d'une ligne d'historique).
+// - Sinon on RELIT le colis (et non l'instantané de l'événement) : les événements peuvent arriver
+//   dans le désordre ; relire garantit que la dernière exécution écrit l'état le plus récent.
+// Idempotent (set complet, pas de merge) : rejouer un événement réécrit la même projection.
+const { projectParcelLite, liteKey } = require('./parcelLite')
+exports.syncParcelLite = onDocumentWritten({ document: 'parcels/{parcelId}', retry: false }, async (event) => {
+  const id = event.params.parcelId
+  const liteRef = db.collection('parcelsLite').doc(id)
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after  = event.data?.after?.exists  ? event.data.after.data()  : null
+  if (before && after && liteKey(projectParcelLite(before)) === liteKey(projectParcelLite(after))) return
+  const fresh = await db.collection('parcels').doc(id).get()
+  if (!fresh.exists) {
+    await liteRef.delete()
+    return
+  }
+  await liteRef.set({ ...projectParcelLite(fresh.data()), liteUpdatedAt: FieldValue.serverTimestamp() })
+})
+
 // ── Rebuild all stats from existing parcels (callable — admin only) ────────
 // Call once after first deploy to bootstrap stats from historical data.
 exports.rebuildStats = onCall({
@@ -1688,4 +1710,37 @@ exports.forceUpdateOperationalDay = onCall(async (request) => {
     console.error('❌ Erreur mise à jour manuelle journée opérationnelle:', error)
     throw new Error(`Erreur: ${error.message}`)
   }
+})
+
+// ── 🔑 Changement du mot de passe d'un utilisateur par l'ADMIN ──────────────
+// Les mots de passe ne sont jamais lisibles (Firebase Auth les chiffre) : l'Admin en définit un
+// nouveau, affiché une seule fois dans l'interface pour être transmis. Rien n'est stocké en clair.
+exports.adminSetUserPassword = onCall({ maxInstances: 5 }, async (request) => {
+  const { HttpsError } = require('firebase-functions/v2/https')
+  if (!request.auth?.uid) throw new HttpsError('unauthenticated', 'Non authentifié')
+  const caller = await db.collection('users').doc(request.auth.uid).get()
+  if (!caller.exists || caller.data().role !== 'admin') {
+    throw new HttpsError('permission-denied', 'Réservé à l\'Admin')
+  }
+  const uid = String(request.data?.uid || '')
+  const password = String(request.data?.password || '')
+  if (!uid) throw new HttpsError('invalid-argument', 'Utilisateur manquant')
+  if (password.length < 6) throw new HttpsError('invalid-argument', 'Le mot de passe doit contenir au moins 6 caractères')
+  const { getAuth } = require('firebase-admin/auth')
+  try {
+    await getAuth().updateUser(uid, { password })
+  } catch (err) {
+    if (err?.code === 'auth/user-not-found') throw new HttpsError('not-found', 'Ce compte n\'a pas d\'accès de connexion (employé sans compte)')
+    throw new HttpsError('internal', err?.message || 'Erreur de mise à jour')
+  }
+  const target = await db.collection('users').doc(uid).get()
+  await db.collection('director_logs').add({
+    type: 'admin_password_reset',
+    action: 'Mot de passe redéfini par l\'Admin',
+    details: { targetUid: uid, targetName: target.data()?.name || '', targetEmail: target.data()?.email || '' },
+    userId: request.auth.uid,
+    userName: caller.data().name || 'Admin',
+    timestamp: FieldValue.serverTimestamp(),
+  })
+  return { ok: true }
 })

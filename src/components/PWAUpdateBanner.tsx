@@ -10,6 +10,14 @@ export default function PWAUpdateBanner() {
   } = useRegisterSW({
     onRegisteredSW(_swUrl: string, reg: ServiceWorkerRegistration | undefined) {
       _registration = reg
+      // 🔄 Vérifie une nouvelle version toutes les 60 s (sinon le navigateur ne vérifie qu'à la
+      // navigation ou une fois par jour) : les applications restées ouvertes passent vite à la
+      // dernière version déployée.
+      if (reg) {
+        setInterval(() => {
+          try { if (navigator.onLine) reg.update() } catch { /* silencieux */ }
+        }, 60_000)
+      }
     },
   })
 

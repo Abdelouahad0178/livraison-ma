@@ -15,6 +15,7 @@ import {
   X,
 } from 'lucide-react'
 import { useState } from 'react'
+import { isMixedCod, codPartsBreakdown, codEditInitial, codPartsLabel } from '../../../utils/codParts'
 import { doc, setDoc, deleteDoc } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
 import {
@@ -261,7 +262,8 @@ export default function AdminExpeditionsTab({
             <input
               value={search}
               onChange={e => setSearch(e.target.value)}
-              placeholder="🔍 Recherche rapide: N° EXP, Tracking ID, nom, téléphone..."
+              onKeyDown={e => { if (e.key === 'Enter') window.dispatchEvent(new CustomEvent('force-search', { detail: search })) }}
+              placeholder="🔍 Recherche rapide: N° EXP, Tracking ID, nom, téléphone... (⏎ pour un N° court)"
               className="w-full border-2 border-gray-300 rounded-xl pl-10 pr-16 py-2.5 text-sm bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none transition"
             />
             {isSearching ? (
@@ -694,11 +696,11 @@ export default function AdminExpeditionsTab({
                       <td className="px-4 py-3">
                         <div className="flex items-center gap-1.5">
                           {p.codAmount > 0
-                            ? <span className="text-orange-600 font-bold">{p.codAmount} DH</span>
+                            ? <span className="text-orange-600 font-bold">{p.codAmount} DH{isMixedCod(p) && <span className="block text-[10px] font-semibold text-orange-500">{codPartsBreakdown(p)}</span>}</span>
                             : <span className="text-gray-300">-</span>
                           }
                           <button
-                            onClick={() => setCodEditModal({ parcel: p, value: p.codAmount || 0, loading: false, error: '' })}
+                            onClick={() => setCodEditModal({ parcel: p, ...codEditInitial(p), loading: false, error: '' })}
                             className="p-0.5 rounded hover:bg-orange-50 text-gray-400 hover:text-orange-500 transition"
                             title="Modifier le RETOUR FOND (Admin)"
                           >
@@ -712,11 +714,11 @@ export default function AdminExpeditionsTab({
                             <span className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full font-medium ${p.codStatus === 'collected' && cpt ? `${cpt.bg} ${cpt.text}` : `${cs.bg} ${cs.text}`}`}>
                               <span className={`w-1.5 h-1.5 rounded-full ${cs.dot}`} />
                               {p.codStatus === 'collected'
-                                ? <>{cpt?.emoji} {codCollectedLabel(paymentTypeKey)}</>
+                                ? (isMixedCod(p) ? <>{codPartsLabel(p)}</> : <>{cpt?.emoji} {codCollectedLabel(paymentTypeKey)}</>)
                                 : cs.label
                               }
                             </span>
-                            {p.codStatus !== 'collected' && cpt && <p className="text-[10px] text-gray-400 mt-0.5">{cpt.emoji} {cpt.label}</p>}
+                            {p.codStatus !== 'collected' && cpt && <p className="text-[10px] text-gray-400 mt-0.5">{isMixedCod(p) ? codPartsLabel(p) : <>{cpt.emoji} {cpt.label}</>}</p>}
                           </div>
                         ) : <span className="text-gray-300 text-xs">-</span>}
                       </td>

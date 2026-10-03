@@ -109,6 +109,7 @@ const cleanText = (text: string): string => {
     .replace(/\b(marrakech|marrakesh)\b/gi, 'Marrakech')
     .replace(/\b(tanger|tangier)\b/gi, 'Tanger')
     .replace(/\b(agadir)\b/gi, 'Agadir')
+    .replace(/\b(a[iï]t[\s-]*mell?oul)\b/gi, 'Ait Melloul')
     .replace(/\b(fès|fes|fez)\b/gi, 'Fès')
     .replace(/\b(meknès|meknes)\b/gi, 'Meknès')
     .replace(/\b(oujda)\b/gi, 'Oujda')

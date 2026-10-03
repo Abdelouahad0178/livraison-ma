@@ -2,6 +2,7 @@ import * as React from 'react'
 import { Calendar, Search, MessageCircle, CheckCircle, Banknote, Filter, Printer } from 'lucide-react'
 import { COD_STATUS, COD_PAYMENT_TYPES } from '../../../firebase/constants'
 import { fmt } from '../../../utils/formatNumber'
+import { codHasType, isMixedCod, codPartsBreakdown, codPartsLabel } from '../../../utils/codParts'
 
 // Banknote is available for use in extended payment type display
 void Banknote
@@ -113,7 +114,8 @@ export default function AdminCodTab({
     }
 
     if (selectedPaymentType !== 'all') {
-      filtered = filtered.filter((p: any) => normalizePaymentType(p) === selectedPaymentType)
+      // RF mixte : visible sous le document ET sous « Espèces »
+      filtered = filtered.filter((p: any) => normalizePaymentType(p) === selectedPaymentType || codHasType(p, selectedPaymentType))
     }
 
     return filtered
@@ -745,11 +747,12 @@ export default function AdminCodTab({
                     {/* Montant RETOUR FOND */}
                     <td className="px-4 py-3">
                       <span className="text-orange-600 font-bold text-base">{p.codAmount} DH</span>
+                      {isMixedCod(p) && <span className="block text-[11px] font-semibold text-orange-500">{codPartsBreakdown(p)}</span>}
                     </td>
                     {/* Mode paiement */}
                     <td className="px-4 py-3">
                       {cpt
-                        ? <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${(cpt as any).bg} ${(cpt as any).text}`}>{(cpt as any).emoji} {(cpt as any).label}</span>
+                        ? <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full font-medium ${(cpt as any).bg} ${(cpt as any).text}`}>{isMixedCod(p) ? codPartsLabel(p) : <>{(cpt as any).emoji} {(cpt as any).label}</>}</span>
                         : <span className="text-gray-300 text-xs">—</span>
                       }
                     </td>

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Check, Package, Banknote, RotateCcw, Truck, AlertCircle } from 'lucide-react'
-import { updateParcelStatus, markParcelAsReturned } from '../firebase/parcels'
+import { updateParcelStatus, markParcelAsReturned, cancelParcelReturn } from '../firebase/parcels'
 import { collectCodAtDestination } from '../firebase/cod'
 
 interface QuickStatusTogglesProps {
@@ -162,6 +162,27 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
     } catch (err: any) {
       console.error('Erreur marquage retour:', err)
       setError(err.message || 'Erreur lors du marquage en retour')
+    } finally {
+      setUpdating(null)
+    }
+  }
+
+  // ↩️ Annuler un retour fait par erreur (chef d'agence / agent pro / chef d'exploitation / admin),
+  // tant que le colis n'est pas reparti sur le camion retour ni finalisé.
+  const canCancelReturn = ['admin', 'chef_agence', 'agentpro', 'chef_exploitation'].includes(profile?.role)
+    && (parcel.wasReturned || parcel.status === 'Retourné')
+    && !['Retour en transit', 'Retour arrivé', 'Retour finalisé', 'Livré'].includes(parcel.status)
+  const handleCancelReturn = async () => {
+    if (!window.confirm("Annuler le retour de ce colis ?\nIl reprendra son expéditeur, son destinataire, ses villes et son statut d'avant le retour.")) return
+    setUpdating('return')
+    setError('')
+    try {
+      const res = await cancelParcelReturn(parcel, profile?.name || profile?.email || '')
+      if (!res.codRestored) setError("Retour annulé. ⚠️ Ancien colis : vérifiez le montant RETOUR FOND (remis à 0 lors du retour) via 🖐️ Éditer.")
+      onSuccess?.({ status: parcel.preReturn?.status || 'Arrivé en agence' })
+    } catch (err: any) {
+      console.error('Erreur annulation retour:', err)
+      setError(err?.code === 'permission-denied' ? "Annulation refusée : seuls le chef d'agence, l'agent pro ou l'admin peuvent annuler un retour." : (err?.message || "Erreur lors de l'annulation du retour"))
     } finally {
       setUpdating(null)
     }
@@ -346,6 +367,17 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
             <RotateCcw className={iconSize} />
             <span>Colis dans le circuit retour</span>
           </div>
+        )}
+        {isInReturnCircuit && canCancelReturn && (
+          <button
+            onClick={handleCancelReturn}
+            disabled={updating !== null}
+            className={`flex items-center gap-1 ${buttonPadding} rounded-lg ${buttonText} font-semibold bg-white text-red-700 hover:bg-red-50 border border-red-300 shadow-sm disabled:opacity-50`}
+            title="Annuler le retour (erreur) : remet le colis dans son état d'avant"
+          >
+            <RotateCcw className={iconSize} />
+            <span>{updating === 'return' ? 'Annulation…' : 'Annuler le retour'}</span>
+          </button>
         )}
       </div>
 

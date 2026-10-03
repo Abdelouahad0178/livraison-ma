@@ -48,6 +48,9 @@ export interface FuseSearchConfig<T> {
 
   /** Recherche initiale */
   initialSearch?: string
+
+  /** Ne lancer la recherche que si le terme est jugé complet (ex. 7 chiffres) — sinon terme vide */
+  shouldSearch?: (query: string) => boolean
 }
 
 export interface FuseSearchResult<T> {
@@ -59,6 +62,8 @@ export interface FuseSearchResult<T> {
 
   /** Recherche après debounce */
   debouncedSearch: string
+  /** Lance immédiatement la recherche du terme actuel (ignore shouldSearch) */
+  forceSearch?: () => void
 
   /** Résultats filtrés et scorés */
   results: T[]
@@ -84,6 +89,7 @@ export function useFuseSearch<T>({
   useExtendedSearch = true,
   limit,
   initialSearch = '',
+  shouldSearch,
 }: FuseSearchConfig<T>): FuseSearchResult<T> {
   const [search, setSearch] = useState(initialSearch)
   const [debouncedSearch, setDebouncedSearch] = useState(initialSearch)
@@ -94,9 +100,15 @@ export function useFuseSearch<T>({
 
   // 🔄 Debounce automatique
   useEffect(() => {
-    setIsSearching(true)
+    // Indicateur « Recherche… » seulement si une recherche va VRAIMENT partir (terme complet :
+    // 7 chiffres / 3 lettres, ou champ vidé) — pas pendant la saisie d'un numéro incomplet.
+    const willSearch = !search.trim() || !shouldSearch || shouldSearch(search)
+    setIsSearching(willSearch)
     const timer = setTimeout(() => {
-      setDebouncedSearch(search)
+      // Terme incomplet (suppression de chiffres, saisie en cours) : la recherche active est
+      // CONSERVÉE (aucun recalcul) ; champ vidé → plus de recherche ; terme complet → nouvelle recherche.
+      if (!search.trim()) setDebouncedSearch('')
+      else if (!shouldSearch || shouldSearch(search)) setDebouncedSearch(search)
       setIsSearching(false)
     }, debounceMs)
 
@@ -209,6 +221,7 @@ export function useFuseSearch<T>({
     search,
     setSearch,
     debouncedSearch,
+    forceSearch: () => setDebouncedSearch(search),
     results,
     detailedResults,
     isSearching,

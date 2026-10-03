@@ -38,6 +38,7 @@ import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
 import { normText } from '../utils/normText'
+import { codPartView, codHasType, isMixedCod, codPartsOf, codTypeDisplay, codPartsBreakdown, codPartsLabel } from '../utils/codParts'
 
 // ⚡ Système de chargement optimisé (Option 3 - comme AdminPage)
 const PAGE_SIZE = 50 // Chargement initial réduit
@@ -48,7 +49,7 @@ const SUPPLIER_LEAD_DAYS = 90
 
 // Type de paiement COD : helper partagé (voir src/firebase/constants.ts)
 const codTypeOf = codPaymentTypeOf
-const codTypeLabel = codPaymentTypeLabel
+const codTypeLabel = (p: any) => isMixedCod(p) ? codTypeDisplay(p) : codPaymentTypeLabel(p)
 
 const money = (n: any) => (parseFloat(n) || 0).toLocaleString('fr-MA')
 const asDate = (value: any) => {
@@ -549,9 +550,10 @@ export default function CentralCollectorPage() {
     }
   }, [])
 
+  // Versés au compte société = part ESPÈCES (RF mixte : vue limitée à la part espèces)
   const depositedParcels = useMemo(() => parcels.filter(p =>
     parseFloat(p.codAmount || 0) > 0 && p.centralDeposited
-  ), [parcels])
+  ).map((p: any) => codPartView(p, 'especes')), [parcels])
 
   // ── Onglet Contrôle & Pointage : contre-espèces de toutes les agences ────
   // Ville d'ORIGINE (ville d'envoi) pour filtrage
@@ -598,7 +600,7 @@ export default function CentralCollectorPage() {
 
     // Filtre type de paiement COD
     if (archivePaymentType !== 'all') {
-      filtered = filtered.filter((p: any) => codTypeOf(p) === archivePaymentType)
+      filtered = filtered.filter((p: any) => codTypeOf(p) === archivePaymentType || codHasType(p, archivePaymentType))
     }
 
     return filtered
@@ -613,7 +615,7 @@ export default function CentralCollectorPage() {
       if (ctlPayType !== 'all') {
         const t = codTypeOf(p)
         if (ctlPayType === 'none' && t) return false
-        if (ctlPayType !== 'none' && t !== ctlPayType) return false
+        if (ctlPayType !== 'none' && t !== ctlPayType && !codHasType(p, ctlPayType)) return false
       }
       if (ctlCodStatus !== 'all' && (p.codStatus || 'pending') !== ctlCodStatus) return false
       if (ctlControl === 'controlled' && !isControlled(p)) return false
@@ -683,10 +685,13 @@ export default function CentralCollectorPage() {
       const amt = parseFloat(p.codAmount) || 0
       totalAmount += amt
       if (isControlled(p)) { controlledCount += 1; controlledAmount += amt }
-      const t = codTypeOf(p) || 'none'
-      if (!byType[t]) byType[t] = { count: 0, amount: 0 }
-      byType[t].count += 1
-      byType[t].amount += amt
+      // RF mixte : chaque part dans son type
+      const splits = isMixedCod(p) ? codPartsOf(p) : [{ type: codTypeOf(p) || 'none', amount: amt }]
+      splits.forEach(({ type: t, amount }) => {
+        if (!byType[t]) byType[t] = { count: 0, amount: 0 }
+        byType[t].count += 1
+        byType[t].amount += amount
+      })
     })
     return {
       total: ctlFiltered.length,
@@ -835,7 +840,7 @@ export default function CentralCollectorPage() {
   const payTypeBadge = (p: any) => {
     const t = COD_PAYMENT_TYPES.find((x: any) => x.key === codTypeOf(p))
     if (!t) return <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-slate-500">—</span>
-    return <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${t.bg} ${t.text}`}>{t.emoji} {t.label}</span>
+    return <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${t.bg} ${t.text}`}>{isMixedCod(p) ? codPartsLabel(p) : <>{t.emoji} {t.label}</>}</span>
   }
 
   const codStatusBadge = (p: any) => {
@@ -1292,7 +1297,7 @@ export default function CentralCollectorPage() {
         <td>${p.receiver?.tel || p.receiverTel || '-'}</td>
         <td>${parcelCity(p)}</td>
         <td>${codTypeLabel(p) || '-'}</td>
-        <td style="text-align:right;font-weight:bold">${money(p.codAmount)} DH</td>
+        <td style="text-align:right;font-weight:bold">${money(p.codAmount)} DH${isMixedCod(p) ? `<br><span style="font-size:8pt;font-weight:normal">${codPartsBreakdown(p)}</span>` : ''}</td>
         <td style="text-align:center">${isControlled(p) ? '✓' : ''}</td>
       </tr>
     `).join('')
@@ -1456,7 +1461,7 @@ export default function CentralCollectorPage() {
         <td>${p.receiver?.tel || '-'}</td>
         <td>${p.originCity || p.sender?.city || '-'}</td>
         <td>${p.destinationCity || p.receiver?.city || '-'}</td>
-        <td style="text-align:right;font-weight:bold">${money(p.codAmount)} DH</td>
+        <td style="text-align:right;font-weight:bold">${money(p.codAmount)} DH${isMixedCod(p) ? `<br><span style="font-size:8pt;font-weight:normal">${codPartsBreakdown(p)}</span>` : ''}</td>
       </tr>
     `).join('')
     const html = `<!doctype html><html><head><meta charset="utf-8"><title>Cheque ${group.senderName}</title>
@@ -1888,7 +1893,7 @@ export default function CentralCollectorPage() {
                             <p className="font-bold text-slate-800 truncate max-w-36">{p.receiver?.name || p.receiverName || '-'}</p>
                             <p className="text-[11px] text-slate-500">{parcelCity(p)}</p>
                           </td>
-                          <td className="px-3 py-2.5 text-right font-black text-emerald-700 whitespace-nowrap">{money(p.codAmount)} DH</td>
+                          <td className="px-3 py-2.5 text-right font-black text-emerald-700 whitespace-nowrap">{money(p.codAmount)} DH{isMixedCod(p) && <div className="text-[10px] font-semibold text-slate-500">{codPartsBreakdown(p)}</div>}</td>
                           <td className="px-3 py-2.5">{payTypeBadge(p)}</td>
                           <td className="px-3 py-2.5">{codStatusBadge(p)}</td>
                           <td className="px-3 py-2.5">{statusBadge(p)}</td>

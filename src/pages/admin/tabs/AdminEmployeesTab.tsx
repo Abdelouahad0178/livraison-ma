@@ -205,6 +205,7 @@ export default function AdminEmployeesTab({
                       setUserEditTab('hr')
                       setUserEdit({
                         id: u.id,
+                        email: u.email || '',
                         name: u.name || '',
                         role: u.role || 'agent',
                         city: u.city || '',

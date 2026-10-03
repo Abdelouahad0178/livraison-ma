@@ -3,7 +3,7 @@ import { Archive, Calendar, RotateCcw, Search, TrendingDown, AlertCircle, CheckC
 import { collection, query, where, orderBy, limit, getDocs, doc, deleteDoc, setDoc, Timestamp } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
 import { getFunctions, httpsCallable } from 'firebase/functions'
-import { STATUS_COLORS } from '../../../firebase/constants'
+import { STATUS_COLORS, CITIES } from '../../../firebase/constants'
 import { searchParcels } from '../../../firebase/parcels'
 import { normIncludes } from '../../../utils/normText'
 
@@ -727,12 +727,7 @@ export default function AdminArchivageTab() {
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
             >
               <option value="all">Toutes</option>
-              <option value="Casablanca">Casablanca</option>
-              <option value="Agadir">Agadir</option>
-              <option value="Marrakech">Marrakech</option>
-              <option value="Rabat">Rabat</option>
-              <option value="Fès">Fès</option>
-              <option value="Tanger">Tanger</option>
+              {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
             </select>
           </div>
 

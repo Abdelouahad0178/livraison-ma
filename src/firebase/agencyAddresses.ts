@@ -13,6 +13,8 @@
 
 export const AGENCY_ADDRESSES: Record<string, string> = {
   'CASABLANCA': 'N°19, Rue 5, Hay Tissir 2 - Casablanca',
+  'AIT MELLOUL': 'Bloc H Rue 2 N°982 Agdal - Ait Melloul',
+  'GUELMIM': 'N°53 AV 3 MARS GUELMIM',
   'AGADIR': '', // TODO: À remplir depuis bglocation.netlify.app
   'MARRAKECH': '', // TODO: À remplir depuis bglocation.netlify.app
   'TANGER': '', // TODO: À remplir depuis bglocation.netlify.app

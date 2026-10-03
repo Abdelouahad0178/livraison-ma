@@ -1,7 +1,7 @@
 import type { TariffConfig } from '../types'
 
 export const CITIES = [
-  'Casablanca', 'Rabat', 'Agadir', 'Marrakech', 'Guelmim',
+  'Casablanca', 'Rabat', 'Agadir', 'Marrakech', 'Guelmim', 'Ait Melloul',
 ]
 
 export const TARIFS: Record<string, number> = {
@@ -10,6 +10,7 @@ export const TARIFS: Record<string, number> = {
   Agadir: 45,
   Marrakech: 40,
   Guelmim: 55,
+  'Ait Melloul': 45, // provisoire (= Agadir), modifiable dans Admin › Tarifs
 }
 
 export const TARIF_WEIGHT_RULES = [
@@ -121,10 +122,14 @@ export const COD_PAYMENT_TYPES = [
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Type de paiement RETOUR FOND (COD) — source de vérité unique
-// `serviceType` (choisi à la création) peut contenir plusieurs valeurs séparées
-// par des virgules (ex: 'cheque,traite'). `codPaymentType` est le type saisi à
-// l'encaissement, mais plusieurs écrans le pré-remplissent à 'especes' par
-// défaut : il ne fait donc foi que s'il est cohérent avec le service demandé.
+// `serviceType` (choisi à la création) = UN SEUL type principal par expédition.
+// Exception RF MIXTE : Espèces + un chèque OU une traite (jamais chèque + traite) →
+// serviceType = document, codMixed = true, codCashAmount = part espèces,
+// codAmount = TOTAL. Lecture par type : src/utils/codParts.ts (codPartsOf).
+// D'anciens colis peuvent encore contenir une liste 'cheque,traite' (ancien écran
+// multi-sélection) : la lecture reste tolérante, mais l'écriture est normalisée
+// (voir normalizeServiceType / sanitizeParcelCodWrite). `codPaymentType` est dérivé
+// de serviceType ; il ne fait foi que s'il est cohérent avec le service demandé.
 // ─────────────────────────────────────────────────────────────────────────────
 const COD_TYPE_ALIASES: Record<string, string> = {
   especes: 'especes',
@@ -153,6 +158,70 @@ export function codPaymentTypeOf(parcel: any): string {
   if (collected.length && (service.length === 0 || service.includes(collected[0]))) return collected[0]
   if (service.length) return service[0]
   return collected[0] || ''
+}
+
+/** Types de service acceptés (une seule valeur par expédition). */
+const VALID_SERVICE_TYPE_KEYS = ['simple', 'especes', 'cheque', 'traite', 'retour_bl', 'retourne', 'oc']
+/** Services sans retour de fonds : montant RF forcé à 0, codPaymentType null. */
+export const NON_COD_SERVICE_TYPES = ['simple', 'retour_bl']
+
+/**
+ * Ramène un serviceType à UNE seule valeur. Une liste 'traite,cheque' (ancien écran
+ * multi-sélection) n'est jamais enregistrée : on garde le premier type valide.
+ */
+export function normalizeServiceType(raw: any): string {
+  const s = String(raw ?? '').trim()
+  if (!s.includes(',')) return s
+  const parts = s.split(',').map(x => x.trim().toLowerCase()).filter(Boolean)
+  const first = parts.find(x => VALID_SERVICE_TYPE_KEYS.includes(x)) || parts[0] || ''
+  console.warn(`[serviceType] valeur multiple "${s}" refusée → "${first}" (un seul type de retour de fonds par expédition)`)
+  return first
+}
+
+/** codPaymentType attendu pour un serviceType ('especes' | 'cheque' | 'traite' | 'bon_livraison' | ''). */
+export function codPaymentTypeForService(serviceType: any): string {
+  return COD_TYPE_ALIASES[normalizeServiceType(serviceType).toLowerCase()] || ''
+}
+
+const VALUE_COD_TYPES = ['especes', 'cheque', 'traite']
+
+/**
+ * Garde-fou de la couche d'écriture (createParcel / updateParcel / encaissements) :
+ * - serviceType jamais multiple ;
+ * - codPaymentType jamais contradictoire avec serviceType (espèces / chèque / traite).
+ * Modifie `data` sur place (l'appelant affiche ainsi exactement ce qui est enregistré).
+ * `currentServiceType` : serviceType déjà en base quand le patch ne le contient pas.
+ */
+export function sanitizeParcelCodWrite<T extends Record<string, any>>(data: T, currentServiceType?: any): T {
+  if (!data || typeof data !== 'object') return data
+  const d = data as Record<string, any>
+  if (typeof d.serviceType === 'string' && d.serviceType.includes(',')) {
+    d.serviceType = normalizeServiceType(d.serviceType)
+  }
+  const st = 'serviceType' in d ? d.serviceType : currentServiceType
+  const expected = codPaymentTypeForService(st)
+  const cpt = d.codPaymentType
+  if ('codPaymentType' in d && cpt && VALUE_COD_TYPES.includes(expected) && VALUE_COD_TYPES.includes(cpt) && cpt !== expected) {
+    console.warn(`[codPaymentType] "${cpt}" incohérent avec serviceType "${st}" → "${expected}"`)
+    d.codPaymentType = expected
+  }
+  // 💵+📋 RF MIXTE (Espèces + UN chèque OU UNE traite) : serviceType = le document,
+  // codAmount = TOTAL, codCashAmount = part espèces (voir src/utils/codParts.ts).
+  // Un mixte n'est valable qu'avec un serviceType chèque/traite et une part espèces > 0
+  // strictement inférieure au total.
+  if (d.codMixed === true) {
+    const cash = parseFloat(String(d.codCashAmount ?? '')) || 0
+    const total = 'codAmount' in d ? (parseFloat(String(d.codAmount ?? '')) || 0) : null
+    if (!['cheque', 'traite'].includes(expected) || cash <= 0 || (total !== null && total <= cash)) {
+      console.warn(`[codMixed] RF mixte invalide (service "${st}", espèces ${cash}, total ${total}) → annulé`)
+      d.codMixed = false
+      d.codCashAmount = 0
+    }
+  } else if ('codMixed' in d && d.codMixed !== true) {
+    d.codMixed = false
+    d.codCashAmount = 0
+  }
+  return data
 }
 
 /** Libellé affichable du type de paiement COD (vide si inconnu). */

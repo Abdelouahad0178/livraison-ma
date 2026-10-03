@@ -1,5 +1,6 @@
 import { Inbox, X, Check } from 'lucide-react'
 import { COD_PAYMENT_TYPES } from '../../../firebase/constants'
+import { isMixedCod, codPartsDetailLabel } from '../../../utils/codParts'
 
 interface AgentReceiveModalProps {
   receiveModal: any
@@ -41,7 +42,7 @@ export default function AgentReceiveModal({ receiveModal, setReceiveModal, handl
           </div>
           <div className="flex items-center justify-between gap-3 pt-2 border-t border-gray-200">
             <span className="text-gray-500">Montant</span>
-            <span className="font-black text-blue-700">{(parseFloat(receiveModal.parcel?.codAmount || 0) || 0).toLocaleString('fr-MA')} DH</span>
+            <span className="font-black text-blue-700">{(parseFloat(receiveModal.parcel?.codAmount || 0) || 0).toLocaleString('fr-MA')} DH{isMixedCod(receiveModal.parcel) && <span className="block text-[11px] font-semibold">{codPartsDetailLabel(receiveModal.parcel)} — la part espèces suit le versement société</span>}</span>
           </div>
         </div>
 

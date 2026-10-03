@@ -10,7 +10,7 @@
  *   « jour par jour : 14/09 (13/27 jours) — Mois de septembre 2026 (du … au …) »
  *   → jour en cours « 14/09 », progression 13/27 (anneau), période « Mois de septembre 2026 … ».
  */
-import { memo, useEffect, useState } from 'react'
+import { memo, useEffect, useRef, useState } from 'react'
 
 // 🎈 Petites phrases qui défilent pendant le chargement, pour faire patienter avec le sourire
 const FUN_MESSAGES = [
@@ -24,33 +24,50 @@ const FUN_MESSAGES = [
   '🏁 Dernière ligne droite !',
 ]
 
+// ⚡ IMPORTANT : les animations ci-dessous écrivent DIRECTEMENT dans le DOM (ref), sans useState.
+// Avant, le compteur défilant faisait un setState à CHAQUE image (60/s pendant 450 ms à chaque
+// journée reçue) et les messages un setState toutes les 2,2 s : chacun de ces rendus prioritaires
+// interrompait puis faisait recommencer à zéro le recalcul en arrière-plan (useDeferredValue /
+// startTransition) de la liste et des totaux de la page → « Mise à jour… » ne disparaissait pas
+// et React finissait par forcer le calcul en bloquant la page.
 function useFunMessage(active: boolean) {
-  const [i, setI] = useState(() => Math.floor(Math.random() * FUN_MESSAGES.length))
+  const ref = useRef<HTMLSpanElement>(null)
+  const [first] = useState(() => Math.floor(Math.random() * FUN_MESSAGES.length))
   useEffect(() => {
     if (!active) return
-    const t = setInterval(() => setI(x => (x + 1) % FUN_MESSAGES.length), 2200)
+    let i = first
+    const t = setInterval(() => {
+      i = (i + 1) % FUN_MESSAGES.length
+      const el = ref.current
+      if (!el) return
+      el.textContent = FUN_MESSAGES[i]
+      // Relance l'animation d'apparition (lp-fade) sans re-rendu React
+      el.classList.remove('lp-fade'); void el.offsetWidth; el.classList.add('lp-fade')
+    }, 2200)
     return () => clearInterval(t)
-  }, [active])
-  return FUN_MESSAGES[i]
+  }, [active, first])
+  return { ref, initial: FUN_MESSAGES[first] }
 }
 
-/** ⚡ Compteur qui « défile » vers la vraie valeur (impression de rapidité). */
+/** ⚡ Compteur qui « défile » vers la vraie valeur (impression de rapidité) — écrit dans le DOM. */
 function useRollingNumber(target: number | null) {
-  const [shown, setShown] = useState<number>(target ?? 0)
+  const ref = useRef<HTMLSpanElement>(null)
+  const shownRef = useRef<number>(target ?? 0)
   useEffect(() => {
     if (target === null) return
     let raf = 0
-    const start = performance.now(), from = shown, delta = target - from
+    const start = performance.now(), from = shownRef.current, delta = target - from
     if (delta === 0) return
     const step = (t: number) => {
       const k = Math.min(1, (t - start) / 450)
-      setShown(Math.round(from + delta * (1 - Math.pow(1 - k, 3))))
+      shownRef.current = Math.round(from + delta * (1 - Math.pow(1 - k, 3)))
+      if (ref.current) ref.current.textContent = shownRef.current.toLocaleString('fr-MA')
       if (k < 1) raf = requestAnimationFrame(step)
     }
     raf = requestAnimationFrame(step)
     return () => cancelAnimationFrame(raf)
-  }, [target]) // eslint-disable-line react-hooks/exhaustive-deps
-  return shown
+  }, [target])
+  return { ref, shown: shownRef.current }
 }
 
 /** ⚡ Vitesse de chargement (expéditions / seconde) depuis le début du chargement. */
@@ -162,7 +179,7 @@ function LoadProgress({
             <span className="text-[11px] font-semibold uppercase tracking-wide text-indigo-400">Chargement</span>
             {n !== null && (
               <span className="text-sm font-extrabold text-indigo-800 tabular-nums">
-                {rolled.toLocaleString('fr-MA')} <span className="font-semibold text-indigo-600">{noun} {loadedWord}</span>
+                <span ref={rolled.ref}>{rolled.shown.toLocaleString('fr-MA')}</span> <span className="font-semibold text-indigo-600">{noun} {loadedWord}</span>
               </span>
             )}
             {rate !== null && (
@@ -194,7 +211,7 @@ function LoadProgress({
               style={pct === null ? undefined : { left: `calc(${pct}% - 12px)` }}
             ><span className="lp-speed">💨</span><span className="inline-block lp-bounce">🚚</span></span>
           </div>
-          <span key={fun} className="lp-fade text-[11px] italic text-indigo-500 mt-0.5 truncate">{fun}</span>
+          <span ref={fun.ref} className="lp-fade text-[11px] italic text-indigo-500 mt-0.5 truncate">{fun.initial}</span>
         </div>
         <style>{`
           @keyframes lpRoam { 0% { left: -14px } 100% { left: calc(100% + 4px) } }

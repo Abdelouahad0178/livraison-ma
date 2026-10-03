@@ -1,7 +1,10 @@
 import { Building2, Wallet, Users, BarChart2, Contact, Car, TrendingUp, AlertTriangle, Calculator, RotateCcw, Download, FileText, Banknote, ShieldCheck, Power, ChevronDown, Upload, Package, Monitor, Star, Archive } from 'lucide-react'
+import { lazy, Suspense } from 'react'
 import { CITIES } from '../../../firebase/constants'
 import { BACKUP_COLLECTIONS } from '../../../firebase/backupCollections'
 import { fmt } from '../../../utils/formatNumber'
+
+const LivePresenceCard = lazy(() => import('../components/LivePresenceCard'))
 
 // BACKUP_COLLECTIONS is imported for potential use in the exports section (passed via props or used in parent)
 void BACKUP_COLLECTIONS
@@ -305,12 +308,17 @@ export default function AdminHomeTab({
         </div>
         {backupMessage && (
           <div className={`mt-4 text-sm font-semibold px-4 py-3 rounded-xl ${
-            backupMessage.type === 'success' ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-red-50 text-red-700 border border-red-100'
+            backupMessage.type === 'success' ? 'bg-green-50 text-green-700 border border-green-100' : backupMessage.type === 'info' ? 'bg-blue-50 text-blue-700 border border-blue-100' : 'bg-red-50 text-red-700 border border-red-100'
           }`}>
             {backupMessage.text}
           </div>
         )}
       </div>
+
+      {/* 👁️ L'œil qui ne dort pas — présence temps réel */}
+      <Suspense fallback={<div className="h-40 rounded-3xl border border-gray-100 bg-white animate-pulse" />}>
+        <LivePresenceCard users={users} />
+      </Suspense>
 
       {/* Cards grille */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
