@@ -1,3 +1,4 @@
+import { showToast } from '../utils/toast'
 import { lazy, Suspense, useEffect, useRef, useState, useMemo } from 'react'
 import { setPresenceTab } from '../services/presenceCounters'
 import { codPaymentTypeOf } from '../firebase/constants'
@@ -101,6 +102,7 @@ import DirectorLogsModal from './admin/modals/DirectorLogsModal'
 import DriverPortDuModal from './admin/modals/DriverPortDuModal'
 import AdminEditParcelModal from './admin/modals/AdminEditParcelModal'
 import { fmt } from '../utils/formatNumber'
+import { analyzeNbColisShortcut, nbColisDigitsOnly, NB_COLIS_SHORTCUT_TITLE } from '../utils/nbColisShortcut'
 
 const parcelDate = (p: any) => {
   // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire — voir
@@ -1654,7 +1656,7 @@ export default function AdminPage() {
     try {
       await deleteParcel(parcelId)
       setDeleteConfirm(null)
-      alert('✅ Expédition supprimée avec succès')
+      showToast('✅ Expédition supprimée avec succès', 'success', 4000) // disparaît tout seul
       // Les parcels seront automatiquement mis à jour par le listener
     } catch (error: any) {
       alert('❌ Erreur : ' + (error.message || 'Impossible de supprimer l\'expédition'))
@@ -2743,7 +2745,20 @@ export default function AdminPage() {
               {/* Détails */}
               <div className="grid grid-cols-3 gap-3">
                 <div><label className="text-xs font-semibold text-gray-500 block mb-1">Poids (kg)</label><input type="number" min="0" step="0.1" value={newParcelModal.form.weight} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, weight: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
-                <div><label className="text-xs font-semibold text-gray-500 block mb-1">Nb Colis</label><input type="number" min="1" value={newParcelModal.form.nbColis} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, nbColis: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
+                <div><label className="text-xs font-semibold text-gray-500 block mb-1">Nb Colis</label><input type="text" autoComplete="off" placeholder="ex. 2 ou 2ds45e500" title={NB_COLIS_SHORTCUT_TITLE} value={newParcelModal.form.nbColis} onChange={e => { const v = e.target.value.slice(0, 40); setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, nbColis: v } })) }}
+                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur() } }}
+                  onBlur={e => {
+                    // ⚡ Raccourci étendu (port ds/ps/dc/ce/cd, retour de fonds e/c/t, poids k ; nature p/b ignorée : pas de champ nature ici) — voir utils/nbColisShortcut
+                    const raw = e.currentTarget.value; const res = analyzeNbColisShortcut(raw)
+                    if (res?.error !== undefined) { const msg = '⚡ ' + res.error; setNewParcelModal((m: any) => ({ ...m, error: msg })); return }
+                    const sc = res?.shortcut
+                    setNewParcelModal((m: any) => ({ ...m, ...(sc ? { error: '' } : {}), form: sc ? {
+                      ...m.form, nbColis: sc.nbColis, portType: sc.portType, portPrice: sc.amount,
+                      ...(sc.cod ? { serviceType: sc.cod.serviceType, codAmount: sc.cod.codAmount, codMixed: sc.cod.codMixed, codCashAmount: sc.cod.codCashAmount } : { serviceType: 'simple', codAmount: '', codMixed: false, codCashAmount: '' }),
+                      ...(sc.weight ? { weight: sc.weight } : {}),
+                    } : { ...m.form, nbColis: nbColisDigitsOnly(raw) } }))
+                  }}
+                  className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
                 <div><label className="text-xs font-semibold text-gray-500 block mb-1">Type</label><select value={newParcelModal.form.serviceType} onChange={e => { const st = e.target.value; setNewParcelModal((m: any) => ({ ...m, error: '', form: { ...m.form, serviceType: st, codAmount: st === 'simple' ? '' : m.form.codAmount, ...((st === 'cheque' || st === 'traite') ? {} : { codMixed: false, codCashAmount: '' }) } })) }} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full"><option value="simple">Simple</option><option value="especes">C/Espèces</option><option value="cheque">C/Chèque</option><option value="traite">C/Traite</option></select></div>
               </div>
 

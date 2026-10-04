@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from 'react'
 import { collection, query, where, onSnapshot, Timestamp } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
 import { CheckCircle, X, AlertCircle, Package, Search, Calendar, Filter, Download } from 'lucide-react'
-import * as XLSX from 'xlsx'
+import { loadExcel } from '../../../utils/loadExcel'
 import { normIncludes } from '../../../utils/normText'
 
 interface PortDuChequeParcel {
@@ -166,7 +166,7 @@ export default function PortDuChequeTab({ agencyCity, profile }: Props) {
   }, [filteredParcels])
 
   // Export Excel
-  const handleExportExcel = () => {
+  const handleExportExcel = async () => {
     const data = filteredParcels.map(p => ({
       'Date': p.createdAt?.toDate?.()?.toLocaleDateString('fr-FR') || '',
       'Tracking': p.trackingId,
@@ -179,6 +179,8 @@ export default function PortDuChequeTab({ agencyCity, profile }: Props) {
       'Statut': p.status || '',
     }))
 
+    const XLSX = await loadExcel()
+    if (!XLSX) return
     const ws = XLSX.utils.json_to_sheet(data)
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Ports Dû Chèque')

@@ -138,7 +138,7 @@ export default function AgentHeader({
         <div className="hidden md:flex items-center gap-1 border-t border-gray-100 pt-1 pb-2 responsive-scroll -mx-4 px-4">
           {[
             { key: 'home',          label: '🏠 Accueil',                onClick: () => { setTab('home'); setCreatedParcel(null) },                                                                                hidden: false },
-            { key: 'new',           label: '+ Saisie colis',            onClick: () => { setTab('new'); setCreatedParcel(null); setForm({ ...EMPTY_FORM, senderCity: profile?.city || '' }) },                   hidden: false },
+            { key: 'new',           label: '+ Saisie colis',            onClick: () => { setTab('new'); setCreatedParcel(null); setForm({ ...EMPTY_FORM, senderCity: profile?.city || '' }); setTimeout(() => window.dispatchEvent(new Event('focus-nexp')), 80) },                   hidden: false },
             { key: 'parcels',       label: profile?.role === 'aide_agent' ? '📋 Mes saisies' : '📦 Expéditions', onClick: () => setTab('parcels'),                                                               hidden: false },
             { key: 'caisse',        label: profile?.role === 'chef_agence' ? '🏛️ Caisse Agence' : '💼 Ma Caisse', onClick: () => setTab('caisse'),                                                              hidden: profile?.role === 'aide_agent' || profile?.role === 'agentpro' },
             { key: 'cod',           label: '💰 RETOUR FOND Clients',    onClick: () => setTab('cod'),                                                                                                             hidden: profile?.role === 'aide_agent' },

@@ -8,7 +8,7 @@ import { useState, useRef, useEffect, useMemo, useDeferredValue } from 'react'
 import PendingBadge from '../../../components/PendingBadge'
 import { deleteField, Timestamp, collection, documentId, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
-import * as XLSX from 'xlsx'
+import { loadExcel } from '../../../utils/loadExcel'
 import {
   loadReturnedParcelOnTruck, validateReturnArrival, getMoreAgentParcels,
 } from '../../../firebase/firestore'
@@ -1360,7 +1360,7 @@ export default function ParcelsTab() {
               </div>
               <div className="flex items-center gap-2 w-full sm:w-auto">
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (selectedSearchParcels.length === 0) {
                       alert('Aucune expédition sélectionnée à exporter')
                       return
@@ -1397,6 +1397,8 @@ export default function ParcelsTab() {
                       ])
                     })
 
+                    const XLSX = await loadExcel()
+                    if (!XLSX) return
                     const wb = XLSX.utils.book_new()
                     const ws = XLSX.utils.aoa_to_sheet(data)
                     ws['!cols'] = [
@@ -2361,7 +2363,7 @@ export default function ParcelsTab() {
                       {/* Bouton Exporter Excel */}
                       <button
                         type="button"
-                        onClick={() => {
+                        onClick={async () => {
                           // ✅ CORRECTION: Utiliser allDisplayParcels au lieu de loadableParcels
                           // pour inclure TOUS les parcels, même ceux filtrés après sélection
                           const selectedParcels = allDisplayParcels.filter((p: any) => bulkLoadSelectedSet.has(p.id))
@@ -2433,6 +2435,8 @@ export default function ParcelsTab() {
                           })
 
                           // Créer le workbook et la worksheet
+                          const XLSX = await loadExcel()
+                          if (!XLSX) return
                           const wb = XLSX.utils.book_new()
                           const ws = XLSX.utils.aoa_to_sheet(data)
 
@@ -2571,7 +2575,7 @@ export default function ParcelsTab() {
                         {/* Bouton Exporter Excel */}
                         <button
                           type="button"
-                          onClick={() => {
+                          onClick={async () => {
                             // ✅ CORRECTION: Utiliser allDisplayParcels au lieu de filteredParcels
                             // pour inclure TOUS les parcels sélectionnés, même si les filtres ont changé
                             const selectedParcels = allDisplayParcels.filter((p: any) => bulkAssignSelectedSet.has(p.id))
@@ -2643,6 +2647,8 @@ export default function ParcelsTab() {
                             })
 
                             // Créer le workbook et la worksheet
+                            const XLSX = await loadExcel()
+                            if (!XLSX) return
                             const wb = XLSX.utils.book_new()
                             const ws = XLSX.utils.aoa_to_sheet(data)
 

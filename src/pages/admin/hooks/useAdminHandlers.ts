@@ -377,6 +377,7 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
     const f = newParcelModal.form
 
     // Validation
+    if (!String(f.senderNic || '').trim()) { setNewParcelModal((m: any) => ({ ...m, error: 'N° EXP (numéro de bon) requis.' })); return }
     if (!f.senderName?.trim()) { setNewParcelModal((m: any) => ({ ...m, error: 'Nom expéditeur requis.' })); return }
     if (!f.receiverName?.trim()) { setNewParcelModal((m: any) => ({ ...m, error: 'Nom destinataire requis.' })); return }
     if (!f.receiverCity?.trim()) { setNewParcelModal((m: any) => ({ ...m, error: 'Ville destinataire requise.' })); return }

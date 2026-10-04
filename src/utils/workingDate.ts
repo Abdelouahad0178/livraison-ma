@@ -1,9 +1,6 @@
 // Système de date de travail GLOBAL contrôlé par l'Admin
 // Version simple SANS listener en temps réel pour éviter les boucles
 
-import { db } from '../firebase/config'
-import { doc, getDoc, setDoc } from 'firebase/firestore'
-
 const WORKING_DATE_KEY = 'bg-express-working-date'
 
 /**
@@ -44,6 +41,10 @@ export const getWorkingDateDisplay = (): string => {
  */
 export const loadWorkingDateFromFirestore = async (): Promise<void> => {
   try {
+    const [{ db }, { doc, getDoc }] = await Promise.all([
+      import('../firebase/db'),
+      import('firebase/firestore'),
+    ])
     const docRef = doc(db, 'settings', 'workingDate')
     const snapshot = await getDoc(docRef)
 
@@ -67,6 +68,11 @@ export const setWorkingDate = async (dateStr: string): Promise<void> => {
   try {
     const date = new Date(dateStr + 'T00:00:00')
     const isoDate = date.toISOString()
+
+    const [{ db }, { doc, setDoc }] = await Promise.all([
+      import('../firebase/db'),
+      import('firebase/firestore'),
+    ])
 
     // Sauvegarder dans Firestore
     await setDoc(doc(db, 'settings', 'workingDate'), {

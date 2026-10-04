@@ -13,7 +13,11 @@ import { db, auth } from '../../../firebase/config'
 import { getWorkingDateStr } from '../../../utils/workingDate'
 import { updateParcel, buildParcelCorrectionPatch, describeParcelSaveError } from '../../../firebase/parcels'
 import { showToast } from '../../../utils/toast'
+import { getGareDriverForCity } from '../../../firebase/delivery'
 import { normIncludes } from '../../../utils/normText'
+import { analyzeNbColisShortcut, nbColisDigitsOnly, NB_COLIS_SHORTCUT_HINT, NB_COLIS_SHORTCUT_TITLE } from '../../../utils/nbColisShortcut'
+import { buildCityInitialsMap, matchCityInitials, CITY_INITIALS_DELAY_MS } from '../../../utils/cityInitials'
+import { getEmptyParcelForm, isParcelFormEmpty } from '../emptyParcelForm'
 
 const Barcode = lazy(() => import('react-barcode'))
 const QRCodeSVG = lazy(() => import('../../../components/QRCodeSvg'))
@@ -25,20 +29,15 @@ const normalizeDecimal = (value: string) => {
 
 // Utiliser la date de travail au lieu de la date système
 const todayStr = () => getWorkingDateStr()
+// Date réelle du système (ordinateur), au format AAAA-MM-JJ
+const systemTodayStr = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
 
-// Fonction pour obtenir un formulaire vide avec la date de travail ACTUELLE
-const getEmptyForm = () => ({
-  senderName: '', senderNic: '', senderAddress: '', senderTel: '', senderCity: '',
-  receiverName: '', receiverAddress: '', receiverTel: '', receiverCity: '', receiverClientId: '',
-  weight: '', nbColis: '0', natureOfGoods: 'Colis', natureOfGoodsCustomPrice: '', codAmount: '',
-  serviceType: 'simple', codMixed: false, codCashAmount: '', hasRetourBL: false, shipmentMode: 'personal',
-  portType: 'port_du', portPayeMethod: '', portPayeMontant: '',
-  portPrice: '',
-  clientId: '', clientName: '', autoDebit: false,
-  deliverySectorId: '', deliveryDriverId: '',
-  enGare: true,
-  operationDate: todayStr(), // Date de travail ACTUELLE à chaque appel
-})
+// Formulaire vide avec la date de travail ACTUELLE (source unique partagée avec AgentPage / HomeTab)
+const getEmptyForm = getEmptyParcelForm
+
+// 🏙️ Initiales des villes de destination : A = Agadir, AA = Ait Melloul, C, M, G, R…
+const CITY_INITIALS = buildCityInitialsMap(CITIES)
+const CITY_INITIALS_TITLE = 'Initiales (taper la lettre) : ' + Object.entries(CITY_INITIALS).map(([k, c]) => `${k} = ${c}`).join(' · ')
 
 // Types disponibles pour création (sans retour_bl et retourne - ces types sont pour marquage uniquement)
 const SERVICE_TYPES = ALL_SERVICE_TYPES.filter(t => t.key !== 'retour_bl' && t.key !== 'retourne')
@@ -91,7 +90,48 @@ export default function NewTab() {
 
   // State pour tracker si l'autocomplétion vient de se produire
   const [autoCompleted, setAutoCompleted] = useState(false)
+  // ↩️ Une tentative de création a été refusée (champ oublié : contrôle du navigateur OU contrôle
+  // de l'application) → Entrée renvoie directement au bouton « Créer l'Expédition ».
+  const [retryAfterRefusal, setRetryAfterRefusal] = useState(false)
+  // 🎯 « + Saisie colis » : curseur directement dans le champ N° EXP (NIC), à l'ouverture de
+  // l'onglet comme à chaque nouveau clic sur le bouton.
+  useEffect(() => {
+    // Le formulaire se construit en plusieurs temps au premier affichage (chargement de l'onglet,
+    // clients, en-têtes…) : on recentre le champ N° EXP plusieurs fois pendant ~1,5 s, tant que
+    // l'utilisateur n'a pas commencé à saisir ailleurs.
+    const focusNexp = () => {
+      const show = () => {
+        const el = nexpInputRef.current
+        if (!el) return
+        const active = document.activeElement as HTMLElement | null
+        if (active && active !== el && active !== document.body && active.closest('form') && active.tagName !== 'BUTTON') return // saisie déjà commencée
+        el.style.scrollMarginTop = '140px' // ne pas finir sous l'en-tête fixe
+        el.scrollIntoView({ block: 'center', behavior: 'auto' })
+        el.focus({ preventScroll: true })
+      }
+      ;[60, 250, 600, 1100, 1600].forEach(ms => setTimeout(show, ms))
+      setTimeout(() => nexpInputRef.current?.select?.(), 70)
+    }
+    focusNexp()
+    window.addEventListener('focus-nexp', focusNexp)
+    return () => window.removeEventListener('focus-nexp', focusNexp)
+  }, [])
+  useEffect(() => { if (createdParcel) setRetryAfterRefusal(false) }, [createdParcel])
+  useEffect(() => { if (error) setRetryAfterRefusal(true) }, [error])
+  // ⚡ Précharge le livreur-gare de la ville destinataire (mis en cache) : la création n'attend plus cette requête
+  useEffect(() => {
+    if (form.enGare && form.receiverCity) getGareDriverForCity(form.receiverCity).catch(() => {})
+  }, [form.enGare, form.receiverCity])
   const [receiverAutoCompleted, setReceiverAutoCompleted] = useState(false)
+  // 🧹 Message « Rien à vider » affiché DANS le formulaire, à côté du bouton, masqué après 4 s.
+  // (Le toast DOM ajouté à <body> était masqué par la règle CSS `body > div:not(#root)`.)
+  // (valeur = horodatage du clic : un nouveau clic relance bien les 4 s ; 0 = masqué)
+  const [clearInfoAt, setClearInfoAt] = useState(0)
+  useEffect(() => {
+    if (!clearInfoAt) return
+    const t = setTimeout(() => setClearInfoAt(0), 4000)
+    return () => clearTimeout(t)
+  }, [clearInfoAt])
 
   // States pour les popups de clients
   const [showSenderPopup, setShowSenderPopup] = useState(false)
@@ -103,10 +143,140 @@ export default function NewTab() {
   const handleNewParcel = () => {
     setCreatedParcel(null)
     setForm({ ...getEmptyForm(), senderCity: profile?.city || '' })
+    setRetryAfterRefusal(false)
     // Focus sur N EXP après un court délai pour laisser le DOM se mettre à jour
     setTimeout(() => {
       nexpInputRef.current?.focus()
     }, 100)
+  }
+
+  // ⚡ Raccourci « Nb colis » (voir utils/nbColisShortcut) : 2ds45, 3ps40, 2dc45, 2ce45, 2cd45,
+  // 2ds45e200c800, 2ds45p, 3ds45c1500k8…
+  // Retourne 'applied' (reconnu et appliqué), 'error' (reconnu mais invalide : message sous le champ)
+  // ou 'none' (saisie normale).
+  const [nbColisError, setNbColisError] = useState('')
+  const applyNbColisShortcut = (raw: string, input?: HTMLInputElement | null): 'applied' | 'error' | 'none' => {
+    const res = analyzeNbColisShortcut(raw)
+    if (!res) { setNbColisError(''); input?.setCustomValidity(''); return 'none' }
+    if (res.error !== undefined) {
+      setNbColisError(res.error)
+      // Bloque la soumission tant que le raccourci n'est pas corrigé
+      input?.setCustomValidity(res.error)
+      return 'error'
+    }
+    setNbColisError('')
+    input?.setCustomValidity('')
+    const sc = res.shortcut
+    setForm((p: any) => {
+      const pt = sc.portType
+      const isPaye = pt === 'port_paye'
+      const next: any = {
+        ...p,
+        nbColis: sc.nbColis,
+        natureOfGoods: sc.nature || 'Colis',
+        ...(sc.weight ? { weight: sc.weight } : {}),
+        ...(sc.cod
+          ? { serviceType: sc.cod.serviceType, codAmount: sc.cod.codAmount, codMixed: sc.cod.codMixed, codCashAmount: sc.cod.codCashAmount }
+          : { serviceType: 'simple', codAmount: '', codMixed: false, codCashAmount: '' }),
+        portType: pt,
+        shipmentMode: 'personal',
+        portPrice: sc.amount,
+        portPayeMethod: isPaye ? 'espece' : p.portPayeMethod,
+        portPayeMontant: isPaye ? sc.amount : p.portPayeMontant,
+      }
+      // Mêmes effets que les boutons « Compte Exp » / « Compte Dest »
+      if (pt === 'port_en_compte_expediteur') {
+        next.shipmentMode = 'client'
+        if (p.senderName && p.senderName.trim() !== '') { next.clientName = p.senderName; next.clientId = p.clientId || '' }
+      }
+      if (pt === 'port_en_compte_destinataire') {
+        next.shipmentMode = 'client'
+        if (p.receiverName && p.receiverName.trim() !== '') { next.clientName = p.receiverName; next.clientId = p.receiverClientId || '' }
+      }
+      return next
+    })
+    return 'applied'
+  }
+
+  // 📑 F9 = dupliquer la dernière expédition de la session (même expéditeur + même ville de destination)
+  const submitSnapshotRef = useRef<any>(null)
+  const lastParcelRef = useRef<any>(null)
+  const [dupInfoAt, setDupInfoAt] = useState(0)
+  useEffect(() => {
+    if (!dupInfoAt) return
+    const t = setTimeout(() => setDupInfoAt(0), 4000)
+    return () => clearTimeout(t)
+  }, [dupInfoAt])
+  useEffect(() => {
+    if (!createdParcel) return
+    const snap = submitSnapshotRef.current || {}
+    const isCompte = snap.shipmentMode === 'client' && !!(snap.clientId || snap.portType === 'port_en_compte_expediteur')
+    lastParcelRef.current = {
+      senderName: createdParcel.sender?.name ?? snap.senderName ?? '',
+      senderTel: createdParcel.sender?.tel ?? snap.senderTel ?? '',
+      senderAddress: createdParcel.sender?.address ?? snap.senderAddress ?? '',
+      senderCity: createdParcel.sender?.city || snap.senderCity || '',
+      receiverCity: createdParcel.receiver?.city || snap.receiverCity || '',
+      ...(isCompte ? { shipmentMode: 'client', clientId: snap.clientId || '', clientName: snap.clientName || snap.senderName || '' } : {}),
+    }
+  }, [createdParcel])
+  const duplicateLastParcel = () => {
+    const last = lastParcelRef.current
+    if (!last) { setDupInfoAt(Date.now()); return }
+    setDupInfoAt(0)
+    setCreatedParcel(null)
+    setRetryAfterRefusal(false)
+    setNbColisError('')
+    nbColisRef.current?.setCustomValidity('')
+    setForm({ ...getEmptyForm(), senderCity: last.senderCity || profile?.city || '', ...last })
+    ;[100, 300].forEach(ms => setTimeout(() => { nexpInputRef.current?.focus(); nexpInputRef.current?.select?.() }, ms))
+  }
+  const duplicateLastParcelRef = useRef(duplicateLastParcel)
+  duplicateLastParcelRef.current = duplicateLastParcel
+  const blockF9Ref = useRef(false)
+  blockF9Ref.current = showConfirmModal || showSenderPopup || showReceiverPopup
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'F9') return
+      e.preventDefault()
+      if (blockF9Ref.current) return // popup / modal ouvert
+      const active = document.activeElement as HTMLElement | null
+      // Focus dans une autre fenêtre modale (overlay fixe hors formulaire) → ignorer
+      if (active && active !== document.body && !active.closest('form') && active.closest('.fixed')) return
+      duplicateLastParcelRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
+  // 🏙️ Ville de destination au clavier par initiales (A, AA, C, M, G, R)
+  const cityInitialsRef = useRef({ buffer: '', at: 0 })
+  const changeReceiverCity = (city: string) => setForm((p: any) => ({
+    ...p,
+    receiverCity: city,
+    receiverClientId: '',
+    receiverName: '',
+    receiverTel: '',
+    receiverAddress: '',
+    deliverySectorId: '',
+    deliveryDriverId: '',
+  }))
+  const handleReceiverCityKeyDown = (e: React.KeyboardEvent<HTMLSelectElement>) => {
+    if (e.key.length === 1 && /[a-z]/i.test(e.key) && !e.ctrlKey && !e.altKey && !e.metaKey) {
+      const st = cityInitialsRef.current
+      const now = Date.now()
+      const prev = now - st.at <= CITY_INITIALS_DELAY_MS ? st.buffer : ''
+      const r = matchCityInitials(CITY_INITIALS, prev, e.key)
+      cityInitialsRef.current = { buffer: r.buffer, at: now }
+      if (r.city) {
+        e.preventDefault() // remplace la recherche native du navigateur
+        if (r.city !== form.receiverCity) changeReceiverCity(r.city)
+        return
+      }
+      if (r.buffer) { e.preventDefault(); return } // préfixe d'un code en attente
+      return // lettre sans code : comportement natif
+    }
+    handleKeyNav(e)
   }
 
   // Navigation clavier pour le formulaire
@@ -134,6 +304,17 @@ export default function NewTab() {
       // Si c'est un bouton submit, laisser le comportement par défaut (soumettre le formulaire)
       if (target.tagName === 'BUTTON' && (target as HTMLButtonElement).type === 'submit') {
         return // Laisser le formulaire se soumettre normalement
+      }
+
+      // ↩️ Après un refus de création (champ oublié) : une fois le champ corrigé, Entrée ramène
+      // directement au bouton « ✨ Créer l'Expédition 📦 » au lieu de reparcourir tout le formulaire.
+      if ((error || retryAfterRefusal) && target.tagName !== 'BUTTON' && target.tagName !== 'TEXTAREA') {
+        const submitBtn = form.querySelector('button[type="submit"]') as HTMLButtonElement | null
+        if (submitBtn && !submitBtn.disabled) {
+          e.preventDefault()
+          submitBtn.focus()
+          return
+        }
       }
 
       // Logique spéciale : si on est sur le bouton Colis, aller directement à Port Dû
@@ -174,13 +355,8 @@ export default function NewTab() {
     }
   }
 
-  // Focus automatique sur bouton Colis à l'ouverture
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      colisButtonRef.current?.focus()
-    }, 100)
-    return () => clearTimeout(timer)
-  }, [])
+  // (Ancien focus automatique sur le bouton « Colis » à l'ouverture SUPPRIMÉ : il faisait défiler
+  //  la page vers le bas et cachait le champ N° EXP. Le curseur va désormais dans le N° EXP.)
 
   // 🇲🇦 Vérifier si le N° EXP existe déjà dans TOUTE LA PLATEFORME (toutes les agences du Maroc)
   const checkDuplicateNic = async (nic: string) => {
@@ -289,8 +465,9 @@ export default function NewTab() {
   const handleSenderNameKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter' && autoCompleted) {
       e.preventDefault()
-      // Passer directement au champ nom du destinataire
-      receiverNameRef.current?.focus()
+      // Expéditeur saisi par son CODE client + Entrée → directement à la ville de destination
+      // (téléphone / adresse déjà remplis par la fiche client). Saisie manuelle : inchangé.
+      receiverCityRef.current?.focus()
       setAutoCompleted(false)
     } else {
       // Comportement normal de navigation
@@ -337,9 +514,10 @@ export default function NewTab() {
     console.log('🔍 Enter pressé - receiverAutoCompleted:', receiverAutoCompleted)
     if (e.key === 'Enter' && receiverAutoCompleted) {
       e.preventDefault()
-      console.log('✅ Navigation vers ville de destination')
-      // Passer directement au champ ville de destination
-      receiverCityRef.current?.focus()
+      // Destinataire saisi par son CODE client + Entrée → directement au nombre de colis
+      // (ville, téléphone, adresse remplis par la fiche client). Saisie manuelle : inchangé.
+      nbColisRef.current?.focus()
+      nbColisRef.current?.select?.()
       setReceiverAutoCompleted(false)
     } else if (e.key === 'Enter') {
       console.log('❌ receiverAutoCompleted est false - navigation normale')
@@ -379,9 +557,9 @@ export default function NewTab() {
       senderAddress: client.address || '',
     }))
     setShowSenderPopup(false)
-    // Mettre le focus sur le nom du destinataire après sélection
+    // Expéditeur choisi dans la liste (F1) → directement à la ville de destination
     setTimeout(() => {
-      receiverNameRef.current?.focus()
+      receiverCityRef.current?.focus()
     }, 100)
   }
 
@@ -395,9 +573,10 @@ export default function NewTab() {
       receiverCity: client.city || '',
     }))
     setShowReceiverPopup(false)
-    // Mettre le focus sur Nb colis après sélection
+    // Destinataire choisi dans la liste (F2) → directement à la saisie du nombre de colis
     setTimeout(() => {
-      colisButtonRef.current?.focus()
+      nbColisRef.current?.focus()
+      nbColisRef.current?.select?.()
     }, 100)
   }
 
@@ -546,15 +725,24 @@ export default function NewTab() {
       // 💾 Enregistrer dans Firestore les corrections faites dans ce modal
       // (auparavant elles n'étaient appliquées qu'au bon imprimé, jamais en base)
       const original = pendingParcel || editableParcel
+      const numOr = (v: any, d = 0) => { const n = parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(n) ? n : d }
+      const { _docPart, ...ep0 } = editableParcel as any
+      void _docPart
+      const ep: any = {
+        ...ep0,
+        codAmount: numOr(ep0.codAmount),
+        ...(ep0.codMixed === true ? { codCashAmount: numOr(ep0.codCashAmount) } : {}),
+        nbColis: Math.max(1, parseInt(String(ep0.nbColis ?? '1'), 10) || 1),
+      }
       const patch = buildParcelCorrectionPatch(original, {
-        sender:        editableParcel.sender,
-        receiver:      editableParcel.receiver,
-        weight:        editableParcel.weight,
-        nbColis:       editableParcel.nbColis,
-        natureOfGoods: editableParcel.natureOfGoods,
-        price:         editableParcel.price,
-        codAmount:     editableParcel.codAmount,
-        ...(editableParcel.codMixed === true ? { codMixed: true, codCashAmount: editableParcel.codCashAmount } : {}),
+        sender:        ep.sender,
+        receiver:      ep.receiver,
+        weight:        ep.weight,
+        nbColis:       ep.nbColis,
+        natureOfGoods: ep.natureOfGoods,
+        price:         ep.price,
+        codAmount:     ep.codAmount,
+        ...(ep.codMixed === true ? { codMixed: true, codCashAmount: ep.codCashAmount } : {}),
       }, { uid: auth.currentUser?.uid || null, name: profile?.name || 'Agent' })
       if (Object.keys(patch).length > 0 && original?.id) {
         setConfirmSaving(true)
@@ -576,7 +764,7 @@ export default function NewTab() {
       // Marquer comme confirmé pour éviter que le modal se rouvre
       setIsConfirmed(true)
       // Afficher le bon avec les données éditées
-      setCreatedParcel({ ...(pendingParcel || {}), ...editableParcel, ...(Object.keys(patch).length ? patch : {}) })
+      setCreatedParcel({ ...(pendingParcel || {}), ...ep, ...(Object.keys(patch).length ? patch : {}) })
       setShowConfirmModal(false)
       setPendingParcel(null)
       setEditableParcel(null)
@@ -770,10 +958,17 @@ export default function NewTab() {
                   <input
                     type="text"
                     inputMode="numeric"
-                    value={editableParcel.nbColis || 1}
+                    value={editableParcel.nbColis ?? ''}
                     onChange={(e) => {
+                      // ⚠️ Avant : value={nbColis || 1} → en effaçant le chiffre, le champ réaffichait « 1 »
+                      // et on ne pouvait jamais le remplacer. Le champ peut maintenant être vidé puis ressaisi.
                       const value = e.target.value.replace(/[^0-9]/g, '')
                       setEditableParcel({ ...editableParcel, nbColis: value })
+                    }}
+                    onFocus={(e) => e.target.select()}
+                    onBlur={() => {
+                      const n = parseInt(String(editableParcel.nbColis ?? ''), 10)
+                      if (!n || n < 1) setEditableParcel({ ...editableParcel, nbColis: '1' })
                     }}
                     className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
                   />
@@ -809,11 +1004,14 @@ export default function NewTab() {
                       <input
                         type="text"
                         inputMode="decimal"
-                        value={editableParcel.codCashAmount || 0}
+                        value={editableParcel.codCashAmount ?? ''}
+                        onFocus={(e) => e.target.select()}
                         onChange={(e) => {
-                          const cash = parseFloat(normalizeDecimal(e.target.value)) || 0
-                          const docPart = codDocPartOf(editableParcel)
-                          setEditableParcel({ ...editableParcel, codCashAmount: cash, codAmount: cash + docPart })
+                          // Saisie libre (ex. « 12,5 ») : on garde le texte, le total est recalculé
+                          const raw = normalizeDecimal(e.target.value).replace(/[^0-9.]/g, '')
+                          const docPart = editableParcel._docPart !== undefined
+                            ? (parseFloat(editableParcel._docPart) || 0) : codDocPartOf(editableParcel)
+                          setEditableParcel({ ...editableParcel, codCashAmount: raw, _docPart: String(docPart), codAmount: (parseFloat(raw) || 0) + docPart })
                         }}
                         className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
                       />
@@ -823,11 +1021,12 @@ export default function NewTab() {
                       <input
                         type="text"
                         inputMode="decimal"
-                        value={Math.max(0, (parseFloat(editableParcel.codAmount) || 0) - (parseFloat(editableParcel.codCashAmount) || 0))}
+                        value={editableParcel._docPart ?? String(Math.max(0, (parseFloat(editableParcel.codAmount) || 0) - (parseFloat(editableParcel.codCashAmount) || 0)))}
+                        onFocus={(e) => e.target.select()}
                         onChange={(e) => {
-                          const docPart = parseFloat(normalizeDecimal(e.target.value)) || 0
+                          const raw = normalizeDecimal(e.target.value).replace(/[^0-9.]/g, '')
                           const cash = parseFloat(editableParcel.codCashAmount) || 0
-                          setEditableParcel({ ...editableParcel, codAmount: cash + docPart })
+                          setEditableParcel({ ...editableParcel, _docPart: raw, codAmount: cash + (parseFloat(raw) || 0) })
                         }}
                         className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
                       />
@@ -840,10 +1039,12 @@ export default function NewTab() {
                   <input
                     type="text"
                     inputMode="decimal"
-                    value={editableParcel.codAmount || 0}
+                    value={editableParcel.codAmount ?? ''}
+                    onFocus={(e) => e.target.select()}
                     onChange={(e) => {
-                      const normalized = normalizeDecimal(e.target.value)
-                      setEditableParcel({ ...editableParcel, codAmount: parseFloat(normalized) || 0 })
+                      // Saisie libre (ex. « 1250,50 ») : converti en nombre à l'enregistrement
+                      const raw = normalizeDecimal(e.target.value).replace(/[^0-9.]/g, '')
+                      setEditableParcel({ ...editableParcel, codAmount: raw })
                     }}
                     className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-purple-500 focus:outline-none"
                   />
@@ -1073,7 +1274,7 @@ export default function NewTab() {
           </div>
         </div>
       </div>
-      <form onSubmit={handleSubmit} autoComplete="off" className="p-4 space-y-2">
+      <form onSubmit={(e) => { submitSnapshotRef.current = { ...form }; return handleSubmit(e) }} onInvalidCapture={() => setRetryAfterRefusal(true)} autoComplete="off" className="p-4 space-y-2">
         {/* Date + Micro IA - Version compacte */}
         <div className="flex items-center gap-2 bg-purple-50 border border-purple-200 rounded-lg px-3 py-1.5">
           <span className="text-lg">📅</span>
@@ -1087,6 +1288,32 @@ export default function NewTab() {
           {form.operationDate !== todayStr() && (
             <button type="button" onClick={() => setForm((p: any) => ({ ...p, operationDate: todayStr() }))}
               className="text-xs text-blue-500 hover:text-blue-700 font-medium">Aujourd'hui</button>
+          )}
+          {/* 🧹 Vider tout le formulaire (nouvelle saisie) */}
+          <button type="button" tabIndex={-1}
+            onClick={(e) => {
+              e.preventDefault()
+              e.stopPropagation()
+              // Formulaire déjà vide (seulement les valeurs par défaut) → pas de confirmation, simple message
+              if (isParcelFormEmpty(form)) { setClearInfoAt(Date.now()); return }
+              setClearInfoAt(0)
+              if (window.confirm('Vider tous les champs du formulaire ?')) handleNewParcel()
+            }}
+            className="ml-auto shrink-0 inline-flex items-center gap-1 rounded-md border border-gray-300 bg-white px-2 py-0.5 text-xs font-semibold text-gray-600 hover:bg-gray-100"
+            title="Vider tous les champs du formulaire · F9 = dupliquer la dernière expédition (même expéditeur + ville)">
+            🧹 Vider
+          </button>
+          {clearInfoAt > 0 && (
+            <span role="status" aria-live="polite"
+              className="shrink-0 rounded-md bg-green-600 px-2 py-0.5 text-xs font-semibold text-white shadow">
+              Rien à vider : le formulaire est déjà vide
+            </span>
+          )}
+          {dupInfoAt > 0 && (
+            <span role="status" aria-live="polite"
+              className="shrink-0 rounded-md bg-amber-500 px-2 py-0.5 text-xs font-semibold text-white shadow">
+              F9 : Aucune expédition précédente
+            </span>
           )}
           {/* VoiceInputAI désactivé temporairement pour optimiser les performances */}
           {/* <VoiceInputAI onResult={handleVoiceResult} onBulkFill={handleBulkFill} onClientFound={handleClientFound} /> */}
@@ -1102,10 +1329,17 @@ export default function NewTab() {
               <span className="text-base">📤</span> Expéditeur
             </h3>
             <div className="space-y-2">
+              {/* ⬆️ Date de saisie ≠ date du système : simple flèche vers la date (08:00 → minuit seulement) */}
+              {form.operationDate && form.operationDate !== systemTodayStr() && new Date().getHours() >= 8 && (
+                <div className="flex justify-center -mt-1" title="La date de saisie est différente de la date du système">
+                  <span className="text-2xl leading-none animate-bounce select-none" aria-label="Vérifier la date de saisie">⬆️</span>
+                </div>
+              )}
               <input
                 ref={nexpInputRef}
                 id="senderNic"
-                placeholder="N EXP"
+                required
+                placeholder="🔢 N° EXP (numéro de bon) *"
                 value={form.senderNic}
                 onChange={f('senderNic')}
                 onBlur={(e) => {
@@ -1117,7 +1351,7 @@ export default function NewTab() {
                   }
                 }}
                 onKeyDown={handleKeyNav}
-                className={inputCls}
+                className={`${inputCls} !border-2 !border-pink-400 font-bold text-base tracking-wide placeholder:font-semibold placeholder:text-pink-400 focus:!border-pink-600 focus:ring-4 focus:ring-pink-200`}
               />
               <input
                 id="senderName"
@@ -1177,17 +1411,9 @@ export default function NewTab() {
                   id="receiverCity"
                   required
                   value={form.receiverCity}
-                  onChange={e => setForm((p: any) => ({
-                    ...p,
-                    receiverCity: e.target.value,
-                    receiverClientId: '',
-                    receiverName: '',
-                    receiverTel: '',
-                    receiverAddress: '',
-                    deliverySectorId: '',
-                    deliveryDriverId: '',
-                  }))}
-                  onKeyDown={handleKeyNav}
+                  onChange={e => changeReceiverCity(e.target.value)}
+                  onKeyDown={handleReceiverCityKeyDown}
+                  title={CITY_INITIALS_TITLE}
                   className={selectCls}
                 >
                   <option value="">Ville de destination</option>
@@ -1320,22 +1546,62 @@ export default function NewTab() {
               onKeyDown={handleKeyNav}
               className={inputCls}
             />
+            <div>
             <input
               ref={nbColisRef}
               id="nbColis"
               required
               type="text"
-              inputMode="numeric"
-              placeholder="Nb colis"
+              inputMode="text"
+              autoComplete="off"
+              placeholder="Nb colis (raccourci : 2ds45e500…)"
+              title={NB_COLIS_SHORTCUT_TITLE}
+              aria-invalid={nbColisError ? true : undefined}
               value={form.nbColis}
               onChange={(e) => {
-                // Accepter seulement les chiffres entiers
-                const value = e.target.value.replace(/[^0-9]/g, '')
-                setForm({ ...form, nbColis: value })
+                // ⚠️ Ne PAS filtrer ici : le raccourci « 2ds45 » doit pouvoir être tapé tel quel.
+                // La normalisation en chiffres se fait sur Entrée / à la sortie du champ.
+                const value = e.target.value.slice(0, 40)
+                if (nbColisError) { setNbColisError(''); e.currentTarget.setCustomValidity('') }
+                setForm((p: any) => ({ ...p, nbColis: value }))
               }}
-              onKeyDown={handleKeyNav}
-              className={inputCls}
+              onKeyDown={(e) => {
+                // ⚡ Raccourci étendu (port, retour de fonds, nature, poids) — voir utils/nbColisShortcut
+                if (e.key === 'Enter' && !e.ctrlKey) {
+                  // Lire la valeur brute du DOM (pas l'état React, qui peut être en retard)
+                  const r = applyNbColisShortcut(e.currentTarget.value, e.currentTarget)
+                  if (r === 'error') { e.preventDefault(); return } // rester dans le champ pour corriger
+                  if (r === 'applied') {
+                    e.preventDefault()
+                    // Curseur directement sur « ✨ Créer l'Expédition 📦 »
+                    const formEl = e.currentTarget.closest('form')
+                    setTimeout(() => (formEl?.querySelector('button[type="submit"]') as HTMLButtonElement | null)?.focus(), 50)
+                    return
+                  }
+                  // Saisie normale : seulement des chiffres
+                  const raw = e.currentTarget.value
+                  const digits = nbColisDigitsOnly(raw)
+                  if (digits !== raw) setForm((p: any) => ({ ...p, nbColis: digits }))
+                }
+                handleKeyNav(e)
+              }}
+              onBlur={(e) => {
+                // Sortie du champ (Tab, clic) : appliquer le raccourci s'il est valide, sinon chiffres seuls
+                const raw = e.currentTarget.value
+                if (applyNbColisShortcut(raw, e.currentTarget) !== 'none') return
+                const digits = nbColisDigitsOnly(raw)
+                if (digits !== raw) setForm((p: any) => ({ ...p, nbColis: digits }))
+              }}
+              className={`${inputCls} w-full ${nbColisError ? '!border-red-500' : ''}`}
             />
+            {nbColisError ? (
+              <p role="alert" className="text-[10px] font-semibold text-red-600 mt-0.5 leading-tight">⚠️ {nbColisError}</p>
+            ) : (
+              <p className="text-[10px] text-gray-500 mt-0.5 leading-tight" title={NB_COLIS_SHORTCUT_TITLE}>
+                {NB_COLIS_SHORTCUT_HINT}
+              </p>
+            )}
+            </div>
           </div>
           <div className="grid grid-cols-4 gap-2">
             {[

@@ -242,6 +242,7 @@ function useDebounce(value: any, delay = 150) {
 }
 
 import { getWorkingDateStr } from '../utils/workingDate'
+import { getEmptyParcelForm } from './agent/emptyParcelForm'
 import { normName, isBilledByAgency, isInAgencyScope } from '../utils/billingAgency'
 import { isAwaitingArrival } from '../utils/awaitingArrival'
 import { normIncludes, normText } from '../utils/normText'
@@ -252,18 +253,8 @@ const parsePositiveNumber = (value: any, fallback = 0) => {
   return Number.isFinite(num) && num >= 0 ? num : fallback
 }
 
-const EMPTY_FORM = {
-  senderName: '', senderNic: '', senderAddress: '', senderTel: '', senderCity: '',
-  receiverName: '', receiverAddress: '', receiverTel: '', receiverCity: '', receiverClientId: '',
-  weight: '', nbColis: '0', natureOfGoods: 'Colis', natureOfGoodsCustomPrice: '', codAmount: '',
-  serviceType: 'simple', codMixed: false, codCashAmount: '', hasRetourBL: false, shipmentMode: 'personal',
-  portType: 'port_du', portPayeMethod: '', portPayeMontant: '',
-  portPrice: '',
-  clientId: '', clientName: '', autoDebit: false,
-  deliverySectorId: '', deliveryDriverId: '',
-  enGare: true,
-  operationDate: getWorkingDateStr(),
-}
+// Formulaire vide : source unique partagée (voir agent/emptyParcelForm.ts)
+const EMPTY_FORM = getEmptyParcelForm()
 
 export default function AgentPage() {
   const navigate  = useNavigate()
@@ -279,6 +270,13 @@ export default function AgentPage() {
   // naviguer entre deux de ces onglets ne doit PAS relancer le chargement.
   const needsParcels = TABS_NEEDING_PARCELS.includes(tab)
   const [msg, setMsg]                   = useState<{ type: string; text: string } | null>(null)
+  // ⏱️ Les messages de SUCCÈS (ex. « Expédition supprimée avec succès ») disparaissent tout seuls
+  // après 4 s ; les messages d'erreur restent affichés.
+  useEffect(() => {
+    if (!msg || msg.type !== 'success') return
+    const t = setTimeout(() => setMsg(cur => (cur === msg ? null : cur)), 4000)
+    return () => clearTimeout(t)
+  }, [msg])
   const [subTab, setSubTab]             = useState('mine')
   const [viewSignature,     setViewSignature]     = useState<any>(null)
   const [returnParcelModal, setReturnParcelModal] = useState<any>(null)

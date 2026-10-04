@@ -1,11 +1,13 @@
 // Petit toast DOM sans dépendance (erreurs / confirmations visibles quel que soit le scroll du modal).
 export function showToast(message: string, type: 'error' | 'success' = 'error', durationMs = 6000) {
   if (typeof document === 'undefined') return
-  const el = document.createElement('div')
+  // ⚠️ PAS un <div> : la règle CSS anti-debug `body > div:not(#root) { display:none !important }`
+  // (src/index.css) masquait tous les toasts ajoutés directement à <body>.
+  const el = document.createElement('aside')
   el.setAttribute('role', type === 'error' ? 'alert' : 'status')
   el.textContent = message
   Object.assign(el.style, {
-    position: 'fixed', left: '50%', bottom: '24px', transform: 'translateX(-50%)',
+    display: 'block', position: 'fixed', left: '50%', bottom: '24px', transform: 'translateX(-50%)',
     zIndex: '99999', maxWidth: 'min(92vw, 520px)', padding: '12px 16px',
     borderRadius: '12px', fontSize: '14px', fontWeight: '600', lineHeight: '1.4',
     color: '#fff', background: type === 'error' ? '#dc2626' : '#16a34a',

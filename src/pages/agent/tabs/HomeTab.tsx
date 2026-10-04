@@ -3,22 +3,13 @@ import { Plus, Package, MapPin, Wallet, MessageCircle, Printer, LayoutGrid, Truc
 import { useAgentCtx } from '../AgentCtx'
 import { STATUSES, STATUS_COLORS } from '../../../firebase/constants'
 import { parcelDate, entryDate, filterByDate } from '../../../utils/dateFilter'
-import { getWorkingDateStr } from '../../../utils/workingDate'
+import { getEmptyParcelForm } from '../emptyParcelForm'
 import { HERO_STAT_CARD, HERO_CARD, HERO_BUTTON } from '../../../styles/heroTheme'
 import { subscribeClients } from '../../../firebase/clients'
 
 // Fonction pour obtenir un formulaire vide avec la date de travail ACTUELLE
-const getEmptyForm = () => ({
-  senderName: '', senderNic: '', senderAddress: '', senderTel: '', senderCity: '',
-  receiverName: '', receiverAddress: '', receiverTel: '', receiverCity: '',
-  weight: '', nbColis: '0', natureOfGoods: 'Colis', natureOfGoodsCustomPrice: '', codAmount: '',
-  serviceType: 'simple', shipmentMode: 'personal',
-  portType: 'port_du', portPayeMethod: '', portPayeMontant: '',
-  portPrice: '',
-  clientId: '', clientName: '', autoDebit: false,
-  deliverySectorId: '', deliveryDriverId: '',
-  operationDate: getWorkingDateStr(), // Date de travail ACTUELLE à chaque appel
-})
+// Formulaire vide : source unique partagée (voir agent/emptyParcelForm.ts)
+const getEmptyForm = getEmptyParcelForm
 
 const dateFilterLabel = (preset: string) => ({
   all: 'Tout', today: "Aujourd'hui", week: '7 derniers jours', month: 'Ce mois',

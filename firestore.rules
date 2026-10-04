@@ -307,6 +307,11 @@ service cloud.firestore {
         isAdmin()
         || isChefOfAideAgentParcelAgency()
         || (isAgentOrChef() && isParcelCreator())
+        // 🗑️ Chef d'agence : colis de SON agence saisis par ses AIDE-AGENTS ou ses AGENTS PRO
+        // (les siens sont couverts par « créateur » ci-dessus), tant qu'ils ne sont pas chargés dans un camion
+        || (role() == 'chef_agence' && !isParcelLocked()
+            && (resource.data.get('agentRole', '') == 'aide_agent' || resource.data.get('agentRole', '') == 'agentpro')
+            && (resource.data.get('originCity', '') == userCity() || resource.data.get('createdByCity', '') == userCity()))
         || (isAideAgent() && isParcelCreator() && resource.data.validatedByChef != true)
         || (isStaff() && !isAgentOrChef() && !isAideAgent())
       );

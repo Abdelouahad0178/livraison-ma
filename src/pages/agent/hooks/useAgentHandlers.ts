@@ -31,6 +31,7 @@ import {
 } from '../../../firebase/clients'
 import { createBankDeposit } from '../../../firebase/bankDeposits'
 import { createParticularPortalAccount } from '../../../firebase/portalAccounts'
+import { getGareDriverForCity } from '../../../firebase/delivery'
 import { printCharge, printTable, printBonRamassage } from '../../../utils/agentPrintUtils'
 import { printFeuilleDeCharge } from '../../../utils/printFeuilleDeCharge'
 import { ALL_SERVICE_TYPES, codPaymentTypeOf, normalizeServiceType, codPaymentTypeForService } from '../../../firebase/constants'
@@ -1680,6 +1681,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     // ⚠️ VALIDATION OBLIGATOIRE - Expéditeur et Destinataire
     const errors: string[] = []
 
+    // 🔢 N° EXP (NIC / numéro de bon) OBLIGATOIRE
+    if (!form.senderNic || String(form.senderNic).trim() === '') {
+      errors.push('❌ N° EXP (numéro de bon)')
+    }
     if (!form.senderName || form.senderName.trim() === '') {
       errors.push('❌ Nom expéditeur')
     }
@@ -1692,11 +1697,14 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 
     if (errors.length > 0) {
       setError('⚠️ CHAMPS OBLIGATOIRES MANQUANTS:\n\n' + errors.join('\n'))
+      s.current.submissionInProgress = false // sinon le bouton reste bloqué après correction
+      if (errors[0]?.includes('N° EXP')) setTimeout(() => document.getElementById('senderNic')?.focus(), 50)
       return
     }
 
     if (form.portType === 'port_en_compte_expediteur' && !form.clientName && !form.senderName) {
       setError('⚠️ Veuillez saisir un nom d\'expéditeur pour le mode "En Compte".')
+      s.current.submissionInProgress = false
       return
     }
     // Si En Compte mais pas de clientId, utiliser le nom de l'expéditeur comme client
@@ -1706,6 +1714,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     // Validation shipmentMode 'client' : accepter clientName OU clientId
     if (form.shipmentMode === 'client' && !form.clientId && !form.clientName) {
       setError('Veuillez saisir un nom de client ou sélectionner un client existant.')
+      s.current.submissionInProgress = false
       return
     }
     // 💵+📋 RF mixte : chaque type coché doit avoir son montant (> 0)
@@ -1736,20 +1745,11 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       // 🚉 Assignation automatique au livreur-gare si "Livraison en gare"
       if (form.enGare && form.receiverCity) {
         try {
-          const { collection, query, where, getDocs } = await import('firebase/firestore')
-          const { db } = await import('../../../firebase/config')
-
-          const gareDriverQuery = query(
-            collection(db, 'users'),
-            where('role', '==', 'livreur-gare'),
-            where('city', '==', form.receiverCity)
-          )
-          const gareDriverSnap = await getDocs(gareDriverQuery)
-
-          if (!gareDriverSnap.empty) {
-            const gareDriver = gareDriverSnap.docs[0].data()
+          // ⚡ Résultat mis en cache par ville (préchargé dès que « En gare » + ville sont choisis)
+          const gareDriver = await getGareDriverForCity(form.receiverCity)
+          if (gareDriver) {
             selectedDeliveryDriver = {
-              id: gareDriverSnap.docs[0].id,
+              id: gareDriver.id,
               name: `En gare - ${form.receiverCity}` // nom d'affichage normalisé : « En gare - <ville> »
             }
           }
@@ -1819,7 +1819,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         agentRole:            profile?.role || 'agent',
         hasRetourBL:          form.hasRetourBL || false,  // ⭐ Retour BL obligatoire
         deliveryMethod:       form.enGare ? 'gare' : 'domicile',  // 🚉 Mode de livraison
-      })
+      }, { knownClients: clients })  // ⚡ clients déjà chargés en direct : pas de relecture Firestore
 
       // 🚀 OPÉRATIONS POST-CRÉATION EN ARRIÈRE-PLAN (sans bloquer l'UI)
 

@@ -4,7 +4,7 @@ import { makeFacturierSearchMatcher } from '../utils/parcelSearch'
 import { subscribeAllParcels, getParcelsPage, getParcelsByCreatedAtRange } from '../firebase/parcels'
 import { Search, Printer, FileSpreadsheet, Edit2, Check, X, FileText, Database, Download, MapPin, User, Receipt, RefreshCw } from 'lucide-react'
 import { CITIES, STATUSES } from '../firebase/constants'
-import * as XLSX from 'xlsx'
+import { loadExcel } from '../utils/loadExcel'
 import { doc, updateDoc, Timestamp } from 'firebase/firestore'
 import { auth, db } from '../firebase/config'
 import { printParcelTicket } from '../utils/printParcelTicket'
@@ -532,7 +532,7 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
   }
 
   // ── Export Excel ──────────────────────────────────────────────────────────
-  function exportToExcel() {
+  async function exportToExcel() {
     const excelData: any[] = filteredParcels.map((parcel: any) => ({
       'N° EXP (NIC)': parcel.sender?.nic || parcel.trackingId || '-',
       'Client': parcel.clientName || '-',
@@ -556,6 +556,8 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
       'Montant Port (DH)': stats.total,
       'CRBT (DH)': stats.cod,
     })
+    const XLSX = await loadExcel()
+    if (!XLSX) return
     const ws = XLSX.utils.json_to_sheet(excelData)
     const wb = XLSX.utils.book_new()
     XLSX.utils.book_append_sheet(wb, ws, 'Facturier')

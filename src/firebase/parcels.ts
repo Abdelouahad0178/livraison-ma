@@ -138,7 +138,11 @@ export async function ensureFullParcels(list: any[]): Promise<any[]> {
   return items.map((p: any) => (p && full.has(p.id) ? full.get(p.id) : p))
 }
 
-async function ensureReceiverClientForAgency(parcel: any, parcelId: any) {
+// knownClients : liste « clients » déjà chargée EN DIRECT par la page (onSnapshot de la collection
+// entière, onglet Nouvelle expédition). Si fournie, la recherche se fait en mémoire (même règle :
+// même tél + même ville, sinon même nom insensible à la casse + même ville) au lieu de relire
+// Firestore — la requête « tous les clients de la ville » téléchargeait 2 à 5 Mo (Agadir : 7 750 docs).
+async function ensureReceiverClientForAgency(parcel: any, parcelId: any, knownClients?: any[] | null) {
   if (parcel.receiverClientId) {
     const receiver = parcel.receiver || {}
     await updateDoc(doc(db, 'clients', parcel.receiverClientId), {
@@ -160,16 +164,31 @@ async function ensureReceiverClientForAgency(parcel: any, parcelId: any) {
   if (!city || (!name && !tel)) return null
 
   let existing: any = null
+  const useKnown = Array.isArray(knownClients) && knownClients.length > 0
   if (tel) {
-    const byTel = await getDocs(query(collection(db, 'clients'), where('tel', '==', tel)))
-    const found = byTel.docs.find(d => d.data().city === city)
-    if (found) existing = { id: found.id, ...found.data() }
+    if (useKnown) {
+      existing = knownClients!.find((c: any) => c?.id && c.tel === tel && c.city === city) || null
+    } else {
+      const byTel = await getDocs(query(collection(db, 'clients'), where('tel', '==', tel)))
+      const found = byTel.docs.find(d => d.data().city === city)
+      if (found) existing = { id: found.id, ...found.data() }
+    }
   }
 
   if (!existing && name) {
-    const byCity = await getDocs(query(collection(db, 'clients'), where('city', '==', city)))
-    const found = byCity.docs.find(d => sameText(d.data().name, name))
-    if (found) existing = { id: found.id, ...found.data() }
+    if (useKnown) {
+      existing = knownClients!.find((c: any) => c?.id && c.city === city && sameText(c.name, name)) || null
+    } else {
+      // Nom exact d'abord (requête légère) ; balayage de la ville seulement s'il n'y a pas de correspondance exacte
+      const exact = await getDocs(query(collection(db, 'clients'), where('city', '==', city), where('name', '==', name), limit(1)))
+      if (!exact.empty) {
+        existing = { id: exact.docs[0].id, ...exact.docs[0].data() }
+      } else {
+        const byCity = await getDocs(query(collection(db, 'clients'), where('city', '==', city)))
+        const found = byCity.docs.find(d => sameText(d.data().name, name))
+        if (found) existing = { id: found.id, ...found.data() }
+      }
+    }
   }
 
   if (existing) {
@@ -216,7 +235,10 @@ async function ensureReceiverClientForAgency(parcel: any, parcelId: any) {
   })
   return ref.id
 }
-export async function createParcel(data: Record<string, unknown>): Promise<Record<string, unknown> & { id: string; trackingId: string }> {
+export async function createParcel(
+  data: Record<string, unknown>,
+  opts?: { knownClients?: any[] | null },
+): Promise<Record<string, unknown> & { id: string; trackingId: string }> {
   const trackingId    = generateTrackingId()
   // ⚠️ VALIDATION DÉSACTIVÉE : Les saisies des aides agents et portail client ne nécessitent plus de validation par le chef
   const requiresChefValidation = false  // Était: data.agentRole === 'aide_agent' || data.agentRole === 'client_portal'
@@ -355,37 +377,37 @@ export async function createParcel(data: Record<string, unknown>): Promise<Recor
     receiverNameNorm:     normName(receiver?.name),
     hasRetourBL:          data.hasRetourBL === true,  // ⭐ Retour BL obligatoire
   }
+  // ⚡ Seule l'écriture de l'expédition est attendue (accusé serveur = colis réellement enregistré).
+  // Les écritures annexes ci-dessous partent EN ARRIÈRE-PLAN : elles ajoutaient jusqu'à 5 allers-
+  // retours séquentiels + le téléchargement de tous les clients de la ville (2 à 7 s) avant que
+  // l'agent ne voie le bon. Leurs erreurs sont journalisées comme avant (elles ne bloquaient déjà
+  // pas la création).
   const ref = await addDoc(collection(db, 'parcels'), parcel)
 
   // 💼 Si client "en compte" (société), ajouter le montant au solde
   if (data.clientId) {
-    try {
-      const clientRef = doc(db, 'clients', data.clientId as string)
-      const clientSnap = await getDoc(clientRef)
-
-      // Vérifier que le client a accountType === 'compte'
-      if (clientSnap.exists() && clientSnap.data().accountType === 'compte') {
-        await updateDoc(clientRef, {
-          balance: increment(parcel.price)
-        })
-      }
-    } catch (err) {
-      console.error('Erreur mise à jour solde client:', err)
-    }
+    const clientRef = doc(db, 'clients', data.clientId as string)
+    getDoc(clientRef)
+      .then(clientSnap => {
+        // Vérifier que le client a accountType === 'compte'
+        if (clientSnap.exists() && clientSnap.data().accountType === 'compte') {
+          return updateDoc(clientRef, { balance: increment(parcel.price) })
+        }
+      })
+      .catch(err => console.error('Erreur mise à jour solde client:', err))
   }
 
   // NOUVELLE POLITIQUE : Toujours créer le client destinataire (pas d'attente de validation)
-  let receiverClientId = null
-  try {
-    receiverClientId = await ensureReceiverClientForAgency(parcel, ref.id)
-    if (receiverClientId) await updateDoc(ref, { receiverClientId })
-  } catch (err: any) {
-    if (err?.code !== 'permission-denied') {
-      console.warn('ensureReceiverClientForAgency:', err)
-    }
-  }
+  ensureReceiverClientForAgency(parcel, ref.id, opts?.knownClients)
+    .then(receiverClientId => (receiverClientId ? updateDoc(ref, { receiverClientId }) : undefined))
+    .catch((err: any) => {
+      if (err?.code !== 'permission-denied') {
+        console.warn('ensureReceiverClientForAgency:', err)
+      }
+    })
   bumpPresence('created')
-  return { id: ref.id, ...parcel, receiverClientId }
+  // receiverClientId est renseigné en base quelques instants plus tard (arrière-plan)
+  return { id: ref.id, ...parcel }
 }
 
 // Mise à jour de statut — non bloquant sur la géolocalisation

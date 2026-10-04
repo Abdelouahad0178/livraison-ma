@@ -10,6 +10,23 @@ import { CITIES, STATUSES } from './constants'
 import { daysAgoTimestamp } from './firestoreUtils'
 import { isParcelVisibleInDestinationAgency } from './parcels'
 
+// 🚉 Livreur-gare d'une ville (assignation auto « Livraison en gare »). Même requête qu'avant,
+// mise en cache 5 min par ville (et préchargée par le formulaire) : évite un aller-retour serveur
+// à chaque création d'expédition. Les erreurs ne sont pas mises en cache.
+const GARE_DRIVER_TTL_MS = 5 * 60 * 1000
+const gareDriverCache = new Map<string, { at: number; p: Promise<{ id: string } | null> }>()
+export function getGareDriverForCity(city: string): Promise<{ id: string } | null> {
+  const key = String(city || '').trim()
+  if (!key) return Promise.resolve(null)
+  const hit = gareDriverCache.get(key)
+  if (hit && Date.now() - hit.at < GARE_DRIVER_TTL_MS) return hit.p
+  const p = getDocs(query(collection(db, 'users'), where('role', '==', 'livreur-gare'), where('city', '==', key)))
+    .then(snap => (snap.empty ? null : { id: snap.docs[0].id }))
+  p.catch(() => gareDriverCache.delete(key))
+  gareDriverCache.set(key, { at: Date.now(), p })
+  return p
+}
+
 export async function getDrivers() {
   const q    = query(collection(db, 'users'), where('role', 'in', ['chauffeur', 'livreur']))
   const snap = await getDocs(q)

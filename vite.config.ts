@@ -21,18 +21,26 @@ export default defineConfig({
         entryFileNames: 'assets/[name]-[hash].js',
         chunkFileNames: 'assets/[name]-[hash].js',
         assetFileNames: 'assets/[name]-[hash].[ext]',
-        manualChunks: {
-          react: ['react', 'react-dom', 'react-router-dom'],
-          firebaseCore: ['firebase/app'],
-          firebaseAuth: ['firebase/auth'],
-          firebaseDb: ['firebase/firestore'],
-          firebaseStorage: ['firebase/storage'],
-          firebaseFunctions: ['firebase/functions'],
-          chartjs: ['chart.js', 'react-chartjs-2'],
-          scanner: ['html5-qrcode'],
-          barcode: ['react-barcode', 'jsbarcode'],
-          qrcode: ['qrcode.react'],
-          icons: ['lucide-react'],
+        manualChunks(id) {
+          const moduleId = id.replace(/\\/g, '/')
+          // Shared runtime helpers must not make React depend on a heavy feature chunk.
+          if (moduleId.includes('commonjsHelpers')) return 'react'
+          const groups: Record<string, string[]> = {
+            react: ['react', 'react-dom', 'react-router', 'react-router-dom', 'scheduler'],
+            firebaseCore: ['firebase/app', '@firebase/app', '@firebase/component', '@firebase/util', '@firebase/logger'],
+            firebaseAuth: ['firebase/auth', '@firebase/auth'],
+            firebaseDb: ['firebase/firestore', '@firebase/firestore'],
+            firebaseStorage: ['firebase/storage', '@firebase/storage'],
+            firebaseFunctions: ['firebase/functions', '@firebase/functions'],
+            chartjs: ['chart.js', 'react-chartjs-2'],
+            scanner: ['html5-qrcode'],
+            barcode: ['react-barcode', 'jsbarcode'],
+            qrcode: ['qrcode.react'],
+            icons: ['lucide-react'],
+          }
+          for (const [chunk, packages] of Object.entries(groups)) {
+            if (packages.some(pkg => moduleId.includes(`/node_modules/${pkg}/`))) return chunk
+          }
         },
       },
     },
@@ -68,11 +76,10 @@ export default defineConfig({
         runtimeCaching: [
           {
             urlPattern: /\/assets\/.*\.js$/i,
-            handler: 'NetworkFirst',
+            handler: 'CacheFirst',
             options: {
               cacheName: 'js-chunks-cache',
-              networkTimeoutSeconds: 3,
-              expiration: { maxEntries: 80, maxAgeSeconds: 60 * 60 * 24 },
+              expiration: { maxEntries: 80, maxAgeSeconds: 60 * 60 * 24 * 30 },
             },
           },
           {

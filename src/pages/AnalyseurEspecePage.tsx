@@ -3,7 +3,7 @@ import { codPaymentTypeOf } from '../firebase/constants'
 import { signOut } from 'firebase/auth'
 import { doc, onSnapshot } from 'firebase/firestore'
 import { auth, db } from '../firebase/config'
-import * as XLSX from 'xlsx'
+import { loadExcel } from '../utils/loadExcel'
 import {
   createCentralSupplierPayment,
   markCentralSupplierPaymentPaid,
@@ -1071,7 +1071,7 @@ export default function AnalyseurEspecePage() {
     setTimeout(() => w.print(), 300)
   }
 
-  const exportToExcel = () => {
+  const exportToExcel = async () => {
     // Exporter les colis sélectionnés ou tous les colis filtrés
     const toExport = ctlSelected.size > 0
       ? ctlFiltered.filter((p: any) => ctlSelected.has(p.id))
@@ -1145,6 +1145,8 @@ export default function AnalyseurEspecePage() {
     })
 
     // Créer le workbook et la worksheet
+    const XLSX = await loadExcel()
+    if (!XLSX) return
     const wb = XLSX.utils.book_new()
     const ws = XLSX.utils.aoa_to_sheet(data)
 
