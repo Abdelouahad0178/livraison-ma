@@ -1,3 +1,4 @@
+import DateInput from '../components/DateInput'
 import { useRef, useState, useEffect, useCallback, useMemo } from 'react'
 import { setPresenceTab } from '../services/presenceCounters'
 import { signOut } from 'firebase/auth'
@@ -1379,11 +1380,11 @@ export default function DriverPage() {
               </div>
               {datePreset === 'custom' && (
                 <div className="flex items-center gap-2 pl-6">
-                  <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                  <DateInput value={dateFrom} onChange={e => setDateFrom(e.target.value)}
                     className="bg-gray-700 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 flex-1"
                   />
                   <span className="text-gray-400 text-xs shrink-0">→</span>
-                  <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                  <DateInput value={dateTo} onChange={e => setDateTo(e.target.value)}
                     className="bg-gray-700 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 flex-1"
                   />
                 </div>

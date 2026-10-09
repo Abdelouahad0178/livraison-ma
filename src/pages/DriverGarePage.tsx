@@ -9,7 +9,7 @@ import { generateSignatureToken, confirmDeliveryAfterSignature, submitDeliverySi
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner'
 import LiveClock from '../components/LiveClock'
 import CompanyContact from '../components/CompanyContact'
-import { normIncludes } from '../utils/normText'
+import { normIncludes, digitAwareIncludes } from '../utils/normText'
 import { isMixedCod, codPartsBreakdown, codPartsDetailLabel } from '../utils/codParts'
 
 // ⚡ Les colis déjà remis (Livré) ne sont chargés que sur cette fenêtre (en jours).
@@ -425,7 +425,7 @@ export default function DriverGarePage() {
     !search ||
     normIncludes(p.trackingId, search.toLowerCase()) ||
     normIncludes(p.receiver?.name, search.toLowerCase()) ||
-    p.receiver?.tel?.includes(search)
+    digitAwareIncludes(String(p.receiver?.tel ?? ''), search.trim())
   )
 
   const filteredActive = filtered.filter(p => p.status !== 'Livré')

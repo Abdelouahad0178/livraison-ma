@@ -1,3 +1,4 @@
+import DateInput from '../components/DateInput'
 import { useState, useEffect, useRef } from 'react'
 import { signOut } from 'firebase/auth'
 import { auth, db } from '../firebase/config'
@@ -1137,10 +1138,10 @@ export default function PointeurPage() {
                 </div>
                 {datePreset === 'custom' && (
                   <div className="flex gap-2 items-center">
-                    <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                    <DateInput value={dateFrom} onChange={e => setDateFrom(e.target.value)}
                       className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-xs focus:outline-none focus:border-indigo-400" />
                     <span className="text-gray-400 text-xs">au</span>
-                    <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                    <DateInput value={dateTo} onChange={e => setDateTo(e.target.value)}
                       className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-xs focus:outline-none focus:border-indigo-400" />
                   </div>
                 )}
@@ -2050,9 +2051,8 @@ export default function PointeurPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date d'émission</label>
-                      <input
+                      <DateInput
                         ref={dateEmissionRef}
-                        type="date"
                         value={formModal.data.dateEmission}
                         onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, dateEmission: e.target.value } }))}
                         onKeyDown={e => handleFormKeyDown(e, 'dateEmission')}
@@ -2062,9 +2062,8 @@ export default function PointeurPage() {
                     {formModal.data.modeReglement === 'traite' && (
                       <div>
                         <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date d'échéance</label>
-                        <input
+                        <DateInput
                           ref={dateEcheanceRef}
-                          type="date"
                           value={formModal.data.dateEcheance}
                           onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, dateEcheance: e.target.value } }))}
                           onKeyDown={e => handleFormKeyDown(e, 'dateEcheance')}

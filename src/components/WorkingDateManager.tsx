@@ -1,3 +1,4 @@
+import DateInput from './DateInput'
 import { useState, useEffect } from 'react'
 import { Calendar, ChevronLeft, ChevronRight, RotateCcw } from 'lucide-react'
 import {
@@ -83,8 +84,7 @@ export default function WorkingDateManager() {
             <ChevronLeft className="w-5 h-5 text-blue-600" />
           </button>
 
-          <input
-            type="date"
+          <DateInput
             value={dateStr}
             onChange={e => handleDateChange(e.target.value)}
             className="flex-1 px-4 py-3 border-2 border-blue-200 rounded-lg text-center font-bold text-blue-600 text-lg focus:border-blue-400 focus:outline-none"

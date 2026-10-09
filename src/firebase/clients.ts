@@ -183,6 +183,34 @@ export function subscribeClients(callback: (rows: FirestoreRow[]) => void, onErr
   }, onError)
 }
 
+/**
+ * ⚡ Clients ayant un CODE de saisie rapide (≈100 fiches, lues en une fraction de seconde).
+ * La liste complète (≈14 000 clients, 15 s et plus) arrive ensuite : en attendant, la saisie par
+ * code client (expéditeur, destinataire) fonctionne dès l'ouverture du formulaire.
+ */
+export function subscribeCodedClients(callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
+  const q = query(collection(db, 'clients'), where('code', '>', ''))
+  return onSnapshot(q, snap => {
+    callback(snap.docs.map(rowFromDoc))
+  }, onError)
+}
+
+/**
+ * 💼 Sociétés « en compte » d'une ville (accountType == 'compte'), triées par createdAt décroissant.
+ * Remplace subscribeClients + filtre client sur l'Accueil du chef d'agence (≈14 000 clients, ~10 Mo,
+ * pour en garder ~5 à 10). Même résultat : l'ancien orderBy('createdAt') excluait les fiches sans
+ * createdAt — reproduit ici.
+ */
+export function subscribeEnCompteClientsByCity(city: string, callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
+  const q = query(collection(db, 'clients'), where('city', '==', city), where('accountType', '==', 'compte'))
+  const ms = (v: any) => (v?.toMillis ? v.toMillis() : v?.seconds != null ? v.seconds * 1000 : new Date(v).getTime() || 0)
+  return onSnapshot(q, snap => {
+    callback(snap.docs.map(rowFromDoc)
+      .filter((c: any) => c.createdAt != null)
+      .sort((a: any, b: any) => ms(b.createdAt) - ms(a.createdAt)))
+  }, onError)
+}
+
 export async function addPayment(data: DynamicData) {
   const paymentRef = doc(collection(db, 'payments'))
   await runTransaction(db, async tx => {

@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { useState } from 'react'
 import { X, ChevronDown, Save, FileText, KeyRound, Copy, RefreshCw } from 'lucide-react'
 import { getFunctions, httpsCallable } from 'firebase/functions'
@@ -318,15 +319,15 @@ export default function UserEditModal({
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date de naissance</label>
-                  <input type="date" value={userEdit.dateNaissance||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateNaissance: e.target.value }))} className={inputCls} />
+                  <DateInput value={userEdit.dateNaissance||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateNaissance: e.target.value }))} className={inputCls} />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date d'embauche</label>
-                  <input type="date" value={userEdit.dateEmbauche||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateEmbauche: e.target.value }))} className={inputCls} />
+                  <DateInput value={userEdit.dateEmbauche||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateEmbauche: e.target.value }))} className={inputCls} />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date de sortie</label>
-                  <input type="date" value={userEdit.dateSortie||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateSortie: e.target.value }))} className={inputCls} />
+                  <DateInput value={userEdit.dateSortie||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateSortie: e.target.value }))} className={inputCls} />
                 </div>
                 <div>
                   <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Salaire (DH/mois)</label>

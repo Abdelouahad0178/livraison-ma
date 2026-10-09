@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import * as React from 'react'
 import { Calendar, Search, MessageCircle, CheckCircle, Banknote, Filter, Printer } from 'lucide-react'
 import { COD_STATUS, COD_PAYMENT_TYPES } from '../../../firebase/constants'
@@ -151,10 +152,10 @@ export default function AdminCodTab({
               ))}
               {codDatePreset === 'custom' && (
                 <div className="flex items-center gap-2 ml-2">
-                  <input type="date" value={codDateFrom} onChange={e => setCodDateFrom(e.target.value)}
+                  <DateInput value={codDateFrom} onChange={e => setCodDateFrom(e.target.value)}
                     className="border-2 border-green-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-green-500" />
                   <span className="text-gray-400 text-sm font-bold">→</span>
-                  <input type="date" value={codDateTo} onChange={e => setCodDateTo(e.target.value)}
+                  <DateInput value={codDateTo} onChange={e => setCodDateTo(e.target.value)}
                     className="border-2 border-green-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-green-500" />
                 </div>
               )}
@@ -395,8 +396,7 @@ export default function AdminCodTab({
             <span className="text-xs font-bold text-gray-600">📆 Période personnalisée :</span>
             <div className="flex items-center gap-2">
               <label className="text-xs text-gray-500">De</label>
-              <input
-                type="date"
+              <DateInput
                 value={codDateFrom}
                 onChange={e => {
                   setCodDateFrom(e.target.value)
@@ -407,8 +407,7 @@ export default function AdminCodTab({
             </div>
             <div className="flex items-center gap-2">
               <label className="text-xs text-gray-500">À</label>
-              <input
-                type="date"
+              <DateInput
                 value={codDateTo}
                 onChange={e => {
                   setCodDateTo(e.target.value)

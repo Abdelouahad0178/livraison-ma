@@ -17,7 +17,7 @@ import {
 import CompanyContact from '../components/CompanyContact'
 import LiveClock from '../components/LiveClock'
 import { fmt } from '../utils/formatNumber'
-import { normIncludes } from '../utils/normText'
+import { normIncludes, digitAwareIncludes } from '../utils/normText'
 
 const ACCOUNT_TYPES = [
   { key: 'cash',   label: 'Comptant',  color: 'bg-gray-100 text-gray-700'  },
@@ -106,7 +106,7 @@ export default function ClientsPage() {
     const s = search.toLowerCase()
     return list.filter(c =>
       normIncludes(c.name, s) ||
-      c.tel?.includes(s) ||
+      digitAwareIncludes(String(c.tel ?? ''), s) ||
       normIncludes(c.city, s) ||
       normIncludes(c.nic, s) ||
       normIncludes(c.createdByName, s)

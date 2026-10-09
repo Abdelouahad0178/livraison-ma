@@ -584,3 +584,33 @@ export async function unmarkParcelsDeliveryControlled(parcelIds: string[]) {
   }
   return { updated: ids.length }
 }
+
+/**
+ * 🧾 Données des chèques / traites d'un retour de fonds, saisies par l'Encaisseur Central au
+ * moment du pointage (fiche de réception à faire signer par le client expéditeur).
+ * Écriture SÉPARÉE du pointage (markParcelsControlled) : la règle « chaque pointage n'appartient
+ * qu'à son auteur » reste ainsi vérifiée sur la seule mise à jour des champs de contrôle.
+ */
+export interface CodDocument {
+  type: 'cheque' | 'traite'
+  numero: string
+  banque: string
+  montant: number
+  echeance: string // AAAA-MM-JJ (facultatif pour un chèque)
+}
+export async function saveParcelCodDocuments(parcelId: string, documents: CodDocument[], by: string, byId: string) {
+  const clean = (documents || []).map(d => ({
+    type: d.type === 'traite' ? 'traite' : 'cheque',
+    numero: String(d.numero || '').trim(),
+    banque: String(d.banque || '').trim(),
+    montant: Math.round((Number(d.montant) || 0) * 100) / 100,
+    echeance: String(d.echeance || '').trim(),
+  }))
+  await updateDoc(doc(db, 'parcels', parcelId), {
+    codDocuments: clean,
+    codDocumentsSavedBy: by || 'Encaisseur central',
+    codDocumentsSavedById: byId || '',
+    codDocumentsSavedAt: new Date().toISOString(),
+  })
+  return clean
+}

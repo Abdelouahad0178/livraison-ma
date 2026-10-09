@@ -1,3 +1,4 @@
+import DateInput from '../components/DateInput'
 import { useState, useEffect, useMemo } from 'react'
 import { setPresenceTab } from '../services/presenceCounters'
 import { codPaymentTypeOf } from '../firebase/constants'
@@ -118,10 +119,10 @@ const ListFilters = ({
         </div>
         {preset === 'custom' && (
           <div className="flex items-center gap-2 pl-6">
-            <input type="date" value={from} onChange={e => onFrom(e.target.value)}
+            <DateInput value={from} onChange={e => onFrom(e.target.value)}
               className={`border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none ${focus} flex-1`} />
             <span className="text-gray-400 text-xs shrink-0">a</span>
-            <input type="date" value={to} onChange={e => onTo(e.target.value)}
+            <DateInput value={to} onChange={e => onTo(e.target.value)}
               className={`border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none ${focus} flex-1`} />
           </div>
         )}
@@ -1244,10 +1245,10 @@ export default function CaissierPage() {
               </div>
               {datePreset === 'custom' && (
                 <div className="flex items-center gap-2 pl-6">
-                  <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                  <DateInput value={dateFrom} onChange={e => setDateFrom(e.target.value)}
                     className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-teal-500 flex-1" />
                   <span className="text-gray-400 text-xs shrink-0">a</span>
-                  <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                  <DateInput value={dateTo} onChange={e => setDateTo(e.target.value)}
                     className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-teal-500 flex-1" />
                 </div>
               )}

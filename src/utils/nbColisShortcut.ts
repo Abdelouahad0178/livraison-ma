@@ -140,6 +140,13 @@ export const parseNbColisShortcut = (raw: string): NbColisShortcut | null =>
 export const nbColisDigitsOnly = (raw: string): string =>
   normalizeShortcutInput(raw).replace(/[^0-9]/g, '')
 
+/**
+ * 🔌 Interrupteur du raccourci « Nb colis ». false = DÉSACTIVÉ : le champ n'accepte que le nombre
+ * de colis (chiffres), ni aide ni bouton « ? Aide » affichés. Tout le code reste en place :
+ * repasser à true pour le réactiver.
+ */
+export const NB_COLIS_SHORTCUT_ENABLED = false
+
 /** Aide courte affichée sous le champ + infobulle détaillée. */
 export const NB_COLIS_SHORTCUT_HINT =
   '⚡ nb + port (ds/ps/dc/ce/cd) + montant [+ e/c/t montant] [p/b] [k poids] + Entrée · ex. 2ds45e200c800'

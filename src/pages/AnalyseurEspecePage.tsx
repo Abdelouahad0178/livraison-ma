@@ -1,3 +1,4 @@
+import DateInput from '../components/DateInput'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { codPaymentTypeOf } from '../firebase/constants'
 import { signOut } from 'firebase/auth'
@@ -33,7 +34,7 @@ import ProfilePhotoUpload from '../components/ProfilePhotoUpload'
 import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
-import { normText } from '../utils/normText'
+import { normText, isDigitsOnly, numberStartsWith } from '../utils/normText'
 import { codHasType, isMixedCod, codPartsOf, codPartsBreakdown, codPartsLabel } from '../utils/codParts'
 
 const PAGE_SIZE = 800 // Chargement progressif par tranches de 800
@@ -59,6 +60,9 @@ const normalizeSearch = (value: any) => normText(value).replace(/\s+/g, '')
 const hasSearch = (values: any, q: any) => {
   if (!q) return true
   const compactQ = normalizeSearch(q)
+  // 🔢 Numéro (N° EXP, téléphone) : le 0 compte, correspondance depuis le 1er chiffre
+  const digitsQ = normText(q).replace(/[\s.\-\/]/g, '')
+  if (isDigitsOnly(digitsQ)) return values.some((v: any) => numberStartsWith(v, digitsQ))
   return values.some((v: any) => {
     const raw = normText(v)
     return raw.includes(normText(q)) || normalizeSearch(raw).includes(compactQ)
@@ -1503,8 +1507,8 @@ export default function AnalyseurEspecePage() {
                   </div>
                 ) : (
                   <>
-                    <input type="date" value={ctlDateFrom} onChange={e => { setCtlDateFrom(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
-                    <input type="date" value={ctlDateTo} onChange={e => { setCtlDateTo(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
+                    <DateInput value={ctlDateFrom} onChange={e => { setCtlDateFrom(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
+                    <DateInput value={ctlDateTo} onChange={e => { setCtlDateTo(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
                   </>
                 )}
                 <input type="number" min="0" value={ctlMinAmount} onChange={e => setCtlMinAmount(e.target.value)} placeholder="Min DH" className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium placeholder:text-purple-300 transition-all duration-300" />
@@ -1923,14 +1927,12 @@ export default function AnalyseurEspecePage() {
                 <option value="custom">🎯 Personnalisé</option>
               </select>
             </div>
-            <input
-              type="date"
+            <DateInput
               value={dateFrom}
               onChange={e => { setDateFrom(e.target.value); setDatePreset('custom') }}
               className="px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm text-sm font-medium transition-all duration-300"
             />
-            <input
-              type="date"
+            <DateInput
               value={dateTo}
               onChange={e => { setDateTo(e.target.value); setDatePreset('custom') }}
               className="px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm text-sm font-medium transition-all duration-300"
@@ -2390,8 +2392,7 @@ export default function AnalyseurEspecePage() {
                         <>
                           <div>
                             <label className="block text-xs font-bold text-purple-800 mb-2">Du</label>
-                            <input
-                              type="date"
+                            <DateInput
                               value={archiveDateFrom}
                               onChange={(e) => setArchiveDateFrom(e.target.value)}
                               className="w-full px-3 py-2 rounded-xl border border-purple-200 text-sm focus:ring-2 focus:ring-purple-400 focus:outline-none"
@@ -2399,8 +2400,7 @@ export default function AnalyseurEspecePage() {
                           </div>
                           <div>
                             <label className="block text-xs font-bold text-purple-800 mb-2">Au</label>
-                            <input
-                              type="date"
+                            <DateInput
                               value={archiveDateTo}
                               onChange={(e) => setArchiveDateTo(e.target.value)}
                               className="w-full px-3 py-2 rounded-xl border border-purple-200 text-sm focus:ring-2 focus:ring-purple-400 focus:outline-none"
@@ -2593,7 +2593,7 @@ export default function AnalyseurEspecePage() {
               </label>
               <label className="text-xs font-bold text-slate-500 col-span-2">
                 Date cheque
-                <input type="date" value={modal.chequeDate} onChange={e => setModal((m: any) => ({ ...m, chequeDate: e.target.value }))} className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none" />
+                <DateInput value={modal.chequeDate} onChange={e => setModal((m: any) => ({ ...m, chequeDate: e.target.value }))} className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none" />
               </label>
               <label className="text-xs font-bold text-slate-500 col-span-2">
                 Note
@@ -2665,8 +2665,7 @@ export default function AnalyseurEspecePage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-bold text-slate-700 mb-1">Date d'échéance</label>
-                  <input
-                    type="date"
+                  <DateInput
                     value={editPaymentModal.chequeDate || ''}
                     onChange={e => setEditPaymentModal({ ...editPaymentModal, chequeDate: e.target.value })}
                     className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"

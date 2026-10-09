@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { useState, useEffect, useMemo } from 'react'
 import { Archive, Calendar, RotateCcw, Search, TrendingDown, AlertCircle, CheckCircle, Trash2 } from 'lucide-react'
 import { collection, query, where, orderBy, limit, getDocs, doc, deleteDoc, setDoc, Timestamp } from 'firebase/firestore'
@@ -5,7 +6,7 @@ import { db } from '../../../firebase/config'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { STATUS_COLORS, CITIES } from '../../../firebase/constants'
 import { searchParcels } from '../../../firebase/parcels'
-import { normIncludes } from '../../../utils/normText'
+import { normIncludes, digitAwareIncludes } from '../../../utils/normText'
 
 export default function AdminArchivageTab() {
   const [stats, setStats] = useState<any>(null)
@@ -233,7 +234,7 @@ export default function AdminArchivageTab() {
             normIncludes(p.trackingId, search) ||
             normIncludes(p.sender?.name, search) ||
             normIncludes(p.receiver?.name, search) ||
-            nic.includes(search)
+            digitAwareIncludes(nic, search)
           )
         })
         .sort((a: any, b: any) => {
@@ -288,7 +289,7 @@ export default function AdminArchivageTab() {
 
     try {
       const { archivedAt, archivedReason, archivedBy, archivedByName, ...parcelData } = parcel
-      await setDoc(doc(db, 'parcels', parcel.id), parcelData)
+      await setDoc(doc(db, 'parcels', parcel.id), { ...parcelData, isArchived: false })
       await deleteDoc(doc(db, 'parcels_archive', parcel.id))
 
       setArchivedParcels(prev => prev.filter(p => p.id !== parcel.id))
@@ -521,8 +522,7 @@ export default function AdminArchivageTab() {
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Date de création du (optionnel):
               </label>
-              <input
-                type="date"
+              <DateInput
                 value={archiveDateFrom}
                 onChange={e => setArchiveDateFrom(e.target.value)}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
@@ -533,8 +533,7 @@ export default function AdminArchivageTab() {
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Date de création au (optionnel):
               </label>
-              <input
-                type="date"
+              <DateInput
                 value={archiveDateTo}
                 onChange={e => setArchiveDateTo(e.target.value)}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
@@ -733,8 +732,7 @@ export default function AdminArchivageTab() {
 
           <div>
             <label className="block text-xs font-semibold text-gray-600 mb-2">Du</label>
-            <input
-              type="date"
+            <DateInput
               value={dateFrom}
               onChange={e => setDateFrom(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
@@ -743,8 +741,7 @@ export default function AdminArchivageTab() {
 
           <div>
             <label className="block text-xs font-semibold text-gray-600 mb-2">Au</label>
-            <input
-              type="date"
+            <DateInput
               value={dateTo}
               onChange={e => setDateTo(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"

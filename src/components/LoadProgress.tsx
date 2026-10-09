@@ -202,25 +202,44 @@ function LoadProgress({
             <span className="text-[11px] text-slate-500 truncate">{rest.join(' — ')}</span>
           )}
           {/* 🚚 Route : le camion avance avec la progression (ou fait des allers-retours sans %) */}
-          <div className="relative mt-1 h-3.5 w-full min-w-[160px] max-w-[320px] rounded-full bg-indigo-50 border border-indigo-100 overflow-hidden">
+          <div className="relative mt-1 h-4 w-full min-w-[180px] max-w-[340px] rounded-full bg-indigo-50 border border-indigo-100 overflow-hidden">
             {pct !== null && (
               <div className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-indigo-300 via-sky-300 to-indigo-300 lp-shimmer transition-[width] duration-300 ease-out" style={{ width: `${pct}%` }} />
             )}
+            {/* Semi-remorque (remorque + tracteur) orienté vers l'AVANT (droite), dans le sens du déplacement */}
             <span
-              className={`absolute top-1/2 -translate-y-1/2 text-[11px] leading-none ${pct === null ? 'lp-truck-roam' : 'transition-[left] duration-300 ease-out'}`}
-              style={pct === null ? undefined : { left: `calc(${pct}% - 12px)` }}
-            ><span className="lp-speed">💨</span><span className="inline-block lp-bounce">🚚</span></span>
+              // Le camion roule TOUJOURS (la barre colorée montre l'avancement)
+              className="absolute top-1/2 -translate-y-1/2 flex items-center leading-none lp-truck-roam"
+            >
+              <span className="lp-speed">💨</span>
+              <svg className="lp-bounce" width="36" height="12" viewBox="0 0 36 12" aria-hidden="true">
+                {/* remorque */}
+                <rect x="0.5" y="0.5" width="22" height="7.5" rx="1" fill="#6366f1" />
+                <rect x="2" y="2" width="19" height="1.2" rx="0.6" fill="#c7d2fe" />
+                {/* attelage */}
+                <rect x="22.5" y="6" width="2" height="1.4" fill="#334155" />
+                {/* tracteur (cabine à l'avant, à droite) */}
+                <path d="M24.5 3 H31 L35 6 V8.5 H24.5 Z" fill="#f97316" />
+                <rect x="31" y="3.6" width="2.4" height="2" rx="0.3" fill="#e0f2fe" />
+                {/* roues */}
+                <circle cx="4" cy="9.6" r="1.7" fill="#1e293b" />
+                <circle cx="8" cy="9.6" r="1.7" fill="#1e293b" />
+                <circle cx="18" cy="9.6" r="1.7" fill="#1e293b" />
+                <circle cx="27" cy="9.6" r="1.7" fill="#1e293b" />
+                <circle cx="32.5" cy="9.6" r="1.7" fill="#1e293b" />
+              </svg>
+            </span>
           </div>
           <span ref={fun.ref} className="lp-fade text-[11px] italic text-indigo-500 mt-0.5 truncate">{fun.initial}</span>
         </div>
         <style>{`
-          @keyframes lpRoam { 0% { left: -14px } 100% { left: calc(100% + 4px) } }
+          @keyframes lpRoam { 0% { left: -48px } 100% { left: calc(100% + 4px) } }
           .lp-truck-roam { animation: lpRoam 1.3s linear infinite; }
           @keyframes lpShimmer { 0% { background-position: 0% 50% } 100% { background-position: 200% 50% } }
           .lp-shimmer { background-size: 200% 100%; animation: lpShimmer 0.9s linear infinite; }
           @keyframes lpBounce { 0%,100% { transform: translateY(0) } 50% { transform: translateY(-1.5px) } }
           .lp-bounce { animation: lpBounce .25s ease-in-out infinite; }
-          @keyframes lpSpeed { 0% { opacity: .9; margin-right: 0 } 100% { opacity: 0; margin-right: 6px } }
+          @keyframes lpSpeed { 0% { opacity: .9; margin-right: 0 } 100% { opacity: 0; margin-right: 5px } }
           .lp-speed { display: inline-block; font-size: 9px; animation: lpSpeed .4s ease-out infinite; }
           @keyframes lpPulse { 0%,100% { transform: scale(1) } 50% { transform: scale(1.08) } }
           .lp-pulse { animation: lpPulse .8s ease-in-out infinite; }

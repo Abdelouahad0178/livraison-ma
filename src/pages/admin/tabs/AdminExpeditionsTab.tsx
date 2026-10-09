@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import {
   Archive,
   Banknote,
@@ -106,7 +107,7 @@ export default function AdminExpeditionsTab({
     setRestoringParcel(parcel.id)
     try {
       const { archivedAt, archivedReason, archivedBy, archivedByName, isArchived, _archivedAt, _archivedFrom, ...parcelData } = parcel
-      await setDoc(doc(db, 'parcels', parcel.id), parcelData)
+      await setDoc(doc(db, 'parcels', parcel.id), { ...parcelData, isArchived: false })
       await deleteDoc(doc(db, 'parcels_archive', parcel.id))
 
       alert('✅ Colis restauré! Rechargez la page pour voir les changements.')
@@ -506,15 +507,13 @@ export default function AdminExpeditionsTab({
           ))}
           {datePreset === 'custom' && (
             <div className="flex items-center gap-2 ml-1">
-              <input
-                type="date"
+              <DateInput
                 value={dateFrom}
                 onChange={e => setDateFrom(e.target.value)}
                 className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
               />
               <span className="text-gray-400 text-xs">-</span>
-              <input
-                type="date"
+              <DateInput
                 value={dateTo}
                 onChange={e => setDateTo(e.target.value)}
                 className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"

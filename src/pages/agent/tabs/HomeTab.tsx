@@ -5,7 +5,7 @@ import { STATUSES, STATUS_COLORS } from '../../../firebase/constants'
 import { parcelDate, entryDate, filterByDate } from '../../../utils/dateFilter'
 import { getEmptyParcelForm } from '../emptyParcelForm'
 import { HERO_STAT_CARD, HERO_CARD, HERO_BUTTON } from '../../../styles/heroTheme'
-import { subscribeClients } from '../../../firebase/clients'
+import { subscribeEnCompteClientsByCity } from '../../../firebase/clients'
 
 // Fonction pour obtenir un formulaire vide avec la date de travail ACTUELLE
 // Formulaire vide : source unique partagée (voir agent/emptyParcelForm.ts)
@@ -41,11 +41,12 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
   // État pour charger les clients
   const [clients, setClients] = useState<any[]>([])
 
-  // Charger les clients
+  // Charger les sociétés « en compte » de la ville (requête ciblée — avant : TOUS les clients
+  // de toutes les villes, ~10 Mo, filtrés ici). Même liste, même ordre.
   useEffect(() => {
-    const unsub = subscribeClients(setClients)
-    return () => unsub()
-  }, [])
+    if (profile?.role !== 'chef_agence' || !profile?.city) { setClients([]); return }
+    return subscribeEnCompteClientsByCity(profile.city, setClients, err => console.error('HomeTab clients en compte:', err))
+  }, [profile?.role, profile?.city])
 
   const homeChefStats = useMemo(() => {
     const today = new Date(); today.setHours(0, 0, 0, 0)

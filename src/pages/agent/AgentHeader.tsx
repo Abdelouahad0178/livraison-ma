@@ -197,7 +197,7 @@ export default function AgentHeader({
             </button>
             <span className="text-gray-300">/</span>
             <span className="text-sm font-semibold text-blue-600">
-              {tab === 'new' ? '+ Nouveau colis' : tab === 'caisse' ? (profile?.role === 'chef_agence' ? `Caisse Agence ${profile?.city || ''}` : 'Ma Caisse') : tab === 'cod' ? 'RETOUR FOND Clients' : tab === 'valeurs' ? '✅ Valeurs à valider' : tab === 'clientportdu' ? '🏦 Ports en compte clients' : tab === 'portpayecheque' ? '📋 Ports payés chèque' : tab === 'portducheque' ? '📋 Ports dû chèque' : tab === 'invoices' ? '🧾 Factures' : tab === 'clients' ? 'Mes clients' : tab === 'charge' ? 'Feuille de charge' : tab === 'secteurs' ? 'Secteurs' : tab === 'drivers' ? 'Port dû' : tab === 'arrivage' ? 'Arrivages' : tab === 'retours' ? '↩️ Retours' : tab === 'lostparcels' ? '🚨 Colis perdus' : tab === 'modifications' ? 'Modif. clients' : tab === 'aideagents' ? 'Aide Agents' : tab === 'dashboard' ? 'Dashboard' : tab === 'notes' ? 'Notes agents' : 'Expéditions'}
+              {tab === 'new' ? '+ Nouveau colis' : tab === 'caisse' ? (profile?.role === 'chef_agence' ? `Caisse Agence ${profile?.city || ''}` : 'Ma Caisse') : tab === 'cod' ? 'RETOUR FOND Clients' : tab === 'valeurs' ? '✅ Valeurs à valider' : tab === 'clientportdu' ? '🏦 Ports en compte clients' : tab === 'portpayecheque' ? '📋 Ports payés chèque' : tab === 'portducheque' ? '📋 Ports dû chèque' : tab === 'invoices' ? '🧾 Factures' : tab === 'clients' ? 'Mes clients' : tab === 'charge' ? 'Feuille de charge' : tab === 'secteurs' ? 'Secteurs' : tab === 'drivers' ? 'Port dû' : tab === 'arrivage' ? 'Arrivages' : tab === 'retours' ? '↩️ Retours' : tab === 'lostparcels' ? '🚨 Colis perdus' : tab === 'modifications' ? 'Modif. clients' : tab === 'aideagents' ? 'Aide Agents' : tab === 'dashboard' ? 'Dashboard' : tab === 'notes' ? 'Notes agents' : (profile?.role === 'aide_agent' ? 'Mes saisies' : 'Expéditions')}
             </span>
           </div>
         )}
@@ -221,7 +221,7 @@ export default function AgentHeader({
               onClick={() => { setTab('parcels'); setMenuOpen(false) }}
               className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'parcels' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`}
             >
-              <Package className="w-4 h-4" /> Expéditions
+              <Package className="w-4 h-4" /> {profile?.role === 'aide_agent' ? 'Mes saisies' : 'Expéditions'}
             </button>
             {profile?.role !== 'aide_agent' && profile?.role !== 'agentpro' && (
               <button

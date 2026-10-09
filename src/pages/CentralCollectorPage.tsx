@@ -1,3 +1,4 @@
+import DateInput from '../components/DateInput'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { signOut } from 'firebase/auth'
 import { doc, onSnapshot, getDoc, collection, query as fbQuery, where, orderBy, limit as fbLimit } from 'firebase/firestore'
@@ -37,7 +38,9 @@ import { subscribeAllParcelsWithDateFilter, loadMoreParcelsWithDateFilter } from
 import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
-import { normText } from '../utils/normText'
+import { saveParcelCodDocuments, type CodDocument } from '../firebase/central'
+import { ChequeEntryModal, ReceptionSheetModal, isDocParcel, hasDocData, docsOf } from './central/ChequeReception'
+import { normText, isDigitsOnly, numberStartsWith } from '../utils/normText'
 import { codPartView, codHasType, isMixedCod, codPartsOf, codTypeDisplay, codPartsBreakdown, codPartsLabel } from '../utils/codParts'
 
 // ⚡ Système de chargement optimisé (Option 3 - comme AdminPage)
@@ -72,6 +75,9 @@ const normalizeSearch = (value: any) => normText(value).replace(/\s+/g, '')
 const hasSearch = (values: any, q: any) => {
   if (!q) return true
   const compactQ = normalizeSearch(q)
+  // 🔢 Numéro (N° EXP, téléphone) : le 0 compte, correspondance depuis le 1er chiffre
+  const digitsQ = normText(q).replace(/[\s.\-\/]/g, '')
+  if (isDigitsOnly(digitsQ)) return values.some((v: any) => numberStartsWith(v, digitsQ))
   return values.some((v: any) => {
     const raw = normText(v)
     return raw.includes(normText(q)) || normalizeSearch(raw).includes(compactQ)
@@ -148,6 +154,9 @@ export default function CentralCollectorPage() {
   const [moreParcels, setMoreParcels] = useState<any[]>([])       // pages suivantes (statique)
   const [serverResults, setServerResults] = useState<any[]>([])   // recherche serveur toute la base
   const [controlOverrides, setControlOverrides] = useState<Record<string, any>>({}) // pointage optimiste
+  // 🧾 Chèques / traites : formulaire de saisie au pointage + fiche de réception par client
+  const [chequeModal, setChequeModal] = useState<any>(null)
+  const [receptionOpen, setReceptionOpen] = useState(false)
   const [hasMore, setHasMore] = useState(true)
   const [loadingMore, setLoadingMore] = useState(false)
   const [loadingAll, setLoadingAll] = useState(false)
@@ -264,6 +273,7 @@ export default function CentralCollectorPage() {
             controlledBy: d.controlledBy || '',
             controlledById: d.controlledById || '',
             controlledAt: d.controlledAt || '',
+            ...(Array.isArray(d.codDocuments) ? { codDocuments: d.codDocuments } : {}),
           }
         })
         return next
@@ -745,6 +755,17 @@ export default function CentralCollectorPage() {
     )
     const who = owners.size > 0 ? ` (déjà fait par ${[...owners].join(', ')})` : ''
     alert(`⚠️ Impossible de ${actionLabel} : au moins un colis a été mis à jour entre-temps par un autre encaisseur${who}. L'affichage a été resynchronisé.`)
+  }
+
+  // 🧾 Enregistrer les données des chèques / traites PUIS (option) pointer le colis.
+  // Deux écritures séparées : le pointage garde sa règle « appartient à son auteur ».
+  const saveChequeDocs = async (p: any, docs: CodDocument[], point: boolean) => {
+    const name = profile?.name || 'Encaisseur central'
+    const uid = auth.currentUser?.uid || ''
+    const clean = await saveParcelCodDocuments(p.id, docs, name, uid)
+    setControlOverrides(prev => ({ ...prev, [p.id]: { ...(prev[p.id] || {}), codDocuments: clean } }))
+    setChequeModal(null)
+    if (point) await applyControl([p.id], true)
   }
 
   // ✅ Pointage : marquer / dé-marquer contrôlé (batch Firestore + MAJ optimiste)
@@ -1732,8 +1753,8 @@ export default function CentralCollectorPage() {
                   </div>
                 ) : (
                   <>
-                    <input type="date" value={ctlDateFrom} onChange={e => { setCtlDateFrom(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
-                    <input type="date" value={ctlDateTo} onChange={e => { setCtlDateTo(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
+                    <DateInput value={ctlDateFrom} onChange={e => { setCtlDateFrom(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
+                    <DateInput value={ctlDateTo} onChange={e => { setCtlDateTo(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
                   </>
                 )}
                 <input type="number" min="0" value={ctlMinAmount} onChange={e => setCtlMinAmount(e.target.value)} placeholder="Min DH" className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium placeholder:text-purple-300 transition-all duration-300" />
@@ -1801,7 +1822,13 @@ export default function CentralCollectorPage() {
                 <p className="text-sm font-black">{ctlSelected.size.toLocaleString('fr-MA')} colis sélectionné{ctlSelected.size > 1 ? 's' : ''}</p>
                 <div className="ml-auto flex flex-wrap gap-2">
                   <button
-                    onClick={() => applyControl([...ctlSelected], true)}
+                    onClick={() => {
+                      const sel = ctlFiltered.filter((p: any) => ctlSelected.has(p.id))
+                      const noData = sel.filter((p: any) => isDocParcel(p) && !hasDocData(p) && !isControlled(p))
+                      if (noData.length && !confirm(`${noData.length} chèque(s) / traite(s) sélectionné(s) n'ont pas encore leurs données (N°, banque, échéance).\n\nIls ne seront PAS pointés : utilisez « Pointer » sur chaque ligne pour saisir leurs données.\n\nPointer les ${sel.length - noData.length} autre(s) ?`)) return
+                      const skip = new Set(noData.map((p: any) => p.id))
+                      applyControl([...ctlSelected].filter(id => !skip.has(id)), true)
+                    }}
                     disabled={pointing}
                     className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs font-black flex items-center gap-2 transition"
                   >
@@ -1826,6 +1853,23 @@ export default function CentralCollectorPage() {
               </section>
             )}
 
+            {chequeModal && (
+              <ChequeEntryModal
+                parcel={ctlFiltered.find((x: any) => x.id === chequeModal.id) || chequeModal}
+                alreadyControlled={isControlled(ctlFiltered.find((x: any) => x.id === chequeModal.id) || chequeModal)}
+                onClose={() => setChequeModal(null)}
+                onSave={(docs, point) => saveChequeDocs(chequeModal, docs, point)}
+              />
+            )}
+            {receptionOpen && (
+              <ReceptionSheetModal
+                parcels={ctlFiltered.filter((p: any) => isDocParcel(p) && isControlled(p))}
+                profileName={profile?.name || ''}
+                onClose={() => setReceptionOpen(false)}
+                onEdit={(p: any) => setChequeModal(p)}
+              />
+            )}
+
             {/* Tableau des COD (contre remboursement) */}
             <section className="bg-white rounded-3xl border border-slate-200 shadow-lg overflow-hidden">
               <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center gap-2">
@@ -1834,6 +1878,13 @@ export default function CentralCollectorPage() {
                 <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded-full">
                   {ctlDisplayed.length.toLocaleString('fr-MA')} affichés / {ctlFiltered.length.toLocaleString('fr-MA')} filtrés
                 </span>
+                <button
+                  onClick={() => setReceptionOpen(true)}
+                  className="ml-auto px-3 py-1.5 rounded-xl bg-purple-600 hover:bg-purple-700 text-white text-xs font-black flex items-center gap-1.5 transition"
+                  title="Fiche de réception des chèques et traites d'un client expéditeur"
+                >
+                  <Printer className="w-3.5 h-3.5" /> Fiche de réception chèques / traites
+                </button>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-sm">
@@ -1896,7 +1947,16 @@ export default function CentralCollectorPage() {
                             <p className="text-[11px] text-slate-500">{parcelCity(p)}</p>
                           </td>
                           <td className="px-3 py-2.5 text-right font-black text-emerald-700 whitespace-nowrap">{money(p.codAmount)} DH{isMixedCod(p) && <div className="text-[10px] font-semibold text-slate-500">{codPartsBreakdown(p)}</div>}</td>
-                          <td className="px-3 py-2.5">{payTypeBadge(p)}</td>
+                          <td className="px-3 py-2.5">
+                            {payTypeBadge(p)}
+                            {isDocParcel(p) && (
+                              <button type="button" onClick={() => setChequeModal(p)} className="block mt-1 text-left text-[10px] leading-tight hover:underline" title="Saisir / modifier les données du chèque ou de la traite">
+                                {hasDocData(p)
+                                  ? docsOf(p).map((d: any, i: number) => <span key={i} className="block text-slate-600">N° {d.numero} · {d.banque}{d.echeance ? ` · éch. ${d.echeance.split('-').reverse().join('/')}` : ''}</span>)
+                                  : <span className="font-bold text-amber-700">⚠️ Données à saisir ✏️</span>}
+                              </button>
+                            )}
+                          </td>
                           <td className="px-3 py-2.5">{codStatusBadge(p)}</td>
                           <td className="px-3 py-2.5">{statusBadge(p)}</td>
                           <td className="px-3 py-2.5">
@@ -1929,11 +1989,11 @@ export default function CentralCollectorPage() {
                                 </div>
                               ) : (
                                 <button
-                                  onClick={() => applyControl([p.id], true)}
+                                  onClick={() => (isDocParcel(p) ? setChequeModal(p) : applyControl([p.id], true))}
                                   disabled={pointing}
                                   className="px-3 py-1.5 rounded-lg bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-[11px] font-black transition"
                                 >
-                                  Pointer
+                                  {isDocParcel(p) ? 'Pointer 🧾' : 'Pointer'}
                                 </button>
                               )}
 
@@ -2201,14 +2261,12 @@ export default function CentralCollectorPage() {
                 <option value="custom">🎯 Personnalisé</option>
               </select>
             </div>
-            <input
-              type="date"
+            <DateInput
               value={dateFrom}
               onChange={e => { setDateFrom(e.target.value); setDatePreset('custom') }}
               className="px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm text-sm font-medium transition-all duration-300"
             />
-            <input
-              type="date"
+            <DateInput
               value={dateTo}
               onChange={e => { setDateTo(e.target.value); setDatePreset('custom') }}
               className="px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm text-sm font-medium transition-all duration-300"
@@ -2668,8 +2726,7 @@ export default function CentralCollectorPage() {
                         <>
                           <div>
                             <label className="block text-xs font-bold text-purple-800 mb-2">Du</label>
-                            <input
-                              type="date"
+                            <DateInput
                               value={archiveDateFrom}
                               onChange={(e) => setArchiveDateFrom(e.target.value)}
                               className="w-full px-3 py-2 rounded-xl border border-purple-200 text-sm focus:ring-2 focus:ring-purple-400 focus:outline-none"
@@ -2677,8 +2734,7 @@ export default function CentralCollectorPage() {
                           </div>
                           <div>
                             <label className="block text-xs font-bold text-purple-800 mb-2">Au</label>
-                            <input
-                              type="date"
+                            <DateInput
                               value={archiveDateTo}
                               onChange={(e) => setArchiveDateTo(e.target.value)}
                               className="w-full px-3 py-2 rounded-xl border border-purple-200 text-sm focus:ring-2 focus:ring-purple-400 focus:outline-none"
@@ -2871,7 +2927,7 @@ export default function CentralCollectorPage() {
               </label>
               <label className="text-xs font-bold text-slate-500 col-span-2">
                 Date cheque
-                <input type="date" value={modal.chequeDate} onChange={e => setModal((m: any) => ({ ...m, chequeDate: e.target.value }))} className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none" />
+                <DateInput value={modal.chequeDate} onChange={e => setModal((m: any) => ({ ...m, chequeDate: e.target.value }))} className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none" />
               </label>
               <label className="text-xs font-bold text-slate-500 col-span-2">
                 Note
@@ -2943,8 +2999,7 @@ export default function CentralCollectorPage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-bold text-slate-700 mb-1">Date d'échéance</label>
-                  <input
-                    type="date"
+                  <DateInput
                     value={editPaymentModal.chequeDate || ''}
                     onChange={e => setEditPaymentModal({ ...editPaymentModal, chequeDate: e.target.value })}
                     className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"

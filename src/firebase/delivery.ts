@@ -464,7 +464,13 @@ const sortArrivagesDocs = (docs: any) => docs.sort((a: any, b: any) => {
 })
 export function subscribeArrivages(city: any, callback: any, onError: (err?: any) => void = () => {}) {
   const since = daysAgoTimestamp(60)
-  const q = query(collection(db, 'arrivages'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(60))
+  // ⚡ Filtre ville CÔTÉ SERVEUR (index arrivages city+createdAt) : avant, les 60 derniers arrivages
+  // de TOUTES les villes (~40 Ko chacun) étaient téléchargés puis filtrés ici. Tous les arrivages
+  // portent un champ city (vérifié). 30 derniers de LA ville (avant : la part de la ville parmi les 60
+  // derniers toutes villes, soit ~12 à 26). Sans ville : comportement inchangé.
+  const q = city
+    ? query(collection(db, 'arrivages'), where('city', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(30))
+    : query(collection(db, 'arrivages'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(60))
   return onSnapshot(q, snap => {
     let docs: any[] = snap.docs.map(d => ({ id: d.id, ...d.data() }))
     if (city) docs = docs.filter(d => !d.city || d.city === city)

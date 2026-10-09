@@ -604,6 +604,67 @@ export function printAdminExpeditions(
 // IMPRESSION DES PORTS COLLECTÉS (avec totaux en haut et en bas)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+/** 🖨️ Valeurs (COD) collectées sur une période — montants par type (espèces / chèque / traite). */
+export function printCodCollectes(
+  parcels: any[],
+  amountOfType: (p: any, type: 'especes' | 'cheque' | 'traite') => number,
+  profileData?: any,
+  periodNote?: string
+): void {
+  if (!parcels.length) {
+    alert('Aucune valeur collectée à imprimer')
+    return
+  }
+  const fmtDH = (n: number) => n ? `${n.toFixed(2)} DH` : '—'
+  const toDate = (v: any) => (v?.toDate ? v.toDate() : v ? new Date(v) : null)
+  const esc = (s: any) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c])
+  const tot = { especes: 0, cheque: 0, traite: 0 }
+  const rows = parcels.map((p, i) => {
+    const e = amountOfType(p, 'especes'), c = amountOfType(p, 'cheque'), t = amountOfType(p, 'traite')
+    tot.especes += e; tot.cheque += c; tot.traite += t
+    const at = toDate(p.codCollectedAt)
+    return `<tr style="background:${i % 2 ? '#f0fdf4' : '#fff'}">
+      <td style="text-align:center;color:#555">${i + 1}</td>
+      <td style="font-family:monospace;font-weight:bold;color:#1d4ed8">${esc(p.sender?.nic || p.senderNic || p.trackingId || '—')}</td>
+      <td>${esc(p.sender?.name || '—')}</td>
+      <td>${esc(p.receiver?.name || '—')}</td>
+      <td>${esc(p.deliveryDriverName || '—')}</td>
+      <td style="color:#6b7280">${esc(p.codCollectedBy || '—')}${at && !isNaN(at.getTime()) ? `<br><span style="font-size:6.5pt">${at.toLocaleTimeString('fr-MA', { hour: '2-digit', minute: '2-digit' })}</span>` : ''}</td>
+      <td style="text-align:right">${fmtDH(e)}</td>
+      <td style="text-align:right">${fmtDH(c)}</td>
+      <td style="text-align:right">${fmtDH(t)}</td>
+      <td style="text-align:right;font-weight:bold;color:#15803d">${fmtDH(e + c + t)}</td>
+    </tr>`
+  }).join('')
+  const total = tot.especes + tot.cheque + tot.traite
+  const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Valeurs-COD-collectees</title>
+  <style>
+    @page { size: A4 landscape; margin: 10mm; }
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    body { font-family: Arial, sans-serif; font-size: 8pt; color: #111; margin: 0; }
+    h1 { font-size: 14pt; color: #15803d; margin: 0 0 4px; }
+    .sub { color: #374151; margin-bottom: 10px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { background: #15803d; color: #fff; padding: 5px; text-align: left; font-size: 7.5pt; }
+    td { padding: 4px 5px; border-bottom: 1px solid #e5e7eb; }
+    tfoot td { font-weight: bold; background: #dcfce7; }
+  </style></head><body>
+    <h1>Valeurs (COD) collectées</h1>
+    <div class="sub">${esc(profileData?.city ? `Agence ${profileData.city}` : '')}${periodNote ? ` · ${esc(periodNote)}` : ''} · ${parcels.length} expédition(s) · imprimé par ${esc(profileData?.name || '')}</div>
+    <table><thead><tr><th>#</th><th>N° EXP</th><th>Expéditeur</th><th>Destinataire</th><th>Livreur</th><th>Collecté par</th>
+      <th style="text-align:right">Espèces</th><th style="text-align:right">Chèque</th><th style="text-align:right">Traite</th><th style="text-align:right">Total</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr><td colspan="6">TOTAL — ${parcels.length} expédition(s)</td><td style="text-align:right">${fmtDH(tot.especes)}</td><td style="text-align:right">${fmtDH(tot.cheque)}</td><td style="text-align:right">${fmtDH(tot.traite)}</td><td style="text-align:right">${fmtDH(total)}</td></tr></tfoot>
+    </table>
+    <script>window.onload = () => { window.print() }</script>
+  </body></html>`
+  const win = openPrintWindow('width=1200,height=800')
+  if (win) {
+    win.document.write(html)
+    win.document.close()
+  }
+}
+
 export function printPortsCollectes(
   parcels: any[],
   profileData?: any,

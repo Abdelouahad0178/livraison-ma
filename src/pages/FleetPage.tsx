@@ -1,3 +1,4 @@
+import DateInput from '../components/DateInput'
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -556,7 +557,7 @@ export default function FleetPage() {
                     return (
                       <div key={key}>
                         <label className="text-xs text-gray-500 block mb-1">{label}</label>
-                        <input type="date" value={form[key] || ''}
+                        <DateInput value={form[key] || ''}
                           onChange={e => setForm((f: any) => ({ ...f, [key]: e.target.value }))}
                           className={inputCls}
                         />

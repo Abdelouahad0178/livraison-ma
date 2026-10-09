@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { CheckCircle, XCircle, Clock, Banknote, AlertTriangle, Eye, Search, X, Plus, Edit, Trash2 } from 'lucide-react'
 import { fmt } from '../../../utils/formatNumber'
 import { useState, useMemo } from 'react'
@@ -468,8 +469,7 @@ export default function AdminVersementsTab({
         {/* Période - Champs de date uniquement (sans boutons de préréglage) */}
         <div className="flex gap-3 items-center">
           <label className="text-sm font-semibold text-gray-600">Période:</label>
-          <input
-            type="date"
+          <DateInput
             value={dateFrom}
             onChange={(e) => {
               setDateFrom(e.target.value)
@@ -479,8 +479,7 @@ export default function AdminVersementsTab({
             placeholder="Du"
           />
           <span className="text-gray-400">→</span>
-          <input
-            type="date"
+          <DateInput
             value={dateTo}
             onChange={(e) => {
               setDateTo(e.target.value)

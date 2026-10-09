@@ -1,3 +1,4 @@
+import DateInput from '../components/DateInput'
 import { useState, useEffect, useMemo, useRef, useDeferredValue, startTransition } from 'react'
 import PendingBadge from '../components/PendingBadge'
 import { makeFacturierSearchMatcher } from '../utils/parcelSearch'
@@ -1238,7 +1239,7 @@ function CreateClientInvoiceModal({
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1">Date de facture</label>
-              <input type="date" value={invoiceDate} onChange={e => setInvoiceDate(e.target.value || ymd(new Date()))} className={inputCls} />
+              <DateInput value={invoiceDate} onChange={e => setInvoiceDate(e.target.value || ymd(new Date()))} className={inputCls} />
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1">Agence</label>
@@ -1250,7 +1251,7 @@ function CreateClientInvoiceModal({
             </div>
             <div>
               <label className="block text-xs font-semibold text-gray-600 mb-1">Échéance (optionnel)</label>
-              <input type="date" value={dueDate} onChange={e => setDueDate(e.target.value)} className={inputCls} />
+              <DateInput value={dueDate} onChange={e => setDueDate(e.target.value)} className={inputCls} />
             </div>
           </div>
           <div>

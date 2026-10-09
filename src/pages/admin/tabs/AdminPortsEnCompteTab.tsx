@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { useMemo, useState } from 'react'
 import { Clock, Building2, User, Calendar, Filter, TrendingUp, TrendingDown } from 'lucide-react'
 import { PORT_ECHEANCES, CITIES } from '../../../firebase/constants'
@@ -232,8 +233,7 @@ export default function AdminPortsEnCompteTab({ allParcels }: Props) {
           {/* Date début */}
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1">📅 Date début</label>
-            <input
-              type="date"
+            <DateInput
               value={filterDateDebut}
               onChange={(e) => setFilterDateDebut(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
@@ -243,8 +243,7 @@ export default function AdminPortsEnCompteTab({ allParcels }: Props) {
           {/* Date fin */}
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1">📅 Date fin</label>
-            <input
-              type="date"
+            <DateInput
               value={filterDateFin}
               onChange={(e) => setFilterDateFin(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"

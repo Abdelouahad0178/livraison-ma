@@ -376,6 +376,8 @@ export async function createParcel(
     senderNameNorm:       normName(sender?.name),
     receiverNameNorm:     normName(receiver?.name),
     hasRetourBL:          data.hasRetourBL === true,  // ⭐ Retour BL obligatoire
+    // 🗄️ Toujours présent : les requêtes « En gare » filtrent côté serveur sur isArchived == false
+    isArchived:           false,
   }
   // ⚡ Seule l'écriture de l'expédition est attendue (accusé serveur = colis réellement enregistré).
   // Les écritures annexes ci-dessous partent EN ARRIÈRE-PLAN : elles ajoutaient jusqu'à 5 allers-
@@ -1492,6 +1494,35 @@ export async function getMoreAgentParcels(agentId: any, beforeTimestamp: any, pa
   return { parcels: result, hasMore: s1.docs.length === pageSize || s2.docs.length === pageSize }
 }
 
+/**
+ * 📋 « Mes saisies » (aide agent) : expéditions SAISIES par cet utilisateur sur une tranche
+ * [dateFrom, dateTo] (journée ou mois), en TEMPS RÉEL.
+ * On filtre sur aideAgentId (et non agentId) : quand le chef valide une saisie, agentId devient
+ * celui du chef — aideAgentId, lui, garde toujours l'aide qui a saisi (anciennes saisies comprises).
+ * Requête bornée par la tranche (index aideAgentId ASC + createdAt DESC, sur parcels ET parcelsLite).
+ */
+export function subscribeMyEntries(
+  aideId: string,
+  dateFrom: Date,
+  dateTo: Date,
+  callback: (rows: any[], meta: { fromCache: boolean }) => void,
+  onError: (err?: any) => void = () => {},
+  lite = true,
+  // Repli (index aideAgentId en construction) : agentId — sans les saisies déjà validées par le chef
+  field: 'aideAgentId' | 'agentId' = 'aideAgentId',
+) {
+  const q = query(
+    collection(db, lite ? PARCELS_LITE_COLLECTION : 'parcels'),
+    where(field, '==', aideId),
+    where('createdAt', '>=', Timestamp.fromDate(dateFrom)),
+    where('createdAt', '<=', Timestamp.fromDate(dateTo)),
+    orderBy('createdAt', 'desc'),
+  )
+  return onSnapshot(q, snap => {
+    callback(snap.docs.map(d => ({ id: d.id, ...d.data() })), { fromCache: snap.metadata.fromCache })
+  }, onError)
+}
+
 // Counts précis pour le home tab chef_agence — utilise getCountFromServer (0 document téléchargé)
 export async function getAccurateAgencyStats(city: any) {
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
@@ -2411,7 +2442,7 @@ export async function unarchiveParcel(parcelId: string): Promise<void> {
 
   // Restaurer dans la collection active
   const parcelRef = doc(db, 'parcels', parcelId)
-  await setDoc(parcelRef, originalData)
+  await setDoc(parcelRef, { ...originalData, isArchived: false })
 
   // Supprimer de la collection archives
   await deleteDoc(archiveRef)

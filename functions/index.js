@@ -324,6 +324,14 @@ exports.onParcelWrite = onDocumentWritten('parcels/{parcelId}', async (event) =>
     })
 
   } else if (before && after) {
+    // 🗄️ Seul changement = isArchived absent → false (backfill / filet de sécurité ci-dessous) :
+    // aucun compteur concerné → aucune écriture (évite de solliciter stats/global en rafale).
+    if (before.isArchived === undefined && after.isArchived === false) {
+      const keys = new Set([...Object.keys(before), ...Object.keys(after)])
+      keys.delete('isArchived')
+      const same = [...keys].every(k => JSON.stringify(before[k]) === JSON.stringify(after[k]))
+      if (same) return
+    }
     // ── UPDATE — only react to meaningful changes ─────────────────────
     const sBefore = before.status || ''
     const sAfter  = after.status  || ''
@@ -390,6 +398,13 @@ exports.onParcelWrite = onDocumentWritten('parcels/{parcelId}', async (event) =>
     batch.set(db.doc(`stats/global/drivers/${driverId}`), u, { merge: true })
   }
   await batch.commit()
+  // 🗄️ Filet de sécurité : tout colis créé sans isArchived (ancienne version de l'appli encore en
+  // cache, script…) reçoit isArchived:false, sinon il n'apparaîtrait pas dans la liste « En gare »
+  // (requête serveur isArchived == false). L'événement de mise à jour qui en résulte est ignoré ci-dessus.
+  if (!before && after && after.isArchived === undefined) {
+    await event.data.after.ref.update({ isArchived: false })
+      .catch(err => console.warn('isArchived:false non posé', event.params.parcelId, err.message))
+  }
 })
 
 // ── Version allégée des expéditions : parcels/{id} → parcelsLite/{id} ───────

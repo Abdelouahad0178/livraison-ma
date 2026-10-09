@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { normIncludes } from '../utils/normText'
+import { normIncludes, digitAwareIncludes } from '../utils/normText'
 
 interface ParcelFilters {
   search?: string
@@ -27,8 +27,8 @@ export function useOptimizedParcels(parcels: any[], filters: ParcelFilters = {})
         normIncludes(p.trackingId, searchLower) ||
         normIncludes(p.receiverName, searchLower) ||
         normIncludes(p.receiver?.name, searchLower) ||
-        p.receiverPhone?.includes(searchLower) ||
-        p.receiver?.phone?.includes(searchLower) ||
+        digitAwareIncludes(String(p.receiverPhone ?? ''), searchLower) ||
+        digitAwareIncludes(String(p.receiver?.phone ?? ''), searchLower) ||
         normIncludes(p.senderName, searchLower) ||
         normIncludes(p.sender?.name, searchLower)
       )

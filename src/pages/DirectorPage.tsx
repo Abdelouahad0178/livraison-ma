@@ -1,3 +1,4 @@
+import DateInput from '../components/DateInput'
 import { useEffect, useRef, useState, useMemo } from 'react'
 import { setPresenceTab } from '../services/presenceCounters'
 import { codPaymentTypeOf } from '../firebase/constants'
@@ -959,10 +960,10 @@ export default function DirectorPage() {
                 ))}
                 {datePreset === 'custom' && (
                   <div className="flex items-center gap-2">
-                    <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                    <DateInput value={dateFrom} onChange={e => setDateFrom(e.target.value)}
                       className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
                     <span className="text-gray-400 text-xs">→</span>
-                    <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                    <DateInput value={dateTo} onChange={e => setDateTo(e.target.value)}
                       className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
                   </div>
                 )}
@@ -1222,9 +1223,9 @@ export default function DirectorPage() {
                 ))}
                 {activityDatePreset === 'custom' && (
                   <div className="flex items-center gap-2">
-                    <input type="date" value={activityDateFrom} onChange={e => setActivityDateFrom(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
+                    <DateInput value={activityDateFrom} onChange={e => setActivityDateFrom(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
                     <span className="text-gray-400 text-xs">→</span>
-                    <input type="date" value={activityDateTo} onChange={e => setActivityDateTo(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
+                    <DateInput value={activityDateTo} onChange={e => setActivityDateTo(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
                   </div>
                 )}
               </div>
@@ -1444,15 +1445,15 @@ export default function DirectorPage() {
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date de naissance</label>
-                      <input type="date" value={userEdit.dateNaissance||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateNaissance: e.target.value }))} className={inputCls} />
+                      <DateInput value={userEdit.dateNaissance||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateNaissance: e.target.value }))} className={inputCls} />
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date d'embauche</label>
-                      <input type="date" value={userEdit.dateEmbauche||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateEmbauche: e.target.value }))} className={inputCls} />
+                      <DateInput value={userEdit.dateEmbauche||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateEmbauche: e.target.value }))} className={inputCls} />
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date de sortie</label>
-                      <input type="date" value={userEdit.dateSortie||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateSortie: e.target.value }))} className={inputCls} />
+                      <DateInput value={userEdit.dateSortie||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateSortie: e.target.value }))} className={inputCls} />
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Salaire (DH/mois)</label>

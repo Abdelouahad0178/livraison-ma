@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { useState, useEffect } from 'react'
 import { collection, query, where, getDocs, Timestamp, doc, updateDoc } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
@@ -245,8 +246,7 @@ export default function AdminDuplicatesTab() {
             <span className="text-sm text-gray-600">Période :</span>
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-500">Du</span>
-              <input
-                type="date"
+              <DateInput
                 value={dateFrom}
                 onChange={(e) => setDateFrom(e.target.value)}
                 className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
@@ -255,8 +255,7 @@ export default function AdminDuplicatesTab() {
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs text-gray-500">au</span>
-              <input
-                type="date"
+              <DateInput
                 value={dateTo}
                 onChange={(e) => setDateTo(e.target.value)}
                 className="px-3 py-2 border border-gray-300 rounded-lg text-sm"

@@ -8,7 +8,7 @@ import { STATUS_COLORS, CITIES } from '../firebase/constants'
 import {
   ChevronLeft, ChevronRight, Search, Archive, Calendar, X, Package, RefreshCw,
 } from 'lucide-react'
-import { normIncludes } from '../utils/normText'
+import { normIncludes, digitAwareIncludes } from '../utils/normText'
 import { isMixedCod, codServiceLabel } from '../utils/codParts'
 
 const PAGE_SIZE = 25
@@ -132,8 +132,8 @@ export default function ArchivePage() {
         normIncludes(p.trackingId || '', q) ||
         normIncludes(p.sender?.name || '', q) ||
         normIncludes(p.receiver?.name || '', q) ||
-        (p.sender?.tel || '').includes(q) ||
-        (p.receiver?.tel || '').includes(q) ||
+        digitAwareIncludes(String(p.sender?.tel || ''), q) ||
+        digitAwareIncludes(String(p.receiver?.tel || ''), q) ||
         normIncludes(p.originCity || '', q) ||
         normIncludes(p.destinationCity || '', q)
       )

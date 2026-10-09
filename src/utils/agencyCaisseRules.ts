@@ -568,6 +568,9 @@ export const caisseInstances = (
 
 // ── Vue complète (les deux pages) ────────────────────────────────────────────
 
+/** Valeurs (COD) collectées sur une journée d'opération — montants par type (mixte : chaque part dans son type). */
+export interface CodCollecteJour { count: number; montant: number; especes: number; cheque: number; traite: number; parcels: any[] }
+
 export interface CaisseViewInput {
   city: string
   /** Colis de l'agence (useAgencyParcelsFull) fusionnés avec les retours (subscribeAgencyReturnParcels). */
@@ -671,9 +674,29 @@ export const computeCaisseView = (input: CaisseViewInput) => {
   })
   const collectesParJour = [...parJour.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14)
 
+  // Valeurs (COD) collectées par journée d'opération (14 dernières) — montants par type comme Caisse Agence
+  const codParJour = new Map<string, CodCollecteJour>()
+  allWithExtra.forEach((p: any) => {
+    if (!p.codStatus || p.codStatus === 'pending') return
+    if (safeParseAmount(p.codAmount) <= 0 || isReturnedForGroup(p)) return
+    if (p.destinationCity !== city) return
+    if (driverFilter !== 'all' && p.deliveryDriverId !== driverFilter) return
+    const d = toDateSafe(p.codCollectedAt)
+    if (!d) return
+    const key = getOperationalDayString(d)
+    const cur = codParJour.get(key) || { count: 0, montant: 0, especes: 0, cheque: 0, traite: 0, parcels: [] as any[] }
+    const especes = caisseCodAmountOfType(p, 'especes'), cheque = caisseCodAmountOfType(p, 'cheque'), traite = caisseCodAmountOfType(p, 'traite')
+    codParJour.set(key, {
+      count: cur.count + 1, montant: cur.montant + especes + cheque + traite,
+      especes: cur.especes + especes, cheque: cur.cheque + cheque, traite: cur.traite + traite,
+      parcels: [...cur.parcels, p],
+    })
+  })
+  const codCollectesParJour = [...codParJour.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14)
+
   return {
     passesDateFilter, dataSource, stats, soldeCaisseGlobal, soldeLivreur, portsCollectesForPrint,
-    drivers, filteredDrivers, filteredStats, bilanJournee, instances, collectesParJour,
+    drivers, filteredDrivers, filteredStats, bilanJournee, instances, collectesParJour, codCollectesParJour,
     periodLabel: caissePeriodLabel(datePreset, dateFrom, dateTo, operationalDay),
     statusFilterLabel: caisseStatusFilterLabel(statusFilter),
   }

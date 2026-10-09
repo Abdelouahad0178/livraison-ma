@@ -54,7 +54,7 @@ import {
   subscribeAgentCodRequests, markAgentCodRequestRead, addAgentCodRequestReply, resolveAgentCodRequest,
 } from '../firebase/agentCodRequests'
 import {
-  subscribeClients, createClient, updateClient, addPayment,
+  subscribeClients, subscribeCodedClients, createClient, updateClient, addPayment,
   subscribeAgencyModificationRequests, resolveModificationRequest, deleteModificationRequest,
 } from '../firebase/clients'
 import { subscribeVehicles } from '../firebase/vehicles'
@@ -245,7 +245,7 @@ import { getWorkingDateStr } from '../utils/workingDate'
 import { getEmptyParcelForm } from './agent/emptyParcelForm'
 import { normName, isBilledByAgency, isInAgencyScope } from '../utils/billingAgency'
 import { isAwaitingArrival } from '../utils/awaitingArrival'
-import { normIncludes, normText } from '../utils/normText'
+import { normIncludes, normText, digitAwareIncludes } from '../utils/normText'
 import { makeAgentSearchMatcher, sortByCreatedAtDesc } from '../utils/parcelSearch'
 
 const parsePositiveNumber = (value: any, fallback = 0) => {
@@ -548,6 +548,10 @@ export default function AgentPage() {
   const [codEditModal, setCodEditModal] = useState<any>(null)
 
   const [clients,         setClients]         = useState<any[]>([])
+  // ⚡ Clients à CODE (≈100 fiches, instantané) : la saisie par code fonctionne avant l'arrivée de
+  // la liste complète (≈14 000 clients, 15 s et plus). Remplacés par la liste complète dès qu'elle arrive.
+  const [codedClients,    setCodedClients]    = useState<any[]>([])
+  const formClients = clients.length ? clients : codedClients
   const [clientSearch,    setClientSearch]    = useState('')
   const [showClientDropdown, setShowClientDropdown] = useState(false)
   const [showSenderDropdown, setShowSenderDropdown] = useState(false)
@@ -778,6 +782,8 @@ export default function AgentPage() {
         unsubscribers.push(subscribeAllUsers(data => {
           setAgencyCashiers(data.filter(u => u.role === 'caissier'))
           setAllUsers(data)
+          // Même requête que l'ancien 2ᵉ abonnement (chef/agent pro) : une seule écoute suffit
+          if (profile.role === 'chef_agence' || profile.role === 'agentpro') setUsers(data)
         }, onListenerError('subscribeAllUsers')))
         // subscribeAgentCodRequests est chargé à l'ouverture de l'onglet RETOUR FOND (bloc lazy)
       }
@@ -1541,7 +1547,9 @@ export default function AgentPage() {
     return () => { unsubAdminTx?.(); unsubSectors?.() }
   }, [profile?.city, profile?.role, authTick])
 
-  // ⭐ TEMPS RÉEL : toujours subscribe aux arrivages pour afficher le badge de notification
+  // ⭐ TEMPS RÉEL : colis en transit (badge Arrivages), bons de ramassage, notes, utilisateurs.
+  // (Les documents « arrivages » — historique des réceptions — ne servent qu'à l'onglet Arrivage :
+  // ils sont chargés à son ouverture, voir le bloc lazy plus bas.)
   // ⚡ OPTIMISATION : Retarder de 2 secondes pour affichage rapide initial
   useEffect(() => {
     if (!profile?.city) return
@@ -1558,11 +1566,9 @@ export default function AgentPage() {
           auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
         }
       }
-      unsubscribers.push(subscribeArrivages(profile.city, setArrivages, onErr('subscribeArrivages')))
       unsubscribers.push(subscribeBonRamasageBatches(profile.city, setBonBatches, onErr('subscribeBonRamasageBatches')))
       if (profile.role === 'chef_agence' || profile.role === 'agentpro') {
         unsubscribers.push(subscribeAgentNotesByCity(profile.city, setAgentNotes, onErr('subscribeAgentNotes')))
-        unsubscribers.push(subscribeAllUsers(setUsers, onErr('subscribeAllUsers')))
       }
 
       const mergeTransit = (() => {
@@ -1605,15 +1611,37 @@ export default function AgentPage() {
   // Lazy: caisse, versements, rapports — uniquement a la premiere visite de l'onglet
   const _agentLazyStarted = useRef<any>({})
   useEffect(() => {
-    if (!profile?.city || profile?.role === 'aide_agent') return
+    if (!profile?.city) return
     const started = _agentLazyStarted.current
     const onErr = (label: any) => (err: any) => {
       console.error(`AgentPage ${label}:`, err)
       if (err.code === 'permission-denied') auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
     }
     // 👥 Clients : collection entière sans limite — chargée seulement pour les onglets qui l'exploitent
-    if (['new', 'clients', 'invoices', 'clientportdu'].includes(tab) && !started.clients) {
+    // ✏️ Aide agent inclus : même saisie que le chef d'agence (code client, F1/F2, knownClients à
+    // la création). Avant, l'aide n'avait AUCUN client chargé → autocomplétion et popups vides.
+    if (!started.codedClients) {
+      started.codedClients = [subscribeCodedClients(setCodedClients, onErr('subscribeCodedClients'))]
+    }
+    // ✏️ Aide agent : la saisie est son travail principal → liste complète chargée dès l'ouverture
+    if ((['new', 'clients', 'invoices', 'clientportdu'].includes(tab) || profile?.role === 'aide_agent') && !started.clients) {
       started.clients = [subscribeClients(setClients, onErr('subscribeClients'))]
+    }
+    if (profile?.role === 'aide_agent') {
+      // 🚚 Livreurs + secteurs : nécessaires à la saisie (client destinataire → secteur / livreur
+      // attitrés, comme chez le chef d'agence). Les autres données (caisse, arrivages…) restent
+      // réservées au chef / agent.
+      if (tab === 'new' && !started.aideSaisie) {
+        started.aideSaisie = [
+          subscribeDrivers(setDrivers, onErr('subscribeDrivers')),
+          subscribeAllSectors(setAllSectors, onErr('subscribeAllSectors')),
+        ]
+      }
+      return
+    }
+    // 📥 Historique des arrivages (≈40 Ko/document) : seulement à l'ouverture de l'onglet Arrivage
+    if (tab === 'arrivage' && !started.arrivages) {
+      started.arrivages = [subscribeArrivages(profile.city, setArrivages, onErr('subscribeArrivages'))]
     }
     if (tab === 'caisse' && !started.caisse) {
       started.caisse = [
@@ -1739,7 +1767,7 @@ export default function AgentPage() {
     // parcel form
     form, setForm, loading, setLoading, error, setError,
     createdParcel, setCreatedParcel, price: parseFloat((form as any).portPrice) || 0,
-    clients, setClients,
+    clients: formClients, setClients, allClientsLoaded: clients.length > 0,
     inlineNewClient, setInlineNewClient,
     showClientDropdown, setShowClientDropdown,
     showSenderDropdown, setShowSenderDropdown,
@@ -1947,7 +1975,7 @@ export default function AgentPage() {
     if (!clientSearch.trim()) return cityClients
     const s = clientSearch.toLowerCase()
     return cityClients.filter(c =>
-      normIncludes(c.name, s) || c.tel?.includes(s) || normIncludes(c.nic, s)
+      normIncludes(c.name, s) || digitAwareIncludes(String(c.tel ?? ''), s) || normIncludes(c.nic, s)
     )
   })()
   const ef = (field: any) => (e: any) => setEditForm((p: any) => ({ ...p, [field]: e.target.value }))
@@ -1996,8 +2024,12 @@ export default function AgentPage() {
   const profileRole = profile?.role
 
   // 🏬 « En gare - ville » : toutes les expéditions ARRIVÉES en attente (hors fenêtre de dates)
+  // ⚡ Écoute démarrée seulement à la première ouverture de l'onglet Expéditions (seul utilisateur
+  // de cette liste sur cette page ; Caisse Agence a la sienne) — pas au chargement sur l'Accueil.
+  const [gareNeeded, setGareNeeded] = useState(false)
+  useEffect(() => { if (tab === 'parcels') setGareNeeded(true) }, [tab])
   const garePendingList = useGarePending(
-    (profile?.role === 'chef_agence' || profile?.role === 'agentpro') ? profile?.city : undefined)
+    gareNeeded && (profile?.role === 'chef_agence' || profile?.role === 'agentpro') ? profile?.city : undefined)
 
   // ⚡ Filtrage en priorité BASSE (comme le Facturier) : la frappe, les clics sur les filtres et
   // l'arrivée de nouvelles journées restent fluides ; React calcule la nouvelle liste filtrée
@@ -2849,7 +2881,7 @@ export default function AgentPage() {
     showClientDropdown, setShowClientDropdown,
     showSenderDropdown, setShowSenderDropdown,
     inlineNewClient, setInlineNewClient,
-    clients, setClients,
+    clients: formClients, setClients,
     clientSearch, setClientSearch,
     whatsappMsg, whatsappLink,
     handleSubmit,
@@ -3479,10 +3511,11 @@ export default function AgentPage() {
                 Voulez-vous vraiment supprimer cette expédition ?
               </p>
               <div className="bg-gray-50 p-3 rounded mb-4 text-sm">
-                <p><strong>N° Expédition:</strong> {deleteConfirm.trackingRef || deleteConfirm.id}</p>
-                <p><strong>Expéditeur:</strong> {deleteConfirm.senderName}</p>
-                <p><strong>Destinataire:</strong> {deleteConfirm.receiverName}</p>
-                <p><strong>Ville:</strong> {deleteConfirm.receiverCity}</p>
+                <p><strong>N° Expédition:</strong> {deleteConfirm.trackingRef || deleteConfirm.trackingId || deleteConfirm.id}</p>
+                {(deleteConfirm.senderNic || deleteConfirm.sender?.nic) && <p><strong>N° EXP:</strong> {deleteConfirm.senderNic || deleteConfirm.sender?.nic}</p>}
+                <p><strong>Expéditeur:</strong> {deleteConfirm.senderName || deleteConfirm.sender?.name}</p>
+                <p><strong>Destinataire:</strong> {deleteConfirm.receiverName || deleteConfirm.receiver?.name}</p>
+                <p><strong>Ville:</strong> {deleteConfirm.receiverCity || deleteConfirm.receiver?.city || deleteConfirm.destinationCity}</p>
               </div>
               <p className="text-sm text-red-600 mb-4">
                 ⚠️ Cette action est irréversible !

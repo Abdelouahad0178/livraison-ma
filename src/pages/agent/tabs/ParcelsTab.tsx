@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import {
   AlertTriangle, Banknote, Calendar, Car, Check, CheckSquare,
   ChevronDown, ChevronLeft, ChevronRight, Download, Edit, Edit2, Filter, Hand,
@@ -6,12 +7,13 @@ import {
 } from 'lucide-react'
 import { useState, useRef, useEffect, useMemo, useDeferredValue } from 'react'
 import PendingBadge from '../../../components/PendingBadge'
-import { deleteField, Timestamp, collection, documentId, onSnapshot, query, where } from 'firebase/firestore'
+import { arrayUnion, deleteField, doc, updateDoc, Timestamp, collection, documentId, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
 import { loadExcel } from '../../../utils/loadExcel'
 import {
   loadReturnedParcelOnTruck, validateReturnArrival, getMoreAgentParcels,
 } from '../../../firebase/firestore'
+import { showToast } from '../../../utils/toast'
 import { isInReturnCircuit, updateParcel, buildParcelCorrectionPatch, describeParcelSaveError, ensureFullParcel, ensureFullParcels } from '../../../firebase/parcels'
 import { reservePrintWindow, releasePrintWindow } from '../../../utils/printWindow'
 
@@ -30,6 +32,7 @@ import {
   buildCodWriteFields, validateCodChoice, toggleCodService, codSelectionOf, COD_PART_EMOJI, COD_PART_LABEL,
 } from '../../../utils/codParts'
 import { useAgentCtx } from '../AgentCtx'
+import MesSaisiesView from './MesSaisiesView'
 import { OperationalDaySelector } from '../../../components/OperationalDaySelector'
 import QuickStatusToggles from '../../../components/QuickStatusToggles'
 import HScrollArrows from '../../../components/HScrollArrows'
@@ -38,7 +41,7 @@ import { useLoadProgress, type LoadProgressStore } from '../../../utils/loadProg
 
 import { parcelDate, filterByDate } from '../../../utils/dateFilter'
 import { formatOperationalDay } from '../../../config/operationalDay'
-import { normText } from '../../../utils/normText'
+import { normText, isDigitsOnly, numberStartsWith } from '../../../utils/normText'
 import { makeTableSearchMatcher } from '../../../utils/parcelSearch'
 import { agencyPortAmounts } from '../../../utils/billingAgency'
 
@@ -47,6 +50,9 @@ const matchesSearch = (values: any, query: any) => {
   const q = normText(query)
   if (!q) return true
   const compactQ = normalizeSearch(q)
+  // 🔢 Numéro (N° EXP, téléphone) : le 0 compte, correspondance depuis le 1er chiffre
+  const digitsQ = normText(q).replace(/[\s.\-\/]/g, '')
+  if (isDigitsOnly(digitsQ)) return values.some((v: any) => numberStartsWith(v, digitsQ))
   return values.some((v: any) => {
     const raw = normText(v)
     return raw.includes(q) || normalizeSearch(raw).includes(compactQ)
@@ -522,6 +528,111 @@ export default function ParcelsTab() {
       console.error('Erreur modification date:', err)
       alert(err?.code === 'permission-denied' ? '❌ Modification refusée : le colis est chargé/verrouillé ou vous n’avez pas le droit de modifier sa date.' : `❌ Erreur: ${err.message}`)
     }
+  }
+
+  // 🔁 Agadir ⇄ Ait Melloul : colis arrivé par erreur dans l'agence voisine.
+  // Clic sur la ville de destination = bascule directe vers l'autre ville, statut « Arrivé en agence ».
+  // Réservé au chef d'agence / Agent PRO de la ville de destination actuelle (même règle dans firestore.rules).
+  const NEIGHBOR_CITIES: Record<string, string> = { 'Agadir': 'Ait Melloul', 'Ait Melloul': 'Agadir' }
+  // deleteField() sur un champ absent ne compte pas comme modification pour firestore.rules
+  const DELIVERY_ASSIGNMENT_RESET = Object.fromEntries([
+    'deliveryDriverId', 'deliveryDriverName', 'deliverySectorId', 'deliverySectorCode', 'deliverySectorName',
+    'deliveryVehicleId', 'deliveryVehicleLabel', 'deliveryAssignedAt', 'deliveryAssignedBy',
+  ].map(k => [k, deleteField()]))
+  const [togglingCityId, setTogglingCityId] = useState<string | null>(null)
+  const neighborCityOf = (parcel: any): string | null => NEIGHBOR_CITIES[parcel?.destinationCity] || null
+  // Expédition locale (Agadir → Agadir, Ait Melloul → Ait Melloul) : créée avec un livreur
+  // (« En cours de livraison ») ou sans (« Initialisé »)
+  const isLocalNotDelivered = (parcel: any) =>
+    ['Initialisé', 'En cours de livraison'].includes(parcel.status) && parcel.originCity === parcel.destinationCity
+  const canToggleDestCity = (parcel: any) =>
+    !!neighborCityOf(parcel)
+    && (parcel.status === 'Arrivé en agence' || parcel.status === 'En cours de livraison' || isLocalNotDelivered(parcel))
+    && (profile?.role === 'chef_agence' || profile?.role === 'agentpro')
+    && profile?.city === parcel.destinationCity
+  // Livreurs de la ville cible (même filtre que les livreurs d'agence)
+  const driversOfCity = (city: string) => (drivers || []).filter((d: any) =>
+    d.city === city && (d.role === 'livreur' || (d.role === 'chauffeur' && d.chauffeurType !== 'transport')))
+  // Expédition assignée à un livreur : choix d'un livreur de l'autre ville avant la bascule
+  const [cityMoveModal, setCityMoveModal] = useState<{ parcel: any; target: string; driverId: string } | null>(null)
+
+  // Le clic ouvre TOUJOURS le choix du livreur de l'autre ville (ou « sans livreur » = en gare)
+  const onDestCityClick = (parcel: any) => {
+    const target = neighborCityOf(parcel)
+    if (!target || togglingCityId) return
+    setCityMoveModal({ parcel, target, driverId: '' })
+  }
+
+  /** Bascule Agadir ⇄ Ait Melloul. driver = livreur de la ville cible (→ « En cours de livraison »), null = « Arrivé en agence ». */
+  const handleToggleDestCity = async (parcel: any, driver: { id: string; name: string } | null) => {
+    const target = neighborCityOf(parcel)
+    if (!target || togglingCityId) return
+    setTogglingCityId(parcel.id)
+    try {
+      const now = new Date().toISOString()
+      const status = driver ? 'En cours de livraison' : 'Arrivé en agence'
+      // Ancien livreur retiré ; nouveau livreur de la ville cible si choisi
+      const assignment = driver
+        ? { ...DELIVERY_ASSIGNMENT_RESET, deliveryDriverId: driver.id, deliveryDriverName: driver.name || 'Livreur', deliveryAssignedAt: now, deliveryAssignedBy: profile?.name || '' }
+        : DELIVERY_ASSIGNMENT_RESET
+      // Une seule écriture, champ imbriqué 'receiver.city' uniquement : la copie affichée
+      // (recherche, version lite…) peut différer de la base, et firestore.rules refuse tout
+      // autre changement du destinataire.
+      await updateDoc(doc(db, 'parcels', parcel.id), {
+        'receiver.city': target,
+        destinationCity: target,
+        destinationArrivedAt: now,
+        status,
+        visibleInDestinationAgency: true,
+        ...assignment,
+        history: arrayUnion({
+          status,
+          timestamp: now,
+          note: `Basculée ${parcel.destinationCity} → ${target}${driver ? ` et assignée au livreur ${driver.name}` : ''}${parcel.deliveryDriverName ? ` (ancien livreur : ${parcel.deliveryDriverName})` : ''}`,
+          by: profile?.name || '',
+        }),
+      })
+      // Affichage immédiat dans toutes les listes de la page (y compris résultats de recherche)
+      const updates = {
+        receiver: { ...(parcel.receiver || {}), city: target },
+        destinationCity: target,
+        destinationArrivedAt: now,
+        status,
+        visibleInDestinationAgency: true,
+        ...Object.fromEntries(Object.keys(DELIVERY_ASSIGNMENT_RESET).map(k => [k, undefined])),
+        ...(driver ? { deliveryDriverId: driver.id, deliveryDriverName: driver.name || 'Livreur', deliveryAssignedAt: now, deliveryAssignedBy: profile?.name || '' } : {}),
+      }
+      setLocalParcelUpdates(prev => ({ ...prev, [parcel.id]: { ...prev[parcel.id], ...updates } }))
+      window.dispatchEvent(new CustomEvent('parcelUpdated', {
+        detail: { parcelId: parcel.id, updates, timestamp: now, source: 'database' },
+      }))
+      showToast(`${parcel.trackingId || 'Expédition'} → ${target}${driver ? ` · livreur ${driver.name}` : ' (Arrivé en agence)'}`, 'success', 2500)
+    } catch (err: any) {
+      console.error('Erreur bascule ville:', err)
+      showToast(err?.code === 'permission-denied'
+        ? `Bascule refusée : réservée au chef d'agence / Agent PRO de ${parcel.destinationCity}, expédition non livrée.`
+        : `Erreur : ${err?.message || err}`, 'error')
+    } finally {
+      setTogglingCityId(null)
+    }
+  }
+
+  // Badge ville de destination : cliquable (bascule) pour Agadir / Ait Melloul, sinon simple texte
+  const renderDestCity = (parcel: any, className: string, prefix = '') => {
+    const city = parcel.receiver?.city || parcel.destinationCity || '—'
+    if (!canToggleDestCity(parcel)) return <span className={className}>{prefix}{city}</span>
+    const target = neighborCityOf(parcel)
+    return (
+      <button
+        type="button"
+        onClick={e => { e.stopPropagation(); onDestCityClick(parcel) }}
+        disabled={togglingCityId === parcel.id}
+        title={`Cliquer pour passer à ${target} et choisir un livreur de ${target}`}
+        className={`${className} cursor-pointer ring-1 ring-pink-300 hover:ring-2 hover:ring-pink-500 transition disabled:opacity-50 disabled:cursor-wait`}
+      >
+        {prefix}{city} <span aria-hidden="true">⇄</span>
+      </button>
+    )
   }
 
   // ⭐ Générer une couleur pour un livreur basée sur son ID
@@ -1257,6 +1368,8 @@ export default function ParcelsTab() {
 
   return (
     <>
+      {/* 📋 Aide agent : vue dédiée « Mes saisies » (ses propres bons, période, totaux, actions) */}
+      {profile?.role === 'aide_agent' ? <MesSaisiesView /> : (
       <div className="mt-4 space-y-3">
         {/* Sub-tabs */}
         <div className="flex items-center gap-2">
@@ -1534,9 +1647,7 @@ export default function ParcelsTab() {
                               {parcel.sender?.city || parcel.originCity || '—'}
                             </span>
                             <span className="text-gray-400">→</span>
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-pink-100 text-pink-700 rounded text-xs font-semibold">
-                              {parcel.receiver?.city || parcel.destinationCity || '—'}
-                            </span>
+                            {renderDestCity(parcel, 'inline-flex items-center gap-1 px-1.5 py-0.5 bg-pink-100 text-pink-700 rounded text-xs font-semibold')}
                           </div>
                           {parcel.receiver?.tel && (
                             <div className="font-mono text-gray-500">
@@ -1973,7 +2084,7 @@ export default function ParcelsTab() {
                     {datePreset === 'operational' && (
                       <div className="flex items-center gap-2 pl-20">
                         <span className="text-xs text-gray-500">Jour d'opération (8H → 6H lendemain)</span>
-                        <input type="date" value={operationalDay ? `${operationalDay.getFullYear()}-${String(operationalDay.getMonth() + 1).padStart(2, '0')}-${String(operationalDay.getDate()).padStart(2, '0')}` : ''}
+                        <DateInput value={operationalDay ? `${operationalDay.getFullYear()}-${String(operationalDay.getMonth() + 1).padStart(2, '0')}-${String(operationalDay.getDate()).padStart(2, '0')}` : ''}
                           onChange={e => {
                             if (!e.target.value) {
                               setOperationalDay(null)
@@ -1988,18 +2099,18 @@ export default function ParcelsTab() {
                     )}
                     {datePreset === 'day' && (
                       <div className="flex items-center gap-2 pl-20">
-                        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                        <DateInput value={dateFrom} onChange={e => setDateFrom(e.target.value)}
                           className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500 flex-1"
                         />
                       </div>
                     )}
                     {datePreset === 'custom' && (
                       <div className="flex items-center gap-2 pl-20">
-                        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                        <DateInput value={dateFrom} onChange={e => setDateFrom(e.target.value)}
                           className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500 flex-1"
                         />
                         <span className="text-gray-400 text-xs shrink-0">→</span>
-                        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                        <DateInput value={dateTo} onChange={e => setDateTo(e.target.value)}
                           className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500 flex-1"
                         />
                       </div>
@@ -3344,8 +3455,7 @@ export default function ParcelsTab() {
                                 if (canEditDate && isEditing) {
                                   return (
                                     <div className="flex flex-col gap-2 py-1">
-                                      <input
-                                        type="date"
+                                      <DateInput
                                         value={editingDateValue}
                                         onChange={e => setEditingDateValue(e.target.value)}
                                         className="border-2 border-blue-500 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-200 shadow-sm"
@@ -3563,9 +3673,7 @@ export default function ParcelsTab() {
                           )}
                           {visibleColumns.villeDest && (
                             <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100 bg-pink-50/30">
-                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-pink-100 text-pink-700 rounded-lg text-xs font-semibold">
-                                📍 {parcel.receiver?.city || parcel.destinationCity || '—'}
-                              </span>
+                              {renderDestCity(parcel, 'inline-flex items-center gap-1 px-2 py-1 bg-pink-100 text-pink-700 rounded-lg text-xs font-semibold', '📍 ')}
                             </td>
                           )}
                           {visibleColumns.adresse && (
@@ -4152,7 +4260,7 @@ export default function ParcelsTab() {
                       <div className="flex items-center gap-1 font-bold text-gray-700 flex-wrap">
                         <span>{parcel.sender?.city || '—'}</span>
                         <span className="text-gray-400">→</span>
-                        <span>{parcel.receiver?.city || '—'}</span>
+                        {renderDestCity(parcel, 'rounded px-1')}
                         <span className="text-gray-400">•</span>
                         <span>{parcel.weight || 0} kg</span>
                         <span className="text-gray-400">•</span>
@@ -4918,6 +5026,7 @@ export default function ParcelsTab() {
         })()
         )}
       </div>
+      )}
 
       {/* ── MODAL MODIFICATION ── */}
       {editingParcel && (
@@ -5440,6 +5549,45 @@ export default function ParcelsTab() {
           </div>
         </div>
       )}
+
+      {/* ── MODAL BASCULE AGADIR ⇄ AIT MELLOUL D'UNE EXPÉDITION ASSIGNÉE : choix du livreur de l'autre ville ── */}
+      {cityMoveModal && (() => {
+        const { parcel, target } = cityMoveModal
+        const targetDrivers = driversOfCity(target)
+        const chosen = targetDrivers.find((d: any) => d.id === cityMoveModal.driverId)
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4" onClick={() => setCityMoveModal(null)}>
+            <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-sm p-6 space-y-4" onClick={e => e.stopPropagation()}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-bold text-gray-900">Passer à {target}</h3>
+                  <p className="text-xs font-mono text-blue-600 mt-0.5">{parcel.sender?.nic || parcel.trackingId}</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {parcel.destinationCity} → <b>{target}</b> · livreur actuel : <b>{parcel.deliveryDriverName || '—'}</b>
+                  </p>
+                </div>
+                <button onClick={() => setCityMoveModal(null)} className="p-1 rounded-lg hover:bg-gray-100"><X className="w-5 h-5 text-gray-400" /></button>
+              </div>
+              <label className="block text-xs font-semibold text-gray-600">Nouveau livreur ({target})
+                <select value={cityMoveModal.driverId} onChange={e => setCityMoveModal({ ...cityMoveModal, driverId: e.target.value })} className={`${selectCls} mt-1`}>
+                  <option value="">— Sans livreur : en gare à {target} (Arrivé en agence) —</option>
+                  {targetDrivers.map((d: any) => <option key={d.id} value={d.id}>{d.name || d.email || d.id}</option>)}
+                </select>
+              </label>
+              {targetDrivers.length === 0 && <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">Aucun livreur trouvé pour {target}.</p>}
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setCityMoveModal(null)} className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-100">Annuler</button>
+                <button
+                  disabled={togglingCityId === parcel.id}
+                  onClick={() => { setCityMoveModal(null); handleToggleDestCity(parcel, chosen ? { id: chosen.id, name: chosen.name || '' } : null) }}
+                  className="px-4 py-2 rounded-xl text-sm font-semibold bg-pink-600 text-white hover:bg-pink-700 disabled:opacity-50">
+                  {chosen ? `Passer chez ${chosen.name}` : `Passer à ${target}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ── MODAL CHARGEMENT TRANSPORT ── */}
       {transportModal.open && (

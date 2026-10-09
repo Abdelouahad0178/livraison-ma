@@ -1,3 +1,4 @@
+import DateInput from '../../components/DateInput'
 import { Calendar } from 'lucide-react'
 import type { DateFilterPreset } from '../../types'
 
@@ -66,7 +67,7 @@ export default function DateFilter({
       {operationalMode && value === 'operational' && (
         <div className="flex items-center gap-2 pl-6">
           <span className="text-xs text-gray-400 shrink-0">Jour d'opération (8h → 6h lendemain)</span>
-          <input type="date" value={toLocalDateInput(operationalDay)}
+          <DateInput value={toLocalDateInput(operationalDay)}
             onChange={e => onOperationalDayChange?.(e.target.value ? new Date(e.target.value + 'T00:00:00') : null)}
             className={`border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none ${focusCls} flex-1`}
           />
@@ -74,18 +75,18 @@ export default function DateFilter({
       )}
       {!operationalMode && value === 'day' && (
         <div className="flex items-center gap-2 pl-6">
-          <input type="date" value={from} onChange={e => onFromChange?.(e.target.value)}
+          <DateInput value={from} onChange={e => onFromChange?.(e.target.value)}
             className={`border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none ${focusCls} flex-1`}
           />
         </div>
       )}
       {value === 'custom' && (
         <div className="flex items-center gap-2 pl-6">
-          <input type="date" value={from} onChange={e => onFromChange?.(e.target.value)}
+          <DateInput value={from} onChange={e => onFromChange?.(e.target.value)}
             className={`border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none ${focusCls} flex-1`}
           />
           <span className="text-gray-400 text-xs shrink-0">→</span>
-          <input type="date" value={to} onChange={e => onToChange?.(e.target.value)}
+          <DateInput value={to} onChange={e => onToChange?.(e.target.value)}
             className={`border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none ${focusCls} flex-1`}
           />
         </div>

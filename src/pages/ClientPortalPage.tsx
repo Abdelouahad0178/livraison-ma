@@ -34,7 +34,7 @@ import {
   ThumbsUp, MessageSquare, Clock, Eye,
 } from 'lucide-react'
 import { fmt } from '../utils/formatNumber'
-import { normIncludes } from '../utils/normText'
+import { normIncludes, digitAwareIncludes } from '../utils/normText'
 import { isMixedCod, codTypeDisplay, codPartsBreakdown, buildCodWriteFields, validateCodChoice } from '../utils/codParts'
 
 
@@ -229,7 +229,7 @@ export default function ClientPortalPage() {
       normIncludes(p.trackingId, q) ||
       normIncludes(p.receiver?.name, q) ||
       normIncludes(p.receiver?.city, q) ||
-      p.receiver?.tel?.includes(q)
+      digitAwareIncludes(String(p.receiver?.tel ?? ''), q)
     )
   }, [parcels, search])
 

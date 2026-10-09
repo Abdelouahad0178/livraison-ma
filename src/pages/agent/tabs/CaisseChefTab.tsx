@@ -27,6 +27,7 @@ import { shouldTriggerSearch } from '../../../utils/searchUtils'
 import { printPortsCollectes, printVersementParcels, printDriverExpeditionsTable, printBilanJournee, printInstancesRetards } from '../../../utils/agentPrintUtils'
 import HScrollArrows from '../../../components/HScrollArrows'
 import DriverCaisseCard from '../../../components/caisse/DriverCaisseCard'
+import CollectesParJour from '../../../components/caisse/CollectesParJour'
 import { printFeuilleDeCharge } from '../../../utils/printFeuilleDeCharge'
 import { useGarePending } from '../../exploitation/useGarePending'
 import { useDepotIds } from '../../exploitation/useDepotIds'
@@ -68,8 +69,6 @@ export default function CaisseChefTab() {
   // ⚡ RÉACTIVITÉ DES BOUTONS : les valeurs « …Ui » sont URGENTES (bouton/sélecteur mis à jour
   // immédiatement, chargement Firestore lancé aussitôt) ; les calculs lourds (soldes, livreurs,
   // totaux) utilisent les copies DIFFÉRÉES (mêmes noms qu'avant), recalculées en arrière-plan.
-  // 📅 Journée de collecte ouverte (clic sur une carte « Collectes par jour »)
-  const [collecteDay, setCollecteDay] = useState<any>(null)
   const [datePresetUi, setDatePreset] = useState<any>(CAISSE_DEFAULT_PRESET)
   const [dateFromUi, setDateFrom] = useState('')
   const [dateToUi, setDateTo] = useState('')
@@ -1146,105 +1145,8 @@ export default function CaisseChefTab() {
         </div>
       </div>
 
-      {/* 📊 Bandeau "Collecté par jour" (14 derniers jours) */}
-      {collectesParJour.length > 0 && (
-        <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-5">
-          <div className="flex items-center gap-2 mb-4">
-            <Calendar className="w-5 h-5 text-green-600" />
-            <h3 className="text-lg font-bold text-gray-900">Collectes par jour (14 derniers jours)</h3>
-          </div>
-          <div className="grid grid-cols-7 gap-2">
-            {collectesParJour.map(([dateStr, data]) => {
-              const d = new Date(dateStr)
-              const dayLabel = d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
-              return (
-                <button type="button" key={dateStr} onClick={() => setCollecteDay({ dateStr, dayLabel, ...data })}
-                  title="Voir le détail et imprimer"
-                  className="bg-white border border-green-200 rounded-lg p-3 text-center hover:border-green-400 hover:shadow-md hover:-translate-y-0.5 transition cursor-pointer">
-                  <div className="text-xs font-semibold text-gray-600 mb-1">{dayLabel}</div>
-                  <div className="text-lg font-bold text-green-700">{data.count}</div>
-                  <div className="text-xs text-gray-500 mt-1">{data.montant.toFixed(0)} DH</div>
-                  <div className="text-[10px] text-green-600 mt-1 font-semibold">👁 Détail</div>
-                </button>
-              )
-            })}
-          </div>
-          <div className="mt-3 text-xs text-gray-600 text-center">
-            Total 14 jours: <strong>{collectesParJour.reduce((s, [, d]) => s + d.count, 0)} colis</strong> pour{' '}
-            <strong>{collectesParJour.reduce((s, [, d]) => s + d.montant, 0).toFixed(2)} DH</strong>
-          </div>
-        </div>
-      )}
-
-      {/* 📅 Détail d'une journée de collecte (clic sur une carte) */}
-      {collecteDay && (() => {
-        const list = [...(collecteDay.parcels || [])].sort((a: any, b: any) => String(a.deliveryDriverName || '').localeCompare(String(b.deliveryDriverName || '')))
-        const byDriver = new Map<string, { n: number; m: number }>()
-        list.forEach((p: any) => { const k = p.deliveryDriverName || p.portCollectedBy || '—'; const c = byDriver.get(k) || { n: 0, m: 0 }; c.n++; c.m += Number(p.price) || 0; byDriver.set(k, c) })
-        const fullDay = new Date(collecteDay.dateStr + 'T12:00:00').toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })
-        return (
-          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-3" onClick={() => setCollecteDay(null)}>
-            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col" onClick={e => e.stopPropagation()}>
-              <div className="flex items-center justify-between gap-3 px-5 py-4 border-b bg-gradient-to-r from-green-50 to-emerald-50 rounded-t-2xl">
-                <div>
-                  <h3 className="font-bold text-gray-900">Ports collectés — journée du {fullDay}</h3>
-                  <p className="text-xs text-gray-600">{collecteDay.count} colis · <b className="text-green-700">{collecteDay.montant.toFixed(2)} DH</b> · {byDriver.size} livreur(s)</p>
-                </div>
-                <div className="flex items-center gap-2">
-                  <button onClick={() => printPortsCollectes(list, profile, `Journée d'opération du ${fullDay}`)}
-                    className="inline-flex items-center gap-1.5 bg-green-600 hover:bg-green-700 text-white text-sm font-semibold px-3 py-2 rounded-lg">
-                    <Printer className="w-4 h-4" /> Imprimer
-                  </button>
-                  <button onClick={() => setCollecteDay(null)} className="p-2 rounded-lg hover:bg-gray-100 text-gray-500" title="Fermer">✕</button>
-                </div>
-              </div>
-              <div className="px-5 py-3 flex flex-wrap gap-2 border-b">
-                {[...byDriver.entries()].map(([name, v]) => (
-                  <span key={name} className="text-xs bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-full px-2.5 py-1">
-                    {name} : <b>{v.n}</b> · {v.m.toFixed(0)} DH
-                  </span>
-                ))}
-              </div>
-              <div className="overflow-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 text-xs text-gray-600 sticky top-0">
-                    <tr>
-                      <th className="px-3 py-2 text-left">#</th>
-                      <th className="px-3 py-2 text-left">N° EXP</th>
-                      <th className="px-3 py-2 text-left">Expéditeur</th>
-                      <th className="px-3 py-2 text-left">Destinataire</th>
-                      <th className="px-3 py-2 text-left">Livreur</th>
-                      <th className="px-3 py-2 text-left">Collecté par</th>
-                      <th className="px-3 py-2 text-left">Heure</th>
-                      <th className="px-3 py-2 text-right">Port dû</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {list.map((p: any, i: number) => {
-                      const at = p.portCollectedAt?.toDate ? p.portCollectedAt.toDate() : p.portCollectedAt ? new Date(p.portCollectedAt) : null
-                      return (
-                        <tr key={p.id} className={i % 2 ? 'bg-gray-50/60' : ''}>
-                          <td className="px-3 py-1.5 text-gray-400">{i + 1}</td>
-                          <td className="px-3 py-1.5 font-mono font-semibold text-blue-700">{p.sender?.nic || p.senderNic || p.trackingId}</td>
-                          <td className="px-3 py-1.5">{p.sender?.name || '—'}</td>
-                          <td className="px-3 py-1.5">{p.receiver?.name || '—'}</td>
-                          <td className="px-3 py-1.5">{p.deliveryDriverName || '—'}</td>
-                          <td className="px-3 py-1.5 text-gray-600">{p.portCollectedBy || '—'}</td>
-                          <td className="px-3 py-1.5 text-gray-600">{at && !isNaN(at.getTime()) ? at.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-                          <td className="px-3 py-1.5 text-right font-bold text-green-700">{(Number(p.price) || 0).toFixed(2)} DH</td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                  <tfoot className="bg-green-50 font-bold">
-                    <tr><td colSpan={7} className="px-3 py-2">TOTAL — {collecteDay.count} colis</td><td className="px-3 py-2 text-right text-green-800">{collecteDay.montant.toFixed(2)} DH</td></tr>
-                  </tfoot>
-                </table>
-              </div>
-            </div>
-          </div>
-        )
-      })()}
+      {/* 📊 Collectes par jour (14 derniers jours) + détail imprimable — composant partagé avec la Collecte du soir */}
+      <CollectesParJour collectesParJour={collectesParJour} profile={profile} />
 
       {/* Bouton d'impression des ports collectés */}
       {portsCollectesForPrint.length > 0 && (

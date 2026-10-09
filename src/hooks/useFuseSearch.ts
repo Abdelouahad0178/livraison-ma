@@ -1,5 +1,8 @@
 import { useMemo, useState, useEffect, useRef } from 'react'
 import Fuse, { type FuseResult } from 'fuse.js'
+import { numberStartsWith } from '../utils/normText'
+
+const valueAt = (item: any, path: string): unknown => path.split('.').reduce((o: any, k) => (o == null ? undefined : o[k]), item)
 
 // ⚡ Cache de recherche (30 secondes)
 interface SearchCache<T> {
@@ -181,11 +184,13 @@ export function useFuseSearch<T>({
     let searchResults: FuseResult<T>[]
 
     if (isNumeric) {
-      // 🔢 Recherche numérique: préfixe exact d'abord
-      searchResults = fuseIndex.search(`^${query}`)
-      if (searchResults.length === 0) {
-        searchResults = fuseIndex.search(query)
-      }
+      // 🔢 Recherche numérique (N° EXP, téléphone) : JAMAIS approximative. Le 0 est un chiffre
+      // indispensable : « 0987223 » ne trouve pas « 987223 » (l'ancien repli flou Fuse les
+      // confondait). Un numéro correspond depuis son premier chiffre (voir normText).
+      const paths = keys.map(k => (typeof k === 'string' ? k : k.name))
+      searchResults = (items as any[])
+        .map((item, refIndex) => ({ item, refIndex, score: 0 }))
+        .filter(r => paths.some(path => numberStartsWith(valueAt(r.item, path), query))) as FuseResult<T>[]
     } else {
       // 📝 Recherche textuelle standard
       searchResults = fuseIndex.search(query)
@@ -209,7 +214,7 @@ export function useFuseSearch<T>({
       detailedResults: limitedResults,
       results: limitedResults.map(r => r.item),
     }
-  }, [debouncedSearch, fuseIndex, items, limit])
+  }, [debouncedSearch, fuseIndex, items, limit, keys])
 
   // 🔄 Reset function
   const reset = () => {

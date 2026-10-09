@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { useMemo, useState, useEffect } from 'react'
 import { Building2, TrendingUp, Package, Search, Filter, X, Calendar, ChevronDown, Truck, CheckCircle, Clock, XCircle, DollarSign } from 'lucide-react'
 import { collection, query, getDocs } from 'firebase/firestore'
@@ -355,15 +356,13 @@ export default function AdminStatsGlobalesTab({
                 ))}
                 {datePreset === 'custom' && (
                   <div className="flex items-center gap-2 ml-2">
-                    <input
-                      type="date"
+                    <DateInput
                       value={dateFrom}
                       onChange={e => setDateFrom(e.target.value)}
                       className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500"
                     />
                     <span className="text-gray-400 text-xs font-bold">→</span>
-                    <input
-                      type="date"
+                    <DateInput
                       value={dateTo}
                       onChange={e => setDateTo(e.target.value)}
                       className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500"

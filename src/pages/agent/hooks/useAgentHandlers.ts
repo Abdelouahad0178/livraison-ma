@@ -1663,7 +1663,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   const handleSubmit = async (e: any) => {
     const {
       form, setError, setLoading, setCreatedParcel, profile,
-      allSectors, drivers, clients, price, loading,
+      allSectors, drivers, clients, allClientsLoaded, price, loading,
     } = s.current
     e.preventDefault()
 
@@ -1819,7 +1819,9 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         agentRole:            profile?.role || 'agent',
         hasRetourBL:          form.hasRetourBL || false,  // ⭐ Retour BL obligatoire
         deliveryMethod:       form.enGare ? 'gare' : 'domicile',  // 🚉 Mode de livraison
-      }, { knownClients: clients })  // ⚡ clients déjà chargés en direct : pas de relecture Firestore
+      // ⚡ clients déjà chargés en direct : pas de relecture Firestore. Tant que seule la petite
+      // liste des clients à code est arrivée, on relit Firestore (sinon risque de client en double).
+      }, { knownClients: allClientsLoaded ? clients : null })
 
       // 🚀 OPÉRATIONS POST-CRÉATION EN ARRIÈRE-PLAN (sans bloquer l'UI)
 

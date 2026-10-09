@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { auth } from '../../../firebase/config'
 import { validerRapport, rejeterRapport } from '../../../firebase/firestore'
 import { Banknote, FileText, Search } from 'lucide-react'
@@ -214,10 +215,10 @@ export default function AdminReglementsTab({
                 </div>
                 {rgDatePreset === 'custom' && (
                   <div className="flex gap-2 mt-3">
-                    <input type="date" value={rgDateFrom} onChange={e => setRgDateFrom(e.target.value)}
+                    <DateInput value={rgDateFrom} onChange={e => setRgDateFrom(e.target.value)}
                       className="flex-1 border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-indigo-400" />
                     <span className="text-gray-400 text-xs self-center">au</span>
-                    <input type="date" value={rgDateTo} onChange={e => setRgDateTo(e.target.value)}
+                    <DateInput value={rgDateTo} onChange={e => setRgDateTo(e.target.value)}
                       className="flex-1 border border-gray-200 rounded-xl px-2 py-2 text-xs focus:outline-none focus:border-indigo-400" />
                   </div>
                 )}

@@ -1,4 +1,4 @@
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache } from 'firebase/firestore'
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, memoryLruGarbageCollector } from 'firebase/firestore'
 import app from './appCore'
 
 // ⚡ Cache Firestore :
@@ -13,5 +13,8 @@ try { usePersistent = FIELD_ROLES.includes(localStorage.getItem('bg-cache-role')
 export const db = initializeFirestore(app, {
   localCache: usePersistent
     ? persistentLocalCache({ tabManager: persistentMultipleTabManager() })
-    : memoryLocalCache(),
+    // LRU (100 Mo) : les documents lus restent en mémoire pendant la session → en revenant sur un
+    // onglet / filtre, l'écoute reprend avec un jeton de reprise (seuls les changements sont
+    // retéléchargés) au lieu de tout relire. Rien n'est écrit sur disque.
+    : memoryLocalCache({ garbageCollector: memoryLruGarbageCollector({ cacheSizeBytes: 100 * 1024 * 1024 }) }),
 })

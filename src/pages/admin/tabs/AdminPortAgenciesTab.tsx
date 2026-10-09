@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { useMemo, useState, useEffect, useRef, useDeferredValue, startTransition } from 'react'
 import PendingBadge from '../../../components/PendingBadge'
 import { Building2, TrendingUp, Package, Printer, Filter, X, Calendar, ChevronDown, Loader2, AlertCircle, Eye } from 'lucide-react'
@@ -527,6 +528,19 @@ export default function AdminPortAgenciesTab({
           .shadow-xl, .shadow-lg, .shadow-sm {
             box-shadow: none !important;
           }
+          /* 🖨️ Tableau par agence : TOUTES les colonnes tiennent sur la largeur A4 (avant, les
+             grandes marges et gros chiffres débordaient et la fin du tableau était coupée). */
+          .port-agence-table-wrap, .port-agence-table-wrap * { overflow: visible !important; }
+          .port-agence-table { width: 100% !important; table-layout: auto; font-size: 9px !important; }
+          .port-agence-table th, .port-agence-table td {
+            padding: 4px 4px !important;
+            white-space: normal !important;
+            word-break: keep-all;
+          }
+          .port-agence-table th { font-size: 8px !important; line-height: 1.15; }
+          .port-agence-table td span, .port-agence-table td div { font-size: 9px !important; line-height: 1.2; }
+          .port-agence-table td span { padding: 0 !important; white-space: nowrap; }
+          .port-agence-table svg { width: 10px !important; height: 10px !important; }
         }
       `}</style>
 
@@ -740,8 +754,7 @@ export default function AdminPortAgenciesTab({
                 {datePreset === 'operational' && (
                   <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:ml-2 w-full sm:w-auto">
                     <span className="text-xs text-gray-500 whitespace-nowrap">Jour d'opération (8H → 6H lendemain)</span>
-                    <input
-                      type="date"
+                    <DateInput
                       value={operationalDay ? `${operationalDay.getFullYear()}-${String(operationalDay.getMonth() + 1).padStart(2, '0')}-${String(operationalDay.getDate()).padStart(2, '0')}` : ''}
                       onChange={e => {
                         if (!e.target.value) {
@@ -757,15 +770,13 @@ export default function AdminPortAgenciesTab({
 
                 {datePreset === 'custom' && (
                   <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:ml-2 w-full sm:w-auto">
-                    <input
-                      type="date"
+                    <DateInput
                       value={dateFrom}
                       onChange={e => setDateFrom(e.target.value)}
                       className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500 w-full sm:w-auto"
                     />
                     <span className="text-gray-400 text-xs font-bold">→</span>
-                    <input
-                      type="date"
+                    <DateInput
                       value={dateTo}
                       onChange={e => setDateTo(e.target.value)}
                       className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500 w-full sm:w-auto"
@@ -1109,9 +1120,9 @@ export default function AdminPortAgenciesTab({
       </div>
 
       {/* Tableau par agence */}
-      <div className="bg-white rounded-2xl shadow-xl border-2 border-purple-100 overflow-hidden print:rounded-none print:border print:border-gray-300">
+      <div className="port-agence-table-wrap bg-white rounded-2xl shadow-xl border-2 border-purple-100 overflow-hidden print:rounded-none print:border print:border-gray-300">
         <HScrollArrows className="print:overflow-visible">
-          <table className="w-full print:text-sm">
+          <table className="port-agence-table w-full">
             <thead className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white">
               <tr>
                 <th className="px-6 py-4 text-left font-bold whitespace-nowrap">
@@ -1135,13 +1146,13 @@ export default function AdminPortAgenciesTab({
                 <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-green-600/30">
                   💵 Total (Payé + Dû + Chèque)
                 </th>
-                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-indigo-600/30 print:hidden">
+                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-indigo-600/30">
                   📤 En Compte Exp
                 </th>
-                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-pink-600/30 print:hidden">
+                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-pink-600/30">
                   📥 En Compte Dest
                 </th>
-                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-green-600/30 print:hidden">
+                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-green-600/30">
                   💵 Total Port
                 </th>
               </tr>
@@ -1189,17 +1200,17 @@ export default function AdminPortAgenciesTab({
                       {(stat.portPaye + stat.portDu + stat.portDuCheque).toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-right font-bold bg-indigo-50/50 print:hidden">
+                  <td className="px-6 py-4 text-right font-bold bg-indigo-50/50">
                     <span className="text-indigo-700 text-lg">
                       {stat.enCompteExp.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-right font-bold bg-pink-50/50 print:hidden">
+                  <td className="px-6 py-4 text-right font-bold bg-pink-50/50">
                     <span className="text-pink-700 text-lg">
                       {stat.enCompteDest.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-right font-bold bg-green-50/50 print:hidden">
+                  <td className="px-6 py-4 text-right font-bold bg-green-50/50">
                     <span className="text-green-700 text-xl">
                       {stat.totalPort.toLocaleString('fr-MA')} DH
                     </span>
@@ -1240,17 +1251,17 @@ export default function AdminPortAgenciesTab({
                       {(totauxFiltres.portPaye + totauxFiltres.portDu + totauxFiltres.portDuCheque).toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-5 text-right bg-indigo-100 print:hidden">
+                  <td className="px-6 py-5 text-right bg-indigo-100">
                     <span className="text-indigo-900 text-xl font-black">
                       {totauxFiltres.enCompteExp.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-5 text-right bg-pink-100 print:hidden">
+                  <td className="px-6 py-5 text-right bg-pink-100">
                     <span className="text-pink-900 text-xl font-black">
                       {totauxFiltres.enCompteDest.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-5 text-right bg-green-100 print:hidden">
+                  <td className="px-6 py-5 text-right bg-green-100">
                     <span className="text-green-900 text-2xl font-black">
                       {(totauxFiltres.portPaye + totauxFiltres.portDu + totauxFiltres.portDuCheque + totauxFiltres.enCompteExp + totauxFiltres.enCompteDest).toLocaleString('fr-MA')} DH
                     </span>

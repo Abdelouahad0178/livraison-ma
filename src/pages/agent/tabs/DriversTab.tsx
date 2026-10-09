@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { Banknote, Trash2, CheckSquare, Square, X, CheckCircle } from 'lucide-react'
 import { useState } from 'react'
 import { useAgentCtx } from '../AgentCtx'
@@ -510,8 +511,7 @@ export default function DriversTab() {
                     <label className="block text-sm font-semibold text-gray-700 mb-1">
                       Date d'encaissement <span className="text-red-500">*</span>
                     </label>
-                    <input
-                      type="date"
+                    <DateInput
                       value={chequeForm.dateEncaissement}
                       onChange={(e) => setChequeForm({ ...chequeForm, dateEncaissement: e.target.value })}
                       className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none"

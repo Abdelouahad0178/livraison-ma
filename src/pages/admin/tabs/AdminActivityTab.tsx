@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import {
   ArrowRight, Banknote, BarChart2, Calendar, CheckCircle, MapPin, Package, Truck, Users, Wallet,
 } from 'lucide-react'
@@ -70,11 +71,11 @@ export default function AdminActivityTab({
                 ))}
                 {activityDatePreset === 'custom' && (
                   <div className="flex items-center gap-2">
-                    <input type="date" value={activityDateFrom} onChange={e => setActivityDateFrom(e.target.value)}
+                    <DateInput value={activityDateFrom} onChange={e => setActivityDateFrom(e.target.value)}
                       className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
                     />
                     <span className="text-gray-400 text-xs">→</span>
-                    <input type="date" value={activityDateTo} onChange={e => setActivityDateTo(e.target.value)}
+                    <DateInput value={activityDateTo} onChange={e => setActivityDateTo(e.target.value)}
                       className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
                     />
                   </div>

@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { lazy, Suspense, useState, useEffect, useRef } from 'react'
 import { Calendar, Search, X, Plus, MapPin, ChevronDown, Check, MessageCircle, Printer } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
@@ -15,9 +16,10 @@ import { updateParcel, buildParcelCorrectionPatch, describeParcelSaveError } fro
 import { showToast } from '../../../utils/toast'
 import { getGareDriverForCity } from '../../../firebase/delivery'
 import { normIncludes } from '../../../utils/normText'
-import { analyzeNbColisShortcut, nbColisDigitsOnly, NB_COLIS_SHORTCUT_HINT, NB_COLIS_SHORTCUT_TITLE } from '../../../utils/nbColisShortcut'
+import { analyzeNbColisShortcut, nbColisDigitsOnly, NB_COLIS_SHORTCUT_HINT, NB_COLIS_SHORTCUT_TITLE, NB_COLIS_SHORTCUT_ENABLED } from '../../../utils/nbColisShortcut'
 import { buildCityInitialsMap, matchCityInitials, CITY_INITIALS_DELAY_MS } from '../../../utils/cityInitials'
 import { getEmptyParcelForm, isParcelFormEmpty } from '../emptyParcelForm'
+import NbColisShortcutHelp from '../components/NbColisShortcutHelp'
 
 const Barcode = lazy(() => import('react-barcode'))
 const QRCodeSVG = lazy(() => import('../../../components/QRCodeSvg'))
@@ -156,6 +158,8 @@ export default function NewTab() {
   // ou 'none' (saisie normale).
   const [nbColisError, setNbColisError] = useState('')
   const applyNbColisShortcut = (raw: string, input?: HTMLInputElement | null): 'applied' | 'error' | 'none' => {
+    // 🔌 Raccourci désactivé (utils/nbColisShortcut) : saisie normale du nombre de colis uniquement
+    if (!NB_COLIS_SHORTCUT_ENABLED) { setNbColisError(''); input?.setCustomValidity(''); return 'none' }
     const res = analyzeNbColisShortcut(raw)
     if (!res) { setNbColisError(''); input?.setCustomValidity(''); return 'none' }
     if (res.error !== undefined) {
@@ -1278,8 +1282,7 @@ export default function NewTab() {
         {/* Date + Micro IA - Version compacte */}
         <div className="flex items-center gap-2 bg-purple-50 border border-purple-200 rounded-lg px-3 py-1.5">
           <span className="text-lg">📅</span>
-          <input
-            type="date"
+          <DateInput
             value={form.operationDate}
             max={todayStr()}
             onChange={f('operationDate')}
@@ -1552,10 +1555,10 @@ export default function NewTab() {
               id="nbColis"
               required
               type="text"
-              inputMode="text"
+              inputMode={NB_COLIS_SHORTCUT_ENABLED ? "text" : "numeric"}
               autoComplete="off"
-              placeholder="Nb colis (raccourci : 2ds45e500…)"
-              title={NB_COLIS_SHORTCUT_TITLE}
+              placeholder={NB_COLIS_SHORTCUT_ENABLED ? "Nb colis (raccourci : 2ds45e500…)" : "Nb colis"}
+              title={NB_COLIS_SHORTCUT_ENABLED ? NB_COLIS_SHORTCUT_TITLE : undefined}
               aria-invalid={nbColisError ? true : undefined}
               value={form.nbColis}
               onChange={(e) => {
@@ -1585,6 +1588,15 @@ export default function NewTab() {
                 }
                 handleKeyNav(e)
               }}
+              onFocus={(e) => {
+                // 🎯 Champ « Nb colis » centré et bien visible dès que le curseur y arrive (Entrée,
+                // F2, code client…). Recentré une 2ᵉ fois : popups/autocomplétion qui se ferment
+                // peuvent encore déplacer la page juste après le focus.
+                const el = e.currentTarget
+                const center = () => { if (document.activeElement === el) el.scrollIntoView({ block: 'center', behavior: 'smooth' }) }
+                center()
+                setTimeout(center, 250)
+              }}
               onBlur={(e) => {
                 // Sortie du champ (Tab, clic) : appliquer le raccourci s'il est valide, sinon chiffres seuls
                 const raw = e.currentTarget.value
@@ -1592,13 +1604,13 @@ export default function NewTab() {
                 const digits = nbColisDigitsOnly(raw)
                 if (digits !== raw) setForm((p: any) => ({ ...p, nbColis: digits }))
               }}
-              className={`${inputCls} w-full ${nbColisError ? '!border-red-500' : ''}`}
+              className={`${inputCls} w-full transition-all focus:!border-blue-600 focus:ring-4 focus:ring-blue-300 focus:bg-yellow-50 focus:text-lg focus:font-bold focus:shadow-lg ${nbColisError ? '!border-red-500' : ''}`}
             />
             {nbColisError ? (
-              <p role="alert" className="text-[10px] font-semibold text-red-600 mt-0.5 leading-tight">⚠️ {nbColisError}</p>
-            ) : (
+              <p role="alert" className="text-[10px] font-semibold text-red-600 mt-0.5 leading-tight">⚠️ {nbColisError} <NbColisShortcutHelp /></p>
+            ) : NB_COLIS_SHORTCUT_ENABLED && (
               <p className="text-[10px] text-gray-500 mt-0.5 leading-tight" title={NB_COLIS_SHORTCUT_TITLE}>
-                {NB_COLIS_SHORTCUT_HINT}
+                {NB_COLIS_SHORTCUT_HINT} <NbColisShortcutHelp />
               </p>
             )}
             </div>

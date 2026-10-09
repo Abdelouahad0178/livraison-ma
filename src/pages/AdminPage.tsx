@@ -68,7 +68,7 @@ import CompanyContact from '../components/CompanyContact'
 import SignatureViewerModal from '../components/SignatureViewerModal'
 import LiveClock from '../components/LiveClock'
 import WorkingDateIndicator from '../components/WorkingDateIndicator'
-import { normIncludes, normText } from '../utils/normText'
+import { normIncludes, normText, isDigitsOnly, numberStartsWith } from '../utils/normText'
 
 const AdminCaisseTab = lazy(() => import('./admin/tabs/AdminCaisseTab'))
 const AdminVersementsTab = lazy(() => import('./admin/tabs/AdminVersementsTab'))
@@ -215,6 +215,9 @@ const calculateSimilarity = (value: string, query: string): number => {
 
   // Match exact = 100 points
   if (v === q) return 100
+
+  // 🔢 Numéro (N° EXP, téléphone) : jamais d'à-peu-près, le 0 compte (« 0987 » ≠ « 987 »)
+  if (isDigitsOnly(q)) return numberStartsWith(v, q) ? 90 : 0
 
   // Commence par la recherche = 90 points
   if (v.startsWith(q)) return 90

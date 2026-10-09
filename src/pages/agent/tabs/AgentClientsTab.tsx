@@ -3,7 +3,7 @@ import { Users, Search, Plus, Edit2, Save, X, Trash2, Truck, ChevronUp, ChevronD
 import { subscribeClients, createClient, updateClient, deleteClient, Client } from '../../../firebase/clients'
 import { subscribeAllUsers, subscribeAllSectors } from '../../../firebase/firestore'
 import { CITIES } from '../../../firebase/constants'
-import { normIncludes } from '../../../utils/normText'
+import { normIncludes, digitAwareIncludes } from '../../../utils/normText'
 
 interface AgentClientsTabProps {
   agencyCity: string
@@ -84,7 +84,7 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
   const filteredClients = clients.filter(c => {
     const matchSearch = !searchTerm ||
       normIncludes(c.name, searchTerm.toLowerCase()) ||
-      c.tel?.includes(searchTerm) ||
+      digitAwareIncludes(String(c.tel ?? ''), searchTerm) ||
       normIncludes(c.address, searchTerm.toLowerCase()) ||
       normIncludes(c.secteurName, searchTerm.toLowerCase())
 

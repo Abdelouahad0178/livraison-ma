@@ -1,3 +1,4 @@
+import DateInput from '../components/DateInput'
 import { useState, useEffect, useRef } from 'react'
 import { signOut } from 'firebase/auth'
 import { auth, db } from '../firebase/config'
@@ -539,8 +540,7 @@ export default function PointeurPageNew() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1">Du</label>
-                    <input
-                      type="date"
+                    <DateInput
                       value={dateFrom}
                       onChange={e => setDateFrom(e.target.value)}
                       className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
@@ -548,8 +548,7 @@ export default function PointeurPageNew() {
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1">Au</label>
-                    <input
-                      type="date"
+                    <DateInput
                       value={dateTo}
                       onChange={e => setDateTo(e.target.value)}
                       className="w-full px-3 py-1.5 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
@@ -882,8 +881,7 @@ export default function PointeurPageNew() {
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1">Date d'émission</label>
-                    <input
-                      type="date"
+                    <DateInput
                       value={formModal.data.dateEmission}
                       onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, dateEmission: e.target.value } }))}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"
@@ -891,8 +889,7 @@ export default function PointeurPageNew() {
                   </div>
                   <div>
                     <label className="block text-xs font-semibold text-gray-600 mb-1">Date d'échéance</label>
-                    <input
-                      type="date"
+                    <DateInput
                       value={formModal.data.dateEcheance}
                       onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, dateEcheance: e.target.value } }))}
                       className="w-full px-3 py-2 border border-gray-200 rounded-lg focus:ring-2 focus:ring-blue-500"

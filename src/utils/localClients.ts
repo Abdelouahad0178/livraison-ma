@@ -1,4 +1,4 @@
-import { normIncludes } from './normText'
+import { normIncludes, digitAwareIncludes } from './normText'
 // Gestion des clients locaux (non enregistrés dans Firestore)
 // Pour les clients de passage qui envoient 1-2 colis
 
@@ -78,7 +78,7 @@ export function searchLocalClients(query: string): LocalClient[] {
 
   return clients.filter(c =>
     normIncludes(c.name, q) ||
-    c.tel.includes(q) ||
+    digitAwareIncludes(String(c.tel ?? ''), q) ||
     normIncludes(c.address, q)
   ).slice(0, 10) // Limiter à 10 résultats
 }

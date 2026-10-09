@@ -7,7 +7,7 @@
 // de chaque valeur source (===) : si un champ change (objet muté, mise à jour locale), seule
 // cette valeur est recalculée. Les règles de correspondance sont STRICTEMENT celles d'avant.
 import { normName } from './billingAgency'
-import { normText } from './normText'
+import { normText, isDigitsOnly, numberStartsWith } from './normText'
 
 type Norm = (v: unknown) => string
 interface Entry { src: unknown[]; out: string[] }
@@ -60,6 +60,14 @@ export function makeAgentSearchMatcher(query: string, scope: 'all' | 'sender' | 
   const compactQ = compact(q)
   const skipSender = scope === 'receiver'
   const skipReceiver = scope === 'sender'
+  // 🔢 Terme en chiffres (N° EXP, téléphone) : le 0 compte — le numéro doit correspondre depuis
+  // son premier chiffre (« 0987223 » ≠ « 987223 »), jamais au milieu d'un autre numéro.
+  if (isDigitsOnly(q)) {
+    return (p: any) => agentFields(p).some((v, i) => {
+      if ((skipSender && i >= 4 && i <= 8) || (skipReceiver && i >= 9)) return false
+      return numberStartsWith(v, q)
+    })
+  }
   return (p: any) => {
     const vals = agentFields(p)
     if (!isObj(p)) {
@@ -84,6 +92,8 @@ export function makeAgentSearchMatcher(query: string, scope: 'all' | 'sender' | 
 // ── Générique : un champ parmi `fields(p)` contient le terme (normName des deux côtés) ─────
 function makeNormNameMatcher(key: string, fields: (p: any) => unknown[], term: string): (p: any) => boolean {
   const t = normName(term)
+  // 🔢 Terme en chiffres : règle des numéros (le 0 compte, voir normText.numberStartsWith)
+  if (isDigitsOnly(t)) return (p: any) => fields(p).some(v => numberStartsWith(v, t))
   return (p: any) => {
     const vals = fields(p)
     const out = isObj(p) ? cachedNorms(p, key, vals, normName) : vals.map(normName)
@@ -94,7 +104,7 @@ function makeNormNameMatcher(key: string, fields: (p: any) => unknown[], term: s
 
 /** Recherche du tableau des Expéditions (ParcelsTab). */
 export const makeTableSearchMatcher = (term: string) => makeNormNameMatcher('table', (p: any) => [
-  p.sender?.nic, p.trackingId, p.clientName, p.sender?.name, p.receiver?.name, p.sender?.tel,
+  p.sender?.nic, p.senderNic, p.trackingId, p.clientName, p.sender?.name, p.receiver?.name, p.sender?.tel,
   p.receiver?.tel, p.sender?.city, p.receiver?.city, p.receiver?.address,
 ], term)
 
