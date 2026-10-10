@@ -3,6 +3,7 @@ import { Banknote, Trash2, CheckSquare, Square, X, CheckCircle } from 'lucide-re
 import { useState } from 'react'
 import { useAgentCtx } from '../AgentCtx'
 import { fmtFixed as fmtAmt } from '../../../utils/formatNumber'
+import { VIA_EXPLOITATION_MSG } from '../../../utils/moneyFlow'
 import { updateParcel, collectPortDuCheque, createCaisseEntry } from '../../../firebase/firestore'
 
 export default function DriversTab() {
@@ -91,22 +92,9 @@ export default function DriversTab() {
   }
 
   // 💳 Ouvrir la modal de choix du mode de paiement
-  const handleOpenPaymentModal = (parcel: any) => {
-    // 🔒 Vérification: seuls Chef d'agence et Agent pro peuvent collecter
-    if (profile?.role !== 'chef_agence' && profile?.role !== 'agentpro') {
-      alert('⚠️ Seuls le Chef d\'agence et l\'Agent pro peuvent réceptionner les ports dus.')
-      return
-    }
-
-    setSelectedParcel(parcel)
-    setPaymentMethod(null)
-    setChequeForm({
-      banque: '',
-      numero: '',
-      dateEncaissement: new Date().toISOString().split('T')[0]
-    })
-    setShowPaymentModal(true)
-  }
+  // 💸 Circuit livreur → chef d'exploitation → chef d'agence : plus de réception directe du port dû ici
+  // (la fenêtre espèces / chèque ci-dessous n'est donc plus ouverte)
+  const handleOpenPaymentModal = (_parcel: any) => { alert(VIA_EXPLOITATION_MSG) }
 
   // 💳 Collecter le port dû par chèque
   const handleCollectPortDuCheque = async () => {

@@ -415,7 +415,9 @@ exports.onParcelWrite = onDocumentWritten('parcels/{parcelId}', async (event) =>
 //   dans le désordre ; relire garantit que la dernière exécution écrit l'état le plus récent.
 // Idempotent (set complet, pas de merge) : rejouer un événement réécrit la même projection.
 const { projectParcelLite, liteKey } = require('./parcelLite')
-exports.syncParcelLite = onDocumentWritten({ document: 'parcels/{parcelId}', retry: false }, async (event) => {
+// retry: true — la fonction relit toujours le colis à jour (idempotente) : un échec ponctuel ne doit plus
+// laisser une copie allégée en retard (les pages de caisse lisent parcelsLite pour les journées passées).
+exports.syncParcelLite = onDocumentWritten({ document: 'parcels/{parcelId}', retry: true }, async (event) => {
   const id = event.params.parcelId
   const liteRef = db.collection('parcelsLite').doc(id)
   const before = event.data?.before?.exists ? event.data.before.data() : null

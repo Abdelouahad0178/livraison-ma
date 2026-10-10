@@ -46,7 +46,7 @@ export default function DriverCaisseCard({ driver, statusFilter, statusFilterLab
               {statusFilter !== 'all'
                 ? `${h.total} expédition${h.total > 1 ? 's' : ''} (${statusFilterLabel.toLowerCase()})`
                 : `${h.total} expéditions${h.enCompte > 0 ? ` (dont ${h.enCompte} en compte)` : ''}`}
-              {statusFilter === 'all' && driver.portsPayesParcels.length > 0 && ` -${driver.portsPayesParcels.length} ramassés-`}
+              {statusFilter === 'all' && driver.portsPayesParcels.length > 0 && ` -${driver.portsPayesParcels.length} à ramasser-`}
             </p>
           </div>
         </div>
@@ -65,7 +65,7 @@ export default function DriverCaisseCard({ driver, statusFilter, statusFilterLab
             {driver.portsPayesARecevoirCount > 0 && (
               <div className="text-center">
                 <div className="text-indigo-600 font-bold">{driver.portsPayesARecevoirCount}</div>
-                <div className="text-xs text-gray-500">Ramassés</div>
+                <div className="text-xs text-gray-500">À ramasser</div>
               </div>
             )}
             {driver.enRetardCount > 0 && (

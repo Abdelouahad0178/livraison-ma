@@ -8,6 +8,7 @@ import { db } from './db'
 import { bumpPresence } from '../services/presenceCounters'
 import { CITIES, STATUSES } from './constants'
 import { daysAgoTimestamp } from './firestoreUtils'
+import { isCodMoneyBeforeStart } from '../utils/moneyFlow'
 import { isParcelVisibleInDestinationAgency } from './parcels'
 
 // 🚉 Livreur-gare d'une ville (assignation auto « Livraison en gare »). Même requête qu'avant,
@@ -44,7 +45,8 @@ export function subscribePendingCods(city: any, callback: any) {
     snap => {
       callback(
         (snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[])
-          .filter(p => p.codStatus === 'collected' && p.codAmount > 0 && p.codPaymentType !== 'bon_livraison')
+          .filter(p => p.codStatus === 'collected' && p.codAmount > 0 && p.codPaymentType !== 'bon_livraison'
+            && !isCodMoneyBeforeStart(p)) // 📅 encaissés avant le 05/10/2026 (essais) : hors solde
           .sort((a, b) => {
             const da = a.codCollectedAt ? new Date(a.codCollectedAt) : new Date(0)
             const db2 = b.codCollectedAt ? new Date(b.codCollectedAt) : new Date(0)

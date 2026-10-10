@@ -7,6 +7,7 @@ import { db } from './db'
 import { bumpPresence } from '../services/presenceCounters'
 import { COD_STATUS, COD_PAYMENT_TYPES, STATUSES, sanitizeParcelCodWrite } from './constants'
 import { findOrCreateClientForReceiver } from './clients'
+import { codMoneyOnly, entriesFromStart, moneyFromStart } from '../utils/moneyFlow'
 
 type DynamicData = Record<string, any>
 type FirestoreRow = DynamicData & { id: string }
@@ -42,7 +43,6 @@ export async function collectCod(
   bumpPresence('cod')
 }
 
-// Collecte directe par l'agence destination (client vient sur place) — passe directement à 'remis'
 /** Annule la collecte d'une valeur (COD) tant qu'elle n'est pas remise au chef d'agence. */
 export async function uncollectCod(parcelId: string): Promise<void> {
   await runTransaction(db, async tx => {
@@ -60,7 +60,10 @@ export async function uncollectCod(parcelId: string): Promise<void> {
   })
 }
 
-export async function collectCodAtDestination(parcelId: string, paymentType: string, collectedBy: string) {
+// Collecte au guichet de l'agence destination (client vient sur place) : « collecté » par le guichet
+// (« En gare - ville »), puis reçu le soir par le chef d'exploitation et remis au chef d'agence par
+// la validation de son envoi (circuit livreur → chef d'exploitation → chef d'agence).
+export async function collectCodAtDestination(parcelId: string, paymentType: string, collectedBy: string, collectedById = '') {
   const now = new Date().toISOString()
   await runTransaction(db, async tx => {
     const ref = doc(db, 'parcels', parcelId)
@@ -69,17 +72,16 @@ export async function collectCodAtDestination(parcelId: string, paymentType: str
     const data = snap.data()
 
     // 🔒 GARDE : Éviter double-encaissement
-    if (data.codStatus === 'remis' || data.codStatus === 'regle') {
+    if (data.codStatus === 'collected' || data.codStatus === 'remis' || data.codStatus === 'regle') {
       throw new Error('Ce COD a déjà été collecté.')
     }
 
     tx.update(ref, {
-      codStatus:      'remis',
+      codStatus:      'collected',
       codPaymentType:  coherentCodPaymentType(data, paymentType),
       codCollectedAt:  now,
       codCollectedBy:  collectedBy,
-      codRemisAt:      now,
-      codRemisBy:      collectedBy,
+      ...(collectedById ? { codCollectedById: collectedById } : {}),
     })
   })
   bumpPresence('cod')
@@ -257,7 +259,8 @@ export async function fetchAllAgentCodParcels(agentId: string) {
   ])
   const all = new Map<string, FirestoreRow>()
   ;[...s1.docs, ...s2.docs].forEach(d => all.set(d.id, rowFromDoc(d)))
-  return [...all.values()].filter(p => parseFloat(p.codAmount) > 0)
+  // 📅 COD encaissés avant le 05/10/2026 (essais) : hors des soldes COD
+  return codMoneyOnly([...all.values()].filter(p => parseFloat(p.codAmount) > 0))
 }
 
 /**
@@ -295,14 +298,15 @@ export async function fetchAllAgencyCodParcels(city: string, onProgress?: (scann
       if (fieldCount >= MIN_PER_FIELD && oldestMs && oldestMs < cutoffMs) break
     }
   }
-  return [...all.values()].filter(p => parseFloat(p.codAmount) > 0)
+  // 📅 COD encaissés avant le 05/10/2026 (essais) : hors des soldes COD
+  return codMoneyOnly([...all.values()].filter(p => parseFloat(p.codAmount) > 0))
 }
 
 // 🗄️ Un colis « isArchived » peut être soit l'ancien modèle (déplacé dans parcels_archive), soit
 // le nouveau (resté dans 'parcels' avec isArchived: true — archivage auto 30/45 j). Les pages
 // Caisse / Chef d'exploitation chargent maintenant ces derniers : cibler aveuglément
 // parcels_archive faisait échouer la collecte (« introuvable »). On vérifie où il se trouve.
-async function resolveParcelCollection(parcelId: string, isArchived: boolean): Promise<'parcels' | 'parcels_archive'> {
+export async function resolveParcelCollection(parcelId: string, isArchived: boolean): Promise<'parcels' | 'parcels_archive'> {
   if (!isArchived) return 'parcels'
   try {
     const snap = await getDoc(doc(db, 'parcels_archive', parcelId))
@@ -311,13 +315,14 @@ async function resolveParcelCollection(parcelId: string, isArchived: boolean): P
     return 'parcels'
   }
 }
-export async function collectPortDu(parcelId: string, agentName: string, agentId: string, isArchived: boolean = false) {
+export async function collectPortDu(parcelId: string, agentName: string, agentId: string, isArchived: boolean = false, extraFields: DynamicData = {}) {
   const updates = {
     portStatus:          'collected',
     portCollectedBy:     agentName,
     portCollectedById:   agentId,
     portCollectedAt:     serverTimestamp(),
     portDuReceivedMethod: 'especes', // Par défaut espèces pour cette fonction
+    ...extraFields,
   }
 
   // 🗄️ Les résultats de recherche peuvent provenir de la collection d'archives
@@ -402,7 +407,8 @@ export async function collectPortDuCheque(
     dateEncaissement: string
   },
   collectedBy: string,
-  collectedById: string
+  collectedById: string,
+  extraFields: DynamicData = {}
 ): Promise<void> {
   const parcelRef = doc(db, 'parcels', parcelId)
 
@@ -429,6 +435,7 @@ export async function collectPortDuCheque(
     portDuChequeDateEncaissement: details.dateEncaissement,
     portDuChequeFinalizedAt: new Date().toISOString(),
     portDuChequeFinalizedBy: collectedBy,
+    ...extraFields,
   }
 
   await updateDoc(parcelRef, updates)
@@ -601,7 +608,7 @@ export function subscribeClientPortDuTransactions(
     orderBy('createdAt', 'desc')
   )
   return onSnapshot(q, snap => {
-    const transactions = snap.docs.map(rowFromDoc)
+    const transactions = entriesFromStart(snap.docs.map(rowFromDoc)) // 📅 depuis le vrai calcul (05/10/2026)
     callback(transactions)
   }, onError)
 }
@@ -661,7 +668,8 @@ export function subscribeCodParcels(city: string, callback: (rows: FirestoreRow[
     const map = new Map<string, FirestoreRow>()
     ;[...recent, ...older].forEach(p => map.set(p.id, p))
     const ms = (p: FirestoreRow) => (p.createdAt?.toMillis ? p.createdAt.toMillis() : 0)
-    callback([...map.values()].filter(matches).sort((a, b) => ms(b) - ms(a)))
+    // 📅 argent encaissé avant le 05/10/2026 (essais) : hors des soldes
+    callback(moneyFromStart([...map.values()].filter(matches)).sort((a, b) => ms(b) - ms(a)))
   }
 
   // 1) Tous les colis de la ville des COD_RECENT_DAYS derniers jours (même filtre client qu'avant)

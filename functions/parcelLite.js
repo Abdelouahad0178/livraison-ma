@@ -31,7 +31,9 @@ const LITE_EXCLUDED_FIELDS = new Set([
   'lostDeclarationId', 'foundBy', 'foundAt',
   'codRemiseCancelledBy', 'codRemiseCancelledById', 'codRemiseCancelledAt',
   'portEnCompteById', 'portEnCompteAt', 'portEnCompteClientId', 'portEnCompteBy',
-  'codSenderPaidBy', 'codSenderPaidById', 'valeursEnvoiId', 'codCollectedById', 'codSentToSourceById',
+  // ⚠️ valeursEnvoiId et codCollectedById sont GARDÉS : lus par Caisse Agence et la Collecte du soir,
+  // qui chargent parcelsLite pour les journées passées (audit des champs des pages de caisse)
+  'codSenderPaidBy', 'codSenderPaidById', 'codSentToSourceById',
   'codReceivedBySourceById', 'codReceivedBySourceBy', 'codReceivedValueNote',
   'codReceivedValueMatchesPointeur', 'codReceivedChequeNum', 'codReceivedChequeEcheance',
   'codReceivedChequeBanque', 'codType',

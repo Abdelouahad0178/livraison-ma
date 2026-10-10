@@ -685,6 +685,13 @@ export function printPortsCollectes(
   // Calculer les totaux
   const totalParcels = parcels.length
   const totalMontant = parcels.reduce((sum, p) => sum + (parseFloat(p.price) || 0), 0)
+  // 💰 Ports dus / 📬 ports payés ramassés au guichet (« En gare »)
+  const isPP = (p: any) => p.portType === 'port_paye'
+  const pp = parcels.filter(isPP)
+  const ppMontant = pp.reduce((sum, p) => sum + (parseFloat(p.price) || 0), 0)
+  const splitHtml = pp.length
+    ? `<div>💰 Ports dus : ${totalParcels - pp.length} · ${(totalMontant - ppMontant).toFixed(2)} DH</div><div>📬 Ports payés à ramasser : ${pp.length} · ${ppMontant.toFixed(2)} DH</div>`
+    : ''
 
   // Fonction pour formater une date
   const formatDate = (timestamp: any) => {
@@ -719,6 +726,7 @@ export function printPortsCollectes(
           <span style="color:#6b7280;font-size:6.5pt">${p.receiver?.city || ''} · ${p.receiver?.tel || ''}</span>
         </td>
         <td style="text-align:center;font-size:7.5pt">${p.deliveryDriverName || '—'}</td>
+        <td style="text-align:center;font-size:7pt;font-weight:bold;color:${isPP(p) ? '#4338ca' : '#15803d'}">${isPP(p) ? `📬 Port payé à ramasser${p.destinationCity ? `<br><span style="font-weight:normal;color:#6b7280">→ ${p.destinationCity}</span>` : ''}` : '💰 Port dû'}</td>
         <td style="text-align:right;font-weight:bold;color:#15803d;font-size:8pt">
           ${price.toFixed(2)} DH
         </td>
@@ -839,6 +847,7 @@ export function printPortsCollectes(
   <div class="summary-top">
     <div>📦 Total Expéditions : ${totalParcels}</div>
     <div>💰 Montant Total : ${totalMontant.toFixed(2)} DH</div>
+    ${splitHtml}
   </div>
 
   <table>
@@ -850,6 +859,7 @@ export function printPortsCollectes(
         <th style="width:110px">Expéditeur</th>
         <th style="width:130px">Destinataire</th>
         <th style="width:90px;text-align:center">Livreur</th>
+        <th style="width:80px;text-align:center">Type</th>
         <th style="width:70px;text-align:right">Montant</th>
         <th style="width:100px;text-align:center">Collecté Par</th>
         <th style="width:70px;text-align:center">Statut</th>
@@ -858,7 +868,7 @@ export function printPortsCollectes(
     <tbody>
       ${rows}
       <tr class="totals-row">
-        <td colspan="6" style="text-align:right;padding:8px;color:#15803d;font-size:9pt">
+        <td colspan="7" style="text-align:right;padding:8px;color:#15803d;font-size:9pt">
           TOTAL — ${totalParcels} expédition${totalParcels > 1 ? 's' : ''}
         </td>
         <td style="text-align:right;color:#15803d;font-size:9pt;font-weight:bold">
@@ -872,6 +882,7 @@ export function printPortsCollectes(
   <div class="summary-bottom">
     <div>📦 Total : ${totalParcels} expédition${totalParcels > 1 ? 's' : ''}</div>
     <div>💰 Montant Total : ${totalMontant.toFixed(2)} DH</div>
+    ${splitHtml}
   </div>
 
   <script>window.onload = function(){ window.print(); }<\/script>
@@ -1500,7 +1511,7 @@ export function printDriverExpeditionsTable(
       <div class="header-right">
         <div class="title">
           Expéditions — ${driverName}
-          ${statusText ? `<span class="status-badge ${statusText === 'À collecter' ? 'a_collecter' : statusText === 'Collecté' ? 'collecte' : (statusText === 'En compte' || statusText === 'Ramassé') ? 'a_collecter' : 'en_retard'}">${statusText}</span>` : ''}
+          ${statusText ? `<span class="status-badge ${statusText === 'À collecter' ? 'a_collecter' : statusText === 'Collecté' ? 'collecte' : (statusText === 'En compte' || statusText === 'À ramasser') ? 'a_collecter' : 'en_retard'}">${statusText}</span>` : ''}
         </div>
         <div class="subtitle">Imprimé le ${printDate}</div>
       </div>

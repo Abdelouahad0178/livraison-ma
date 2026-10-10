@@ -8,6 +8,7 @@ import { db } from './db'
 import type { CaisseEntry } from '../types'
 import { CAISSE_CATEGORIES, REGLEMENT_MODES, CITIES } from './constants'
 import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
+import { MONEY_START, entriesFromStart, isEntryBeforeStart } from '../utils/moneyFlow'
 
 // 🔒 Fonction sécurisée pour parser les montants
 const safeParseAmount = (value: any): number => {
@@ -134,15 +135,22 @@ export function subscribeAgentRemises(agentId: any, callback: any, onError: (err
   )
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
+// 📅 Lignes de caisse : jamais avant le début du vrai calcul (05/10/2026 08:00, src/utils/moneyFlow.ts)
+const sinceMoneyStart = (since: Timestamp): Timestamp =>
+  since.toMillis() < MONEY_START.getTime() ? Timestamp.fromDate(MONEY_START) : since
+/** Solde stocké (agencyCashes) non mis à jour depuis le début du vrai calcul : affiché à 0. */
+const cashFromStart = (c: any) => (c && isEntryBeforeStart({ createdAt: c.lastUpdatedAt ?? null }) || (c && !c.lastUpdatedAt))
+  ? { ...c, solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 } : c
+
 export function subscribeCaisseByCity(city: any, callback: any, onError: (err?: any) => void = () => {}) {
   // ⚡ OPTIMISATION : 30 jours, 500 docs pour équilibre performance/complétude
-  const since = daysAgoTimestamp(30)
+  const since = sinceMoneyStart(daysAgoTimestamp(30))
   const q = query(collection(db, 'caisseEntries'), where('city', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(500))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 export function subscribeAllCaisse(callback: any, onError: (err?: any) => void = () => {}) {
   // 180 jours pour plus de données sans crasher Firestore
-  const since = daysAgoTimestamp(180)
+  const since = sinceMoneyStart(daysAgoTimestamp(180))
   const q = query(collection(db, 'caisseEntries'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(300))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
@@ -897,7 +905,7 @@ export async function approveRecoveryAtomic(requestId: any, data: any) {
 export function subscribeAgencyCash(city: any, callback: any, onError: (err?: any) => void = () => {}) {
   return onSnapshot(doc(db, 'agencyCashes', city), snap => {
     if (snap.exists()) {
-      callback({ id: snap.id, ...snap.data() })
+      callback(cashFromStart({ id: snap.id, ...snap.data() }))
     } else {
       callback({ id: city, city, solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 })
     }
@@ -905,7 +913,7 @@ export function subscribeAgencyCash(city: any, callback: any, onError: (err?: an
 }
 export function subscribeAllAgencyCashes(callback: any, onError: (err?: any) => void = () => {}) {
   return onSnapshot(collection(db, 'agencyCashes'), snap => {
-    const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const data = snap.docs.map(d => cashFromStart({ id: d.id, ...d.data() }))
     callback(data.length > 0 ? data : CITIES.map(city => ({ id: city, city, solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 })))
   }, onError)
 }
@@ -1637,7 +1645,7 @@ export async function createAdminTransferDirect(data: any, creatorId: string, cr
 
 export function subscribeAdminTransfers(callback: any, onError: (err?: any) => void = () => {}) {
   const q = query(collection(db, 'adminTransfers'), orderBy('createdAt', 'desc'))
-  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
+  return onSnapshot(q, snap => callback(entriesFromStart(snap.docs.map(d => ({ id: d.id, ...d.data() })))), onError)
 }
 export function subscribeMyAdminTransfers(fromId: any, callback: any, onError: (err?: any) => void = () => {}) {
   const q = query(
@@ -1645,7 +1653,7 @@ export function subscribeMyAdminTransfers(fromId: any, callback: any, onError: (
     where('fromId', '==', fromId),
     orderBy('createdAt', 'desc')
   )
-  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
+  return onSnapshot(q, snap => callback(entriesFromStart(snap.docs.map(d => ({ id: d.id, ...d.data() })))), onError)
 }
 export function subscribeAdminTransfersByCity(city: any, callback: any, onError: (err?: any) => void = () => {}) {
   const q = query(
@@ -1653,7 +1661,7 @@ export function subscribeAdminTransfersByCity(city: any, callback: any, onError:
     where('city', '==', city),
     orderBy('createdAt', 'desc')
   )
-  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
+  return onSnapshot(q, snap => callback(entriesFromStart(snap.docs.map(d => ({ id: d.id, ...d.data() })))), onError)
 }
 
 // -- Secteurs ------------------------------------------------------------------

@@ -38,6 +38,7 @@ import { ALL_SERVICE_TYPES, codPaymentTypeOf, normalizeServiceType, codPaymentTy
 import { buildCodWriteFields, validateCodChoice, codCashPartOf, codDocPartOf, isMixedCod, codPartsDetailLabel, codEditResult } from '../../../utils/codParts'
 import { buildParcelCorrectionPatch, describeParcelSaveError, ensureFullParcel, ensureFullParcels } from '../../../firebase/parcels'
 import { showToast } from '../../../utils/toast'
+import { blockDirectChefReception } from '../../../utils/moneyFlow'
 
 // ALL_SERVICE_TYPES importé depuis constants.ts
 
@@ -348,11 +349,13 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       if (isSourceAgent) {
         await collectCodAtSource(parcel.id, effectivePaymentType, name)
       } else {
-        await collectCodAtDestination(parcel.id, effectivePaymentType, name)
+        // 💸 Guichet de destination : COD « collecté », remis le soir au chef d'exploitation (pas de caisse ici)
+        await collectCodAtDestination(parcel.id, effectivePaymentType, name, uid || '')
       }
       // RF mixte : la part espèces entre en caisse, le chèque/la traite suit le circuit document
+      // (agence SOURCE uniquement : à destination, la caisse est écrite à la validation de l'envoi)
       const isEspeces = !NON_CASH.includes(effectivePaymentType) || isMixedCod(parcel)
-      if (isEspeces) {
+      if (isSourceAgent && isEspeces) {
         await createCaisseEntry({
           type: 'entree', category: 'cod_agence',
           amount: isMixedCod(parcel) ? codCashPartOf(parcel) : parcel.codAmount,
@@ -390,17 +393,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const name = profile?.name || 'Agent'
     setPortCollectModal((m: any) => ({ ...m, loading: true }))
     try {
+      // 💸 Encaissé au guichet : remis le soir au chef d'exploitation (pas d'écriture de caisse ici)
       await collectPortDu(parcel.id, name, uid || '')
-      await createCaisseEntry({
-        type: 'entree', category: 'port_du',
-        amount: parcel.price || 0,
-        description: `Port dû — ${parcel.trackingId} (${parcel.receiver?.name})`,
-        reference: parcel.trackingId,
-        agentId: uid || '',
-        agentName: name,
-        city: profile?.city || parcel.receiver?.city || '',
-        cashierId: uid || '', cashierName: name,
-      })
       await updateParcelStatus(parcel.id, 'Livré', {
         deliveredAt: new Date().toISOString(),
         note: 'Retrait en agence — port dû encaissé'
@@ -847,6 +841,11 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     setCodReceptioning(parcel.id)
     setReceptionCodError('')
     try {
+      // 🏢 Chef d'agence EN REMPLACEMENT du chef d'exploitation (absent) : encaissement marqué à son nom
+      // (codExpReceivedRole « chef_agence ») et écrit directement en caisse
+      if (parcel.codExpReceivedAt && parcel.codExpReceivedRole !== 'chef_agence' && parcel.codStatus === 'collected') {
+        throw new Error("Valeur déjà reçue par le chef d'exploitation : elle arrivera par son envoi (onglet « Valeurs à valider »).")
+      }
       let codCaisseEntryId = parcel.codCaisseEntryId || null
       if (isCash(parcel) && !parcel.codCaisseEntryId) {
         codCaisseEntryId = await createCaisseEntry({
@@ -869,6 +868,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         // Mémorise l'état d'origine pour pouvoir annuler l'encaissement plus tard
         codStatusBeforeRemise: parcel.codStatus || 'pending',
         ...(codCaisseEntryId ? { codCaisseEntryId } : {}),
+        // 🏢 Reçu par le chef d'agence lui-même (remplace le chef d'exploitation)
+        codExpReceivedAt: now, codExpReceivedBy: name, codExpReceivedById: uid, codExpReceivedRole: 'chef_agence',
       }
       await remitCod(parcel.id, name, extraFields)
       patchAllCod(parcel.id, { codStatus: 'remis', codRemisAt: now, codRemisBy: name, ...extraFields })
@@ -889,7 +890,13 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     setCodReceptioning(parcel.id)
     setReceptionCodError('')
     try {
-      const restored = await cancelCodRemise(parcel.id, name, uid || '')
+      const restored: Record<string, any> = await cancelCodRemise(parcel.id, name, uid || '')
+      // Encaissement fait par le chef d'agence en remplacement du chef d'exploitation : sa marque est retirée
+      if (parcel.codExpReceivedRole === 'chef_agence') {
+        const clear = { codExpReceivedAt: null, codExpReceivedBy: null, codExpReceivedById: null, codExpReceivedRole: null }
+        await updateParcel(parcel.id, clear)
+        Object.assign(restored, clear)
+      }
       if (parcel.codCaisseEntryId) {
         await deleteCaisseEntry(parcel.codCaisseEntryId).catch((e: any) =>
           console.error('Suppression entrée caisse:', e))
@@ -909,6 +916,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const name = profile?.name || 'Chef'
     setCodFromDriverReceiving((st: any) => ({ ...st, [parcel.id]: true }))
     try {
+      // 🏢 Chef d'agence EN REMPLACEMENT du chef d'exploitation (absent) : reçu à son nom, écrit en caisse
+      if (parcel.codExpReceivedAt && parcel.codExpReceivedRole !== 'chef_agence') {
+        throw new Error("Valeur déjà reçue par le chef d'exploitation : elle arrivera par son envoi (onglet « Valeurs à valider »).")
+      }
       let entryId = parcel.codCaisseEntryId || null
       if (isCash(parcel) && !entryId) {
         entryId = await createCaisseEntry({
@@ -926,6 +937,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         codChefReceivedBy:   name,
         codChefReceivedById: uid,
         ...(entryId ? { codCaisseEntryId: entryId } : {}),
+        codExpReceivedAt: now, codExpReceivedBy: name, codExpReceivedById: uid, codExpReceivedRole: 'chef_agence',
       }
       await remitCod(parcel.id, name, extraFields)
       setParcels((prev: any) => prev.map((p: any) => p.id === parcel.id
@@ -934,6 +946,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       ))
     } catch (err: any) {
       console.error('handleReceiveCodFromDriver:', err)
+      alert(err?.message || 'Erreur lors de la réception.')
     } finally {
       setCodFromDriverReceiving((st: any) => { const n = { ...st }; delete n[parcel.id]; return n })
     }
@@ -969,6 +982,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     setPortDuReceiveError('')
     try {
       if (parcel.portChefReceivedAt) return
+      blockDirectChefReception() // 💸 circuit livreur → chef d'exploitation → chef d'agence
       let entryId = parcel.portCaisseEntryId || null
       if (!entryId) {
         entryId = await createCaisseEntry({
@@ -1862,20 +1876,9 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         }).catch(err => console.error('addPayment port_en_compte:', err))
       }
 
-      // createCaisseEntry pour port_paye (ARRIÈRE-PLAN)
-      if (parcel.portType === 'port_paye' && (parcel.price as number) > 0) {
-        const agentName = profile?.name || 'Agent'
-        createCaisseEntry({
-          type: 'entree', category: 'port_paye',
-          amount: parcel.price as number,
-          description: `Port payé — ${parcel.trackingId} → ${form.receiverCity}`,
-          reference: parcel.trackingId,
-          agentId: auth.currentUser?.uid,
-          agentName,
-          city: profile?.city || form.senderCity || '',
-          cashierId: auth.currentUser?.uid, cashierName: agentName,
-        }).catch(err => console.error('createCaisseEntry port_paye:', err))
-      }
+      // 💸 Port payé encaissé au guichet : PAS d'écriture de caisse ici. Circuit unique : « En gare - ville »
+      // le remet au chef d'exploitation (Collecte du soir), qui l'envoie ; la validation du chef d'agence
+      // écrit la caisse (valeursEnvois.validateEnvoi).
       // Mise à jour client si clientId Firestore existant
       if (form.clientId && form.senderName.trim()) {
         const tel     = form.senderTel.trim()

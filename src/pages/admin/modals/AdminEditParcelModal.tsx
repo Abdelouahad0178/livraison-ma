@@ -97,6 +97,22 @@ export default function AdminEditParcelModal({
             </div>
           </div>
 
+          {/* 🔢 N° EXP (NIC) — modifiable à tout moment par l'admin, unique */}
+          <div className="space-y-3">
+            <p className="text-xs font-bold text-gray-500 uppercase tracking-wider border-b pb-1">N° EXP</p>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">N° EXP (NIC)</label>
+              <input value={adminEditModal.form.senderNic ?? ''} inputMode="numeric"
+                onChange={e => setAdminEditModal((m: any) => ({ ...m, error: '', form: { ...m.form, senderNic: e.target.value } }))}
+                className="w-full sm:w-64 border border-gray-200 rounded-xl px-3 py-2 text-sm font-mono font-semibold text-blue-700 focus:outline-none focus:border-purple-400" />
+              {String(adminEditModal.form.senderNic ?? '').trim() !== String(adminEditModal.parcel.senderNic || adminEditModal.parcel.sender?.nic || '') && (
+                <p className="text-[11px] text-amber-700 mt-1">
+                  Ancien N° EXP : <b className="font-mono">{adminEditModal.parcel.senderNic || adminEditModal.parcel.sender?.nic || '—'}</b> — le nouveau numéro doit être unique ; le changement est tracé dans l'historique admin.
+                </p>
+              )}
+            </div>
+          </div>
+
           {/* Expéditeur */}
           <div className="space-y-3">
             <p className="text-xs font-bold text-gray-500 uppercase tracking-wider border-b pb-1">Expéditeur</p>

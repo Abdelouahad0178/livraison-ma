@@ -40,6 +40,7 @@ import DirectorVersementsTab from './director/tabs/DirectorVersementsTab'
 import DirectorCaisseSimple from './director/DirectorCaisseSimple'
 import { fmt } from '../utils/formatNumber'
 import { normIncludes } from '../utils/normText'
+import { codMoneyOnly } from '../utils/moneyFlow'
 
 const parcelDate = (p: any) => {
   // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire — voir
@@ -386,7 +387,8 @@ export default function DirectorPage() {
   }, [parcels, cityFilter, statusFilter, search, datePreset, dateFrom, dateTo])
 
   // ---- Computed — RETOUR FOND
-  const codParcels    = useMemo(() => parcels.filter(p => p.codAmount > 0), [parcels])
+  // 📅 COD encaissés avant le 05/10/2026 (essais) : hors des soldes COD
+  const codParcels    = useMemo(() => codMoneyOnly(parcels).filter(p => p.codAmount > 0), [parcels])
 
   const codDateFiltered = useMemo(() =>
     filterByDate(codParcels, codDatePreset, codDateFrom, codDateTo),
@@ -490,7 +492,7 @@ export default function DirectorPage() {
             user: u, transports, deliveries,
             activeTransports: transports.filter((p: any) => !['Livré','Retourné','Arrivé en agence'].includes(p.status)).length,
             activeDeliveries: deliveries.filter((p: any) => p.status === 'En cours de livraison').length,
-            codCollected: deliveries.filter((p: any) => ['collected','remis'].includes(p.codStatus)).reduce((s: any,p: any) => s+(p.codAmount||0), 0),
+            codCollected: codMoneyOnly<any>(deliveries).filter((p: any) => ['collected','remis'].includes(p.codStatus)).reduce((s: any,p: any) => s+(p.codAmount||0), 0),
             lastActivity: all.length ? Math.max(...all.map(p => parcelDate(p).getTime())) : null,
           }
         } else {

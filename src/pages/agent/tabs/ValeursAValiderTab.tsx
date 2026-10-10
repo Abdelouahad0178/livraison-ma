@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Check, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { auth } from '../../../firebase/config'
 import { fmtFixed as fmtAmt } from '../../../utils/formatNumber'
-import { rejectEnvoi, subscribeEnvois, validateEnvoi, type Envoi, type ValeurType } from '../../../firebase/valeursEnvois'
+import { rejectEnvoi, subscribeEnvois, validateEnvoi, VALEUR_KIND_LABEL, type Envoi, type ValeurType } from '../../../firebase/valeursEnvois'
 import { useAgentCtx } from '../AgentCtx'
 
 const TYPES: { key: ValeurType; label: string; emoji: string }[] = [
@@ -19,6 +19,8 @@ const LABEL: Record<string, string> = { envoye: 'À valider', valide: 'Validé',
 /**
  * ✅ Valeurs à valider : envois de valeurs / espèces transmis par le chef d'exploitation.
  * Le chef d'agence contrôle les montants puis VALIDE (écriture en caisse agence) ou REJETTE (motif).
+ * C'est le SEUL chemin par lequel l'argent des livreurs entre chez le chef d'agence
+ * (livreur → chef d'exploitation → chef d'agence).
  */
 export default function ValeursAValiderTab() {
   const { profile } = useAgentCtx()
@@ -139,7 +141,7 @@ export default function ValeursAValiderTab() {
                     {e.items.map((i, k) => (
                       <tr key={i.parcelId + k} className="border-t border-gray-100">
                         <td className="px-3 py-1.5 font-mono font-semibold text-blue-600">{i.nic}</td>
-                        <td className="px-3 py-1.5">{i.kind === 'port_du' ? 'Port dû' : 'COD'}</td>
+                        <td className="px-3 py-1.5">{VALEUR_KIND_LABEL[i.kind] || i.kind}</td>
                         <td className="px-3 py-1.5">{TYPES.find(t => t.key === i.type)?.emoji} {TYPES.find(t => t.key === i.type)?.label}</td>
                         <td className="px-3 py-1.5 text-right">{fmtAmt(i.amount)} DH</td>
                       </tr>

@@ -4,6 +4,7 @@ import { Building2, TrendingUp, Package, Users, Calendar, CheckCircle, Clock } f
 import { CITIES } from '../../../firebase/constants'
 import { collection, query, where, orderBy, onSnapshot, limit } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
+import { entriesFromStart, moneyFromStart } from '../../../utils/moneyFlow'
 
 interface Props {
   onClose: () => void
@@ -68,7 +69,7 @@ export default function AdminCaisseView({ onClose }: Props) {
     })
 
     const updateParcels = () => {
-      setParcels(Array.from(parcelsMap.values()))
+      setParcels(moneyFromStart(Array.from(parcelsMap.values()))) // 📅 argent compté depuis le 05/10/2026
       setLoading(false)
     }
 
@@ -90,7 +91,7 @@ export default function AdminCaisseView({ onClose }: Props) {
     )
 
     const unsub = onSnapshot(q, (snap) => {
-      setAdminTransfers(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      setAdminTransfers(entriesFromStart(snap.docs.map(d => ({ id: d.id, ...d.data() })))) // 📅 depuis le 05/10/2026
     })
 
     return () => unsub()

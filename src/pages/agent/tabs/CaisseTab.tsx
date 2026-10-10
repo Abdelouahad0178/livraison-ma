@@ -638,21 +638,9 @@ export default function CaisseTab() {
                           const parcel = portDuPending.find((p: any) => p.id === parcelId)
                           if (parcel) {
                             try {
-                              // Encaisser le port dû
+                              // Encaisser le port dû au guichet — 💸 pas d'écriture de caisse ici : remis le
+                              // soir au chef d'exploitation, la caisse est écrite à la validation de son envoi
                               await collectPortDu(parcel.id, name, uid || '')
-                              // Créer l'entrée de caisse
-                              await createCaisseEntry({
-                                type: 'entree',
-                                category: 'port_du',
-                                amount: parcel.price || 0,
-                                description: `Port dû — ${parcel.trackingId} (${parcel.receiver?.name || 'Destinataire'})`,
-                                reference: parcel.trackingId,
-                                agentId: uid || '',
-                                agentName: name,
-                                city: profile?.city || parcel.receiver?.city || '',
-                                cashierId: uid || '',
-                                cashierName: name,
-                              })
                               // Mettre à jour le statut du colis
                               await updateParcelStatus(parcel.id, 'Livré', {
                                 deliveredAt: new Date().toISOString(),

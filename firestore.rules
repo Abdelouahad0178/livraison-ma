@@ -524,16 +524,35 @@ service cloud.firestore {
       // Chef d'agence / Agent PRO / Chef d'exploitation de la ville de destination actuelle uniquement,
       // seule la ville du destinataire change (même si colis chargé). Statut final : « Arrivé en agence »
       // (sans livreur) ou « En cours de livraison » chez un livreur de la NOUVELLE ville.
+      // Expédition déjà « Livré » SANS PORT DÛ NI COD ENCAISSÉ (le site annule d'abord la collecte faite
+      // ici) : elle reste « Livré », chez un livreur de la nouvelle ville ou sans livreur (en gare).
+      // Le port PAYÉ (encaissé au départ) ne bloque pas.
       allow update: if (role() == 'chef_agence' || role() == 'agentpro' || role() == 'chef_exploitation')
         && isNotBlocked()
-        && (resource.data.status in ['Arrivé en agence', 'En cours de livraison']
-            || (resource.data.status == 'Initialisé'
-                && resource.data.get('originCity', '') == resource.data.destinationCity))
-        && (request.resource.data.status == 'Arrivé en agence'
-            || (request.resource.data.status == 'En cours de livraison'
-                && request.resource.data.get('deliveryDriverId', null) is string
-                && get(/databases/$(database)/documents/users/$(request.resource.data.deliveryDriverId)).data.city
-                   == request.resource.data.destinationCity))
+        && (
+          (
+            (resource.data.status in ['Arrivé en agence', 'En cours de livraison']
+              || (resource.data.status == 'Initialisé'
+                  && resource.data.get('originCity', '') == resource.data.destinationCity))
+            && (request.resource.data.status == 'Arrivé en agence'
+                || (request.resource.data.status == 'En cours de livraison'
+                    && request.resource.data.get('deliveryDriverId', null) is string
+                    && get(/databases/$(database)/documents/users/$(request.resource.data.deliveryDriverId)).data.city
+                       == request.resource.data.destinationCity))
+          )
+          || (
+            resource.data.status == 'Livré'
+            && request.resource.data.status == 'Livré'
+            && !(resource.data.get('portType', '') == 'port_du'
+                 && resource.data.get('portPayeMethod', null) in [null, '']
+                 && resource.data.get('portStatus', null) in ['collected', 'received'])
+            && resource.data.get('codCollectedAt', null) == null
+            && resource.data.get('codStatus', null) in [null, 'pending']
+            && (request.resource.data.get('deliveryDriverId', null) == null
+                || get(/databases/$(database)/documents/users/$(request.resource.data.deliveryDriverId)).data.city
+                   == request.resource.data.destinationCity)
+          )
+        )
         && resource.data.destinationCity in ['Agadir', 'Ait Melloul']
         && request.resource.data.destinationCity in ['Agadir', 'Ait Melloul']
         && request.resource.data.destinationCity != resource.data.destinationCity

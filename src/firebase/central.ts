@@ -6,6 +6,7 @@ import {
 } from 'firebase/firestore'
 import { db } from './db'
 import { daysAgoTimestamp } from './firestoreUtils'
+import { MONEY_START } from '../utils/moneyFlow'
 import { buildCaisseEntryPayload } from './caisse'
 import { centralCodParcelPatch } from './finance'
 
@@ -89,7 +90,7 @@ export async function createCentralCodDeposit({ parcelIds = [], parcels = [] as 
 }
 export function subscribeAllCentralCodDeposits(callback: any, onError: (err?: any) => void = () => {}) {
   // 180 jours pour éviter surcharge Firestore
-  const since = daysAgoTimestamp(180)
+  const since = Timestamp.fromMillis(Math.max(daysAgoTimestamp(180).toMillis(), MONEY_START.getTime())) // 📅 jamais avant le vrai calcul
   const q = query(collection(db, 'centralCodDeposits'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
   // Filtrer les versements supprimés (status: 'deleted')
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((dep: any) => dep.status !== 'deleted')), onError)
@@ -492,7 +493,7 @@ export async function deleteAllCentralSupplierPayments(deletedBy: string, delete
 
 export function subscribeAllCentralSupplierPayments(callback: any, onError: (err?: any) => void = () => {}) {
   // 180 jours pour éviter surcharge Firestore
-  const since = daysAgoTimestamp(180)
+  const since = Timestamp.fromMillis(Math.max(daysAgoTimestamp(180).toMillis(), MONEY_START.getTime())) // 📅 jamais avant le vrai calcul
   const q = query(collection(db, 'centralSupplierPayments'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((p: any) => p.status !== 'deleted')), onError)
 }

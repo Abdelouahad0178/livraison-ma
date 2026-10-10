@@ -87,14 +87,17 @@ describe('AgentHeader', () => {
     }
   })
 
-  it('shows pending modification badge count', () => {
+  // L'entrée « Modif. clients » (et son badge) a été masquée volontairement pour le chef d'agence
+  // (commit c4180f0 « Masquer onglets inutilisés pour chef agence et agentpro ») : elle ne doit pas réapparaître.
+  it('hides the client modifications entry and its badge in the mobile menu', () => {
     const modRequests = [
       { id: '1', status: 'pending' },
       { id: '2', status: 'approved' },
       { id: '3', status: 'pending' },
     ]
-    // Badge is in the mobile dropdown which is only rendered when menuOpen=true
+    // Le menu mobile n'est rendu que si menuOpen=true
     render(<AgentHeader {...makeProps({ profile: { ...makeProps().profile, role: 'chef_agence' }, modRequests, menuOpen: true })} />)
-    expect(screen.getByText('2')).toBeInTheDocument()
+    expect(screen.queryByText(/Modif\. clients/)).not.toBeInTheDocument()
+    expect(screen.queryByText('2')).not.toBeInTheDocument()
   })
 })

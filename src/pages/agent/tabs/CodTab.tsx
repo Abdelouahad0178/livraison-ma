@@ -6,6 +6,7 @@ import DateFilter from '../DateFilter'
 import { useAgentCtx } from '../AgentCtx'
 import { filterByDate } from '../../../utils/dateFilter'
 import { fmt, fmtFixed as fmtAmt } from '../../../utils/formatNumber'
+import { isCodMoneyBeforeStart } from '../../../utils/moneyFlow'
 import { normText, isDigitsOnly, numberStartsWith } from '../../../utils/normText'
 import CodSuiviView from './CodSuiviView'
 import { codPartsOf, codHasType, codAmountOfType, codCashPartOf, isMixedCod, codPartsBreakdown, codServiceLabel, codPartsLabel } from '../../../utils/codParts'
@@ -331,8 +332,10 @@ export default function CodTab() {
     isAgencyManager && sameCity(p.originCity || p.sender?.city, profile?.city)
   const isChefAgencyCodDestination = (p: any) =>
     isAgencyManager && sameCity(p.destinationCity || p.receiver?.city, profile?.city)
+  // 📅 COD encaissés avant le 05/10/2026 (essais) : hors des soldes COD (les expéditions restent ailleurs)
   const liveParcels = (parcels as any[]).filter((p: any) =>
     (p.agentId === uid || p.destinationAgentId === uid || isChefAgencyCodSource(p) || isChefAgencyCodDestination(p)) && isRetourFondValue(p)
+    && !isCodMoneyBeforeStart(p)
   )
   const merged = allCodParcels
     ? (() => {
@@ -542,13 +545,14 @@ export default function CodTab() {
   const handleCollectFromDriver = async (row: any) => {
     const list = row.encaissables
     if (!list.length || bulkReceiving) return
+    // 🏢 Chef d'agence EN REMPLACEMENT du chef d'exploitation (absent) : encaissement marqué à son nom
     const total = list.reduce((s: number, p: any) => s + (parseFloat(p.codAmount || 0) || 0), 0)
     const detail = VALUE_TYPES
       .map(t => ({ t, n: list.filter((p: any) => inType(p, t.key)).length, m: list.reduce((s: number, p: any) => s + codAmountOfType(p, t.key), 0) }))
       .filter(x => x.n > 0)
       .map(x => `  ${x.t.emoji} ${x.t.label} : ${x.n} · ${fmt(x.m)} DH`)
       .join('\n')
-    if (!confirm(`Encaisser ${list.length} valeur(s) de ${row.name} ?\n\n${detail}\n\nTOTAL : ${fmt(total)} DH\n\nLes espèces seront enregistrées en caisse.`)) return
+    if (!confirm(`Encaisser vous-même ${list.length} valeur(s) de ${row.name}, en l'absence du chef d'exploitation ?\n\n${detail}\n\nTOTAL : ${fmt(total)} DH\n\nElles seront marquées reçues par vous (chef d'agence) ; les espèces seront enregistrées en caisse.`)) return
     setBulkReceiving(row.key)
     setCollectFeedback(null)
     try {
@@ -560,6 +564,7 @@ export default function CodTab() {
   }
 
   const handleCollectSingle = async (p: any) => {
+    if (!confirm(`Encaisser vous-même la valeur ${nic(p)} (${fmtAmt(p.codAmount)} DH), en l'absence du chef d'exploitation ?\n\nElle sera marquée reçue par vous (chef d'agence).`)) return
     setCollectFeedback(null)
     await handleReceptionCod(p)
     setCollectFeedback({ ok: true, msg: `${nic(p)} traité — ${fmtAmt(p.codAmount)} DH` })

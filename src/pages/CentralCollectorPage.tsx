@@ -42,6 +42,7 @@ import { saveParcelCodDocuments, type CodDocument } from '../firebase/central'
 import { ChequeEntryModal, ReceptionSheetModal, isDocParcel, hasDocData, docsOf } from './central/ChequeReception'
 import { normText, isDigitsOnly, numberStartsWith } from '../utils/normText'
 import { codPartView, codHasType, isMixedCod, codPartsOf, codTypeDisplay, codPartsBreakdown, codPartsLabel } from '../utils/codParts'
+import { codMoneyOnly } from '../utils/moneyFlow'
 
 // ⚡ Système de chargement optimisé (Option 3 - comme AdminPage)
 const PAGE_SIZE = 50 // Chargement initial réduit
@@ -578,7 +579,8 @@ export default function CentralCollectorPage() {
   // qu'à son propre auteur : chaque pointage est attaché à l'utilisateur qui l'a fait.
   const myUid = auth.currentUser?.uid || ''
 
-  const codParcels = useMemo(() => parcels.filter((p: any) => (parseFloat(p.codAmount) || 0) > 0), [parcels])
+  // 📅 COD encaissés avant le 05/10/2026 (essais) : hors des soldes COD
+  const codParcels = useMemo(() => codMoneyOnly(parcels).filter((p: any) => (parseFloat(p.codAmount) || 0) > 0), [parcels])
 
   const ctlCities = useMemo(() => [...new Set(codParcels.map(parcelCity).filter(Boolean))].sort(), [codParcels])
 

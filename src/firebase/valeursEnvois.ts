@@ -6,13 +6,15 @@ import { createCaisseEntry } from './caisse'
 import { remitCod } from './cod'
 
 /**
- * 📤 Envoi de valeurs / espèces : le chef d'exploitation remet au chef d'agence ce qu'il a collecté
- * auprès des livreurs (ports dus en espèces + COD espèces / chèques / traites). Le chef d'agence
- * CONTRÔLE puis VALIDE (ou rejette avec motif). Seule la validation écrit en caisse agence.
+ * 📤 Envoi de valeurs / espèces : le chef d'exploitation remet au chef d'agence ce qu'il a REÇU des
+ * livreurs et de « En gare - ville » (ports dus + COD espèces / chèques / traites + ports payés ramassés
+ * au guichet). Le chef d'agence CONTRÔLE puis VALIDE (ou rejette avec motif). Seule la validation écrit
+ * en caisse agence — circuit unique livreur → chef d'exploitation → chef d'agence.
  *
  * Collection `valeursEnvois` — statuts : 'envoye' → 'valide' | 'rejete' | 'annule'.
  */
-export type ValeurKind = 'port_du' | 'cod'
+export type ValeurKind = 'port_du' | 'cod' | 'port_paye'
+export const VALEUR_KIND_LABEL: Record<ValeurKind, string> = { port_du: 'Port dû', cod: 'COD', port_paye: 'Port payé à ramasser' }
 export type ValeurType = 'especes' | 'cheque' | 'traite'
 
 export interface EnvoiItem {
@@ -82,6 +84,19 @@ export async function rejectEnvoi(id: string, reason: string, by: { id: string; 
   })
 }
 
+/** Écrit `fields` sur chaque expédition de l'envoi (parcels, sinon parcels_archive) — sautée si déjà faite. */
+async function markEach(items: EnvoiItem[], errors: string[], done: (p: any) => boolean, fields: Record<string, unknown>) {
+  for (const it of items) {
+    try {
+      const snap = await getDoc(doc(db, 'parcels', it.parcelId))
+      if (snap.exists() && done(snap.data())) continue // ré-essai
+      await updateDoc(doc(db, snap.exists() ? 'parcels' : 'parcels_archive', it.parcelId), fields)
+    } catch (e: any) {
+      errors.push(`${it.nic} : ${e?.message || e}`)
+    }
+  }
+}
+
 /**
  * ✅ Validation par le chef d'agence : réception des COD (comme CodTab.handleReceptionCod : remise du
  * COD, écriture en caisse pour les espèces si pas déjà faite) + écriture en caisse des ports dus
@@ -143,6 +158,29 @@ export async function validateEnvoi(envoi: Envoi, by: { id: string; name: string
       errors.push(`Ports dus : ${e?.message || e}`)
     }
   }
+  // Chaque port dû de l'envoi (espèces et chèque) : reçu par le chef d'agence
+  await markEach(envoi.items.filter(i => i.kind === 'port_du'), errors, p => !!p.portChefReceivedAt,
+    { portChefReceivedAt: now, portChefReceivedBy: by.name, portChefReceivedById: by.id, valeursEnvoiId: envoi.id })
+
+  // 3) Ports payés ramassés au guichet : une écriture de caisse globale (ils ne sont plus écrits en
+  // caisse à la création), puis chaque expédition passe « reçu » par le chef d'agence
+  const pps = envoi.items.filter(i => i.kind === 'port_paye')
+  const ppTotal = pps.reduce((s, i) => s + i.amount, 0)
+  if (pps.length > 0 && ppTotal > 0 && !(envoi.caisseEntryIds || []).some(id => id.startsWith('pp:'))) {
+    try {
+      const id = await createCaisseEntry({
+        type: 'entree', category: 'port_paye', amount: ppTotal,
+        description: `Ports payés à ramasser validés (envoi chef d'exploitation ${envoi.createdByName}) — ${pps.length} expédition(s)`,
+        reference: envoi.id,
+        agentId: by.id, agentName: by.name, city: by.city, cashierId: by.id, cashierName: by.name,
+      })
+      caisseEntryIds.push(`pp:${id}`)
+    } catch (e: any) {
+      errors.push(`Ports payés : ${e?.message || e}`)
+    }
+  }
+  await markEach(pps, errors, p => p.portStatus === 'received',
+    { portStatus: 'received', portReceivedBy: by.name, portReceivedById: by.id, portReceivedAt: now, valeursEnvoiId: envoi.id })
 
   if (errors.length > 0) {
     await updateDoc(doc(db, 'valeursEnvois', envoi.id), { validationErrors: errors, caisseEntryIds })

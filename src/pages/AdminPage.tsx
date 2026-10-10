@@ -103,6 +103,7 @@ import DriverPortDuModal from './admin/modals/DriverPortDuModal'
 import AdminEditParcelModal from './admin/modals/AdminEditParcelModal'
 import { fmt } from '../utils/formatNumber'
 import { analyzeNbColisShortcut, nbColisDigitsOnly, NB_COLIS_SHORTCUT_TITLE } from '../utils/nbColisShortcut'
+import { codMoneyOnly, isPortDuMoneyBeforeStart } from '../utils/moneyFlow'
 
 const parcelDate = (p: any) => {
   // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire — voir
@@ -1090,7 +1091,7 @@ export default function AdminPage() {
   , [directorLogs, adminDatePreset, adminDateFrom, adminDateTo, operationalDay])
 
   const codDateFiltered = useMemo(() =>
-    filterByDate(allParcels.filter((p: any) => parseFloat(p.codAmount) > 0),
+    filterByDate(codMoneyOnly(allParcels).filter((p: any) => parseFloat(p.codAmount) > 0), // 📅 COD comptés depuis le 05/10/2026
       codDatePreset, codDateFrom, codDateTo, (p: any) => {
         // 📅 Utiliser workDate (date de travail) au lieu de createdAt
         if (p.workDate) return new Date(p.workDate + 'T12:00:00')
@@ -1126,9 +1127,9 @@ export default function AdminPage() {
     if (!Array.isArray(allParcels)) return { pendingDH: 0, collectedDH: 0, remisDH: 0, regleDH: 0 }
     return {
       pendingDH:   allParcels.filter((p: any) => parseFloat(p.codAmount) > 0 && (!p.codStatus || p.codStatus === 'pending')).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
-      collectedDH: allParcels.filter((p: any) => p.codStatus === 'collected').reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
-      remisDH:     allParcels.filter((p: any) => p.codStatus === 'remis' && !p.codSenderPaid).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
-      regleDH:     allParcels.filter((p: any) => p.codSenderPaid).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
+      collectedDH: codMoneyOnly(allParcels).filter((p: any) => p.codStatus === 'collected').reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
+      remisDH:     codMoneyOnly(allParcels).filter((p: any) => p.codStatus === 'remis' && !p.codSenderPaid).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
+      regleDH:     codMoneyOnly(allParcels).filter((p: any) => p.codSenderPaid).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0),
     }
   }, [allParcels])
 
@@ -1203,9 +1204,9 @@ export default function AdminPage() {
         const colisLivres      = [...transports, ...deliveries].filter((p: any) => p.status === 'Livré').length
         const activeTransports = transports.filter((p: any) => p.status === 'En transit').length
         const activeDeliveries = deliveries.filter((p: any) => p.status === 'En cours de livraison').length
-        const codCollected     = deliveries.reduce((s: number, p: any) => p.codStatus === 'collected' ? s + (parseFloat(p.codAmount) || 0) : s, 0)
+        const codCollected     = codMoneyOnly(deliveries).reduce((s: number, p: any) => p.codStatus === 'collected' ? s + (parseFloat(p.codAmount) || 0) : s, 0)
         const driverTxs        = driverPortDuTxs.filter((t: any) => t.driverId === u.id)
-        const portDuCollecte   = deliveries.filter((p: any) => p.portType === 'port_du' && p.portStatus === 'collected').reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
+        const portDuCollecte   = deliveries.filter((p: any) => p.portType === 'port_du' && p.portStatus === 'collected' && !isPortDuMoneyBeforeStart(p)).reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
         const versements       = driverTxs.filter((t: any) => t.type === 'versement').reduce((s: number, t: any) => s + (t.amount || 0), 0)
         const avances          = driverTxs.filter((t: any) => t.type === 'avance').reduce((s: number, t: any) => s + (t.amount || 0), 0)
         const remises          = driverTxs.filter((t: any) => t.type === 'remise').reduce((s: number, t: any) => s + (t.amount || 0), 0)
@@ -1258,7 +1259,7 @@ export default function AdminPage() {
 
   const codAlerts = useMemo(() => {
     if (!Array.isArray(periodParcels)) return []
-    return periodParcels
+    return codMoneyOnly(periodParcels)
       .filter((p: any) => p.codStatus === 'collected' && parseFloat(p.codAmount) > 0 && !p.codSenderPaid)
       .map((p: any) => {
         const d = p.codCollectedAt ? new Date(p.codCollectedAt) : new Date(p.createdAt || 0)

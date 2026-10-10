@@ -36,6 +36,7 @@ import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
 import { normText, isDigitsOnly, numberStartsWith } from '../utils/normText'
 import { codHasType, isMixedCod, codPartsOf, codPartsBreakdown, codPartsLabel } from '../utils/codParts'
+import { codMoneyOnly } from '../utils/moneyFlow'
 
 const PAGE_SIZE = 800 // Chargement progressif par tranches de 800
 
@@ -361,7 +362,8 @@ export default function AnalyseurEspecePage() {
   const parcelCity = (p: any) => p.destinationCity || p.receiver?.city || 'Ville inconnue'
   const isControlled = (p: any) => !!p.controlled
 
-  const codParcels = useMemo(() => parcels.filter((p: any) => (parseFloat(p.codAmount) || 0) > 0), [parcels])
+  // 📅 COD encaissés avant le 05/10/2026 (essais) : hors des soldes COD
+  const codParcels = useMemo(() => codMoneyOnly(parcels).filter((p: any) => (parseFloat(p.codAmount) || 0) > 0), [parcels])
 
   const ctlCities = useMemo(() => [...new Set(codParcels.map(parcelCity).filter(Boolean))].sort(), [codParcels])
 

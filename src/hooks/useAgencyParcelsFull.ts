@@ -15,6 +15,9 @@ export function useAgencyParcelsFull(
   dateFrom: Date | null,
   dateTo: Date | null,
   enabled = true,
+  // 🪶 Pages de caisse : journées PASSÉES en version allégée (parcelsLite, −35 % de données), journée en cours
+  // en expéditions complètes (temps réel exact) — mêmes calculs, aucun changement visible
+  litePast = false,
 ) {
   const [parcels, setParcels] = useState<any[]>([])
   const [loaded, setLoaded] = useState(0)
@@ -34,7 +37,7 @@ export function useAgencyParcelsFull(
     setInitialLoading(true)
     const unsub = subscribeAgencyParcelsFull(
       city,
-      { dateFrom: fromMs ? new Date(fromMs) : null, dateTo: toMs ? new Date(toMs) : null },
+      { dateFrom: fromMs ? new Date(fromMs) : null, dateTo: toMs ? new Date(toMs) : null, lite: litePast, liteLive: false },
       (data, meta) => {
         startTransition(() => setParcels(data))
         setLoaded(meta.loaded)
@@ -48,7 +51,7 @@ export function useAgencyParcelsFull(
       },
     )
     return unsub
-  }, [city, fromMs, toMs, enabled])
+  }, [city, fromMs, toMs, enabled, litePast])
 
   return { parcels, loaded, loading, initialLoading }
 }

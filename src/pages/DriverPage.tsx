@@ -35,6 +35,7 @@ import SignatureViewerModal from '../components/SignatureViewerModal'
 import VersementChefModal from './driver/components/VersementChefModal'
 import { fmt } from '../utils/formatNumber'
 import { normIncludes } from '../utils/normText'
+import { isCodMoneyBeforeStart, isPortDuMoneyBeforeStart } from '../utils/moneyFlow'
 
 const QRCodeSVG = lazy(() => import('../components/QRCodeSvg'))
 
@@ -441,20 +442,22 @@ export default function DriverPage() {
     .reduce((s: number, v: any) => s + (parseFloat(v.amount) || 0), 0)
 
   // Port Dû collecté : EXACTEMENT la même logique que l'onglet "Port Dû" qui fonctionne (ligne 1991)
-  const myPortDuParcels = deliveryParcels.filter((p: any) => p.portType === 'port_du' && p.portStatus === 'collected')
+  // 📅 Argent encaissé avant le 05/10/2026 (essais) : hors solde
+  const myPortDuParcels = deliveryParcels.filter((p: any) => p.portType === 'port_du' && p.portStatus === 'collected' && !isPortDuMoneyBeforeStart(p))
   const portDuTotalCollected = myPortDuParcels.reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
+  // 💸 Remis au chef d'exploitation (ou, avant, reçu par le chef d'agence) : plus détenu par le livreur
   const portDuReceivedByChef = myPortDuParcels
-    .filter((p: any) => p.portChefReceivedAt)
+    .filter((p: any) => p.portChefReceivedAt || p.portExpReceivedAt)
     .reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
   const portDuHeld = portDuTotalCollected - portDuReceivedByChef
 
-  // COD collecté : colis avec COD collecté par le livreur mais pas encore reçu par le chef
+  // COD collecté : colis avec COD collecté par le livreur mais pas encore remis (chef d'exploitation / chef)
   const codHeld = deliveryParcels
     .filter((p: any) => {
       const hasCod = parseFloat(p.codAmount || 0) > 0
       const isCollected = ['collected_by_driver', 'collected_at_destination', 'collected', 'remis'].includes(p.codStatus || '')
-      const notReceivedByChef = !p.codReceivedByChef
-      return hasCod && isCollected && notReceivedByChef
+      const notReceivedByChef = !p.codReceivedByChef && !p.codExpReceivedAt
+      return hasCod && isCollected && notReceivedByChef && !isCodMoneyBeforeStart(p)
     })
     .reduce((s: number, p: any) => s + (parseFloat(p.codAmount) || 0), 0)
 

@@ -7,6 +7,8 @@ import {
 import { useAgentCtx } from '../AgentCtx'
 import DateFilter from '../DateFilter'
 import { fmtFixed as fmtAmt } from '../../../utils/formatNumber'
+import { VIA_EXPLOITATION_MSG } from '../../../utils/moneyFlow'
+import { chefCancelPortDu, chefCancelPortPaye, chefReceivePortDu, chefReceivePortPaye } from '../../../firebase/chefPortReception'
 import {
   createAdminTransferFromAgent,
   subscribeMyAdminTransfers
@@ -28,12 +30,14 @@ import { printPortsCollectes, printVersementParcels, printDriverExpeditionsTable
 import HScrollArrows from '../../../components/HScrollArrows'
 import DriverCaisseCard from '../../../components/caisse/DriverCaisseCard'
 import CollectesParJour from '../../../components/caisse/CollectesParJour'
+import CaisseSummaryCards from '../../../components/caisse/CaisseSummaryCards'
 import { printFeuilleDeCharge } from '../../../utils/printFeuilleDeCharge'
 import { useGarePending } from '../../exploitation/useGarePending'
 import { useDepotIds } from '../../exploitation/useDepotIds'
 import {
   firestoreBoundsFor, caisseFilterByDate, safeParseAmount, computeCaisseView,
   caisseCodAmountOfType, caisseCodTotals, CAISSE_DEFAULT_PRESET, caisseDefaultOperationalDay, CAISSE_STATUS_OPTIONS,
+  isRamasseGuichet,
 } from '../../../utils/agencyCaisseRules'
 import { isMixedCod, codPartsBreakdown, codCashPartOf, codDocPartOf, codEditResult } from '../../../utils/codParts'
 
@@ -79,6 +83,13 @@ export default function CaisseChefTab() {
     if (key === 'operational' && !operationalDayUi) setOperationalDay(new Date())
     setDatePreset(key)
   }
+  // 📅 Période APPLIQUÉE (chargement + calculs) : avec « Période », la recherche ne part qu'une fois les
+  // DEUX dates choisies (et dans l'ordre) — d'ici là, la période précédente reste affichée.
+  const [appliedDates, setAppliedDates] = useState({ preset: datePresetUi, from: dateFromUi, to: dateToUi })
+  useEffect(() => {
+    if (datePresetUi === 'custom' && (!dateFromUi || !dateToUi || dateFromUi > dateToUi)) return
+    setAppliedDates(prev => (prev.preset === datePresetUi && prev.from === dateFromUi && prev.to === dateToUi ? prev : { preset: datePresetUi, from: dateFromUi, to: dateToUi }))
+  }, [datePresetUi, dateFromUi, dateToUi])
 
   // 📡 Chargement des expéditions PROPRE à cette page, indépendant de l'onglet Expéditions.
   // Avant, Caisse Agence lisait passivement les colis déjà chargés en mémoire par un AUTRE
@@ -92,7 +103,7 @@ export default function CaisseChefTab() {
   // totaux (ports à collecter, collectés, versements) étaient faux. Désormais : bornes Firestore
   // exactes pour chaque preset (firestoreBoundsFor, sur-ensemble du filtre client), chargement
   // jusqu'à épuisement en temps réel, archivés inclus, 45 jours pour les filtres larges.
-  const caisseBounds = firestoreBoundsFor(datePresetUi, dateFromUi, dateToUi, operationalDayUi)
+  const caisseBounds = firestoreBoundsFor(appliedDates.preset, appliedDates.from, appliedDates.to, operationalDayUi)
   const caisseFromMs = caisseBounds.from ? caisseBounds.from.getTime() : 0
   const caisseToMs = caisseBounds.to ? caisseBounds.to.getTime() : 0
   const isChefCaisse = profile?.role === 'chef_agence' && !!profile?.city
@@ -105,6 +116,7 @@ export default function CaisseChefTab() {
     caisseFromMs ? new Date(caisseFromMs) : null,
     caisseToMs ? new Date(caisseToMs) : null,
     isChefCaisse,
+    true, // journées passées en version allégée (parcelsLite), journée en cours complète
   )
   const [caisseReturnParcels, setCaisseReturnParcels] = useState<any[]>([])
   useEffect(() => {
@@ -121,13 +133,27 @@ export default function CaisseChefTab() {
     return () => { unsubReturns() }
   }, [isChefCaisse, profile?.city, caisseFromMs, caisseToMs])
 
+  // 📬 Temps réel : ports payés ramassés au guichet encore « à verser » (portStatus collected) — une réception
+  // ou une annulation faite par le chef d'exploitation se voit aussitôt, même sur une journée passée
+  // (les journées passées sont sinon lues une seule fois à l'ouverture)
+  const [liveRamasses, setLiveRamasses] = useState<Map<string, any>>(() => new Map())
+  useEffect(() => {
+    if (!isChefCaisse || !profile?.city) return
+    const q = query(collection(db, 'parcels'),
+      where('originCity', '==', profile.city), where('portType', '==', 'port_paye'), where('portStatus', '==', 'collected'))
+    return onSnapshot(q, snap => startTransition(() => setLiveRamasses(new Map(snap.docs.map(d => [d.id, { id: d.id, ...d.data() }])))),
+      err => console.error('CaisseChefTab ramassés temps réel:', err))
+  }, [isChefCaisse, profile?.city])
+
   // Fusion colis + retours, même logique que allDisplayParcels côté Expéditions
   const allDisplayParcels = useMemo(() => {
     const map = new Map()
     ;(caisseParcels || []).forEach((p: any) => map.set(p.id, p))
     ;(caisseReturnParcels || []).forEach((p: any) => map.set(p.id, p))
+    // Version temps réel (document complet) à la place de la version lue à l'ouverture
+    liveRamasses.forEach((p, id) => { if (map.has(id)) map.set(id, p) })
     return [...map.values()]
-  }, [caisseParcels, caisseReturnParcels])
+  }, [caisseParcels, caisseReturnParcels, liveRamasses])
 
   // Filtres
   const [driverFilterUi, setDriverFilter] = useState('all')
@@ -135,8 +161,8 @@ export default function CaisseChefTab() {
   // Copies DIFFÉRÉES des filtres (lues par tous les calculs) — un seul objet pour qu'elles
   // changent ensemble dans le même rendu d'arrière-plan.
   const urgentCaisseFilters = useMemo(
-    () => ({ datePreset: datePresetUi, dateFrom: dateFromUi, dateTo: dateToUi, operationalDay: operationalDayUi, driverFilter: driverFilterUi, statusFilter: statusFilterUi }),
-    [datePresetUi, dateFromUi, dateToUi, operationalDayUi, driverFilterUi, statusFilterUi]
+    () => ({ datePreset: appliedDates.preset, dateFrom: appliedDates.from, dateTo: appliedDates.to, operationalDay: operationalDayUi, driverFilter: driverFilterUi, statusFilter: statusFilterUi }),
+    [appliedDates, operationalDayUi, driverFilterUi, statusFilterUi]
   )
   const deferredCaisseFilters = useDeferredValue(urgentCaisseFilters)
   const { datePreset, dateFrom, dateTo, operationalDay, driverFilter, statusFilter } = deferredCaisseFilters
@@ -535,57 +561,40 @@ export default function CaisseChefTab() {
 
   // Collecter un port dû
   // 🆕 Réception des ports payés ramassés par le livreur
-  const handleReceivePortPaye = async (parcel: any) => {
-    if (!confirm(`Confirmer la réception du port payé de ${fmtAmt(parcel.price)} DH ramassé par le livreur pour l'expédition ${parcel.senderNic || parcel.trackingId} ?`)) {
-      return
-    }
-
+  // 🏢 Chef d'agence EN REMPLACEMENT du chef d'exploitation (absent) : collecte / réception des ports
+  // marquée à son nom (rôle « chef_agence ») et écrite directement en caisse (src/firebase/chefPortReception.ts)
+  const chefActor = { id: uid || '', name: profile?.name || '', city: profile?.city || '' }
+  const runChefPort = async (parcel: any, question: string, fn: () => Promise<Record<string, any>>) => {
+    if (!chefActor.id || !chefActor.name) { alert("❌ Impossible d'identifier le chef d'agence connecté. Reconnectez-vous."); return }
+    if (!confirm(question)) return
     setCollectingPortIds(prev => new Set(prev).add(parcel.id))
     try {
-      const updatedData = {
-        portStatus: 'received',  // Chef a reçu l'argent du livreur
-        portReceivedBy: profile?.name || '',
-        portReceivedById: uid || '',
-        portReceivedAt: new Date(),
-      }
-
-      setModifiedParcels(prev => ({ ...prev, [parcel.id]: updatedData }))
-      updateParcelOptimistic(parcel.id, updatedData)
-
-      if (searchResults) {
-        setSearchResults(prev =>
-          prev ? prev.map(p => p.id === parcel.id ? { ...p, ...updatedData } : p) : prev
-        )
-      }
-
-      await updateParcel(parcel.id, updatedData)
+      const fields = await fn()
+      setModifiedParcels(prev => ({ ...prev, [parcel.id]: { ...(prev[parcel.id] || {}), ...fields } }))
+      updateParcelOptimistic(parcel.id, fields)
+      if (searchResults) setSearchResults(prev => prev ? prev.map(p => p.id === parcel.id ? { ...p, ...fields } : p) : prev)
     } catch (err: any) {
-      console.error('❌ [handleReceivePortPaye] ERREUR:', err)
-      alert(`❌ Erreur: ${err.message}`)
-
-      setModifiedParcels(prev => {
-        const updated = { ...prev }
-        delete updated[parcel.id]
-        return updated
-      })
-
-      if (searchResults) {
-        setSearchResults(prev =>
-          prev ? prev.map(p => p.id === parcel.id ? parcel : p) : prev
-        )
-      }
+      console.error('❌ [chef d\'agence ports]', err)
+      alert(`❌ Erreur: ${err?.message || err}`)
     } finally {
-      setCollectingPortIds(prev => {
-        const updated = new Set(prev)
-        updated.delete(parcel.id)
-        return updated
-      })
+      setCollectingPortIds(prev => { const s = new Set(prev); s.delete(parcel.id); return s })
     }
   }
+  const nicOf = (parcel: any) => parcel.senderNic || parcel.trackingId
+  const handleReceivePortPaye = (parcel: any) => runChefPort(parcel,
+    `Recevoir vous-même le port payé à ramasser de ${fmtAmt(parcel.price)} DH (${nicOf(parcel)}), en l'absence du chef d'exploitation ?\n\nIl sera marqué reçu par vous (chef d'agence) et enregistré en caisse.`,
+    () => chefReceivePortPaye(parcel, chefActor))
 
   // 🆕 Annuler la réception d'un port payé (pour corriger les erreurs)
   const handleUncollectPortPaye = async (parcel: any) => {
-    if (!confirm(`Annuler la réception du port payé de ${fmtAmt(parcel.price)} DH pour l'expédition ${parcel.senderNic || parcel.trackingId} ?\n\nLe port sera remis en état "Ramassé" (à recevoir).`)) {
+    // Reçu par la validation d'un envoi du chef d'exploitation : déjà écrit en caisse, non annulable ici
+    if (parcel.valeursEnvoiId) { alert("Port payé reçu par un envoi validé du chef d'exploitation : annulation impossible ici."); return }
+    // Reçu par moi en remplacement du chef d'exploitation : entrée de caisse supprimée
+    if (parcel.portPayeExpReceivedRole === 'chef_agence') {
+      return runChefPort(parcel, `Annuler votre réception du port payé de ${fmtAmt(parcel.price)} DH (${nicOf(parcel)}) ?\n\nL'entrée de caisse sera supprimée.`,
+        () => chefCancelPortPaye(parcel, chefActor))
+    }
+    if (!confirm(`Annuler la réception du port payé de ${fmtAmt(parcel.price)} DH pour l'expédition ${parcel.senderNic || parcel.trackingId} ?\n\nLe port sera remis en état « À ramasser » (à recevoir).`)) {
       return
     }
 
@@ -631,147 +640,25 @@ export default function CaisseChefTab() {
       })
     }
   }
-  const handleCollectPort = async (parcel: any) => {
-    if (!confirm(`Confirmer la collecte du port de ${fmtAmt(parcel.price)} DH pour l'expédition ${parcel.senderNic || parcel.trackingId} ?`)) {
-      return
-    }
-
-    // ⚠️ Garde-fou : sans uid/nom d'agent valides, la mise à jour Firestore
-    // sera rejetée par les règles de sécurité (portCollectedById doit être
-    // l'uid de l'utilisateur connecté). On bloque AVANT toute mise à jour
-    // optimiste pour ne pas afficher un état "Collecté" qui ne sera jamais
-    // persisté côté serveur.
-    if (!uid || !profile?.name) {
-      console.error('❌ [handleCollectPort] Paramètres manquants, annulation:', {
-        uid,
-        profileName: profile?.name,
-        parcelId: parcel.id
-      })
-      alert("❌ Erreur: impossible d'identifier l'agent connecté (uid ou nom manquant). Reconnectez-vous et réessayez.")
-      return
-    }
-
-    console.log('🔵 [handleCollectPort] DÉBUT:', {
-      parcelId: parcel.id,
-      nic: parcel.senderNic || parcel.trackingId,
-      price: parcel.price,
-      currentPortStatus: parcel.portStatus,
-      uid,
-      agentName: profile.name
-    })
-
-    setCollectingPortIds(prev => new Set(prev).add(parcel.id))
-    try {
-      const updatedData = {
-        portStatus: 'collected',
-        portCollectedBy: profile.name,
-        portCollectedById: uid,
-        portCollectedAt: new Date(),
-        portDuReceivedMethod: 'especes',
-      }
-
-      console.log('🟢 [handleCollectPort] MISE À JOUR avec:', updatedData)
-
-      // SOLUTION SIMPLIFIÉE : Une seule source de vérité via modifiedParcels
-      // Cela garantit que dataSource recalcule immédiatement
-      setModifiedParcels(prev => {
-        const updated = { ...prev, [parcel.id]: updatedData }
-        console.log('🟡 [handleCollectPort] modifiedParcels mis à jour:', {
-          parcelId: parcel.id,
-          totalModified: Object.keys(updated).length
-        })
-        return updated
-      })
-
-      // Mise à jour optimiste pour le contexte (pour d'autres composants)
-      updateParcelOptimistic(parcel.id, updatedData)
-
-      // Mise à jour de searchResults si en mode recherche (pour cohérence)
-      if (searchResults) {
-        setSearchResults(prev =>
-          prev ? prev.map(p =>
-            p.id === parcel.id ? { ...p, ...updatedData } : p
-          ) : prev
-        )
-        console.log('🔵 [handleCollectPort] searchResults mis à jour')
-      }
-
-      console.error('🟢 [handleCollectPort] AVANT appel Firebase collectPortDu:', {
-        parcelId: parcel.id,
-        agentName: profile.name,
-        uid
-      })
-      await collectPortDu(
-        parcel.id,
-        profile.name,
-        uid,
-        !!parcel.isArchived
-      )
-      console.error('✅ [handleCollectPort] APRÈS appel Firebase collectPortDu: écriture confirmée par le SDK')
-
-      // 🗄️ Si le colis collecté n'est pas dans allDisplayParcels (vieux colis > 30j),
-      // le stocker dans extraCollectedParcels pour qu'il apparaisse dans les statistiques
-      const isInAllParcels = (allDisplayParcels || []).some((p: any) => p.id === parcel.id)
-      if (!isInAllParcels && searchResults) {
-        setExtraCollectedParcels(prev => ({
-          ...prev,
-          [parcel.id]: { ...parcel, ...updatedData }
-        }))
-      }
-    } catch (err: any) {
-      // ⚠️ Erreur capturée explicitement (ex: permission-denied si les règles
-      // Firestore ne sont pas déployées, document verrouillé, etc.)
-      console.error('❌ [handleCollectPort] ERREUR Firebase collectPortDu:', {
-        code: err?.code,
-        message: err?.message,
-        parcelId: parcel.id,
-        uid,
-        agentName: profile?.name,
-        err
-      })
-      alert(`❌ Erreur lors de la collecte du port: ${err?.code || ''} ${err?.message || err}`)
-
-      // Annuler TOUTES les mises à jour en cas d'erreur
-      setModifiedParcels(prev => {
-        const updated = { ...prev }
-        delete updated[parcel.id]
-        return updated
-      })
-
-      updateParcelOptimistic(parcel.id, {
-        portStatus: null,
-        portCollectedBy: null,
-        portCollectedById: null,
-        portCollectedAt: null,
-        portDuReceivedMethod: null,
-      })
-
-      if (searchResults) {
-        setSearchResults(prev =>
-          prev ? prev.map(p =>
-            p.id === parcel.id ? { ...p, portStatus: null } : p
-          ) : prev
-        )
-      }
-
-      // Annuler aussi extraCollectedParcels
-      setExtraCollectedParcels(prev => {
-        const updated = { ...prev }
-        delete updated[parcel.id]
-        return updated
-      })
-    } finally {
-      setCollectingPortIds(prev => {
-        const newSet = new Set(prev)
-        newSet.delete(parcel.id)
-        return newSet
-      })
-      console.log('🏁 [handleCollectPort] FIN')
-    }
-  }
+  // Port dû : collecter (pas encore encaissé) ou recevoir (encaissé par le livreur / la gare), en remplacement
+  // du chef d'exploitation — marqué à mon nom et écrit en caisse
+  const handleCollectPort = (parcel: any) => runChefPort(parcel,
+    `${parcel.portStatus === 'collected' ? 'Recevoir' : 'Collecter'} vous-même le port dû de ${fmtAmt(parcel.price)} DH (${nicOf(parcel)}), en l'absence du chef d'exploitation ?\n\nIl sera marqué reçu par vous (chef d'agence) et enregistré en caisse.`,
+    () => chefReceivePortDu(parcel, chefActor))
+  /** Port dû encaissé mais pas encore reçu (ni par moi, ni via un envoi) → « Recevoir ». */
+  const portDuToReceive = (parcel: any) => (parcel.portStatus === 'collected') && !parcel.portChefReceivedAt && parcel.portCollectedById !== uid
 
   // Annuler la collecte d'un port dû
   const handleUncollectPort = async (parcel: any) => {
+    // Reçu par moi en remplacement du chef d'exploitation : entrée de caisse supprimée
+    if (parcel.portExpReceivedRole === 'chef_agence' && parcel.portChefReceivedById === uid) {
+      return runChefPort(parcel, `Annuler votre ${parcel.portCollectedById === uid ? 'collecte' : 'réception'} du port dû de ${fmtAmt(parcel.price)} DH (${nicOf(parcel)}) ?\n\nL'entrée de caisse sera supprimée.`,
+        () => chefCancelPortDu(parcel, chefActor))
+    }
+    if (parcel.portChefReceivedAt) { alert("Port dû reçu via un envoi du chef d'exploitation ou par un autre chef : annulation impossible ici."); return }
+    // 💸 Seule une ancienne collecte faite par moi peut être annulée ici ; celles des livreurs / du chef
+    // d'exploitation se gèrent dans la Collecte du soir (circuit livreur → chef d'exploitation → chef d'agence)
+    if (parcel.portCollectedById && parcel.portCollectedById !== uid) { alert(VIA_EXPLOITATION_MSG); return }
     if (!confirm(`Annuler la collecte du port de ${fmtAmt(parcel.price)} DH pour l'expédition ${parcel.senderNic || parcel.trackingId} ?`)) {
       return
     }
@@ -1054,97 +941,9 @@ export default function CaisseChefTab() {
   return (
     <div className="space-y-4">
       <PendingBadge show={caisseFiltersPending} />
-      {/* En-tête avec statistiques */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
-        {/* Ports à collecter */}
-        <div className="bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 rounded-xl p-4">
-          <div className="flex items-center justify-between mb-2">
-            <Package className="w-5 h-5 text-blue-600" />
-            <span className="text-xs font-semibold text-blue-600">À collecter</span>
-          </div>
-          <div className="text-2xl font-bold text-blue-900">
-            {filteredStats.portsACollecterCount}
-          </div>
-          <div className="text-sm text-blue-700 font-medium mt-1">
-            {fmtAmt(filteredStats.portsACollecterMontant)} DH
-          </div>
-        </div>
-
-        {/* Ports collectés (ports dus) */}
-        <div className="bg-gradient-to-br from-green-50 to-green-100 border border-green-200 rounded-xl p-4">
-          <div className="flex items-center justify-between mb-2">
-            <Wallet className="w-5 h-5 text-green-600" />
-            <span className="text-xs font-semibold text-green-600">Collectés</span>
-          </div>
-          <div className="text-2xl font-bold text-green-900">
-            {filteredStats.portsCollectes}
-          </div>
-          <div className="text-sm text-green-700 font-medium mt-1">
-            {fmtAmt(filteredStats.portsCollectesMontant)} DH
-          </div>
-        </div>
-
-        {/* 🆕 Ports payés à recevoir */}
-        <div className="bg-gradient-to-br from-indigo-50 to-indigo-100 border border-indigo-200 rounded-xl p-4">
-          <div className="flex items-center justify-between mb-2">
-            <Banknote className="w-5 h-5 text-indigo-600" />
-            <span className="text-xs font-semibold text-indigo-600">À recevoir</span>
-          </div>
-          <div className="text-2xl font-bold text-indigo-900">
-            {filteredStats.portsPayesARecevoirCount}
-          </div>
-          <div className="text-sm text-indigo-700 font-medium mt-1">
-            {fmtAmt(filteredStats.portsPayesARecevoirMontant)} DH
-          </div>
-        </div>
-
-        {/* 🆕 Ports payés reçus */}
-        <div className="bg-gradient-to-br from-teal-50 to-teal-100 border border-teal-200 rounded-xl p-4">
-          <div className="flex items-center justify-between mb-2">
-            <Check className="w-5 h-5 text-teal-600" />
-            <span className="text-xs font-semibold text-teal-600">Reçus</span>
-          </div>
-          <div className="text-2xl font-bold text-teal-900">
-            {filteredStats.portsPayesRecusCount}
-          </div>
-          <div className="text-sm text-teal-700 font-medium mt-1">
-            {fmtAmt(filteredStats.portsPayesRecusMontant)} DH
-          </div>
-        </div>
-
-        {/* En retard */}
-        <div className="bg-gradient-to-br from-amber-50 to-amber-100 border border-amber-200 rounded-xl p-4">
-          <div className="flex items-center justify-between mb-2">
-            <AlertCircle className="w-5 h-5 text-amber-600" />
-            <span className="text-xs font-semibold text-amber-600">En retard</span>
-          </div>
-          <div className="text-2xl font-bold text-amber-900">
-            {filteredStats.enRetardCount}
-          </div>
-          <div className="text-sm text-amber-700 font-medium mt-1">
-            &gt; 24 heures
-          </div>
-        </div>
-
-        {/* Solde à verser */}
-        <div className="bg-gradient-to-br from-purple-50 to-purple-100 border border-purple-200 rounded-xl p-4">
-          <div className="flex items-center justify-between mb-2">
-            <TrendingUp className="w-5 h-5 text-purple-600" />
-            <span className="text-xs font-semibold text-purple-600">À verser</span>
-          </div>
-          <div className="text-2xl font-bold text-purple-900">
-            {fmtAmt(
-              searchResults !== null
-                ? filteredStats.soldeAVerser
-                : (driverFilter === 'all' ? soldeCaisseGlobal : soldeLivreur)
-            )} DH
-          </div>
-          <div className="text-sm text-purple-700 font-medium mt-1">
-            Solde disponible
-          </div>
-        </div>
-      </div>
-
+      {/* En-tête : 3 cartes — composant commun avec la Collecte du soir (chef d'exploitation) */}
+      <CaisseSummaryCards stats={filteredStats}
+        aVerser={searchResults !== null ? filteredStats.soldeAVerser : (driverFilter === 'all' ? soldeCaisseGlobal : soldeLivreur)} />
       {/* 📊 Collectes par jour (14 derniers jours) + détail imprimable — composant partagé avec la Collecte du soir */}
       <CollectesParJour collectesParJour={collectesParJour} profile={profile} />
 
@@ -1369,7 +1168,7 @@ export default function CaisseChefTab() {
                             !parcel.portPayeMethod &&
                             (parcel.portStatus === 'collected' || !parcel.portStatus) &&
                             (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city) &&
-                            (parcel.pickupDriverId || parcel.status === 'En cours de ramassage')  // Nouveau OU ancien système
+                            (parcel.pickupDriverId || parcel.status === 'En cours de ramassage' || isRamasseGuichet(parcel, profile?.city || ''))  // Nouveau OU ancien système, ou guichet (« En gare »)
                           // 🆕 Port payé reçu (ramassage local uniquement)
                           const isPortPayeRecu = parcel.portType === 'port_paye' &&
                             !parcel.portPayeMethod &&
@@ -1435,7 +1234,7 @@ export default function CaisseChefTab() {
                                   </span>
                                 ) : isPortPayeRamasse || isPortPayeRecu ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-100 text-teal-700 text-xs font-medium">
-                                    PP Ramassage
+                                    PP à ramasser
                                   </span>
                                 ) : (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-xs font-medium">
@@ -1483,7 +1282,7 @@ export default function CaisseChefTab() {
                                       {isPortDu && (
                                         <>
                                           <button
-                                            onClick={() => isCollected ? handleUncollectPort(parcel) : handleCollectPort(parcel)}
+                                            onClick={() => isCollected && !portDuToReceive(parcel) ? handleUncollectPort(parcel) : handleCollectPort(parcel)}
                                             disabled={collectingPortIds.has(parcel.id)}
                                             className={`px-3 py-1 rounded-lg text-xs font-semibold transition ${
                                               isCollected
@@ -1493,6 +1292,8 @@ export default function CaisseChefTab() {
                                           >
                                             {collectingPortIds.has(parcel.id) ? (
                                               <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                                            ) : portDuToReceive(parcel) ? (
+                                              'Recevoir'
                                             ) : isCollected ? (
                                               'Annuler'
                                             ) : (
@@ -1635,7 +1436,7 @@ export default function CaisseChefTab() {
                                 !parcel.portPayeMethod &&
                                 (parcel.portStatus === 'collected' || !parcel.portStatus) &&
                                 (parcel.createdByCity === profile?.city || parcel.originCity === profile?.city) &&
-                                (parcel.pickupDriverId || parcel.status === 'En cours de ramassage')  // Nouveau OU ancien système
+                                (parcel.pickupDriverId || parcel.status === 'En cours de ramassage' || isRamasseGuichet(parcel, profile?.city || ''))  // Nouveau OU ancien système, ou guichet (« En gare »)
                               // 🆕 Port payé reçu (ramassage local uniquement)
                               const isPortPayeRecu = parcel.portType === 'port_paye' &&
                                 !parcel.portPayeMethod &&
@@ -1698,7 +1499,7 @@ export default function CaisseChefTab() {
                                       </span>
                                     ) : isPortPayeRamasse || isPortPayeRecu ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-100 text-teal-700 text-xs font-medium">
-                                        PP Ramassage
+                                        PP à ramasser
                                       </span>
                                     ) : (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-xs font-medium">
@@ -1720,14 +1521,14 @@ export default function CaisseChefTab() {
                                         Retourné
                                       </span>
                                     ) : isPortPayeRecu ? (
-                                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-700 text-xs font-semibold">
+                                      <span title={parcel.portReceivedBy ? `Reçu par ${parcel.portReceivedBy}` : undefined} className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-700 text-xs font-semibold">
                                         <Check className="w-3 h-3" />
-                                        Reçu
+                                        Reçu{parcel.portPayeExpReceivedRole === 'chef_agence' ? ` · chef d'agence ${parcel.portReceivedBy || ''}` : ''}
                                       </span>
                                     ) : isPortPayeRamasse ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-indigo-100 text-indigo-700 text-xs font-semibold">
                                         <Banknote className="w-3 h-3" />
-                                        Ramassé
+                                        {parcel.portPayeExpReceivedAt ? "Reçu chef d'exploitation" : 'À ramasser'}
                                       </span>
                                     ) : !isPortDu && (parcel.portType === 'port_en_compte_destinataire' || parcel.portType === 'port_en_compte_expediteur') ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-semibold">
@@ -1740,9 +1541,11 @@ export default function CaisseChefTab() {
                                         Déjà payé
                                       </span>
                                     ) : isCollected ? (
-                                      <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-700 text-xs font-semibold">
+                                      <span title={parcel.portCollectedBy ? `Collecté par ${parcel.portCollectedBy}` : undefined} className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-green-100 text-green-700 text-xs font-semibold">
                                         <Check className="w-3 h-3" />
-                                        Collecté
+                                        {parcel.portExpReceivedRole === 'chef_agence'
+                                          ? `Reçu · chef d'agence ${parcel.portChefReceivedBy || ''}`
+                                          : parcel.portChefReceivedAt ? "Reçu (envoi chef d'exploitation)" : 'Collecté'}
                                       </span>
                                     ) : isLate ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-semibold">
@@ -1803,7 +1606,7 @@ export default function CaisseChefTab() {
                                           ) : isPortDu && (
                                             <>
                                               <button
-                                                onClick={() => isCollected ? handleUncollectPort(parcel) : handleCollectPort(parcel)}
+                                                onClick={() => isCollected && !portDuToReceive(parcel) ? handleUncollectPort(parcel) : handleCollectPort(parcel)}
                                                 disabled={collectingPortIds.has(parcel.id)}
                                                 className={`text-xs px-3 py-1 rounded-lg font-medium transition disabled:opacity-50 disabled:cursor-not-allowed ${
                                                   isCollected
@@ -1813,9 +1616,11 @@ export default function CaisseChefTab() {
                                               >
                                                 {collectingPortIds.has(parcel.id)
                                                   ? '...'
-                                                  : isCollected
-                                                    ? 'Annuler'
-                                                    : 'Collecter'}
+                                                  : portDuToReceive(parcel)
+                                                    ? 'Recevoir'
+                                                    : isCollected
+                                                      ? 'Annuler'
+                                                      : 'Collecter'}
                                               </button>
                                               {!isCollected && (
                                                 <>

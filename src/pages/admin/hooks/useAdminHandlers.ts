@@ -1,6 +1,6 @@
 import React from 'react'
 import { createUserWithEmailAndPassword, signOut as fbSignOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth'
-import { collection, doc, setDoc } from 'firebase/firestore'
+import { collection, doc, getDocs, limit, query, setDoc, where } from 'firebase/firestore'
 import { auth, authSecondary, db } from '../../../firebase/config'
 import {
   updateParcel, updateParcelStatus, markParcelAsReturned,
@@ -117,6 +117,7 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       form: {
         status:        parcel.status         || 'Initialisé',
         serviceType:   normalizeServiceType(parcel.serviceType) || 'simple',  // un seul type
+        senderNic:     String(parcel.senderNic || parcel.sender?.nic || ''),  // N° EXP (modifiable à tout moment par l'admin)
         senderName:    parcel.sender?.name   || '',
         senderTel:     parcel.sender?.tel    || '',
         senderCity:    parcel.sender?.city   || '',
@@ -213,10 +214,28 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
         }
       }
 
+      // 🔢 N° EXP (NIC) : modifiable à tout moment par l'admin — obligatoire et UNIQUE (parcels + archives)
+      const oldNic = String(parcel.senderNic || parcel.sender?.nic || '')
+      const newNic = String(form.senderNic || '').trim()
+      if (newNic !== oldNic) {
+        if (!newNic) { setAdminEditModal((m: any) => ({ ...m, loading: false, error: 'Le N° EXP est obligatoire.' })); return }
+        const dup = (await Promise.all(['parcels', 'parcels_archive'].map(c =>
+          getDocs(query(collection(db, c), where('senderNic', '==', newNic), limit(3))))))
+          .flatMap(snap => snap.docs).find(d => d.id !== parcel.id)
+        if (dup) {
+          const other: any = dup.data()
+          setAdminEditModal((m: any) => ({ ...m, loading: false, error: `Le N° EXP ${newNic} est déjà utilisé par une autre expédition (${other.trackingId || dup.id}${other.receiver?.name ? ` · ${other.receiver.name}` : ''}).` }))
+          return
+        }
+        updates.senderNic = newNic
+        changes.push({ field: 'N° EXP', oldValue: oldNic, newValue: newNic, changedAt: now, changedBy: adminEmail })
+      }
+
       // Expéditeur
       const oldSender = parcel.sender || {}
+      if (newNic !== oldNic) updates.sender = { ...oldSender, nic: newNic }
       if (form.senderName !== (oldSender.name||'') || form.senderTel !== (oldSender.tel||'') || form.senderCity !== (oldSender.city||'')) {
-        updates.sender = { ...oldSender, name: form.senderName, tel: form.senderTel, city: form.senderCity }
+        updates.sender = { ...oldSender, ...(newNic !== oldNic ? { nic: newNic } : {}), name: form.senderName, tel: form.senderTel, city: form.senderCity }
         if (form.senderName !== (oldSender.name||'')) changes.push({ field: 'Expéditeur — Nom',    oldValue: oldSender.name||'', newValue: form.senderName, changedAt: now, changedBy: adminEmail })
         if (form.senderTel  !== (oldSender.tel||''))  changes.push({ field: 'Expéditeur — Tél',    oldValue: oldSender.tel||'',  newValue: form.senderTel,  changedAt: now, changedBy: adminEmail })
         if (form.senderCity !== (oldSender.city||'')) changes.push({ field: 'Expéditeur — Ville',  oldValue: oldSender.city||'', newValue: form.senderCity, changedAt: now, changedBy: adminEmail })

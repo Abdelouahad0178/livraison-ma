@@ -1,4 +1,4 @@
-﻿
+
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, getDoc,
   query, where, orderBy, getDocs, onSnapshot, limit, startAfter, getCountFromServer,
@@ -13,6 +13,7 @@ import {
 } from './constants'
 import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
 import { codPartView, isMixedCod } from '../utils/codParts'
+import { codMoneyOnly } from '../utils/moneyFlow'
 import { getOperationalDayString } from '../config/operationalDay'
 import { buildDaySlices, opDayOf } from '../utils/daySlices'
 import { addPayment } from './clients'
@@ -1647,7 +1648,7 @@ export function subscribeAgencyParcels(
 // - meta.complete = toutes les pages sont confirmées par le serveur et la dernière est incomplète.
 export function subscribeAgencyParcelsFull(
   city: string,
-  opts: { dateFrom?: Date | null; dateTo?: Date | null; pageSize?: number; includeArchived?: boolean; lite?: boolean },
+  opts: { dateFrom?: Date | null; dateTo?: Date | null; pageSize?: number; includeArchived?: boolean; lite?: boolean; liteLive?: boolean; live?: boolean },
   onData: (parcels: any[], meta: { loaded: number; complete: boolean; fromCache: boolean }) => void,
   onError: (err?: any) => void = () => {}
 ): () => void {
@@ -1657,14 +1658,20 @@ export function subscribeAgencyParcelsFull(
   // - Journées passées : lecture ponctuelle (getAgencyParcelsDaySlice, paginée jusqu'à épuisement).
   const pageSize = opts.pageSize ?? 2000
   const includeArchived = opts.includeArchived ?? true
-  const lite = opts.lite ?? false // 🪶 parcelsLite (onglet Expéditions) ; Caisse / Chef d'exploitation : parcels
+  const lite = opts.lite ?? false // 🪶 parcelsLite pour les journées passées (onglet Expéditions, pages de caisse)
+  // Journée(s) en cours : parcelsLite aussi (Expéditions) ou expéditions COMPLÈTES (pages de caisse : liteLive=false,
+  // temps réel exact là où se passe l'activité)
+  const liteLive = opts.liteLive ?? lite
   const start = opts.dateFrom ?? new Date(Date.now() - 45 * 24 * 60 * 60 * 1000)
   const end = opts.dateTo ?? new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)
   const FIELDS = ['originCity', 'destinationCity'] as const
   const slices = buildDaySlices(start, end)
   const today = opDayOf(new Date())
-  const liveSlices = slices.filter(sl => sl.day >= today)
-  const pastSlices = slices.filter(sl => sl.day < today)
+  // live : TOUTES les journées en temps réel (Chef d'exploitation : une collecte / réception faite par le chef
+  // d'agence ou un livreur sur une journée passée doit s'afficher sans recharger la page)
+  const allLive = opts.live ?? false
+  const liveSlices = slices.filter(sl => allLive || sl.day >= today)
+  const pastSlices = slices.filter(sl => !allLive && sl.day < today)
 
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -1696,7 +1703,7 @@ export function subscribeAgencyParcelsFull(
   liveSlices.forEach(sl => FIELDS.forEach(field => {
     const key = sl.day + '|' + field
     liveServer.set(key, false)
-    const q = query(parcelsSource(lite),
+    const q = query(parcelsSource(liteLive),
       where(field, '==', city),
       where('createdAt', '>=', Timestamp.fromDate(sl.start)),
       where('createdAt', sl.endInclusive ? '<=' : '<', Timestamp.fromDate(sl.end)),
@@ -2564,7 +2571,8 @@ function subscribeCodByServiceType(
   limitCount: number
 ) {
   const onErr = onError || (() => {})
-  const toParcels = (snapshot: any) => snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Parcel))
+  // 📅 COD encaissés avant le 05/10/2026 (essais) : hors des soldes COD (DRFE / DRFC)
+  const toParcels = (snapshot: any): Parcel[] => codMoneyOnly<Parcel>(snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Parcel)))
 
   // Filtre sur un statut non soldé : aucune borne de date (rien ne doit disparaître)
   if (codStatusFilter === 'pending' || codStatusFilter === 'collected') {
@@ -2713,7 +2721,7 @@ export async function getMoreCodParcelsEspeces(
   } catch (err: any) {
     console.warn('[DRFE] RF mixtes (charger plus) indisponibles :', err?.message || err)
   }
-  return { data: sortByCreatedDesc(data as any[]) as Parcel[], lastDoc: newLastDoc, hasMore: snapshot.docs.length === limitCount || mixedMore }
+  return { data: codMoneyOnly(sortByCreatedDesc(data as any[]) as Parcel[]), lastDoc: newLastDoc, hasMore: snapshot.docs.length === limitCount || mixedMore }
 }
 
 /**
@@ -2760,7 +2768,7 @@ export async function getMoreCodParcelsCheques(
 
   const snapshot = await getDocs(q)
   // RF mixte : part chèque/traite uniquement
-  const data = snapshot.docs.map((d) => codPartView({ id: d.id, ...d.data() } as any, 'document') as Parcel)
+  const data = codMoneyOnly(snapshot.docs.map((d) => codPartView({ id: d.id, ...d.data() } as any, 'document') as Parcel))
   const newLastDoc = snapshot.docs[snapshot.docs.length - 1]
   return { data, lastDoc: newLastDoc, hasMore: snapshot.docs.length === limitCount }
 }
