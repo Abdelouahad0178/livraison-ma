@@ -1910,7 +1910,9 @@ Continuer ?`)) return
             )}
             {receptionOpen && (
               <ReceptionSheetModal
-                parcels={ctlFiltered.filter((p: any) => isDocParcel(p) && isControlled(p))}
+                // Fiche remise à l'EXPÉDITEUR : chèques / traites des expéditions parties de ma ville
+                // (agence d'origine), dès qu'ils sont pointés, arrivés ou que leurs données sont saisies.
+                parcels={ctlFiltered.filter((p: any) => isDocParcel(p) && canConfirmArrival(p) && (isControlled(p) || !!p.deliveryControlled || hasDocData(p)))}
                 profileName={profile?.name || ''}
                 onClose={() => setReceptionOpen(false)}
                 onEdit={(p: any) => setChequeModal(p)}

@@ -1380,6 +1380,60 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // 📊 Gestion commerciale (bgexpress.web.app) : totaux tenus par la Cloud Function syncCommercialStats.
+    // Admin / directeur : toutes les agences ; chef d'agence : seulement sa ville (agence d'origine).
+    match /commercialClients/{id} {
+      allow read: if isAdminOrDirecteur() || (role() == 'chef_agence' && resource.data.city == userCity());
+      allow write: if false;
+    }
+    match /commercialAgencies/{id} {
+      allow read: if isAdminOrDirecteur() || (role() == 'chef_agence' && resource.data.city == userCity());
+      allow write: if false;
+    }
+    match /commercialDays/{id} {
+      allow read: if isAdminOrDirecteur() || (role() == 'chef_agence' && resource.data.city == userCity());
+      allow write: if false;
+    }
+    match /commercialContrib/{id} {
+      allow read, write: if false;
+    }
+    // Contrats / tarifs négociés, devis, factures de recouvrement, relances, compteurs de numéros.
+    // Admin / directeur : tout ; chef d'agence : seulement les documents de SA ville (avant ET après écriture).
+    function isCommercialAdmin() {
+      return isAdminOrDirecteur();
+    }
+    function isCommercialChefOf(city) {
+      return role() == 'chef_agence' && city == userCity();
+    }
+    match /commercialContracts/{id} {
+      allow read, delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
+      allow update: if isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city));
+    }
+    match /commercialQuotes/{id} {
+      allow read, delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
+      allow update: if isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city));
+    }
+    match /commercialInvoices/{id} {
+      allow read: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
+      allow update: if isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city));
+      // Une facture n'est jamais supprimée par une cheffe d'agence (annulation = statut « cancelled »)
+      allow delete: if isCommercialAdmin();
+    }
+    match /commercialReminders/{id} {
+      allow read, delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
+      allow update: if false;
+    }
+    // Compteurs de numérotation : id = {type}_{ville}_{année}
+    match /commercialCounters/{id} {
+      allow read, create, update: if isCommercialAdmin()
+        || (role() == 'chef_agence' && id.split('_').size() == 3 && id.split('_')[1] == userCity());
+      allow delete: if false;
+    }
+
     // ═══════════════════════════════════════════════════════════════════════════
     // ARCHIVES COLIS (parcels_archive)
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1453,9 +1507,10 @@ service cloud.firestore {
 
     // Règle par défaut — la collection presence est exclue (lecture réservée Admin/Directeur ci-dessus)
     match /{coll}/{document=**} {
-      allow read:  if coll != 'presence' && isStaff();
+      // Totaux commerciaux (commercial*) : accès défini plus haut uniquement (chef d'agence limité à sa ville)
+      allow read:  if coll != 'presence' && !coll.matches('commercial.*') && isStaff();
       // parcelsLite : écrit uniquement par la Cloud Function syncParcelLite (Admin SDK)
-      allow write: if coll != 'presence' && coll != 'parcelsLite' && isAdmin();
+      allow write: if coll != 'presence' && coll != 'parcelsLite' && !coll.matches('commercial.*') && isAdmin();
     }
   }
 }

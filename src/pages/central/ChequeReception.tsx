@@ -273,7 +273,7 @@ export function printReceptionSheet(parcels: any[], profileName: string) {
 }
 
 export function ReceptionSheetModal({ parcels, profileName, onClose, onEdit }: {
-  /** Colis à chèque / traite POINTÉS (contrôlés), déjà filtrés par la page */
+  /** Chèques / traites à remettre aux expéditeurs (agence d'origine), déjà filtrés par la page */
   parcels: any[]
   profileName: string
   onClose: () => void
@@ -297,6 +297,7 @@ export function ReceptionSheetModal({ parcels, profileName, onClose, onEdit }: {
   const [unchecked, setUnchecked] = useState<Set<string>>(new Set())
   const picked = current ? current.list.filter(p => !unchecked.has(p.id)) : []
   const missing = picked.filter(p => !hasDocData(p)).length
+  const notArrived = picked.filter(p => !p.deliveryControlled).length
   const shownClients = clients.filter(c => !q || c.name.toLowerCase().includes(q.toLowerCase()))
 
   return (
@@ -305,7 +306,7 @@ export function ReceptionSheetModal({ parcels, profileName, onClose, onEdit }: {
         <div className="px-5 py-4 border-b border-slate-100 flex items-start gap-3">
           <div className="flex-1">
             <h3 className="text-lg font-black text-slate-800">🧾 Fiche de réception des chèques et traites</h3>
-            <p className="text-xs text-slate-500">Choisissez le client expéditeur : la fiche liste ses chèques / traites pointés, à joindre aux documents et à faire signer.</p>
+            <p className="text-xs text-slate-500">Choisissez le client expéditeur : la fiche liste ses chèques / traites, à joindre aux documents et à faire signer.</p>
           </div>
           <button type="button" onClick={onClose} className="p-2 rounded-xl hover:bg-slate-100 text-slate-500"><X className="w-5 h-5" /></button>
         </div>
@@ -313,7 +314,7 @@ export function ReceptionSheetModal({ parcels, profileName, onClose, onEdit }: {
           <div className="border-r border-slate-100 flex flex-col min-h-0">
             <div className="p-3"><input value={q} onChange={e => setQ(e.target.value)} placeholder="Rechercher un client…" className="w-full px-3 py-2 rounded-xl border-2 border-slate-200 text-sm focus:border-purple-400 focus:outline-none" /></div>
             <div className="overflow-y-auto flex-1 px-2 pb-3 space-y-1 max-h-[55vh]">
-              {shownClients.length === 0 && <p className="text-xs text-slate-400 px-2">Aucun chèque / traite pointé dans la sélection actuelle (filtres de la page).</p>}
+              {shownClients.length === 0 && <p className="text-xs text-slate-400 px-2">Aucun chèque / traite à remettre dans la sélection actuelle (expéditions parties de votre agence, filtres de la page).</p>}
               {shownClients.map(c => (
                 <button key={c.key} type="button" onClick={() => { setClient(c.key); setUnchecked(new Set()) }}
                   className={`w-full text-left px-3 py-2 rounded-xl border transition ${client === c.key ? 'bg-purple-600 border-purple-600 text-white' : 'bg-white border-slate-200 hover:bg-purple-50'}`}>
@@ -341,7 +342,8 @@ export function ReceptionSheetModal({ parcels, profileName, onClose, onEdit }: {
                             <td className="px-2 py-2"><input type="checkbox" className="w-4 h-4 accent-purple-600" checked={!unchecked.has(p.id)}
                               onChange={() => setUnchecked(s => { const n = new Set(s); n.has(p.id) ? n.delete(p.id) : n.add(p.id); return n })} /></td>
                             <td className="px-2 py-2 font-bold">{nicOf(p)}<div className="text-[10px] text-slate-400">{fmtD(p.createdAt)}</div></td>
-                            <td className="px-2 py-2 text-xs">{p.receiver?.name || '—'}</td>
+                            <td className="px-2 py-2 text-xs">{p.receiver?.name || '—'}
+                              <div className={`text-[10px] font-black ${p.deliveryControlled ? 'text-blue-700' : 'text-amber-700'}`}>{p.deliveryControlled ? '✓ Arrivée confirmée' : '⏳ Arrivée non confirmée'}</div></td>
                             <td className="px-2 py-2 text-xs">
                               {hasDocData(p)
                                 ? docs.map((d, i) => <div key={i}>{d.type === 'traite' ? '📝' : '📋'} N° {d.numero} · {d.banque}{d.echeance ? ` · éch. ${fmtYmd(d.echeance)}` : ''}</div>)
@@ -358,6 +360,7 @@ export function ReceptionSheetModal({ parcels, profileName, onClose, onEdit }: {
                 <div className="px-4 py-3 border-t border-slate-100 flex flex-wrap items-center gap-2">
                   <p className="text-sm font-black text-slate-700 flex-1">
                     {picked.length} document{picked.length > 1 ? 's' : ''} · {money(picked.reduce((s, p) => s + (docsOf(p).length ? docsOf(p).reduce((a, d) => a + (Number(d.montant) || 0), 0) : docAmountOf(p)), 0))} DH
+                    {notArrived > 0 && <span className="block text-[11px] font-bold text-amber-700">⏳ {notArrived} dont l'arrivée n'est pas encore confirmée.</span>}
                     {missing > 0 && <span className="block text-[11px] font-bold text-amber-700">⚠️ {missing} sans données : leurs lignes seront à compléter à la main sur la fiche.</span>}
                   </p>
                   <button type="button" disabled={!picked.length} onClick={() => printReceptionSheet(picked, profileName)}

@@ -431,6 +431,25 @@ exports.syncParcelLite = onDocumentWritten({ document: 'parcels/{parcelId}', ret
   await liteRef.set({ ...projectParcelLite(fresh.data()), liteUpdatedAt: FieldValue.serverTimestamp() })
 })
 
+// ── Totaux de la gestion commerciale (bgexpress.web.app) — voir functions/commercial.js ──
+// Relit le colis à jour puis applique la différence en transaction (idempotent → retry sûr).
+// Suppression causée par l'ARCHIVAGE (copie présente dans parcels_archive) : totaux inchangés.
+const { syncCommercial, contributionOf } = require('./commercial')
+exports.syncCommercialStats = onDocumentWritten({ document: 'parcels/{parcelId}', retry: true }, async (event) => {
+  const id = event.params.parcelId
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after  = event.data?.after?.exists  ? event.data.after.data()  : null
+  if (before && after && JSON.stringify(contributionOf(before)) === JSON.stringify(contributionOf(after))) return
+  const fresh = await db.collection('parcels').doc(id).get()
+  if (!fresh.exists) {
+    const archived = await db.collection('parcels_archive').doc(id).get()
+    if (archived.exists) return
+    await syncCommercial(db, FieldValue, id, null)
+    return
+  }
+  await syncCommercial(db, FieldValue, id, fresh.data())
+})
+
 // ── Rebuild all stats from existing parcels (callable — admin only) ────────
 // Call once after first deploy to bootstrap stats from historical data.
 exports.rebuildStats = onCall({
