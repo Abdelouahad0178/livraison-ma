@@ -35,6 +35,21 @@ service cloud.firestore {
       return role() == 'encaisseur_central';
     }
 
+    // 🧾 Analyseur chèques : mêmes fonctions que l'encaisseur central, limitées aux COD chèque / traite (mixte compris)
+    function isChequeAnalyst() {
+      return role() == 'analyseur_cheque';
+    }
+    function isDocCodParcel(data) {
+      return data.get('codMixed', false) == true
+        || data.get('codPaymentType', '') in ['cheque', 'traite', 'cod_cheque', 'cod_traite']
+        || data.get('serviceType', '') in ['cheque', 'traite'];
+    }
+    // … et seulement les expéditions de SON agence (sa ville = origine ou destination)
+    function isMyAgencyDocParcel(data) {
+      return isDocCodParcel(data)
+        && (data.get('originCity', '') == userCity() || data.get('destinationCity', '') == userCity());
+    }
+
     function isDistributeurEspeces() {
       return role() == 'distributeur_especes';
     }
@@ -420,7 +435,7 @@ service cloud.firestore {
       // ⚠️ EXCEPTION : si la mise à jour ne touche QUE les champs de pointage (contrôle /
       // confirmation d'arrivée), elle doit en plus respecter isOwnControlChange() — sinon
       // n'importe quel Encaisseur Central pourrait annuler le pointage d'un collègue.
-      allow update: if isCentralCollector()
+      allow update: if (isCentralCollector() || (isChequeAnalyst() && isMyAgencyDocParcel(resource.data)))
         && (!touchesOnlyControlFields() || isOwnControlChange());
 
       // 📅 RÈGLE : Chef d'agence peut corriger la date d'expédition (expeditionDate) et le jour d'opération (workDate)
@@ -1264,14 +1279,14 @@ service cloud.firestore {
     // (protÃ¨ge les collections non listÃ©es explicitement)
     // Encaisseur central : versements societe et paiements fournisseurs
     match /centralCodDeposits/{depositId} {
-      allow read: if isAdmin() || isCentralCollector() || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+      allow read: if isAdmin() || isCentralCollector() || isChequeAnalyst() || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
       allow create: if isAdmin() || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
       allow update: if isAdmin() || isCentralCollector();
       allow delete: if isAdmin();
     }
 
     match /centralSupplierPayments/{paymentId} {
-      allow read, create, update: if isAdmin() || isCentralCollector();
+      allow read, create, update: if isAdmin() || isCentralCollector() || isChequeAnalyst();
       allow delete: if isAdmin();
     }
 
@@ -1373,10 +1388,10 @@ service cloud.firestore {
       allow read: if isStaff() || isCentralCollector();
       // Création : admin uniquement (archivage automatique)
       allow create: if isAdmin();
-      // Mise à jour : admin ou encaisseur central (pour restauration)
-      allow update: if isAdmin() || isCentralCollector();
-      // Suppression : admin ou encaisseur central (pour restauration)
-      allow delete: if isAdmin() || isCentralCollector();
+      // Mise à jour : admin ou encaisseur central (pour restauration) — analyseur chèques : chèques / traites seulement
+      allow update: if isAdmin() || isCentralCollector() || (isChequeAnalyst() && isMyAgencyDocParcel(resource.data));
+      // Suppression : admin ou encaisseur central (pour restauration) — analyseur chèques : chèques / traites seulement
+      allow delete: if isAdmin() || isCentralCollector() || (isChequeAnalyst() && isMyAgencyDocParcel(resource.data));
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

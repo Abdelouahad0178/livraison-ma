@@ -38,7 +38,7 @@ import { useDepotIds } from '../../exploitation/useDepotIds'
 import {
   firestoreBoundsFor, caisseFilterByDate, safeParseAmount, computeCaisseView,
   caisseCodAmountOfType, caisseCodTotals, CAISSE_DEFAULT_PRESET, caisseDefaultOperationalDay, CAISSE_STATUS_OPTIONS,
-  isRamasseGuichet,
+  isRamasseGuichet, GARE_GROUP_ID, ramasseGuichetEtat,
 } from '../../../utils/agencyCaisseRules'
 import { isMixedCod, codPartsBreakdown, codCashPartOf, codDocPartOf, codEditResult } from '../../../utils/codParts'
 
@@ -1686,7 +1686,11 @@ export default function CaisseChefTab() {
                                         <span className="text-xs text-gray-500 italic">-</span>
                                       ) : (
                                         <>
-                                          {isPortPayeRecu ? (
+                                          {/* 🏬 Port payé encaissé AU GUICHET : l'argent est chez « En gare » (reçu dans SA carte), pas chez ce livreur —
+                                              même règle que la Collecte du soir ; l'expédition reste visible ici pour le suivi de sa livraison */}
+                                          {(driver.id !== GARE_GROUP_ID && isRamasseGuichet(parcel, profile?.city || '') && !parcel.pickupDriverId) ? (
+                                            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${ramasseGuichetEtat(parcel).tone === 'gare' ? 'bg-amber-100 text-amber-800' : ramasseGuichetEtat(parcel).tone === 'exp' ? 'bg-indigo-100 text-indigo-700' : 'bg-green-100 text-green-700'}`} title="Port payé encaissé au guichet : il se reçoit dans la carte « En gare »">Payé au guichet · {ramasseGuichetEtat(parcel).label}</span>
+                                          ) : isPortPayeRecu ? (
                                             <button
                                               onClick={() => handleUncollectPortPaye(parcel)}
                                               disabled={collectingPortIds.has(parcel.id)}

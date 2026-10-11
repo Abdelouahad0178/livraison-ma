@@ -207,6 +207,18 @@ export const arrivalDateOf = (p: any): Date | null => {
 /** Id du groupe « En gare - <ville> » (colis sans livreur + compte(s) « Livreur en gare »). */
 export const GARE_GROUP_ID = 'unknown'
 
+/**
+ * 📬 État de l'ARGENT d'un port payé encaissé au guichet (« En gare »), affiché dans la carte du LIVREUR qui livre
+ * l'expédition (l'argent n'est pas chez lui) — même texte dans Caisse Agence et la Collecte du soir, et DYNAMIQUE :
+ * suit la remise au chef d'exploitation et son annulation.
+ */
+export const ramasseGuichetEtat = (p: any): { label: string; tone: 'gare' | 'exp' | 'chef' } =>
+  p?.portStatus === 'received'
+    ? { label: `reçu chef d'agence${p.portReceivedBy ? ` · ${p.portReceivedBy}` : ''}`, tone: 'chef' }
+    : p?.portPayeExpReceivedAt
+      ? { label: `remis au chef d'exploitation${p.portPayeExpReceivedBy ? ` · ${p.portPayeExpReceivedBy}` : ''}`, tone: 'exp' }
+      : { label: 'chez « En gare » (à remettre)', tone: 'gare' }
+
 // ── Statuts / montants ───────────────────────────────────────────────────────
 
 const RETURN_STATUSES = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']

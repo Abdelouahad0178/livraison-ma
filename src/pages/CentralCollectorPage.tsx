@@ -1,7 +1,7 @@
 import DateInput from '../components/DateInput'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { signOut } from 'firebase/auth'
-import { doc, onSnapshot, getDoc, collection, query as fbQuery, where, orderBy, limit as fbLimit } from 'firebase/firestore'
+import { doc, onSnapshot, getDoc, getDocs, collection, query as fbQuery, where, orderBy, limit as fbLimit } from 'firebase/firestore'
 import { auth, db } from '../firebase/config'
 import { loadExcel } from '../utils/loadExcel'
 import {
@@ -132,14 +132,45 @@ const presetRange = (preset: any, from: any, to: any, operationalDay?: Date): { 
   return null
 }
 
-export default function CentralCollectorPage() {
+/**
+ * Page de l'encaisseur central — et, en mode « cheque », page de l'ANALYSEUR CHÈQUES : mêmes onglets et mêmes
+ * fonctions (contrôle / pointage, documents, réception, fournisseurs, archives), limités aux expéditions dont le
+ * COD est un chèque ou une traite (part document d'un COD mixte), sans les actions de suppression massive.
+ * Une seule page : toute amélioration de l'encaisseur central profite aussi à l'analyseur chèques.
+ */
+export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'central' | 'cheque' } = {}) {
+  const chequeOnly = mode === 'cheque'
   const [profile, setProfile] = useState<any>(null)
-  const [deposits, setDeposits] = useState<any[]>([])
-  const [payments, setPayments] = useState<any[]>([])
+  // 🏢 Analyseur chèques : uniquement SON agence (sa ville = origine ou destination de l'expédition)
+  const myCity: string = profile?.city || ''
+  const inMyAgency = (p: any) => !!myCity && [p?.originCity, p?.destinationCity, p?.sender?.city, p?.receiver?.city].includes(myCity)
+  // Circuit de la valeur (COD) : encaissée à la LIVRAISON (ville de destination), puis envoyée à la ville d'ORIGINE
+  // (paiement de l'expéditeur). Encaisseur central ET analyseur chèques, selon la ville de leur compte :
+  // « Pointer » = valeurs encaissées dans SA ville, à envoyer vers l'origine ; « Confirmer arrivée » = valeurs qui
+  // doivent ARRIVER dans sa ville. Compte sans ville : les deux boutons partout (comme avant).
+  const canPoint = (p: any) => !myCity || (p?.destinationCity || p?.receiver?.city) === myCity
+  const canConfirmArrival = (p: any) => !myCity || (p?.originCity || p?.sender?.city) === myCity
+  // 🏙️ Ville de chaque personne qui pointe / confirme (encaisseurs centraux, analyseurs chèques, chefs) : affichée à
+  // côté de son nom dans les badges — retrouvée depuis son compte (rien de plus n'est enregistré sur l'expédition)
+  const [staffCities, setStaffCities] = useState<Map<string, string>>(() => new Map())
+  useEffect(() => {
+    getDocs(fbQuery(collection(db, 'users'), where('role', 'in', ['encaisseur_central', 'analyseur_cheque', 'chef_agence', 'agentpro', 'chef_exploitation', 'admin', 'directeur'])))
+      .then(snap => setStaffCities(new Map(snap.docs.map(d => [d.id, String((d.data() as any).city || '')]))))
+      .catch(err => console.error('Villes du personnel :', err))
+  }, [])
+  const withCity = (name: string, uid?: string) => {
+    const c = uid ? staffCities.get(uid) : ''
+    return `${name || ''}${c ? ` (${c})` : ''}`
+  }
+  const [depositsAll, setDeposits] = useState<any[]>([])
+  const [paymentsAll, setPayments] = useState<any[]>([])
   const [activeTab, setActiveTab] = useState<'controle' | 'fournisseurs' | 'archives'>('controle')
 
   // 📦 Archives
   const [archivedParcels, setArchivedParcels] = useState<any[]>([])
+  // Analyseur chèques : versements de SA ville, paiements fournisseurs touchant une expédition de son agence
+  const deposits = useMemo(() => chequeOnly ? depositsAll.filter((d: any) => d.city === myCity) : depositsAll, [chequeOnly, depositsAll, myCity])
+  const payments = useMemo(() => chequeOnly ? paymentsAll.filter((p: any) => (p.parcels || []).some(inMyAgency)) : paymentsAll, [chequeOnly, paymentsAll, myCity])
   const [archivesLoading, setArchivesLoading] = useState(false)
   const [archivesLoaded, setArchivesLoaded] = useState(false)
   const [archiveSearch, setArchiveSearch] = useState('')
@@ -438,7 +469,7 @@ export default function CentralCollectorPage() {
       try {
         // Récupérer toutes les archives (sans filtre par ville)
         const archived = await getAllArchivedParcels(1000)
-        setArchivedParcels(archived)
+        setArchivedParcels(chequeOnly ? archived.filter((p: any) => isDocParcel(p) && inMyAgency(p)) : archived)
         setArchivesLoaded(true)
       } catch (err: any) {
         console.error('Erreur chargement archives:', err)
@@ -541,6 +572,9 @@ export default function CentralCollectorPage() {
     }
 
     let arr = [...map.values()]
+    // 🧾 Analyseur chèques : seulement les expéditions à valeur DOCUMENT (chèque / traite, mixte compris) de SON
+    // agence (sa ville = ville d'origine OU de destination)
+    if (chequeOnly) arr = arr.filter(p => isDocParcel(p) && inMyAgency(p))
     if (Object.keys(controlOverrides).length) {
       arr = arr.map((p: any) => controlOverrides[p.id] ? { ...p, ...controlOverrides[p.id] } : p)
     }
@@ -549,7 +583,7 @@ export default function CentralCollectorPage() {
       const tb = asDate(b.createdAt)?.getTime() || 0
       return tb - ta
     })
-  }, [liveParcels, moreParcels, serverResults, controlOverrides])
+  }, [liveParcels, moreParcels, serverResults, controlOverrides, chequeOnly, myCity])
 
   useEffect(() => {
     const onError = (err: any) => console.error('CentralCollectorPage:', err)
@@ -1343,7 +1377,7 @@ export default function CentralCollectorPage() {
       <h1>📋 Rapport Contrôle & Pointage - ${villeText}</h1>
       <h2>Période: ${periodeText}</h2>
       <div class="info">
-        <p><strong>Encaisseur Central:</strong> ${profile?.name || 'Encaisseur central'}</p>
+        <p><strong>${chequeOnly ? 'Analyseur Chèque' : 'Encaisseur Central'}:</strong> ${profile?.name || 'Encaisseur central'}${myCity ? ` — Agence de ${myCity}` : ''}</p>
         <p><strong>Date d'impression:</strong> ${new Date().toLocaleDateString('fr-MA')} - ${new Date().toLocaleTimeString('fr-MA')}</p>
         <p><strong>Type de rapport:</strong> ${ctlSelected.size > 0 ? 'Colis sélectionnés' : 'Tous les colis filtrés'}</p>
       </div>
@@ -1525,13 +1559,18 @@ export default function CentralCollectorPage() {
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2">
               <h1 className="text-2xl font-black bg-gradient-to-r from-pink-600 via-purple-600 to-rose-600 bg-clip-text text-transparent">
-                Encaisseur Central
+                {chequeOnly ? 'Analyseur Chèque' : 'Encaisseur Central'}
               </h1>
               <Sparkles className="w-5 h-5 text-pink-500 animate-pulse" />
             </div>
             <p className="text-sm text-purple-600/70 font-medium mt-0.5">
-              Versements agences • RETOUR FOND • Chèques fournisseurs
+              {chequeOnly ? 'Contrôle des chèques et traites • Fournisseurs • Archives' : 'Versements agences • RETOUR FOND • Chèques fournisseurs'}
             </p>
+            {myCity && (
+              <p className="text-xs font-bold text-pink-700 mt-0.5 inline-flex items-center gap-1">
+                <MapPin className="w-3.5 h-3.5" /> Agence de {myCity}
+              </p>
+            )}
             {profile?.name && (
               <p className="text-sm text-rose-600 font-semibold mt-1 flex items-center gap-1.5">
                 <span className="w-2 h-2 bg-rose-500 rounded-full animate-pulse" />
@@ -1825,10 +1864,16 @@ export default function CentralCollectorPage() {
                 <div className="ml-auto flex flex-wrap gap-2">
                   <button
                     onClick={() => {
-                      const sel = ctlFiltered.filter((p: any) => ctlSelected.has(p.id))
+                      const selAll = ctlFiltered.filter((p: any) => ctlSelected.has(p.id))
+                      // Seules les valeurs encaissées dans ma ville (destination) se pointent ici
+                      const notMine = selAll.filter((p: any) => !canPoint(p))
+                      if (notMine.length && !confirm(`${notMine.length} valeur(s) sélectionnée(s) sont à pointer par l'agence de destination (encaissés ailleurs) : ils seront ignorés.
+
+Continuer ?`)) return
+                      const sel = selAll.filter((p: any) => canPoint(p))
                       const noData = sel.filter((p: any) => isDocParcel(p) && !hasDocData(p) && !isControlled(p))
                       if (noData.length && !confirm(`${noData.length} chèque(s) / traite(s) sélectionné(s) n'ont pas encore leurs données (N°, banque, échéance).\n\nIls ne seront PAS pointés : utilisez « Pointer » sur chaque ligne pour saisir leurs données.\n\nPointer les ${sel.length - noData.length} autre(s) ?`)) return
-                      const skip = new Set(noData.map((p: any) => p.id))
+                      const skip = new Set([...noData, ...notMine].map((p: any) => p.id))
                       applyControl([...ctlSelected].filter(id => !skip.has(id)), true)
                     }}
                     disabled={pointing}
@@ -1974,7 +2019,7 @@ export default function CentralCollectorPage() {
                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-black bg-green-100 text-green-700">
                                       <CheckCircle2 className="w-3 h-3" /> Contrôlé
                                     </span>
-                                    <p className="text-[10px] text-slate-400 mt-0.5">{p.controlledBy || ''} {p.controlledAt ? `· ${fmtDate(p.controlledAt)}` : ''}</p>
+                                    <p className="text-[10px] text-slate-400 mt-0.5">{withCity(p.controlledBy, p.controlledById)} {p.controlledAt ? `· ${fmtDate(p.controlledAt)}` : ''}</p>
                                   </div>
                                   {/* ⚠️ Chaque pointage n'appartient qu'à son auteur : seul l'utilisateur qui a
                                       contrôlé ce colis peut annuler SON contrôle (comparaison sur controlledById). */}
@@ -1989,6 +2034,10 @@ export default function CentralCollectorPage() {
                                     </button>
                                   )}
                                 </div>
+                              ) : !canPoint(p) ? (
+                                <span className="text-[10px] font-semibold text-slate-400" title="Le chèque est pointé par l'agence où il a été encaissé (ville de destination), avant son envoi">
+                                  Pointage : agence de destination ({p.destinationCity || p.receiver?.city || '—'})
+                                </span>
                               ) : (
                                 <button
                                   onClick={() => (isDocParcel(p) ? setChequeModal(p) : applyControl([p.id], true))}
@@ -2007,7 +2056,7 @@ export default function CentralCollectorPage() {
                                     <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-black bg-blue-100 text-blue-700">
                                       <CheckCircle2 className="w-3 h-3" /> Arrivée confirmée
                                     </span>
-                                    <p className="text-[10px] text-slate-400 mt-0.5">{p.deliveryControlledBy || ''} {p.deliveryControlledAt ? `· ${fmtDate(p.deliveryControlledAt)}` : ''}</p>
+                                    <p className="text-[10px] text-slate-400 mt-0.5">{withCity(p.deliveryControlledBy, p.deliveryControlledById)} {p.deliveryControlledAt ? `· ${fmtDate(p.deliveryControlledAt)}` : ''}</p>
                                   </div>
                                   {p.deliveryControlledById === myUid && (
                                     <button
@@ -2020,6 +2069,10 @@ export default function CentralCollectorPage() {
                                     </button>
                                   )}
                                 </div>
+                              ) : !canConfirmArrival(p) ? (
+                                <span className="text-[10px] font-semibold text-slate-400" title="L'arrivée du chèque est confirmée par l'agence qui doit le recevoir (ville d'origine)">
+                                  Arrivée : agence d'origine ({p.originCity || p.sender?.city || '—'})
+                                </span>
                               ) : (
                                 <button
                                   onClick={() => applyDeliveryControl([p.id], true)}
@@ -2053,7 +2106,8 @@ export default function CentralCollectorPage() {
 
         {activeTab === 'fournisseurs' && (
         <>
-        {/* Bandeau actions globales - Réinitialisation */}
+        {/* Bandeau actions globales - Réinitialisation (encaisseur central seulement, jamais l'analyseur chèques) */}
+        {!chequeOnly && (
         <section className="bg-gradient-to-r from-red-50 via-orange-50 to-rose-50 rounded-3xl border-2 border-red-200 p-6 shadow-lg">
           <div className="mb-4 flex items-center gap-3">
             <div className="p-2.5 rounded-2xl bg-gradient-to-br from-red-400 to-rose-500 text-white shadow-lg">
@@ -2135,6 +2189,7 @@ export default function CentralCollectorPage() {
             </div>
           </div>
         </section>
+        )}
 
         {/* Cartes statistiques magnifiques */}
         <section className="grid md:grid-cols-3 gap-4">
