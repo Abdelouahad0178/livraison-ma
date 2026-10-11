@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Calendar, Printer } from 'lucide-react'
+import { Calendar, ChevronDown, Printer } from 'lucide-react'
 import { printCodCollectes, printPortsCollectes } from '../../utils/agentPrintUtils'
 import { getOperationalDayString } from '../../config/operationalDay'
 import { caisseCodAmountOfType, toDateSafe, type CodCollecteJour, type CollecteJour } from '../../utils/agencyCaisseRules'
@@ -30,17 +30,33 @@ export default function CollectesParJour({ collectesParJour, profile }: Readonly
   const [collecteDay, setCollecteDay] = useState<(CollecteJour & { dateStr: string; dayLabel: string }) | null>(null)
   // Filtre du détail par date d'expédition (null = toutes)
   const [expFilter, setExpFilter] = useState<string | null>(null)
+  // Bloc replié au démarrage (petite flèche), comme les autres parties des pages
+  const [open, setOpen] = useState(false)
   if (collectesParJour.length === 0) return null
   const today = getOperationalDayString(new Date())
+  const todayData = collectesParJour.find(([k]) => k === today)?.[1]
 
   return (
     <>
-      <div className="bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl p-5">
-        <div className="flex items-center gap-2 mb-4">
-          <Calendar className="w-5 h-5 text-green-600" />
-          <h3 className="text-lg font-bold text-gray-900">Collectes par jour (14 derniers jours)</h3>
-        </div>
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-2">
+      <div className={`bg-gradient-to-r from-green-50 to-emerald-50 border border-green-200 rounded-xl ${open ? 'p-5' : 'px-5 py-3'}`}>
+        <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
+          className={`w-full flex items-center justify-between gap-2 text-left ${open ? 'mb-4' : ''}`}>
+          <span className="flex items-center gap-2 min-w-0">
+            <Calendar className="w-5 h-5 text-green-600 shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-lg font-bold text-gray-900">Collectes par jour (14 derniers jours)</span>
+              {!open && (
+                <span className="block text-xs text-gray-600">
+                  Aujourd'hui : <b className="text-green-700">{todayData?.count || 0}</b> · {(todayData?.montant || 0).toFixed(0)} DH
+                  {' '}— 14 jours : {collectesParJour.reduce((s, [, d]) => s + d.count, 0)} colis · {collectesParJour.reduce((s, [, d]) => s + d.montant, 0).toFixed(0)} DH
+                </span>
+              )}
+            </span>
+          </span>
+          <ChevronDown className={`w-5 h-5 text-green-700 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+        </button>
+        {open && (<>
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-2">
           {collectesParJour.map(([dateStr, data]) => {
             const d = new Date(dateStr)
             const dayLabel = d.toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
@@ -49,7 +65,7 @@ export default function CollectesParJour({ collectesParJour, profile }: Readonly
             return (
               <button type="button" key={dateStr} onClick={() => { setExpFilter(null); setCollecteDay({ dateStr, dayLabel, ...data }) }}
                 title="Voir le détail et imprimer"
-                className={`border rounded-lg p-3 text-center hover:border-green-400 hover:shadow-md hover:-translate-y-0.5 transition cursor-pointer ${isToday ? 'bg-green-600 border-green-600 text-white' : 'bg-white border-green-200'}`}>
+                className={`flex flex-col items-stretch justify-start border rounded-lg p-3 text-center hover:border-green-400 hover:shadow-md hover:-translate-y-0.5 transition cursor-pointer ${isToday ? 'bg-green-600 border-green-600 text-white' : 'bg-white border-green-200'}`}>
                 <div className={`text-xs font-semibold mb-1 ${isToday ? 'text-green-50' : 'text-gray-600'}`}>{isToday ? "Aujourd'hui" : dayLabel}</div>
                 <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-green-700'}`}>{data.count}</div>
                 <div className={`text-xs mt-1 ${isToday ? 'text-green-50' : 'text-gray-500'}`}>{data.montant.toFixed(0)} DH</div>
@@ -59,11 +75,18 @@ export default function CollectesParJour({ collectesParJour, profile }: Readonly
                   </div>
                 )}
                 {exps.length > 1 && (
-                  <div className={`text-[10px] mt-1 leading-tight ${isToday ? 'text-green-50' : 'text-amber-800'}`} title="Expéditions encaissées ce jour, réparties par date d'expédition">
-                    {exps.map(([k, v]) => <div key={k}>📦 Exp. {fmtDayShort(k)} : {v.n} · {v.m.toFixed(0)} DH</div>)}
+                  // Répartition par date d'expédition : 3 lignes au plus (le reste dans le détail)
+                  <div className={`mt-2 pt-1.5 border-t text-[10px] leading-snug text-left space-y-0.5 ${isToday ? 'border-green-500 text-green-50' : 'border-green-100 text-amber-800'}`}
+                    title={exps.map(([k, v]) => `Exp. ${fmtDayShort(k)} : ${v.n} · ${v.m.toFixed(0)} DH`).join('\n')}>
+                    {exps.slice(0, 3).map(([k, v]) => (
+                      <div key={k} className="flex justify-between gap-1 whitespace-nowrap">
+                        <span>📦 {fmtDayShort(k)} · {v.n}</span><span className="tabular-nums">{v.m.toFixed(0)} DH</span>
+                      </div>
+                    ))}
+                    {exps.length > 3 && <div className="italic opacity-80">+ {exps.length - 3} autre{exps.length - 3 > 1 ? 's' : ''} date{exps.length - 3 > 1 ? 's' : ''}</div>}
                   </div>
                 )}
-                <div className={`text-[10px] mt-1 font-semibold ${isToday ? 'text-white' : 'text-green-600'}`}>👁 Détail</div>
+                <div className={`mt-auto pt-2 text-[10px] font-semibold ${isToday ? 'text-white' : 'text-green-600'}`}>👁 Détail</div>
               </button>
             )
           })}
@@ -73,6 +96,7 @@ export default function CollectesParJour({ collectesParJour, profile }: Readonly
           <strong>{collectesParJour.reduce((s, [, d]) => s + d.montant, 0).toFixed(2)} DH</strong>
           {' '}(💰 ports dus {collectesParJour.reduce((s, [, d]) => s + (d.portDu?.montant || 0), 0).toFixed(2)} DH · 📬 ports payés à ramasser {collectesParJour.reduce((s, [, d]) => s + (d.portPaye?.montant || 0), 0).toFixed(2)} DH)
         </div>
+        </>)}
       </div>
 
       {/* 📅 Détail d'une journée de collecte (clic sur une carte) */}
@@ -188,29 +212,54 @@ export function CodCollectesParJour({ codCollectesParJour, profile }: Readonly<{
   profile: any
 }>) {
   const [day, setDay] = useState<(CodCollecteJour & { dateStr: string }) | null>(null)
+  // Bloc replié au démarrage (petite flèche), comme les autres parties des pages
+  const [open, setOpen] = useState(false)
   if (codCollectesParJour.length === 0) return null
   const today = getOperationalDayString(new Date())
   const sum = (k: 'count' | 'montant' | 'especes' | 'cheque' | 'traite') => codCollectesParJour.reduce((s, [, d]) => s + d[k], 0)
+  const todayData = codCollectesParJour.find(([k]) => k === today)?.[1]
 
   return (
     <>
-      <div className="bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-200 rounded-xl p-5">
-        <div className="flex items-center gap-2 mb-4">
-          <Calendar className="w-5 h-5 text-indigo-600" />
-          <h3 className="text-lg font-bold text-gray-900">Valeurs (COD) collectées par jour (14 derniers jours)</h3>
-        </div>
-        <div className="grid grid-cols-[repeat(auto-fill,minmax(110px,1fr))] gap-2">
+      <div className={`bg-gradient-to-r from-indigo-50 to-violet-50 border border-indigo-200 rounded-xl ${open ? 'p-5' : 'px-5 py-3'}`}>
+        <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
+          className={`w-full flex items-center justify-between gap-2 text-left ${open ? 'mb-4' : ''}`}>
+          <span className="flex items-center gap-2 min-w-0">
+            <Calendar className="w-5 h-5 text-indigo-600 shrink-0" />
+            <span className="min-w-0">
+              <span className="block text-lg font-bold text-gray-900">Valeurs (COD) collectées par jour (14 derniers jours)</span>
+              {!open && (
+                <span className="block text-xs text-gray-600">
+                  Aujourd'hui : <b className="text-indigo-700">{todayData?.count || 0}</b> · {(todayData?.montant || 0).toFixed(0)} DH
+                  {' '}— 14 jours : {sum('count')} expédition(s) · {sum('montant').toFixed(0)} DH
+                </span>
+              )}
+            </span>
+          </span>
+          <ChevronDown className={`w-5 h-5 text-indigo-700 shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+        </button>
+        {open && (<>
+        <div className="grid grid-cols-[repeat(auto-fill,minmax(150px,1fr))] gap-2">
           {codCollectesParJour.map(([dateStr, data]) => {
             const isToday = dateStr === today
             const dayLabel = new Date(dateStr).toLocaleDateString('fr-FR', { day: 'numeric', month: 'short' })
             return (
               <button type="button" key={dateStr} onClick={() => setDay({ dateStr, ...data })}
                 title={COD_TYPES.filter(t => data[t.key] > 0).map(t => `${t.label} ${data[t.key].toFixed(0)} DH`).join(' · ')}
-                className={`border rounded-lg p-3 text-center hover:border-indigo-400 hover:shadow-md hover:-translate-y-0.5 transition cursor-pointer ${isToday ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-indigo-200'}`}>
+                className={`flex flex-col items-stretch justify-start border rounded-lg p-3 text-center hover:border-indigo-400 hover:shadow-md hover:-translate-y-0.5 transition cursor-pointer ${isToday ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-indigo-200'}`}>
                 <div className={`text-xs font-semibold mb-1 ${isToday ? 'text-indigo-50' : 'text-gray-600'}`}>{isToday ? "Aujourd'hui" : dayLabel}</div>
                 <div className={`text-lg font-bold ${isToday ? 'text-white' : 'text-indigo-700'}`}>{data.count}</div>
                 <div className={`text-xs mt-1 ${isToday ? 'text-indigo-50' : 'text-gray-500'}`}>{data.montant.toFixed(0)} DH</div>
-                <div className={`text-[10px] mt-1 font-semibold ${isToday ? 'text-white' : 'text-indigo-600'}`}>👁 Détail</div>
+                {COD_TYPES.some(t => data[t.key] > 0) && (
+                  <div className={`mt-2 pt-1.5 border-t text-[10px] leading-snug text-left space-y-0.5 ${isToday ? 'border-indigo-500 text-indigo-50' : 'border-indigo-100 text-gray-600'}`}>
+                    {COD_TYPES.filter(t => data[t.key] > 0).map(t => (
+                      <div key={t.key} className="flex justify-between gap-1 whitespace-nowrap">
+                        <span>{t.emoji} {t.label}</span><span className="tabular-nums">{data[t.key].toFixed(0)} DH</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div className={`mt-auto pt-2 text-[10px] font-semibold ${isToday ? 'text-white' : 'text-indigo-600'}`}>👁 Détail</div>
               </button>
             )
           })}
@@ -219,6 +268,7 @@ export function CodCollectesParJour({ codCollectesParJour, profile }: Readonly<{
           Total 14 jours: <strong>{sum('count')} expédition(s)</strong> pour <strong>{sum('montant').toFixed(2)} DH</strong>
           {COD_TYPES.filter(t => sum(t.key) > 0).map(t => <span key={t.key}> · {t.emoji} {t.label} {sum(t.key).toFixed(2)} DH</span>)}
         </div>
+        </>)}
       </div>
 
       {day && (() => {

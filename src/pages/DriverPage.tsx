@@ -278,7 +278,6 @@ export default function DriverPage() {
       !['chauffeur', 'livreur'].includes(u.role)
     )
     const manager = sameCityStaff.find(u => u.role === 'chef_agence')
-      || sameCityStaff.find(u => u.role === 'agent')
       || sameCityStaff[0]
     return manager?.name || '-'
   }

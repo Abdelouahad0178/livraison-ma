@@ -35,23 +35,24 @@ export default function TrackingPage() {
     setError('')
     setParcel(null)
     try {
-      const [{ findParcel }, { db }, { doc, onSnapshot }] = await Promise.all([
-        import('../firebase/parcelsRead'),
-        import('../firebase/db'),
-        import('firebase/firestore'),
-      ])
-      const found = await findParcel(id)
-      if (!found) {
+      // 🔒 Suivi par une fonction serveur (publicTrackParcel) : les expéditions ne sont plus lisibles sans compte ;
+      // la fonction ne renvoie que ce que cette page affiche. Mise à jour toutes les 30 s (au lieu de l'écoute directe).
+      const [{ getFunctions, httpsCallable }] = await Promise.all([import('firebase/functions'), import('../firebase/db')])
+      const track = httpsCallable(getFunctions(), 'publicTrackParcel')
+      const fetchOnce = async () => ((await track({ trackingId: String(id).trim() })).data as any)
+      const res = await fetchOnce()
+      if (!res?.found) {
         setError('Aucun colis trouvé avec ce numéro de suivi.')
         setLoading(false)
         return
       }
-      setParcel(found)
+      setParcel(res.parcel)
       setLoading(false)
 
-      unsubRef.current = onSnapshot(doc(db, 'parcels', found.id), snap => {
-        if (snap.exists()) setParcel({ id: snap.id, ...snap.data() })
-      })
+      const timer = setInterval(() => {
+        fetchOnce().then(r => { if (r?.found) setParcel(r.parcel) }).catch(() => {})
+      }, 30000)
+      unsubRef.current = () => clearInterval(timer)
     } catch {
       setError('Erreur réseau. Réessayez dans un instant.')
       setLoading(false)

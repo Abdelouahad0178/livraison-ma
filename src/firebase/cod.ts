@@ -15,7 +15,7 @@ type FirestoreRow = DynamicData & { id: string }
 const rowFromDoc = (d: { id: string; data: () => DynamicData }): FirestoreRow => ({ id: d.id, ...d.data() })
 
 /** Type de valeur encaissé : celui du service demandé (un colis C/Chèque n'est jamais encaissé « espèces »). */
-const coherentCodPaymentType = (parcel: DynamicData, paymentType: string): string =>
+export const coherentCodPaymentType = (parcel: DynamicData, paymentType: string): string =>
   sanitizeParcelCodWrite({ codPaymentType: paymentType }, parcel?.serviceType).codPaymentType
 
 export async function collectCod(
@@ -320,7 +320,9 @@ export async function collectPortDu(parcelId: string, agentName: string, agentId
     portStatus:          'collected',
     portCollectedBy:     agentName,
     portCollectedById:   agentId,
-    portCollectedAt:     serverTimestamp(),
+    // Date du moment côté navigateur (Timestamp) : jamais « vide en attente du serveur » (sinon la règle du 05/10 se
+    // rabattait un instant sur la date de création et la carte « par jour » ne savait pas où ranger le port)
+    portCollectedAt:     Timestamp.now(),
     portDuReceivedMethod: 'especes', // Par défaut espèces pour cette fonction
     ...extraFields,
   }
@@ -338,6 +340,11 @@ export async function collectPortDu(parcelId: string, agentName: string, agentId
       if (!snap.exists()) {
         throw new Error(`Colis ${parcelId} introuvable dans ${coll}`)
       }
+      // 🔒 Déjà encaissé (par quelqu'un d'autre, sur un écran pas encore à jour) : rien n'est réécrit — l'encaissement
+      // existant (méthode, auteur, date) est conservé et le même port n'est jamais encaissé deux fois. Pas d'erreur :
+      // l'écran du livreur, qui collecte puis marque « Livré », n'est jamais bloqué.
+      const st = (snap.data() as any).portStatus
+      if (st === 'collected' || st === 'received') return
 
       transaction.update(ref, updates)
     })
@@ -422,13 +429,17 @@ export async function collectPortDuCheque(
   if (parcel.portType !== 'port_du') {
     throw new Error('Ce colis n\'est pas un port dû')
   }
+  // 🔒 Déjà encaissé (espèces ou chèque) par quelqu'un d'autre : ne pas l'écraser
+  if (parcel.portStatus === 'collected' || parcel.portStatus === 'received') {
+    throw new Error('Ce port dû est déjà encaissé.')
+  }
 
   // Mettre à jour avec les détails du chèque
   const updates = {
     portStatus: 'collected',
     portCollectedBy: collectedBy,
     portCollectedById: collectedById,
-    portCollectedAt: serverTimestamp(),
+    portCollectedAt: Timestamp.now(),
     portDuReceivedMethod: 'cheque',
     portDuChequeBanque: details.banque,
     portDuChequeNumero: details.numero,

@@ -843,7 +843,7 @@ export default function PointeurPage() {
     <div className="min-h-screen bg-gray-50 overflow-x-hidden">
       {/* ── HEADER ── */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-20">
-        <div className="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
+        <div className="max-w-4xl xl:max-w-none xl:w-[95%] mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-sm">PE</div>
             <div>
@@ -858,7 +858,7 @@ export default function PointeurPage() {
         </div>
 
         {/* NAV TABS */}
-        <div className="max-w-4xl mx-auto px-4 flex gap-1 pb-0 overflow-x-auto">
+        <div className="max-w-4xl xl:max-w-none xl:w-[95%] mx-auto px-4 flex gap-1 pb-0 overflow-x-auto">
           {[
             { key: 'dashboard', label: 'Tableau de bord', icon: BarChart3 },
             { key: 'livreurs', label: 'Livreurs', icon: Package, badge: livreurPendingCount || 0 },
@@ -880,7 +880,7 @@ export default function PointeurPage() {
         </div>
       </header>
 
-      <div className="max-w-4xl mx-auto px-4 py-4 space-y-4">
+      <div className="max-w-4xl xl:max-w-none xl:w-[95%] mx-auto px-4 py-4 space-y-4">
 
         {/* ── DASHBOARD ── */}
         {tab === 'dashboard' && (

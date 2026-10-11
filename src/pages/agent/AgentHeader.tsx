@@ -57,7 +57,7 @@ export default function AgentHeader({
   }).length
   return (
     <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-10">
-      <div className="max-w-7xl mx-auto px-4">
+      <div className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto px-4">
         {/* Top bar */}
         <div className="flex items-center justify-between gap-3 py-3 min-w-0">
           <div className="flex items-center gap-2 min-w-0">
@@ -140,7 +140,7 @@ export default function AgentHeader({
             { key: 'home',          label: '🏠 Accueil',                onClick: () => { setTab('home'); setCreatedParcel(null) },                                                                                hidden: false },
             { key: 'new',           label: '+ Saisie colis',            onClick: () => { setTab('new'); setCreatedParcel(null); setForm({ ...EMPTY_FORM, senderCity: profile?.city || '' }); setTimeout(() => window.dispatchEvent(new Event('focus-nexp')), 80) },                   hidden: false },
             { key: 'parcels',       label: profile?.role === 'aide_agent' ? '📋 Mes saisies' : '📦 Expéditions', onClick: () => setTab('parcels'),                                                               hidden: false },
-            { key: 'caisse',        label: profile?.role === 'chef_agence' ? '🏛️ Caisse Agence' : '💼 Ma Caisse', onClick: () => setTab('caisse'),                                                              hidden: profile?.role === 'aide_agent' || profile?.role === 'agentpro' },
+            { key: 'caisse',        label: '🏛️ Caisse Agence', onClick: () => setTab('caisse'),                                                              hidden: profile?.role !== 'chef_agence' },
             { key: 'cod',           label: '💰 RETOUR FOND Clients',    onClick: () => setTab('cod'),                                                                                                             hidden: profile?.role === 'aide_agent' },
             { key: 'valeurs',       label: '✅ Valeurs à valider',      onClick: () => setTab('valeurs'),                                                                                                         hidden: profile?.role !== 'chef_agence' },
             { key: 'clientportdu',  label: '🏦 Ports en compte',        onClick: () => setTab('clientportdu'),                                                                                                    hidden: profile?.role !== 'chef_agence' && profile?.role !== 'agentpro' },
@@ -197,7 +197,7 @@ export default function AgentHeader({
             </button>
             <span className="text-gray-300">/</span>
             <span className="text-sm font-semibold text-blue-600">
-              {tab === 'new' ? '+ Nouveau colis' : tab === 'caisse' ? (profile?.role === 'chef_agence' ? `Caisse Agence ${profile?.city || ''}` : 'Ma Caisse') : tab === 'cod' ? 'RETOUR FOND Clients' : tab === 'valeurs' ? '✅ Valeurs à valider' : tab === 'clientportdu' ? '🏦 Ports en compte clients' : tab === 'portpayecheque' ? '📋 Ports payés chèque' : tab === 'portducheque' ? '📋 Ports dû chèque' : tab === 'invoices' ? '🧾 Factures' : tab === 'clients' ? 'Mes clients' : tab === 'charge' ? 'Feuille de charge' : tab === 'secteurs' ? 'Secteurs' : tab === 'drivers' ? 'Port dû' : tab === 'arrivage' ? 'Arrivages' : tab === 'retours' ? '↩️ Retours' : tab === 'lostparcels' ? '🚨 Colis perdus' : tab === 'modifications' ? 'Modif. clients' : tab === 'aideagents' ? 'Aide Agents' : tab === 'dashboard' ? 'Dashboard' : tab === 'notes' ? 'Notes agents' : (profile?.role === 'aide_agent' ? 'Mes saisies' : 'Expéditions')}
+              {tab === 'new' ? '+ Nouveau colis' : tab === 'caisse' ? `Caisse Agence ${profile?.city || ''}` : tab === 'cod' ? 'RETOUR FOND Clients' : tab === 'valeurs' ? '✅ Valeurs à valider' : tab === 'clientportdu' ? '🏦 Ports en compte clients' : tab === 'portpayecheque' ? '📋 Ports payés chèque' : tab === 'portducheque' ? '📋 Ports dû chèque' : tab === 'invoices' ? '🧾 Factures' : tab === 'clients' ? 'Mes clients' : tab === 'charge' ? 'Feuille de charge' : tab === 'secteurs' ? 'Secteurs' : tab === 'drivers' ? 'Port dû' : tab === 'arrivage' ? 'Arrivages' : tab === 'retours' ? '↩️ Retours' : tab === 'lostparcels' ? '🚨 Colis perdus' : tab === 'modifications' ? 'Modif. clients' : tab === 'aideagents' ? 'Aide Agents' : tab === 'dashboard' ? 'Dashboard' : tab === 'notes' ? 'Notes agents' : (profile?.role === 'aide_agent' ? 'Mes saisies' : 'Expéditions')}
             </span>
           </div>
         )}
@@ -223,12 +223,12 @@ export default function AgentHeader({
             >
               <Package className="w-4 h-4" /> {profile?.role === 'aide_agent' ? 'Mes saisies' : 'Expéditions'}
             </button>
-            {profile?.role !== 'aide_agent' && profile?.role !== 'agentpro' && (
+            {profile?.role === 'chef_agence' && (
               <button
                 onClick={() => { setTab('caisse'); setMenuOpen(false) }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'caisse' ? 'bg-green-50 text-green-600' : 'text-gray-600 hover:bg-gray-50'}`}
               >
-                <Wallet className="w-4 h-4" /> {profile?.role === 'chef_agence' ? 'Caisse Agence' : 'Ma Caisse'}
+                <Wallet className="w-4 h-4" /> Caisse Agence
               </button>
             )}
             {profile?.role !== 'aide_agent' && (

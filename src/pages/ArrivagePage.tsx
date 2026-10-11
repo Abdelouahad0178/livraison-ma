@@ -539,7 +539,7 @@ export default function ArrivagePage() {
         ))}
       </div>
 
-      <main className="max-w-2xl mx-auto px-4 py-5 space-y-4">
+      <main className="max-w-2xl xl:max-w-none xl:w-[95%] mx-auto px-4 py-5 space-y-4">
 
         {/* Succès */}
         {success && (

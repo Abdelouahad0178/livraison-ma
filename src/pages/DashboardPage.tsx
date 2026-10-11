@@ -1,4 +1,5 @@
 import { useEffect, useState, useMemo, useCallback } from 'react'
+import { isAgencyStaff } from '../utils/roles'
 import { useNavigate } from 'react-router-dom'
 import { signOut } from 'firebase/auth'
 import {
@@ -178,7 +179,7 @@ export default function DashboardPage() {
     const revenue   = globalStats?.revenue  ?? 0
     const codTotal  = globalStats?.codTotal ?? 0
     const taux   = total > 0 ? Math.round((livres / total) * 100) : 0
-    const agents  = users.filter(u => u.role === 'agent' || u.role === 'chef_agence').length
+    const agents  = users.filter(u => isAgencyStaff(u.role)).length
     const drivers = users.filter(u => ['chauffeur', 'livreur'].includes(u.role)).length
     return { total, livres, retours, enCours, revenue, codTotal, codPending: 0, codRemis: 0, taux, agents, drivers }
   }, [globalStats, users])
@@ -389,7 +390,7 @@ export default function DashboardPage() {
 
       {/* Header */}
       <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
+        <div className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button onClick={() => navigate('/admin')} className="p-2 hover:bg-gray-100 rounded-xl transition">
               <ArrowLeft className="w-5 h-5 text-gray-600" />
@@ -426,7 +427,7 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-6 space-y-6 pb-16">
+      <main className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto px-4 py-6 space-y-6 pb-16">
 
         {/* ── KPI CARDS ─────────────────────────────────────────────────── */}
         <div className="grid grid-cols-2 md:grid-cols-4 xl:grid-cols-8 gap-3">

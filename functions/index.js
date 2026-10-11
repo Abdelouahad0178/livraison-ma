@@ -556,6 +556,13 @@ exports.extractParcelData = onCall({
   if (!request.auth) {
     throw new Error('🔒 Authentification requise')
   }
+  // 🔒 Personnel de saisie uniquement (API IA payante) : un compte inscrit seul ne peut pas l'appeler en boucle
+  const callerSnap = await db.collection('users').doc(request.auth.uid).get()
+  const callerRole = callerSnap.exists ? callerSnap.data().role : null
+  if (!['admin', 'directeur', 'chef_agence', 'chef_exploitation', 'agentpro', 'aide_agent'].includes(callerRole)) {
+    const { HttpsError } = require('firebase-functions/v2/https')
+    throw new HttpsError('permission-denied', 'Réservé au personnel de saisie.')
+  }
 
   const { transcript } = request.data
 
@@ -1760,4 +1767,69 @@ exports.adminSetUserPassword = onCall({ maxInstances: 5 }, async (request) => {
     timestamp: FieldValue.serverTimestamp(),
   })
   return { ok: true }
+})
+
+// ── Pages PUBLIQUES (sans compte) : suivi d'un colis et signature de livraison ──────────
+// 🔒 Les règles Firestore ne laissent plus lire les expéditions sans compte (avant : `allow get: if true` + liste
+// « limit <= 1 » → n'importe qui pouvait aspirer toute la collection : noms, téléphones, CIN, adresses, COD).
+// Ces deux fonctions renvoient UNIQUEMENT ce que les pages publiques affichent.
+const isoOf = v => (v && typeof v.toDate === 'function') ? v.toDate().toISOString() : (v || null)
+
+/** Suivi public : statut, villes, noms, montants affichés et historique (statut + date, sans les notes internes). */
+exports.publicTrackParcel = onCall({ cors: true }, async (request) => {
+  const { HttpsError } = require('firebase-functions/v2/https')
+  const trackingId = String(request.data?.trackingId || '').trim()
+  if (!trackingId || trackingId.length > 40) throw new HttpsError('invalid-argument', 'Numéro de suivi invalide.')
+  const snap = await db.collection('parcels').where('trackingId', '==', trackingId).limit(1).get()
+  if (snap.empty) return { found: false }
+  const d = snap.docs[0]
+  const p = d.data()
+  return {
+    found: true,
+    parcel: {
+      id: d.id,
+      trackingId: p.trackingId || '',
+      status: p.status || '',
+      codAmount: p.codAmount || 0,
+      price: p.price || 0,
+      weight: p.weight || null,
+      signatureConfirmedAt: isoOf(p.signatureConfirmedAt),
+      sender: { name: p.sender?.name || '', city: p.sender?.city || p.originCity || '' },
+      receiver: { name: p.receiver?.name || '', city: p.receiver?.city || p.destinationCity || '' },
+      history: (Array.isArray(p.history) ? p.history : []).map(h => ({ status: h?.status || '', timestamp: isoOf(h?.timestamp) })),
+    },
+  }
+})
+
+/** Page de signature : vérifie le jeton CÔTÉ SERVEUR et renvoie seulement ce que la page affiche. */
+exports.getSignatureParcel = onCall({ cors: true }, async (request) => {
+  const { HttpsError } = require('firebase-functions/v2/https')
+  const parcelId = String(request.data?.parcelId || '')
+  const token = String(request.data?.token || '')
+  if (!parcelId || !token || parcelId.length > 100 || token.length > 200) throw new HttpsError('invalid-argument', 'Lien invalide.')
+  const snap = await db.collection('parcels').doc(parcelId).get()
+  if (!snap.exists) return { valid: false }
+  const p = snap.data()
+  const isReturn = !!p.returnSignatureToken && p.returnSignatureToken === token
+  const isNormal = !!p.signatureToken && p.signatureToken === token
+  if (!isReturn && !isNormal) return { valid: false }
+  if (p.status === 'Livré' || p.status === 'Retour finalisé') return { valid: true, alreadyDelivered: true }
+  return {
+    valid: true,
+    isReturn,
+    parcel: {
+      id: snap.id,
+      trackingId: p.trackingId || '',
+      status: p.status || '',
+      createdAt: isoOf(p.createdAt),
+      originCity: p.originCity || '',
+      destinationCity: p.destinationCity || '',
+      nbColis: p.nbColis || null,
+      arrivedNbColis: p.arrivedNbColis || null,
+      weight: p.weight || null,
+      codAmount: p.codAmount || 0,
+      sender: { name: p.sender?.name || '' },
+      receiver: { name: p.receiver?.name || '', tel: p.receiver?.tel || '', address: p.receiver?.address || '' },
+    },
+  }
 })

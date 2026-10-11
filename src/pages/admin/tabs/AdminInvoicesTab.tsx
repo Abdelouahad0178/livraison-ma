@@ -108,7 +108,7 @@ export default function AdminInvoicesTab({ uid, userName }: any) {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-6 max-w-7xl xl:max-w-none xl:w-[95%] mx-auto">
       {/* En-tête */}
       <div className="flex items-center justify-between mb-6">
         <div>

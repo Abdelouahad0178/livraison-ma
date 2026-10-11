@@ -1,7 +1,7 @@
 
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, getDoc,
-  query, where, orderBy, getDocs, onSnapshot, limit, startAfter, getCountFromServer,
+  query, where, orderBy, getDocs, getDocsFromServer, onSnapshot, limit, startAfter, getCountFromServer,
   serverTimestamp, arrayUnion, increment, writeBatch, setDoc, Timestamp, runTransaction, deleteField, documentId
 } from 'firebase/firestore'
 import type { Query, DocumentData } from 'firebase/firestore'
@@ -15,7 +15,7 @@ import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
 import { codPartView, isMixedCod } from '../utils/codParts'
 import { codMoneyOnly } from '../utils/moneyFlow'
 import { getOperationalDayString } from '../config/operationalDay'
-import { buildDaySlices, opDayOf } from '../utils/daySlices'
+import { buildDaySlices, opDayOf, opStart } from '../utils/daySlices'
 import { addPayment } from './clients'
 import { bumpPresence } from '../services/presenceCounters'
 import { normName, isVisibleInDestinationAgency } from '../utils/billingAgency'
@@ -414,6 +414,25 @@ export async function createParcel(
 }
 
 // Mise à jour de statut — non bloquant sur la géolocalisation
+/**
+ * 📦 Port dû ou COD COLLECTÉ alors que l'expédition est encore « En cours de livraison » : l'argent encaissé prouve
+ * la livraison → passage AUTOMATIQUE à « Livré » (même écriture que le bouton « Livrer » : statut, date de livraison,
+ * ligne d'historique). Relit le statut actuel : rien n'est fait si elle n'est plus « En cours de livraison ».
+ * Retourne les champs modifiés (mise à jour immédiate de l'écran) ou null.
+ */
+export async function markDeliveredAfterCollect(p: any, byName: string, what: string): Promise<Record<string, any> | null> {
+  if (!p?.id) return null
+  const snap = await getDoc(doc(db, 'parcels', p.id))
+  const current: any = snap.exists() ? snap.data() : null
+  if (!current || current.status !== 'En cours de livraison') return null
+  const deliveredAt = new Date().toISOString()
+  await updateParcelStatus(p.id, 'Livré', {
+    deliveredAt,
+    note: `Marqué livré automatiquement après collecte (${what})${current.deliveryDriverName ? ` — ${current.deliveryDriverName}` : ''} par ${byName}`,
+  })
+  return { status: 'Livré', deliveredAt }
+}
+
 export async function updateParcelStatus(parcelId: string, status: string, extra: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const parcelRef = doc(db, 'parcels', parcelId)
 
@@ -1721,8 +1740,17 @@ export function subscribeAgencyParcelsFull(
     const worker = async () => {
       while (next < pastSlices.length && !stopped) {
         const sl = pastSlices[next++]
-        const docs = (await Promise.all(FIELDS.map(field =>
-          getAgencyParcelsDaySlice(city, field, sl.start, sl.end, sl.endInclusive, null, pageSize, lite)))).flat()
+        const readDay = async () => (await Promise.all(FIELDS.map(field => lite
+          ? getLiteDaySliceCached(city, field, sl, pageSize)
+          : getAgencyParcelsDaySlice(city, field, sl.start, sl.end, sl.endInclusive, null, pageSize, lite)))).flat()
+        // Journée en échec (réseau coupé malgré les relances) : relue 2 fois encore (3 s d'écart) avant d'abandonner
+        let docs: any[] = []
+        for (let attempt = 0; ; attempt++) {
+          try { docs = await readDay(); break } catch (err) {
+            if (attempt >= 2 || stopped) throw err
+            await new Promise(r => setTimeout(r, 3000))
+          }
+        }
         if (stopped) return
         for (const d of docs) pastDocs.push(d)
         emit()
@@ -1740,6 +1768,97 @@ export function subscribeAgencyParcelsFull(
     clearTimeout(timer)
     unsubs.forEach(u => u())
   }
+}
+
+// 🧠 MÉMOIRE DES JOURNÉES PASSÉES (parcelsLite) — une période déjà chargée, puis une période incluse ou qui la
+// recoupe : les journées déjà lues ne sont PAS relues. Clé : ville|champ|journée d'opération (journée entière,
+// découpée ensuite aux bornes demandées), partagée par toutes les pages (Caisse Agence, Collecte du soir, Expéditions).
+// Exactitude : avant chaque réutilisation, UNE requête relit seulement les expéditions modifiées depuis la dernière
+// synchronisation (parcelsLite.liteUpdatedAt, posé par syncParcelLite à chaque changement) et les replace dans
+// leur journée (y compris un changement de ville). Trop de changements ou erreur → mémoire vidée (relecture normale).
+// Vidée au rechargement de la page. Une expédition SUPPRIMÉE reste visible jusqu'au rechargement (cas rare).
+const LITE_DAY_CACHE = new Map<string, Map<string, any>>()
+const LITE_DAY_CACHE_MAX = 600 // journées × champs × villes gardées au plus (les plus anciennes sortent)
+const LITE_SYNC_MARGIN_MS = 10 * 60 * 1000 // marge (décalage d'horloge, délai de la Cloud Function)
+const LITE_DELTA_MAX = 2000
+let liteSyncedAt = 0
+let liteSyncing: Promise<void> | null = null
+let liteLastSyncRun = 0 // une seule synchronisation par chargement (les journées d'une période arrivent ensemble)
+const liteDayKey = (city: string, field: string, day: string) => `${city}|${field}|${day}`
+const createdMs = (p: any): number => {
+  const v = p?.createdAt
+  if (!v) return NaN
+  if (typeof v.toMillis === 'function') return v.toMillis()
+  if (typeof v.seconds === 'number') return v.seconds * 1000
+  return new Date(v).getTime()
+}
+
+function syncLiteDayCache(): Promise<void> {
+  if (!LITE_DAY_CACHE.size) return Promise.resolve()
+  if (liteSyncing) return liteSyncing
+  if (Date.now() - liteLastSyncRun < 5000) return Promise.resolve()
+  liteSyncing = (async () => {
+    const startedAt = Date.now()
+    try {
+      const snap = await getDocsServerFirst(query(collection(db, 'parcelsLite'),
+        where('liteUpdatedAt', '>', Timestamp.fromMillis(liteSyncedAt - LITE_SYNC_MARGIN_MS)),
+        orderBy('liteUpdatedAt'), limit(LITE_DELTA_MAX)))
+      if (snap.size >= LITE_DELTA_MAX) { LITE_DAY_CACHE.clear(); return }
+      const changed = snap.docs.map(d => ({ id: d.id, ...d.data() } as any))
+      if (changed.length) {
+        for (const [key, day] of LITE_DAY_CACHE) {
+          const [city, field, dayKey] = key.split('|')
+          for (const p of changed) {
+            day.delete(p.id)
+            const t = createdMs(p)
+            if (p[field] === city && !isNaN(t) && opDayOf(new Date(t)) === dayKey) day.set(p.id, p)
+          }
+        }
+      }
+      liteSyncedAt = startedAt
+      liteLastSyncRun = Date.now()
+    } catch (err) {
+      console.warn('Mémoire des journées : synchronisation impossible, relecture complète', err)
+      LITE_DAY_CACHE.clear()
+    } finally {
+      liteSyncing = null
+    }
+  })()
+  return liteSyncing
+}
+
+/** Tranche passée lue en parcelsLite, via la mémoire des journées (journée entière lue une fois, puis découpée). */
+export async function getLiteDaySliceCached(
+  city: string, field: 'originCity' | 'destinationCity', sl: { start: Date; end: Date; endInclusive: boolean; day: string }, pageSize: number,
+): Promise<any[]> {
+  await syncLiteDayCache()
+  const key = liteDayKey(city, field, sl.day)
+  let day = LITE_DAY_CACHE.get(key)
+  if (!day) {
+    const fetchedAt = Date.now()
+    const dStart = opStart(sl.day)
+    const dEnd = new Date(dStart); dEnd.setDate(dEnd.getDate() + 1)
+    // Journée entière + éventuelles marges de la tranche (tranches extrêmes d'une période)
+    const from = new Date(Math.min(dStart.getTime(), sl.start.getTime()))
+    const to = new Date(Math.max(dEnd.getTime(), sl.end.getTime()))
+    const docs = await getAgencyParcelsDaySlice(city, field, from, to, true, null, pageSize, true)
+    day = new Map()
+    for (const p of docs) {
+      const t = createdMs(p)
+      if (!isNaN(t) && opDayOf(new Date(t)) === sl.day) day.set(p.id, p)
+    }
+    if (!LITE_DAY_CACHE.size) liteSyncedAt = fetchedAt
+    LITE_DAY_CACHE.set(key, day)
+    while (LITE_DAY_CACHE.size > LITE_DAY_CACHE_MAX) LITE_DAY_CACHE.delete(LITE_DAY_CACHE.keys().next().value as string)
+    // Marges hors journée (rattachées à une tranche extrême) : renvoyées sans être gardées en mémoire
+    const extra = docs.filter(p => { const t = createdMs(p); return !isNaN(t) && opDayOf(new Date(t)) !== sl.day })
+    return [...day.values(), ...extra].filter(p => inSlice(p, sl))
+  }
+  return [...day.values()].filter(p => inSlice(p, sl))
+}
+const inSlice = (p: any, sl: { start: Date; end: Date; endInclusive: boolean }) => {
+  const t = createdMs(p)
+  return !isNaN(t) && t >= sl.start.getTime() && (sl.endInclusive ? t <= sl.end.getTime() : t < sl.end.getTime())
 }
 
 // Charger plus de colis pour une agence (pagination)
@@ -1848,6 +1967,21 @@ export async function getMoreAgencyParcels(
   }
 }
 
+// 🌐 Lecture ponctuelle GARANTIE serveur. getDocs renvoie SANS ERREUR le cache local quand le navigateur a
+// perdu le contact avec Firestore (réseau instable, PC sorti de veille…) — pour une journée jamais lue, ce cache
+// est VIDE : la page affichait une liste vide / des chiffres à 0, « réparés » seulement en revenant sur la page.
+// Ici une réponse venue du cache est relancée vers le serveur (3 essais, ≈ 6 s) ; toujours injoignable → erreur
+// (signalée par l'appelant) au lieu d'un résultat vide présenté comme complet.
+async function getDocsServerFirst(q: Query<DocumentData>) {
+  let snap = await getDocs(q)
+  for (let attempt = 0; snap.metadata.fromCache && attempt < 3; attempt++) {
+    await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
+    try { snap = await getDocsFromServer(q) } catch (err) { if (attempt === 2) throw err }
+  }
+  if (snap.metadata.fromCache) throw new Error('Firestore injoignable : lecture interrompue (cache local).')
+  return snap
+}
+
 // 📅 Colis d'une agence pour UNE tranche de temps (une journée d'opération), une requête
 // (originCity OU destinationCity), archivés inclus, paginée par pageSize jusqu'à épuisement.
 // Sert au chargement « jour par jour » de l'onglet Expéditions du chef d'agence / agent pro :
@@ -1875,7 +2009,7 @@ export async function getAgencyParcelsDaySlice(
       ...(cursor ? [startAfter(cursor)] : []),
       limit(pageSize),
     ]
-    const snap = await getDocs(query(parcelsSource(lite), ...constraints))
+    const snap = await getDocsServerFirst(query(parcelsSource(lite), ...constraints))
     snap.docs.forEach(d => out.push({ id: d.id, ...d.data() }))
     if (snap.docs.length < pageSize) break
     cursor = snap.docs[snap.docs.length - 1]
@@ -2227,6 +2361,9 @@ export async function searchParcels(
     // 🔍 Restreint la recherche par NOM à l'expéditeur seul, au destinataire seul, ou les deux
     // (défaut). N'affecte pas les recherches par tracking/NIC/téléphone.
     nameScope?: 'all' | 'sender' | 'receiver'
+    // 🪶 Version allégée (parcelsLite) pour les expéditions non archivées — onglet Expéditions, qui affiche
+    // déjà cette version (≈ −35 % de données téléchargées). Les archives restent lues en version complète.
+    lite?: boolean
   } = {}
 ): Promise<any[]> {
   try {
@@ -2234,9 +2371,15 @@ export async function searchParcels(
 
     const searchTerm = term.trim()
     const includeArchived = options.includeArchived ?? false // Par défaut: NE PAS inclure archives (performance)
-    const results: any[] = []
-    const uniqueIds = new Set<string>()
     const agencyCity = options.agencyCity
+    const nameScope = options.nameScope || 'all'
+
+    // 🧠 Mémoire courte (60 s) : la même recherche relancée (retour en arrière, filtre changé puis remis…)
+    // s'affiche immédiatement, sans nouvelle lecture
+    const lite = options.lite ?? false
+    const cacheKey = JSON.stringify([searchTerm, includeArchived, agencyCity || '', nameScope, lite])
+    const hit = SEARCH_CACHE.get(cacheKey)
+    if (hit && Date.now() - hit.at < SEARCH_CACHE_TTL_MS) return hit.results
 
     // Collections à chercher
     const collections = ['parcels']
@@ -2244,165 +2387,118 @@ export async function searchParcels(
       collections.push('parcels_archive')
     }
 
-    // Chercher dans chaque collection
+    // ⚡ TOUTES les requêtes (N° EXP, tracking, téléphone, chèque/traite, noms — expéditions ET archives)
+    // partent EN MÊME TEMPS : le temps d'attente est celui de la plus lente, et non plus leur somme.
+    // Mêmes requêtes et même ordre de fusion qu'avant (résultats et dédoublonnage identiques).
+    const groups: { isArchived: boolean; label: string; queries: Query<DocumentData>[] }[] = []
     for (const collectionName of collections) {
-      const parcelsCol = collection(db, collectionName)
       const isArchived = collectionName === 'parcels_archive'
+      // …NameLower n'existe pas dans parcelsLite : ses requêtes exactes restent sur la collection complète
+      const fullCol = collection(db, collectionName)
+      const parcelsCol = lite && !isArchived ? collection(db, 'parcelsLite') : fullCol
 
       // Test 1: Recherche EXACTE par senderNic ou nic
-      try {
-        const qSenderNic = query(parcelsCol, where('senderNic', '==', searchTerm))
-        const qNic = query(parcelsCol, where('nic', '==', searchTerm))
-        const [snapSenderNic, snapNic] = await Promise.all([getDocs(qSenderNic), getDocs(qNic)])
-        for (const d of [...snapSenderNic.docs, ...snapNic.docs]) {
-          if (!uniqueIds.has(d.id)) {
-            uniqueIds.add(d.id)
-            results.push({ id: d.id, ...d.data(), isArchived })
-          }
-        }
-      } catch (e) {
-        console.error('Erreur requête senderNic/nic:', e)
-      }
+      groups.push({ isArchived, label: 'senderNic/nic', queries: [
+        query(parcelsCol, where('senderNic', '==', searchTerm)),
+        query(parcelsCol, where('nic', '==', searchTerm)),
+      ] })
 
       // Test 2: trackingId
       const trackingId = searchTerm.toUpperCase().replace(/[\s-]/g, '')
       if (/^LMA/.test(trackingId)) {
-        try {
-          const qTrack = query(parcelsCol, where('trackingId', '==', trackingId))
-          const snapTrack = await getDocs(qTrack)
-          for (const d of snapTrack.docs) {
-            if (!uniqueIds.has(d.id)) {
-              uniqueIds.add(d.id)
-              results.push({ id: d.id, ...d.data(), isArchived })
-            }
-          }
-        } catch (e) {
-          console.error('Erreur requête trackingId:', e)
-        }
+        groups.push({ isArchived, label: 'trackingId', queries: [query(parcelsCol, where('trackingId', '==', trackingId))] })
       }
 
       // Test 3: Téléphone (≥9 chiffres)
       const phone = searchTerm.replace(/[\s\-\(\)\.]/g, '')
       if (/^\d{9,}$/.test(phone)) {
-        try {
-          const qPhone1 = query(parcelsCol, where('senderTel', '==', phone))
-          const qPhone2 = query(parcelsCol, where('receiverTel', '==', phone))
-          const [snap1, snap2] = await Promise.all([getDocs(qPhone1), getDocs(qPhone2)])
-          for (const d of [...snap1.docs, ...snap2.docs]) {
-            if (!uniqueIds.has(d.id)) {
-              uniqueIds.add(d.id)
-              results.push({ id: d.id, ...d.data(), isArchived })
-            }
-          }
-        } catch (e) {
-          console.error('Erreur requête téléphone:', e)
-        }
+        groups.push({ isArchived, label: 'téléphone', queries: [
+          query(parcelsCol, where('senderTel', '==', phone)),
+          query(parcelsCol, where('receiverTel', '==', phone)),
+        ] })
       }
 
       // Test 4: Chèque ou Traite (C/c + montant ou T/t + montant)
       if (/^[ct]/i.test(searchTerm)) {
         const firstChar = searchTerm[0].toUpperCase()
         const amount = searchTerm.substring(1).trim()
-
         if (/^\d+(\.\d+)?$/.test(amount)) {
           const numAmount = parseFloat(amount)
-
-          try {
-            // Pour chèque: serviceType = 'cheque' ET codAmount = numAmount
-            if (firstChar === 'C') {
-              const qCheque = query(
-                parcelsCol,
-                where('serviceType', '==', 'cheque'),
-                where('codAmount', '==', numAmount)
-              )
-              const snapCheque = await getDocs(qCheque)
-              for (const d of snapCheque.docs) {
-                if (!uniqueIds.has(d.id)) {
-                  uniqueIds.add(d.id)
-                  results.push({ id: d.id, ...d.data(), isArchived })
-                }
-              }
-            }
-
-            // Pour traite: serviceType = 'traite' ET codAmount = numAmount
-            if (firstChar === 'T') {
-              const qTraite = query(
-                parcelsCol,
-                where('serviceType', '==', 'traite'),
-                where('codAmount', '==', numAmount)
-              )
-              const snapTraite = await getDocs(qTraite)
-              for (const d of snapTraite.docs) {
-                if (!uniqueIds.has(d.id)) {
-                  uniqueIds.add(d.id)
-                  results.push({ id: d.id, ...d.data(), isArchived })
-                }
-              }
-            }
-          } catch (e) {
-            console.error('Erreur requête chèque/traite:', e)
-          }
+          // Chèque : serviceType = 'cheque' ET codAmount ; traite : serviceType = 'traite' ET codAmount
+          groups.push({ isArchived, label: 'chèque/traite', queries: [query(
+            parcelsCol,
+            where('serviceType', '==', firstChar === 'C' ? 'cheque' : 'traite'),
+            where('codAmount', '==', numAmount),
+          )] })
         }
       }
 
       // Test 5: Nom (expéditeur ou destinataire) - seulement si contient des lettres
       const nameLower = searchTerm.toLowerCase().trim()
       if (/[a-zA-Zà-ÿ]/.test(searchTerm)) {
-        try {
-          // ⚠️ nameScope restreint à un seul champ : on n'interroge même pas l'autre, pour
-          // que "expéditeur seul" n'affiche jamais un colis matché via le destinataire.
-          const nameScope = options.nameScope || 'all'
-          const nameNorm = normName(searchTerm)
-          const PREFIX_END = '\uf8ff'
-          const doPrefix = nameNorm.length >= 3
-          const wantSender = nameScope !== 'receiver'
-          const wantReceiver = nameScope !== 'sender'
-          const nameQueryList: Query<DocumentData>[] = []
-          // Recherche exacte (champs historiques en minuscules + champs normalisés sans accents)
-          if (wantSender) nameQueryList.push(query(parcelsCol, where('senderNameLower', '==', nameLower)))
-          if (wantReceiver) nameQueryList.push(query(parcelsCol, where('receiverNameLower', '==', nameLower)))
-          if (nameNorm) {
-            if (wantSender) nameQueryList.push(query(parcelsCol, where('senderNameNorm', '==', nameNorm)))
-            if (wantReceiver) nameQueryList.push(query(parcelsCol, where('receiverNameNorm', '==', nameNorm)))
-          }
-          // Recherche par préfixe (commence par) — seulement à partir de 3 caractères
-          if (doPrefix) {
-            if (wantSender) {
-              nameQueryList.push(query(parcelsCol, where('senderNameLower', '>=', nameLower), where('senderNameLower', '<=', nameLower + PREFIX_END)))
-              nameQueryList.push(query(parcelsCol, where('senderNameNorm', '>=', nameNorm), where('senderNameNorm', '<=', nameNorm + PREFIX_END)))
-            }
-            if (wantReceiver) {
-              nameQueryList.push(query(parcelsCol, where('receiverNameLower', '>=', nameLower), where('receiverNameLower', '<=', nameLower + PREFIX_END)))
-              nameQueryList.push(query(parcelsCol, where('receiverNameNorm', '>=', nameNorm), where('receiverNameNorm', '<=', nameNorm + PREFIX_END)))
-            }
-          }
-          const nameSnaps = await Promise.all(nameQueryList.map(q => getDocs(q)))
-
-          for (const d of nameSnaps.flatMap(snap => snap.docs)) {
-            if (!uniqueIds.has(d.id)) {
-              uniqueIds.add(d.id)
-              results.push({ id: d.id, ...d.data(), isArchived })
-            }
-          }
-        } catch (e) {
-          console.error('Erreur requête nom:', e)
+        // ⚠️ nameScope restreint à un seul champ : on n'interroge même pas l'autre, pour
+        // que "expéditeur seul" n'affiche jamais un colis matché via le destinataire.
+        const nameNorm = normName(searchTerm)
+        const PREFIX_END = ''
+        const doPrefix = nameNorm.length >= 3
+        const wantSender = nameScope !== 'receiver'
+        const wantReceiver = nameScope !== 'sender'
+        const nameQueryList: Query<DocumentData>[] = []
+        // Recherche exacte (champs historiques en minuscules + champs normalisés sans accents)
+        if (wantSender) nameQueryList.push(query(fullCol, where('senderNameLower', '==', nameLower)))
+        if (wantReceiver) nameQueryList.push(query(fullCol, where('receiverNameLower', '==', nameLower)))
+        if (nameNorm) {
+          if (wantSender) nameQueryList.push(query(parcelsCol, where('senderNameNorm', '==', nameNorm)))
+          if (wantReceiver) nameQueryList.push(query(parcelsCol, where('receiverNameNorm', '==', nameNorm)))
         }
+        // Recherche par préfixe (commence par) — seulement à partir de 3 caractères, sur les champs NORMALISÉS
+        // seuls : présents et à jour sur toutes les expéditions (vérifié : 53 391 / 53 391). Les préfixes sur
+        // …NameLower renvoyaient les MÊMES expéditions une 2e fois (téléchargement doublé) et n'ajoutaient que
+        // de fausses correspondances (ancien nom resté dans …NameLower après modification de l'expéditeur).
+        if (doPrefix) {
+          if (wantSender) nameQueryList.push(query(parcelsCol, where('senderNameNorm', '>=', nameNorm), where('senderNameNorm', '<=', nameNorm + PREFIX_END)))
+          if (wantReceiver) nameQueryList.push(query(parcelsCol, where('receiverNameNorm', '>=', nameNorm), where('receiverNameNorm', '<=', nameNorm + PREFIX_END)))
+        }
+        groups.push({ isArchived, label: 'nom', queries: nameQueryList })
       }
-    } // Fin de la boucle for collections
-
-    // Filtrer par ville si spécifié (pour chefs d'agence)
-    if (agencyCity) {
-      return results.filter(p =>
-        p.originCity === agencyCity || p.destinationCity === agencyCity
-      )
     }
 
-    return results
+    // Une requête en erreur n'empêche pas les autres (comme avant : groupe ignoré, erreur journalisée)
+    const snapsByGroup = await Promise.all(groups.map(g =>
+      Promise.all(g.queries.map(q => getDocs(q))).catch(e => {
+        console.error(`Erreur requête ${g.label}:`, e)
+        return []
+      })))
+
+    const results: any[] = []
+    const uniqueIds = new Set<string>()
+    const anyFromCache = snapsByGroup.some(snaps => snaps.some(snap => snap.metadata.fromCache))
+    snapsByGroup.forEach((snaps, i) => {
+      const { isArchived } = groups[i]
+      for (const d of snaps.flatMap(snap => snap.docs)) {
+        if (!uniqueIds.has(d.id)) {
+          uniqueIds.add(d.id)
+          results.push({ id: d.id, ...d.data(), isArchived })
+        }
+      }
+    })
+
+    // Filtrer par ville si spécifié (pour chefs d'agence)
+    const out = agencyCity
+      ? results.filter(p => p.originCity === agencyCity || p.destinationCity === agencyCity)
+      : results
+    // Recherche sans résultat jamais gardée (une expédition créée juste après doit être trouvée)
+    // (ni une réponse lue dans le cache local faute de réseau)
+    if (out.length && !anyFromCache) SEARCH_CACHE.set(cacheKey, { at: Date.now(), results: out })
+    if (SEARCH_CACHE.size > 50) SEARCH_CACHE.delete(SEARCH_CACHE.keys().next().value as string)
+    return out
   } catch (error) {
     console.error('❌ Erreur searchParcels:', error)
     return []
   }
 }
+const SEARCH_CACHE = new Map<string, { at: number; results: any[] }>()
+const SEARCH_CACHE_TTL_MS = 60 * 1000
 
 // -- Archivage dynamique -------------------------------------
 

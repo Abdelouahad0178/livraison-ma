@@ -50,18 +50,24 @@ export function subscribeDeliverySignature(parcelId: any, callback: any, isRetur
  * Soumet une signature électronique
  * Détecte automatiquement si c'est une signature de retour ou normale
  */
-export async function submitDeliverySignature(parcelId: any, token: any, signatureDataUrl: any, { signatureType = 'personal', companyName = '' } = {}) {
-  const parcelSnap = await getDoc(doc(db, 'parcels', parcelId))
-  if (!parcelSnap.exists()) throw new Error('Colis introuvable.')
-
-  const parcelData = parcelSnap.data()
-
-  // Détecter si c'est une signature de retour ou normale
-  const isReturn = parcelData.returnSignatureToken === token
-  const isNormal = parcelData.signatureToken === token
-
-  if (!isReturn && !isNormal) {
-    throw new Error('Lien de signature invalide ou expiré.')
+export async function submitDeliverySignature(
+  parcelId: any, token: any, signatureDataUrl: any, { signatureType = 'personal', companyName = '' } = {},
+  // Informations déjà vérifiées par le serveur (getSignatureParcel) : la page publique ne peut plus lire l'expédition.
+  // La règle Firestore de `deliverySignatures` revérifie le jeton contre l'expédition à l'écriture.
+  verified?: any,
+) {
+  let parcelData: any
+  let isReturn: boolean
+  if (verified) {
+    parcelData = verified
+    isReturn = !!verified._isReturn
+  } else {
+    const parcelSnap = await getDoc(doc(db, 'parcels', parcelId))
+    if (!parcelSnap.exists()) throw new Error('Colis introuvable.')
+    parcelData = parcelSnap.data()
+    isReturn = parcelData.returnSignatureToken === token
+    const isNormal = parcelData.signatureToken === token
+    if (!isReturn && !isNormal) throw new Error('Lien de signature invalide ou expiré.')
   }
 
   if (parcelData.status === 'Livré' || parcelData.status === 'LivrÃ©') {

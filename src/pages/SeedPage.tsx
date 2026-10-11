@@ -21,13 +21,13 @@ function randRecentTimestamp() {
 }
 
 function buildRecentParcel(users: any, allCities: any) {
-  const agents = users.filter((u: any) => ['agent', 'chef_agence', 'aide_agent'].includes(u.role))
+  const agents = users.filter((u: any) => ['chef_agence', 'aide_agent'].includes(u.role))
   if (!agents.length) return null
   const agent = agents[Math.floor(Math.random() * agents.length)]
   const from = agent.city || allCities[Math.floor(Math.random() * allCities.length)]
   const toCandidates = allCities.filter((c: any) => c !== from)
   const to = toCandidates[Math.floor(Math.random() * toCandidates.length)]
-  const destAgents = users.filter((u: any) => ['agent', 'chef_agence'].includes(u.role) && u.city === to)
+  const destAgents = users.filter((u: any) => ['chef_agence'].includes(u.role) && u.city === to)
   const destAgent = destAgents.length ? destAgents[Math.floor(Math.random() * destAgents.length)] : null
   const status = STATUSES_RECENT[Math.floor(Math.random() * STATUSES_RECENT.length)]
   const svcType = SERVICE_TYPES[Math.floor(Math.random() * SERVICE_TYPES.length)]
@@ -74,13 +74,13 @@ function buildRecentParcel(users: any, allCities: any) {
 }
 
 function buildHistParcel(users: any, allCities: any) {
-  const agents = users.filter((u: any) => ['agent', 'chef_agence', 'aide_agent'].includes(u.role))
+  const agents = users.filter((u: any) => ['chef_agence', 'aide_agent'].includes(u.role))
   if (!agents.length) return null
   const agent = agents[Math.floor(Math.random() * agents.length)]
   const from = agent.city || allCities[Math.floor(Math.random() * allCities.length)]
   const toCandidates = allCities.filter((c: any) => c !== from)
   const to = toCandidates[Math.floor(Math.random() * toCandidates.length)]
-  const destAgents = users.filter((u: any) => ['agent', 'chef_agence'].includes(u.role) && u.city === to)
+  const destAgents = users.filter((u: any) => ['chef_agence'].includes(u.role) && u.city === to)
   const destAgent = destAgents.length ? destAgents[Math.floor(Math.random() * destAgents.length)] : null
   const status = STATUSES_HIST[Math.floor(Math.random() * STATUSES_HIST.length)]
   const svcType = SERVICE_TYPES[Math.floor(Math.random() * SERVICE_TYPES.length)]
@@ -178,7 +178,7 @@ const STAGES = [
     desc: 'Colis enregistré en agence, pas encore chargé',
     color: 'gray',
     build: (pair: any, users: any) => {
-      const agent = pickUser(users, ['agent', 'chef_agence', 'aide_agent'], pair.from)
+      const agent = pickUser(users, ['chef_agence', 'aide_agent'], pair.from)
       if (!agent) return null
       const codAmount = randAmount(100, 500)
       return {
@@ -226,7 +226,7 @@ const STAGES = [
     desc: 'Chargé sur camion, en route vers destination',
     color: 'blue',
     build: (pair: any, users: any) => {
-      const agent = pickUser(users, ['agent', 'chef_agence'], pair.from)
+      const agent = pickUser(users, ['chef_agence'], pair.from)
       const chauffeur = pickUser(users, ['chauffeur'], pair.from) || pickUser(users, ['chauffeur'], undefined)
       if (!agent || !chauffeur) return null
       const codAmount = randAmount(200, 800)
@@ -278,8 +278,8 @@ const STAGES = [
     desc: 'Arrivé en agence destination, chef doit pointer',
     color: 'purple',
     build: (pair: any, users: any) => {
-      const agentOrigin = pickUser(users, ['agent', 'chef_agence'], pair.from)
-      const agentDest = pickUser(users, ['agent', 'chef_agence', 'aide_agent'], pair.to)
+      const agentOrigin = pickUser(users, ['chef_agence'], pair.from)
+      const agentDest = pickUser(users, ['chef_agence', 'aide_agent'], pair.to)
       const chauffeur = pickUser(users, ['chauffeur'], undefined) || agentOrigin
       if (!agentOrigin || !agentDest) return null
       const codAmount = randAmount(150, 600)
@@ -332,8 +332,8 @@ const STAGES = [
     desc: 'Arrivé + chef pointé, peut être assigné à un livreur',
     color: 'amber',
     build: (pair: any, users: any) => {
-      const agentOrigin = pickUser(users, ['agent', 'chef_agence'], pair.from)
-      const agentDest = pickUser(users, ['agent', 'chef_agence'], pair.to)
+      const agentOrigin = pickUser(users, ['chef_agence'], pair.from)
+      const agentDest = pickUser(users, ['chef_agence'], pair.to)
       const chef = pickUser(users, ['chef_agence'], pair.to) || agentDest
       if (!agentOrigin || !agentDest) return null
       const codAmount = randAmount(100, 500)
@@ -388,8 +388,8 @@ const STAGES = [
     desc: 'Assigné à un livreur, en cours de livraison',
     color: 'orange',
     build: (pair: any, users: any) => {
-      const agentOrigin = pickUser(users, ['agent', 'chef_agence'], pair.from)
-      const agentDest = pickUser(users, ['agent', 'chef_agence'], pair.to)
+      const agentOrigin = pickUser(users, ['chef_agence'], pair.from)
+      const agentDest = pickUser(users, ['chef_agence'], pair.to)
       const chef = pickUser(users, ['chef_agence'], pair.to) || agentDest
       const livreur = pickUser(users, ['livreur'], pair.to) || pickUser(users, ['chauffeur'], pair.to)
       if (!agentOrigin || !agentDest || !livreur) return null
@@ -450,8 +450,8 @@ const STAGES = [
     desc: 'Livré avec RETOUR FOND espèces collecté, à pointer par pointeur',
     color: 'green',
     build: (pair: any, users: any) => {
-      const agentOrigin = pickUser(users, ['agent', 'chef_agence'], pair.from)
-      const agentDest = pickUser(users, ['agent', 'chef_agence'], pair.to)
+      const agentOrigin = pickUser(users, ['chef_agence'], pair.from)
+      const agentDest = pickUser(users, ['chef_agence'], pair.to)
       const chef = pickUser(users, ['chef_agence'], pair.to) || agentDest
       const livreur = pickUser(users, ['livreur'], pair.to) || pickUser(users, ['chauffeur'], pair.to)
       if (!agentOrigin || !agentDest || !livreur) return null
@@ -512,8 +512,8 @@ const STAGES = [
     desc: 'Livré avec chèque collecté - contrôle document requis',
     color: 'blue',
     build: (pair: any, users: any) => {
-      const agentOrigin = pickUser(users, ['agent', 'chef_agence'], pair.from)
-      const agentDest = pickUser(users, ['agent', 'chef_agence'], pair.to)
+      const agentOrigin = pickUser(users, ['chef_agence'], pair.from)
+      const agentDest = pickUser(users, ['chef_agence'], pair.to)
       const chef = pickUser(users, ['chef_agence'], pair.to) || agentDest
       const livreur = pickUser(users, ['livreur'], pair.to) || pickUser(users, ['chauffeur'], pair.to)
       if (!agentOrigin || !agentDest || !livreur) return null
@@ -574,8 +574,8 @@ const STAGES = [
     desc: 'Livraison échouée, colis retourné en agence',
     color: 'red',
     build: (pair: any, users: any) => {
-      const agentOrigin = pickUser(users, ['agent', 'chef_agence'], pair.from)
-      const agentDest = pickUser(users, ['agent', 'chef_agence'], pair.to)
+      const agentOrigin = pickUser(users, ['chef_agence'], pair.from)
+      const agentDest = pickUser(users, ['chef_agence'], pair.to)
       const chef = pickUser(users, ['chef_agence'], pair.to) || agentDest
       const livreur = pickUser(users, ['livreur'], pair.to) || pickUser(users, ['chauffeur'], pair.to)
       if (!agentOrigin || !agentDest || !livreur) return null
@@ -632,8 +632,8 @@ const STAGES = [
     desc: 'Livré avec port dû collecté par livreur',
     color: 'teal',
     build: (pair: any, users: any) => {
-      const agentOrigin = pickUser(users, ['agent', 'chef_agence'], pair.from)
-      const agentDest = pickUser(users, ['agent', 'chef_agence'], pair.to)
+      const agentOrigin = pickUser(users, ['chef_agence'], pair.from)
+      const agentDest = pickUser(users, ['chef_agence'], pair.to)
       const chef = pickUser(users, ['chef_agence'], pair.to) || agentDest
       const livreur = pickUser(users, ['livreur'], pair.to) || pickUser(users, ['chauffeur'], pair.to)
       if (!agentOrigin || !agentDest || !livreur) return null
@@ -790,7 +790,7 @@ export default function SeedPage() {
   async function handleSeedCasaMkh() {
     setSeedingQuick(true)
     setQuickResults([])
-    const agent = pickUser(users, ['agent', 'chef_agence', 'aide_agent'], 'Casablanca')
+    const agent = pickUser(users, ['chef_agence', 'aide_agent'], 'Casablanca')
     if (!agent) {
       setQuickResults([{ ok: false, error: 'Aucun agent/chef trouvé pour Casablanca. Créez d\'abord un utilisateur.' }])
       setSeedingQuick(false)
@@ -850,7 +850,7 @@ export default function SeedPage() {
   }
 
   async function handleSeedHistorique(total = 20000) {
-    const agents = users.filter(u => ['agent', 'chef_agence', 'aide_agent'].includes(u.role))
+    const agents = users.filter(u => ['chef_agence', 'aide_agent'].includes(u.role))
     if (!agents.length) { alert('Aucun agent trouvé. Créez des utilisateurs d\'abord.'); return }
     setSeedingHist(true)
     setHistDone(false)

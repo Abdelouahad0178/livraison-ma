@@ -11,7 +11,6 @@ const AUTH_ROLES = [
   { key: 'admin',                label: 'Admin',               emoji: '🖥️' },
   { key: 'chef_agence',          label: "Chef d'agence",        emoji: '🏢' },
   { key: 'chef_exploitation',    label: "Chef d'exploitation", emoji: '🧭' },
-  { key: 'agent',                label: 'Agent',                emoji: '🧑‍💼' },
   { key: 'aide_agent',           label: 'Aide Agent',           emoji: '✏️' },
   { key: 'agentpro',             label: 'Agent Pro',            emoji: '⭐' },
   { key: 'encaisseur_central',   label: 'Encaisseur central',   emoji: '🏦' },
@@ -152,7 +151,6 @@ export default function LoginPage() {
       if      (r === 'admin')                navigate('/admin')
       else if (r === 'chef_agence')          navigate('/agent')
       else if (r === 'chef_exploitation')    navigate('/exploitation')
-      else if (r === 'agent')                navigate('/agent')
       else if (r === 'aide_agent')           navigate('/agent')
       else if (r === 'agentpro')             navigate('/agent')
       else if (r === 'encaisseur_central')   navigate('/central')

@@ -15,7 +15,7 @@ service cloud.firestore {
     }
 
     function isStaff() {
-      return role() == 'admin' || role() == 'directeur' || role() == 'agent'
+      return role() == 'admin' || role() == 'directeur'
           || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation') || role() == 'caissier'
           || role() == 'aide_agent' || role() == 'pointeur_encaisseur'
           || role() == 'encaisseur_central' || role() == 'distributeur_especes'
@@ -52,7 +52,7 @@ service cloud.firestore {
     }
 
     function isAgentOrChef() {
-      return role() == 'agent' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+      return role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
     }
 
     function isChefAgence() {
@@ -61,6 +61,14 @@ service cloud.firestore {
 
     function isAideAgent() {
       return role() == 'aide_agent';
+    }
+
+    // 🔒 Compte de TRAVAIL : fiche users avec un vrai rôle qui n'est pas client (personnel, livreurs, gare, chauffeurs…).
+    // Remplace « signedIn() » dans les règles de modification des expéditions : un compte inscrit seul (ouvert à tous),
+    // un client ou un compte sans fiche ne peut plus modifier prix, COD, statut ou livreur d'une expédition.
+    function isWorkAccount() {
+      return signedIn() && role() is string
+        && !(role() in ['client', 'client-expediteur', 'client-destinataire']);
     }
 
     function isDeliveryWorker() {
@@ -293,17 +301,20 @@ service cloud.firestore {
     // Ã¢â€â‚¬Ã¢â€â‚¬ Colis : lecture publique (tracking)
     // codAmount modifiable uniquement par Admin (protection double : rÃ¨gle + code)
     match /parcels/{parcelId} {
-      allow get:    if true;
+      // 🔒 Plus de lecture SANS COMPTE (avant : « get: if true » + liste « limit <= 1 » → toute la collection aspirable).
+      // Les pages publiques « Suivre un colis » et « Signature » passent par les fonctions serveur publicTrackParcel /
+      // getSignatureParcel, qui ne renvoient que ce qu'elles affichent.
+      allow get:    if isWorkAccount() || ownsClient(resource.data.get('clientId', ''));
       allow list:   if isStaff() || isFacturier()
         || ownsClient(resource.data.clientId)
         || isDeliveryWorker()
-        || (request.query.limit != null && request.query.limit <= 1);
+        || isWorkAccount();
       // ✅ Autoriser les requêtes d'agrégation (count, sum) pour le staff et facturier
       allow read:   if isStaff() || isFacturier();
       allow create: if (signedIn() && request.resource.data.agentId == request.auth.uid)
         || (isStaff() && isNotBlocked())
         || isCentralCollector();  // 📦 Permettre restauration archives
-      allow delete: if ((resource.data.status != 'LivrÃ©' && resource.data.status != 'Livr\u00c3\u00a9') || isAdmin()) && (
+      allow delete: if (resource.data.status != 'Livré' || isAdmin()) && (
         isAdmin()
         || isChefOfAideAgentParcelAgency()
         || (isAgentOrChef() && isParcelCreator())
@@ -312,8 +323,7 @@ service cloud.firestore {
         || (role() == 'chef_agence' && !isParcelLocked()
             && (resource.data.get('agentRole', '') == 'aide_agent' || resource.data.get('agentRole', '') == 'agentpro')
             && (resource.data.get('originCity', '') == userCity() || resource.data.get('createdByCity', '') == userCity()))
-        || (isAideAgent() && isParcelCreator() && resource.data.validatedByChef != true)
-        || (isStaff() && !isAgentOrChef() && !isAideAgent())
+        || (isAideAgent() && isParcelCreator() && resource.data.get('validatedByChef', false) != true)
       );
 
       // 🔒 RÈGLE GLOBALE : Admin peut TOUJOURS modifier (même après chargement camion)
@@ -321,10 +331,10 @@ service cloud.firestore {
 
       // ⚡ Chef d'agence / Agent Pro / Chef d'exploitation : statut, remarques, etc. (voir chefFastPathUpdate)
       // ⚡ (déplacée en tête, peu coûteuse) Validation arrivée / colis déjà arrivés — comportement inchangé
-      allow update: if signedIn()
+      allow update: if (signedIn()
         && 'destinationArrivedAt' in request.resource.data
         && 'history' in request.resource.data
-        && !touchesOnlyControlFields();
+        && !touchesOnlyControlFields()) && isWorkAccount();
       allow update: if chefFastPathUpdate();
       // ↩️ Annulation d'un retour (chefs) : seulement depuis un colis marqué retourné, vers un état
       // non retourné, avec les seuls champs du retour.
@@ -391,14 +401,14 @@ service cloud.firestore {
       // ⚡ Placée EN TÊTE : Firestore arrête l'évaluation après 1000 expressions ; plus bas, cette règle
       // n'était jamais atteinte sur certains colis (« Missing or insufficient permissions » à l'assignation).
       // Assignation livraison locale : seuls les champs livraison sont modifiÃ©s
-      allow update: if signedIn()
+      allow update: if (signedIn()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'deliveryDriverId', 'deliveryDriverName',
           'deliverySectorId', 'deliverySectorCode', 'deliverySectorName',
           'deliveryVehicleId', 'deliveryVehicleLabel',
           'deliveryAssignedAt', 'deliveryAssignedBy'
-        ]);
+        ])) && isWorkAccount();
 
       // 🧾 RÈGLE : Facturier peut marquer un colis comme facturé et corriger le prix / type de port
       allow update: if isFacturier()
@@ -464,7 +474,7 @@ service cloud.firestore {
       // ✅ RÈGLE : Aide-agent peut modifier ses propres colis non validés et non verrouillés
       allow update: if isAideAgent()
         && isParcelCreator()
-        && resource.data.validatedByChef != true
+        && resource.data.get('validatedByChef', false) != true
         && !isParcelLocked()
         && keepsDeliveredStatus();
 
@@ -480,22 +490,22 @@ service cloud.firestore {
       // ⚠️ Sans la garde ci-dessous, un colis déjà "Retourné" (status inchangé par cette
       // règle) laissait n'importe quel utilisateur signé écraser le pointage Encaisseur
       // Central d'un autre (aucune restriction de champs sur cette règle).
-      allow update: if signedIn()
+      allow update: if (signedIn()
         && request.resource.data.status == 'Retourné'
         && !isParcelLocked()
-        && (!touchesOnlyControlFields() || isOwnControlChange());
+        && (!touchesOnlyControlFields() || isOwnControlChange())) && isWorkAccount();
       // ⭐ RÈGLE : Réessayer livraison (Retourné → En livraison)
       // Permet de remettre un colis retourné en circulation
       // 🔒 Note: déjà protégé car on ne peut pas avoir "Retourné" ET "En transit" simultanément
-      allow update: if signedIn()
+      allow update: if (signedIn()
         && resource.data.status == 'Retourné'
-        && request.resource.data.status == 'En livraison';
-      allow update: if signedIn()
+        && request.resource.data.status == 'En livraison') && isWorkAccount();
+      allow update: if (signedIn()
         && keepsDeliveredStatus()
         && resource.data.status != 'LivrÃ©'
         && resource.data.status != 'Livr\u00c3\u00a9'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(parcelCorrectionFields())
-        && !isParcelLocked();
+        && !isParcelLocked()) && isWorkAccount();
       // ✏️ Correction complète du bon (modal "Modifier l'expédition" + confirmation après saisie)
       // - Agent : uniquement SES bons ; Chef d'agence / Agent PRO / Chef exploitation : tous.
       // - Jamais après chargement camion (sauf admin, règle globale) ; statut inchangé (hors liste).
@@ -563,30 +573,30 @@ service cloud.firestore {
           'receiver', 'destinationCity', 'destinationArrivedAt', 'history',
           'status', 'visibleInDestinationAgency'
         ].concat(deliveryAssignmentFields()));
-      allow update: if signedIn()
+      allow update: if (signedIn()
         && keepsDeliveredStatus()
         && request.auth.uid != resource.data.agentId
         && request.resource.data.validatedByChef == true
         && request.resource.data.validatedById == request.auth.uid
         && request.resource.data.agentId == request.auth.uid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(aideAgentValidationFields());
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(aideAgentValidationFields())) && isWorkAccount();
       // Chargement camion : seuls les champs transport sont modifiÃ©s
-      allow update: if signedIn()
+      allow update: if (signedIn()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'chauffeurName', 'chauffeurPhone', 'status',
           'shipmentLoadedAt', 'visibleInDestinationAgency', 'history'
-        ]);
+        ])) && isWorkAccount();
       // ⭐ POINTAGE ARRIVAGE : autoriser sans vérifier keepsDeliveredStatus
       // (car le pointage peut se faire même si le colis a un statut particulier)
-      allow update: if signedIn()
+      allow update: if (signedIn()
         && isStaff()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status', 'visibleInDestinationAgency', 'destinationArrivedAt',
           'destinationAgentId', 'destinationAgentName', 'arrivedNbColis',
           'chefPointedAt', 'chefPointedBy', 'chefPointedById', 'chefPointedSource',
           'history'
-        ]);
+        ])) && isWorkAccount();
       // ⭐ VALIDATION ARRIVÉE RETOUR : validation arrivée colis retourné
       // Autorise mise à jour avec destinationArrivedAt (=validation retour)
       // ⚠️ 'destinationArrivedAt' et 'history' existent déjà sur quasi tout colis déjà arrivé —
@@ -594,28 +604,28 @@ service cloud.firestore {
       // utilisateur signé écraser le pointage d'un autre sur ces colis. Exclu explicitement.
       // (règle « validation arrivée retour » déplacée en tête du bloc, voir plus haut)
       // RÃ©ception agence : prise en charge et arrivage de colis en transit
-      allow update: if signedIn()
+      allow update: if (signedIn()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status', 'visibleInDestinationAgency', 'destinationArrivedAt',
           'destinationAgentId', 'destinationAgentName', 'arrivedNbColis',
           'chefPointedAt', 'chefPointedBy', 'chefPointedById', 'chefPointedSource',
           'history'
-        ]);
+        ])) && isWorkAccount();
       // ⭐ Staff : générer token de signature (agents, chauffeurs, etc.)
-      allow update: if signedIn()
+      allow update: if (signedIn()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'signatureToken',
           'signatureTokenCreatedAt'
-        ]);
+        ])) && isWorkAccount();
       // ⭐ Staff : générer token de signature de retour
-      allow update: if signedIn()
+      allow update: if (signedIn()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'returnSignatureToken',
           'returnSignatureTokenCreatedAt'
-        ]);
+        ])) && isWorkAccount();
       // ⭐ Staff : confirmer signature normale (Livré)
-      allow update: if signedIn()
+      allow update: if (signedIn()
         && request.resource.data.status == 'Livré'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status',
@@ -623,9 +633,9 @@ service cloud.firestore {
           'signatureConfirmedAt',
           'signatureMethod',
           'history'
-        ]);
+        ])) && isWorkAccount();
       // ⭐ Staff : confirmer signature de retour (Retour finalisé)
-      allow update: if signedIn()
+      allow update: if (signedIn()
         && request.resource.data.status == 'Retour finalisé'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status',
@@ -633,7 +643,7 @@ service cloud.firestore {
           'returnSignatureConfirmedAt',
           'signatureMethod',
           'history'
-        ]);
+        ])) && isWorkAccount();
       // Pointeur-Encaisseur : rÃ©ception port dÃ» versÃ© par un livreur
       allow update: if isPointeurEncaisseur()
         && keepsDeliveredStatus()
@@ -689,7 +699,7 @@ service cloud.firestore {
            ]);
       // Retour camion : l'agence qui a physiquement le colis retournÃ© peut l'expÃ©dier
       // vers l'agence d'origine, sans toucher aux donnÃ©es sensibles du bon.
-      allow update: if signedIn()
+      allow update: if (signedIn()
         && keepsDeliveredStatus()
         && request.resource.data.status == 'Retour en transit'
         && (resource.data.status == 'RetournÃ©' || resource.data.status == 'RetournÃ©')
@@ -703,10 +713,10 @@ service cloud.firestore {
           'destinationCity',
           'returnToCity',
           'arrivedNbColis'
-        ]);
+        ])) && isWorkAccount();
       // Retour direct depuis l'agence destination ou le livreur assignÃ©.
       // Le bon est inversÃ© pour repartir vers l'expÃ©diteur, sans modifier les champs sensibles hors retour.
-      allow update: if signedIn()
+      allow update: if (signedIn()
         && keepsDeliveredStatus()
         && request.resource.data.status == 'RetournÃ©'
         && resource.data.status != 'RetournÃ©'
@@ -746,7 +756,7 @@ service cloud.firestore {
           'deliveryVehicleLabel',
           'deliveryAssignedAt',
           'deliveryAssignedBy'
-        ]);
+        ])) && isWorkAccount();
       // ⚠️ Ce bloc est volontairement très large (retours, corrections diverses par le staff).
       // Comme il ne restreint pas explicitement les champs 'controlled'/'deliveryControlled',
       // il laissait n'importe quel membre du staff écraser le pointage Encaisseur Central d'un
@@ -773,7 +783,7 @@ service cloud.firestore {
           // Aide agent : modification de ses propres saisies non validÃ©es
           isAideAgent()
           && isParcelCreator()
-          && (resource.data.validatedByChef != true || resource.data.aideEditUnlocked == true)
+          && (resource.data.get('validatedByChef', false) != true || resource.data.get('aideEditUnlocked', false) == true)
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny(aideAgentValidationFields())
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'codAmount', 'codMixed', 'codCashAmount'])
         )
@@ -795,8 +805,8 @@ service cloud.firestore {
         )
       );
       // REGLE RETOUR COLIS
-      allow update: if signedIn() && request.resource.data.status == "Retourné"
-        && !touchesOnlyControlFields();
+      allow update: if (signedIn() && request.resource.data.status == "Retourné"
+        && !touchesOnlyControlFields()) && isWorkAccount();
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Villes
@@ -848,11 +858,33 @@ service cloud.firestore {
       // Par l'utilisateur lui-même OU par le staff
       allow create: if signedIn()
         && request.auth.uid == userId
-        && request.resource.data.role in ['client-expediteur', 'client-destinataire'];
+        && request.resource.data.role in ['client-expediteur', 'client-destinataire']
+        && request.resource.data.get('clientId', null) == null;
       // Staff peut créer des comptes portail pour les clients
       allow create: if isStaff()
         && request.resource.data.role in ['client-expediteur', 'client-destinataire'];
-      allow update: if isStaff();
+      // 🔒 Modification des fiches (avant : « allow update: if isStaff() » → un aide-agent pouvait se donner le rôle admin)
+      // Admin : tout. Directeur : tout sauf un compte admin, et jamais créer un admin.
+      allow update: if isAdmin();
+      allow update: if role() == 'directeur'
+        && resource.data.get('role', '') != 'admin'
+        && request.resource.data.get('role', '') != 'admin';
+      // Soi-même (personnel) : sa fiche, sans toucher aux champs d'autorisation
+      allow update: if isStaff() && request.auth.uid == userId
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(
+          ['role', 'city', 'blocked', 'blockedByChef', 'clientId', 'clientData', 'directorPermissions', 'permissions', 'code']);
+      // Chefs (agence / agent pro / exploitation) : leurs livreurs, aides-agents, pointeurs, chauffeurs —
+      // rôle inchangé, ville du chef, champs de gestion uniquement (nom, tél, matricule, secteur, ville, blocage)
+      allow update: if isChefAgence() && isNotBlocked()
+        && resource.data.get('role', '') in ['livreur', 'livreur-gare', 'chauffeur', 'aide_agent', 'pointeur_encaisseur']
+        && request.resource.data.get('role', '') == resource.data.get('role', '')
+        && (resource.data.get('city', '') == userCity() || request.resource.data.get('city', '') == userCity())
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['name', 'tel', 'matricule', 'sectorId', 'city', 'blocked', 'blockedByChef', 'photoURL', 'updatedAt']);
+      // Personnel : comptes du portail client (rattachement à la fiche client), qui restent des comptes clients
+      allow update: if isStaff()
+        && resource.data.get('role', '') in ['client-expediteur', 'client-destinataire', 'client']
+        && request.resource.data.get('role', '') in ['client-expediteur', 'client-destinataire', 'client'];
       // Suppression : admin ou chef pour aide_agent/livreur/pointeur de sa ville
       allow delete: if isAdmin()
         || ((role() == 'chef_agence' || role() == 'agentpro')
@@ -1011,12 +1043,12 @@ service cloud.firestore {
     // Ã¢â€â‚¬Ã¢â€â‚¬ Port dÃ» chauffeurs (legacy Ã¢â‚¬â€ no longer used by UI)
     match /driverPortDuTransactions/{id} {
       allow read: if isStaff() || (signedIn() && request.auth.uid != null && resource.data.driverId == request.auth.uid);
-      allow create:        if role() == 'admin' || role() == 'agent'
+      allow create:        if role() == 'admin'
         || (signedIn()
           && request.resource.data.driverId == request.auth.uid
           && request.resource.data.type == 'versement'
           && request.resource.data.status == 'pending');
-      allow update, delete: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+      allow update, delete: if role() == 'admin' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
     }
 
     // -- Versements Livreur -> Chef d'agence (Port Du / COD, workflow de validation)
@@ -1038,7 +1070,7 @@ service cloud.firestore {
           && request.resource.data.status == 'pending')
         // OU validation / rejet par chef d'agence, agent (de la meme ville), directeur ou admin
         || role() == 'admin' || role() == 'directeur'
-        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation') || role() == 'agent') && resource.data.city == userCity());
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation')) && resource.data.city == userCity());
       // Suppression par le créateur (livreur) si status == 'pending' OU par admin
       allow delete: if isAdmin()
         || (signedIn()
@@ -1089,7 +1121,7 @@ service cloud.firestore {
     // Ã¢â€â‚¬Ã¢â€â‚¬ Transferts vers l'Admin
     match /adminTransfers/{id} {
       allow read:   if isStaff();
-      allow create: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation') || role() == 'caissier';
+      allow create: if role() == 'admin' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation') || role() == 'caissier';
       // Modification par le créateur si status == 'pending'
       allow update: if (signedIn()
           && resource.data.fromId == request.auth.uid

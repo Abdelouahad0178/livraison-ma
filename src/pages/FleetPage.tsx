@@ -192,7 +192,7 @@ export default function FleetPage() {
 
       {/* Header */}
       <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-3 sm:px-4 py-3 flex items-center justify-between gap-3 min-w-0">
+        <div className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto px-3 sm:px-4 py-3 flex items-center justify-between gap-3 min-w-0">
           <div className="flex items-center gap-2 sm:gap-3 min-w-0">
             <button onClick={() => navigate(-1)} className="p-2 hover:bg-gray-100 rounded-xl transition shrink-0">
               <ArrowLeft className="w-5 h-5 text-gray-600" />
@@ -216,7 +216,7 @@ export default function FleetPage() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-3 sm:px-4 pb-16">
+      <main className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto px-3 sm:px-4 pb-16">
         {(loadError || saveError) && (
           <div className="bg-red-50 border border-red-200 text-red-700 rounded-2xl p-4 mb-4 text-sm font-semibold">
             {loadError || saveError}

@@ -17,16 +17,16 @@ const safeParseAmount = (value: any): number => {
   return (!isNaN(num) && isFinite(num) && num >= 0) ? num : 0
 }
 
-export async function createCaisseEntry(data: Record<string, unknown>): Promise<string> {
+/**
+ * 🧾 Contenu d'une entrée de caisse (mêmes champs que createCaisseEntry), pour l'écrire DANS une transaction /
+ * un lot avec l'expédition concernée (écriture indivisible : jamais d'argent en caisse sans réception, ni l'inverse).
+ */
+export function caisseEntryDoc(data: Record<string, unknown>): Record<string, unknown> {
   const amount = safeParseAmount(data.amount)
-
-  // 🛡️ VALIDATION: Port dû ne peut JAMAIS être une sortie
   if (data.type === 'sortie' && data.category === 'port_du') {
-    console.error('❌ ERREUR CRITIQUE: Tentative de créer une SORTIE avec category port_du!', data)
     throw new Error('Un encaissement de port dû ne peut pas être une sortie. Type forcé à "entree".')
   }
-
-  const ref = await addDoc(collection(db, 'caisseEntries'), {
+  return {
     type:        data.type,
     category:    data.category,
     amount,
@@ -45,11 +45,17 @@ export async function createCaisseEntry(data: Record<string, unknown>): Promise<
     cashierId:   data.cashierId    || null,
     cashierName: data.cashierName  || '',
     note:        data.note         || '',
-    createdById:   data.createdById   || null,  // ⭐ NOUVEAU : ID du créateur
-    createdByRole: data.createdByRole || null,  // ⭐ NOUVEAU : Rôle du créateur
-    cashAdjusted:  false,  // ✅ FIX C5: Tag pour tracer si agencyCashes a été ajusté
+    createdById:   data.createdById   || null,
+    createdByRole: data.createdByRole || null,
+    cashAdjusted:  false,
     createdAt:   serverTimestamp(),
-  })
+  }
+}
+/** Référence d'une NOUVELLE entrée de caisse (identifiant généré localement, à écrire avec caisseEntryDoc). */
+export const newCaisseEntryRef = () => doc(collection(db, 'caisseEntries'))
+
+export async function createCaisseEntry(data: Record<string, unknown>): Promise<string> {
+  const ref = await addDoc(collection(db, 'caisseEntries'), caisseEntryDoc(data))
   return ref.id
 }
 export async function deleteCaisseEntry(id: string): Promise<void> {

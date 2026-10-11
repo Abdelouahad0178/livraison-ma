@@ -206,7 +206,7 @@ export default function CaisseAdminPage() {
 
       {/* ── Header ── */}
       <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-10">
-        <div className="max-w-6xl mx-auto px-4">
+        <div className="max-w-6xl xl:max-w-none xl:w-[95%] mx-auto px-4">
           <div className="flex items-center justify-between py-3">
             <div className="flex items-center gap-2">
               <img src="/LOGO.jpg" alt="BG Express" className="h-9 object-contain" />
@@ -308,7 +308,7 @@ export default function CaisseAdminPage() {
         </div>
       </header>
 
-      <main className="max-w-6xl mx-auto p-4 pb-20">
+      <main className="max-w-6xl xl:max-w-none xl:w-[95%] mx-auto p-4 pb-20">
 
         {/* ══════════════ CAISSE VIRTUELLE ══════════════ */}
         {tab === 'virtuelle' && (

@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import DateInput from '../../components/DateInput'
 import { Calendar } from 'lucide-react'
 import type { DateFilterPreset } from '../../types'
@@ -49,22 +50,42 @@ export default function DateFilter({
   const activeCls = tone === 'green' ? 'bg-green-600 text-white' : tone === 'amber' ? 'bg-amber-500 text-white' : tone === 'violet' ? 'bg-violet-600 text-white shadow-sm' : 'bg-blue-600 text-white'
   const focusCls  = tone === 'green' ? 'focus:border-green-500' : tone === 'amber' ? 'focus:border-amber-500' : tone === 'violet' ? 'focus:border-violet-500' : 'focus:border-blue-500'
   const presets = operationalMode ? OPERATIONAL_FILTER_PRESETS : FILTER_PRESETS
+  // 📅 « Période » : la recherche ne part qu'une fois les DEUX dates choisies (et dans l'ordre). D'ici là,
+  // les dates restent en brouillon ici et la période précédente reste appliquée sur la page.
+  const [draft, setDraft] = useState<{ from: string; to: string } | null>(null)
+  // Période changée ailleurs (réinitialisation, raccourci…) : brouillon abandonné
+  useEffect(() => { setDraft(null) }, [value, from, to])
+  const showCustom = value === 'custom' || draft !== null
+  const pickPreset = (key: DateFilterPreset) => {
+    if (key === 'custom') { if (value !== 'custom') setDraft({ from: from || '', to: to || '' }); return }
+    setDraft(null)
+    onChange(key)
+  }
+  const editPeriod = (part: 'from' | 'to', v: string) => {
+    const next = { from: draft ? draft.from : (from || ''), to: draft ? draft.to : (to || ''), [part]: v }
+    if (next.from && next.to && next.from <= next.to) {
+      onFromChange?.(next.from)
+      onToChange?.(next.to)
+      if (value !== 'custom') onChange('custom')
+      setDraft(null)
+    } else setDraft(next)
+  }
   return (
     <div className={bare ? 'space-y-2' : 'bg-white border border-gray-200 rounded-xl p-3 space-y-2'}>
       <div className="flex items-center gap-2 flex-wrap">
         <Calendar className="w-4 h-4 text-gray-400 shrink-0" />
         {presets.map(({ key, label }) => (
           <button key={key}
-            onClick={() => onChange(key)}
+            onClick={() => pickPreset(key)}
             className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-              value === key ? activeCls : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+              (draft ? key === 'custom' : value === key) ? activeCls : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
             }`}
           >
             {label}
           </button>
         ))}
       </div>
-      {operationalMode && value === 'operational' && (
+      {operationalMode && value === 'operational' && !draft && (
         <div className="flex items-center gap-2 pl-6">
           <span className="text-xs text-gray-400 shrink-0">Jour d'opération (8h → 6h lendemain)</span>
           <DateInput value={toLocalDateInput(operationalDay)}
@@ -73,23 +94,30 @@ export default function DateFilter({
           />
         </div>
       )}
-      {!operationalMode && value === 'day' && (
+      {!operationalMode && value === 'day' && !draft && (
         <div className="flex items-center gap-2 pl-6">
           <DateInput value={from} onChange={e => onFromChange?.(e.target.value)}
             className={`border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none ${focusCls} flex-1`}
           />
         </div>
       )}
-      {value === 'custom' && (
+      {showCustom && (
         <div className="flex items-center gap-2 pl-6">
-          <DateInput value={from} onChange={e => onFromChange?.(e.target.value)}
+          <DateInput value={draft ? draft.from : from} onChange={e => editPeriod('from', e.target.value)}
             className={`border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none ${focusCls} flex-1`}
           />
           <span className="text-gray-400 text-xs shrink-0">→</span>
-          <DateInput value={to} onChange={e => onToChange?.(e.target.value)}
+          <DateInput value={draft ? draft.to : to} onChange={e => editPeriod('to', e.target.value)}
             className={`border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none ${focusCls} flex-1`}
           />
         </div>
+      )}
+      {draft && (
+        <p className="pl-6 text-[11px] text-amber-700">
+          {draft.from && draft.to && draft.from > draft.to
+            ? '⚠️ La date de début doit précéder la date de fin.'
+            : 'Choisissez les deux dates : la recherche se lance ensuite.'}
+        </p>
       )}
     </div>
   )

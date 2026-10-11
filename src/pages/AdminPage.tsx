@@ -1,4 +1,5 @@
 import { showToast } from '../utils/toast'
+import { isAgencyStaff, matchesActivityRole } from '../utils/roles'
 import { lazy, Suspense, useEffect, useRef, useState, useMemo } from 'react'
 import { setPresenceTab } from '../services/presenceCounters'
 import { codPaymentTypeOf } from '../firebase/constants'
@@ -330,7 +331,6 @@ const ROLES = [
   { key: 'directeur',   label: 'Directeur',       emoji: '👔',   badge: 'bg-purple-100 text-purple-700'   },
   { key: 'chef_agence', label: "Chef d'agence",   emoji: '🏢',   badge: 'bg-indigo-100 text-indigo-700'   },
   { key: 'chef_exploitation',    label: "Chef d'exploitation", emoji: '🧭', badge: 'bg-amber-100 text-amber-700' },
-  { key: 'agent',       label: 'Agent',           emoji: '👤', badge: 'bg-blue-100 text-blue-700'      },
   { key: 'aide_agent',           label: 'Aide Agent',         emoji: '🙋',   badge: 'bg-violet-100 text-violet-700'  },
   { key: 'agentpro',             label: 'Agent Pro',          emoji: '⭐',   badge: 'bg-purple-100 text-purple-700'  },
   { key: 'encaisseur_central',   label: 'Encaisseur central',  emoji: '🏦',   badge: 'bg-emerald-100 text-emerald-700' },
@@ -1180,10 +1180,10 @@ export default function AdminPage() {
     const periodEntries = filterByDate(caisseEntries, adminDatePreset, adminDateFrom, adminDateTo, eDate, operationalDay)
     if (!Array.isArray(periodEntries)) return []
     return users
-      .filter((u: any) => ['agent','chauffeur','livreur','caissier'].includes(u.role))
-      .filter((u: any) => activityRoleFilter === 'all' || u.role === activityRoleFilter)
+      .filter((u: any) => isAgencyStaff(u.role) || ['chauffeur','livreur','caissier'].includes(u.role))
+      .filter((u: any) => matchesActivityRole(activityRoleFilter, u.role))
       .map((u: any) => {
-        const created    = periodParcels.filter((p: any) => p.agentId === u.id && p.agentRole !== 'aide_agent')
+        const created    = periodParcels.filter((p: any) => p.agentId === u.id && (u.role === 'aide_agent' || p.agentRole !== 'aide_agent'))
         const claimed    = periodParcels.filter((p: any) => p.destinationAgentId === u.id)
         const transports = periodParcels.filter((p: any) => p.chauffeurId === u.id)
         const deliveries = periodParcels.filter((p: any) => p.deliveryDriverId === u.id)

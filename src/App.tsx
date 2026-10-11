@@ -101,9 +101,10 @@ function PrivateRoute({ user, role, profile, operationLocks, requiredRole, child
 
 function Loader() {
   return (
-    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-4">
+    // Fond CLAIR (comme les pages) : plus d'écran noir entre deux affichages
+    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-4">
       <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
-      <p className="text-gray-400 text-sm">Chargement...</p>
+      <p className="text-gray-500 text-sm">Chargement...</p>
     </div>
   )
 }
@@ -290,7 +291,7 @@ function AppContent() {
             </PrivateRoute>
           } />
           <Route path="/agent" element={
-            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole={['agent', 'chef_agence', 'aide_agent', 'agentpro']}>
+            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole={['chef_agence', 'aide_agent', 'agentpro']}>
               <AgentPage />
             </PrivateRoute>
           } />
@@ -354,7 +355,7 @@ function AppContent() {
           <Route path="/client" element={<Navigate to="/" replace />} />
 
           <Route path="/arrivage" element={
-            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole={['agent', 'chef_agence', 'admin', 'directeur']}>
+            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole={['chef_agence', 'admin', 'directeur']}>
               <ArrivagePage />
             </PrivateRoute>
           } />

@@ -1202,7 +1202,7 @@ export default function AnalyseurEspecePage() {
     <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-pink-50 text-slate-900">
       {/* Header magnifique */}
       <header className="bg-white/80 backdrop-blur-xl border-b border-pink-100/50 px-6 py-5 sticky top-0 z-20 shadow-sm">
-        <div className="max-w-7xl mx-auto flex items-center gap-4">
+        <div className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto flex items-center gap-4">
           {/* Photo de profil avec effet brillant */}
           {auth.currentUser?.uid && (
             <div className="relative">
@@ -1244,7 +1244,7 @@ export default function AnalyseurEspecePage() {
         </div>
       </header>
 
-      <main className="p-6 max-w-7xl mx-auto space-y-6">
+      <main className="p-6 max-w-7xl xl:max-w-none xl:w-[95%] mx-auto space-y-6">
         {/* Onglets */}
         <div className="flex gap-2 bg-white/70 backdrop-blur-xl rounded-2xl border border-pink-100/50 p-1.5 shadow-sm w-fit">
           <button

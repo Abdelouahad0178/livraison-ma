@@ -197,8 +197,8 @@ export default function CaissierPage() {
     let unsubRecoveryRequests: any = null
     let unsubCash: any = null
     const unsubUsers = subscribeAllUsers(data => {
-      setAgents(data.filter(u => u.role === 'agent'))
-      setStaffUsers(data.filter(u => ['directeur', 'agent', 'chauffeur', 'caissier', 'salarie'].includes(u.role)))
+      setAgents(data.filter(u => u.role === 'chef_agence' || u.role === 'agentpro'))
+      setStaffUsers(data.filter(u => ['directeur', 'chef_agence', 'agentpro', 'chauffeur', 'caissier', 'salarie'].includes(u.role)))
     })
     let currentCity: any = null
 
@@ -650,7 +650,7 @@ export default function CaissierPage() {
 
       {/* ---- Header ---- */}
       <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-10">
-        <div className="max-w-2xl mx-auto px-4">
+        <div className="max-w-2xl xl:max-w-none xl:w-[95%] mx-auto px-4">
           <div className="flex items-center justify-between py-3">
             <div className="flex items-center gap-2">
               <img src="/LOGO.jpg" alt="BG Express" className="h-9 object-contain" />
@@ -762,7 +762,7 @@ export default function CaissierPage() {
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto p-4 pb-20">
+      <main className="max-w-2xl xl:max-w-none xl:w-[95%] mx-auto p-4 pb-20">
 
         {/* ══════════════ ACCUEIL ══════════════ */}
         {tab === 'home' && (

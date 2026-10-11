@@ -817,7 +817,7 @@ export default function AdminVersementsTab({
                   onChange={(e) => setFormData({ ...formData, fromRole: e.target.value })}
                   className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
                 >
-                  <option value="agent">Agent</option>
+                  <option value="agent">Agent / Chef</option>
                   <option value="chef_agence">Chef Agence</option>
                   <option value="caissier">Caissier</option>
                   <option value="admin">Admin</option>

@@ -1588,6 +1588,7 @@ export function printBilanJournee(bilanData: any[], profileData: any, dateLabel:
           <div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:4px;padding:4px 8px;display:inline-block">
             <div style="font-weight:bold;color:#991b1b">${b.montantManquant.toFixed(2)} DH</div>
             <div style="font-size:8pt;color:#dc2626">(${b.livresNonCollectes.length} colis)</div>
+            <div style="font-size:7pt;color:#dc2626">${[b.montantManquantPort > 0 ? `port ${b.montantManquantPort.toFixed(2)}` : '', b.montantManquantCod > 0 ? `COD ${b.montantManquantCod.toFixed(2)}` : ''].filter(Boolean).join(' · ')}</div>
           </div>
         ` : '<span style="color:#9ca3af">—</span>'}
       </td>
@@ -1675,7 +1676,7 @@ export function printBilanJournee(bilanData: any[], profileData: any, dateLabel:
     <strong>Taux %:</strong> Pourcentage de livraison (🟢 ≥80% | 🟡 50-79% | 🔴 &lt;50%) |
     <strong>En cours:</strong> Expéditions encore chez le livreur |
     <strong>Collectés:</strong> Montant des ports dûs encaissés |
-    <strong>🚨 Livrés non encaissés:</strong> Argent dû mais non collecté (ANOMALIE!)${hasCod ? ' | <strong>COD:</strong> collecté / total (DH) par type — colis mixte : chaque part dans sa colonne' : ''}
+    <strong>🚨 Livrés non encaissés:</strong> Port dû et/ou COD d'expéditions livrées, pas encore collectés (ANOMALIE!)${hasCod ? ' | <strong>COD:</strong> collecté / total (DH) par type — colis mixte : chaque part dans sa colonne' : ''}
   </div>
 
   <script>window.onload = function(){ window.print(); }<\/script>

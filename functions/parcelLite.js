@@ -14,8 +14,9 @@
 const LITE_EXCLUDED_FIELDS = new Set([
   // Historique (le plus lourd) + journaux de modification
   'history', 'adminChanges',
-  // Champs dénormalisés pour la recherche SERVEUR (la recherche « Tout » reste sur parcels)
-  'senderNameLower', 'receiverNameLower', 'senderNameNorm', 'receiverNameNorm',
+  // Champs dénormalisés pour la recherche SERVEUR — ⚠️ senderNameNorm / receiverNameNorm sont GARDÉS :
+  // la recherche par nom de l'onglet Expéditions interroge parcelsLite (searchParcels { lite })
+  'senderNameLower', 'receiverNameLower',
   // Audit / traçabilité non affichés dans les listes
   'chefPointedBy', 'chefPointedById', 'chefPointedSource',
   'aideAgentName', 'validatedById', 'customerMode', 'photoUrl', 'priceModifiedAt',

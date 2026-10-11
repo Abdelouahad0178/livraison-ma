@@ -1,5 +1,5 @@
 import DateInput from '../../../components/DateInput'
-import { lazy, Suspense, useState, useEffect, useRef } from 'react'
+import { lazy, Suspense, useState, useEffect, useMemo, useRef, startTransition, type RefObject } from 'react'
 import { Calendar, Search, X, Plus, MapPin, ChevronDown, Check, MessageCircle, Printer } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import { CITIES, ALL_SERVICE_TYPES, normalizeServiceType } from '../../../firebase/constants'
@@ -53,6 +53,57 @@ const PORT_TYPE_LABELS: Record<string, { label: string; className: string }> = {
 }
 const portTypeInfo = (portType: string) => PORT_TYPE_LABELS[portType] || PORT_TYPE_LABELS.port_paye
 
+/**
+ * ⚡ Champ N° EXP ISOLÉ : la frappe ne met à jour QUE ce petit composant (affichage instantané, création comme
+ * suppression de chiffres). Le formulaire — stocké dans AgentPage, dont chaque mise à jour recalcule toute la
+ * page — reçoit le numéro à la PAUSE de frappe (250 ms) et en quittant le champ. L'enregistrement relit le champ
+ * lui-même (handleSubmit) : le dernier chiffre tapé est toujours pris en compte.
+ */
+function NicInput({ inputRef, value, onCommit, onBlur, onKeyDown, className }: {
+  inputRef: RefObject<HTMLInputElement | null>
+  value: string
+  onCommit: (v: string) => void
+  onBlur?: (e: any) => void
+  onKeyDown?: (e: any) => void
+  className?: string
+}) {
+  const [draft, setDraft] = useState(value)
+  const pushed = useRef(value)
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  const commitRef = useRef(onCommit)
+  commitRef.current = onCommit
+  // Changement venu d'ailleurs (formulaire vidé après création, NIC en double effacé, F9…)
+  useEffect(() => {
+    if (value === pushed.current) return
+    if (value === '' || document.activeElement !== inputRef.current) {
+      clearTimeout(timer.current)
+      pushed.current = value
+      setDraft(value)
+    }
+  }, [value, inputRef])
+  const flush = (v: string) => { clearTimeout(timer.current); pushed.current = v; commitRef.current(v) }
+  useEffect(() => () => clearTimeout(timer.current), [])
+  return (
+    <input
+      ref={inputRef}
+      id="senderNic"
+      required
+      placeholder="🔢 N° EXP (numéro de bon) *"
+      value={draft}
+      onChange={e => {
+        const v = e.target.value
+        setDraft(v)
+        pushed.current = v
+        clearTimeout(timer.current)
+        timer.current = setTimeout(() => commitRef.current(v), 250)
+      }}
+      onBlur={e => { flush(e.target.value); onBlur?.(e) }}
+      onKeyDown={e => { if (e.key === 'Enter' || e.key === 'Tab') flush((e.target as HTMLInputElement).value); onKeyDown?.(e) }}
+      className={className}
+    />
+  )
+}
+
 export default function NewTab() {
   const {
     profile, ticketRef,
@@ -82,6 +133,7 @@ export default function NewTab() {
 
   // Ref pour le champ N EXP et le conteneur du ticket
   const nexpInputRef = useRef<HTMLInputElement>(null)
+  const commitNic = (v: string) => startTransition(() => setForm((p: any) => (p.senderNic === v ? p : { ...p, senderNic: v })))
   const ticketContainerRef = useRef<HTMLDivElement>(null)
   const validateButtonRef = useRef<HTMLButtonElement>(null)
   const colisButtonRef = useRef<HTMLButtonElement>(null)
@@ -534,23 +586,24 @@ export default function NewTab() {
   }
 
   // Filtrer les clients pour les popups
-  const filteredSenderClients = clients.filter((c: Client) => {
+  // ⚡ Filtrage des ~14 000 clients SEULEMENT fenêtre de choix ouverte (avant : à chaque frappe dans la fiche)
+  const filteredSenderClients = useMemo(() => {
+    if (!showSenderPopup) return [] as Client[]
     const searchLower = senderSearch.toLowerCase()
-    return (
+    return clients.filter((c: Client) =>
       c.isExpediteur &&
       (normIncludes(c.name, searchLower) ||
-       (c.code && normIncludes(c.code, searchLower)))
-    )
-  })
+       (c.code && normIncludes(c.code, searchLower))))
+  }, [showSenderPopup, clients, senderSearch])
 
-  const filteredReceiverClients = clients.filter((c: Client) => {
+  const filteredReceiverClients = useMemo(() => {
+    if (!showReceiverPopup) return [] as Client[]
     const searchLower = receiverSearch.toLowerCase()
-    return (
+    return clients.filter((c: Client) =>
       c.isDestinataire &&
       (normIncludes(c.name, searchLower) ||
-       (c.code && normIncludes(c.code, searchLower)))
-    )
-  })
+       (c.code && normIncludes(c.code, searchLower))))
+  }, [showReceiverPopup, clients, receiverSearch])
 
   // Sélectionner un client expéditeur depuis la popup
   const selectSenderClient = (client: Client) => {
@@ -1338,14 +1391,11 @@ export default function NewTab() {
                   <span className="text-2xl leading-none animate-bounce select-none" aria-label="Vérifier la date de saisie">⬆️</span>
                 </div>
               )}
-              <input
-                ref={nexpInputRef}
-                id="senderNic"
-                required
-                placeholder="🔢 N° EXP (numéro de bon) *"
-                value={form.senderNic}
-                onChange={f('senderNic')}
-                onBlur={(e) => {
+              <NicInput
+                inputRef={nexpInputRef}
+                value={form.senderNic || ''}
+                onCommit={commitNic}
+                onBlur={(e: any) => {
                   // 🚀 VÉRIFICATION EN ARRIÈRE-PLAN (ne bloque pas la saisie)
                   const nic = e.target.value
                   if (nic && nic.trim()) {

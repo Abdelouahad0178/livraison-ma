@@ -28,7 +28,7 @@ export default function NotesAgentsTab({ profile, users, agentNotes }: NotesAgen
   const myAgents = useMemo(() => {
     return users.filter(u =>
       u.city === profile.city &&
-      ['agent', 'chauffeur', 'livreur', 'aide_agent', 'pointeur', 'caissier'].includes(u.role)
+      ['chauffeur', 'livreur', 'aide_agent', 'pointeur', 'caissier'].includes(u.role)
     )
   }, [users, profile.city])
 

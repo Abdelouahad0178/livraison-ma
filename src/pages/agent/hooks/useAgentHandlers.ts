@@ -36,7 +36,8 @@ import { printCharge, printTable, printBonRamassage } from '../../../utils/agent
 import { printFeuilleDeCharge } from '../../../utils/printFeuilleDeCharge'
 import { ALL_SERVICE_TYPES, codPaymentTypeOf, normalizeServiceType, codPaymentTypeForService } from '../../../firebase/constants'
 import { buildCodWriteFields, validateCodChoice, codCashPartOf, codDocPartOf, isMixedCod, codPartsDetailLabel, codEditResult } from '../../../utils/codParts'
-import { buildParcelCorrectionPatch, describeParcelSaveError, ensureFullParcel, ensureFullParcels } from '../../../firebase/parcels'
+import { buildParcelCorrectionPatch, describeParcelSaveError, ensureFullParcel, ensureFullParcels, markDeliveredAfterCollect } from '../../../firebase/parcels'
+import { chefReceiveCod } from '../../../firebase/chefPortReception'
 import { showToast } from '../../../utils/toast'
 import { blockDirectChefReception } from '../../../utils/moneyFlow'
 
@@ -842,37 +843,12 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     setReceptionCodError('')
     try {
       // 🏢 Chef d'agence EN REMPLACEMENT du chef d'exploitation (absent) : encaissement marqué à son nom
-      // (codExpReceivedRole « chef_agence ») et écrit directement en caisse
-      if (parcel.codExpReceivedAt && parcel.codExpReceivedRole !== 'chef_agence' && parcel.codStatus === 'collected') {
-        throw new Error("Valeur déjà reçue par le chef d'exploitation : elle arrivera par son envoi (onglet « Valeurs à valider »).")
-      }
-      let codCaisseEntryId = parcel.codCaisseEntryId || null
-      if (isCash(parcel) && !parcel.codCaisseEntryId) {
-        codCaisseEntryId = await createCaisseEntry({
-          type: 'entree', category: 'cod_agent',
-          amount: codCashPartOf(parcel),
-          description: `RETOUR FOND espèces réceptionné du livreur — ${parcel.trackingId} (${parcel.receiver?.name || ''})`,
-          reference: parcel.trackingId,
-          agentId: uid, agentName: name, city: profile?.city || '',
-          cashierId: uid, cashierName: name,
-        })
-      }
-      const now = new Date().toISOString()
-      const extraFields = {
-        codReceivedByChef:   true,              // ⭐ Boolean pour filtrage livreur
-        codReceivedByChefAt: now,               // ⭐ Date réception (format ISO pour livreur)
-        codReceivedByChefBy: name,              // ⭐ Nom chef (pour accusé livreur)
-        codChefReceivedAt:   now,
-        codChefReceivedBy:   name,
-        codChefReceivedById: uid,
-        // Mémorise l'état d'origine pour pouvoir annuler l'encaissement plus tard
-        codStatusBeforeRemise: parcel.codStatus || 'pending',
-        ...(codCaisseEntryId ? { codCaisseEntryId } : {}),
-        // 🏢 Reçu par le chef d'agence lui-même (remplace le chef d'exploitation)
-        codExpReceivedAt: now, codExpReceivedBy: name, codExpReceivedById: uid, codExpReceivedRole: 'chef_agence',
-      }
-      await remitCod(parcel.id, name, extraFields)
-      patchAllCod(parcel.id, { codStatus: 'remis', codRemisAt: now, codRemisBy: name, ...extraFields })
+      // (codExpReceivedRole « chef_agence ») et écrit directement en caisse.
+      // 🔒 Même réception que Caisse Agence (chefReceiveCod) : une seule opération (remise + entrée de caisse),
+      // état relu, refus si déjà reçue (par le chef d'exploitation ou ailleurs) ; une valeur encore « en attente »
+      // est collectée au passage (codCollectedAt → « Valeurs (COD) collectées par jour ») et passe « Livré ».
+      const fields = await chefReceiveCod(parcel, { id: uid || '', name, city: profile?.city || '' })
+      patchAllCod(parcel.id, fields)
     } catch (err: any) {
       console.error('handleReceptionCod:', err)
       setReceptionCodError(err?.message || 'Erreur lors de la réception RETOUR FOND.')
@@ -887,6 +863,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const { profile, setCodReceptioning, setReceptionCodError } = s.current
     const uid  = auth.currentUser?.uid
     const name = profile?.name || 'Agent'
+    if (parcel.valeursEnvoiId) {
+      setReceptionCodError("Valeur reçue par la validation d'un envoi du chef d'exploitation : annulation impossible ici.")
+      return
+    }
     setCodReceptioning(parcel.id)
     setReceptionCodError('')
     try {
@@ -916,34 +896,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const name = profile?.name || 'Chef'
     setCodFromDriverReceiving((st: any) => ({ ...st, [parcel.id]: true }))
     try {
-      // 🏢 Chef d'agence EN REMPLACEMENT du chef d'exploitation (absent) : reçu à son nom, écrit en caisse
-      if (parcel.codExpReceivedAt && parcel.codExpReceivedRole !== 'chef_agence') {
-        throw new Error("Valeur déjà reçue par le chef d'exploitation : elle arrivera par son envoi (onglet « Valeurs à valider »).")
-      }
-      let entryId = parcel.codCaisseEntryId || null
-      if (isCash(parcel) && !entryId) {
-        entryId = await createCaisseEntry({
-          type: 'entree', category: 'cod_agent',
-          amount: codCashPartOf(parcel),
-          description: `RETOUR FOND espèces reçu du livreur — ${parcel.trackingId} (${parcel.receiver?.name || ''})`,
-          reference: parcel.trackingId,
-          agentId: uid, agentName: name, city: profile?.city || '',
-          cashierId: uid, cashierName: name,
-        })
-      }
-      const now = new Date().toISOString()
-      const extraFields = {
-        codChefReceivedAt:   now,
-        codChefReceivedBy:   name,
-        codChefReceivedById: uid,
-        ...(entryId ? { codCaisseEntryId: entryId } : {}),
-        codExpReceivedAt: now, codExpReceivedBy: name, codExpReceivedById: uid, codExpReceivedRole: 'chef_agence',
-      }
-      await remitCod(parcel.id, name, extraFields)
-      setParcels((prev: any) => prev.map((p: any) => p.id === parcel.id
-        ? { ...p, codStatus: 'remis', codRemisAt: now, codRemisBy: name, ...extraFields }
-        : p
-      ))
+      // 🏢 Chef d'agence EN REMPLACEMENT du chef d'exploitation (absent) : reçu à son nom, écrit en caisse —
+      // même réception sécurisée que Caisse Agence (une seule opération, refus si déjà reçue)
+      const fields = await chefReceiveCod(parcel, { id: uid || '', name, city: profile?.city || '' })
+      setParcels((prev: any) => prev.map((p: any) => p.id === parcel.id ? { ...p, ...fields } : p))
     } catch (err: any) {
       console.error('handleReceiveCodFromDriver:', err)
       alert(err?.message || 'Erreur lors de la réception.')
@@ -1676,9 +1632,13 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 
   const handleSubmit = async (e: any) => {
     const {
-      form, setError, setLoading, setCreatedParcel, profile,
+      setError, setLoading, setCreatedParcel, profile,
       allSectors, drivers, clients, allClientsLoaded, price, loading,
     } = s.current
+    // ⚡ N° EXP relu dans le champ lui-même : sa saisie est transmise au formulaire en arrière-plan (NewTab),
+    // le dernier chiffre tapé juste avant l'enregistrement est donc toujours pris en compte
+    const nicEl = typeof document !== 'undefined' ? document.getElementById('senderNic') as HTMLInputElement | null : null
+    const form = nicEl ? { ...s.current.form, senderNic: nicEl.value } : s.current.form
     e.preventDefault()
 
     // 🔒 Protection RENFORCÉE contre les doubles soumissions

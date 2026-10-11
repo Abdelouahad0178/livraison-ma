@@ -1,4 +1,5 @@
 import DateInput from '../components/DateInput'
+import { isAgencyStaff, matchesActivityRole } from '../utils/roles'
 import { useEffect, useRef, useState, useMemo } from 'react'
 import { setPresenceTab } from '../services/presenceCounters'
 import { codPaymentTypeOf } from '../firebase/constants'
@@ -74,7 +75,6 @@ const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parc
 const currentSalaryMonth = () => new Date().toISOString().slice(0, 7)
 
 const EDIT_ROLES = [
-  { key: 'agent',     label: 'Agent',     emoji: '🧑‍💼', badge: 'bg-blue-100 text-blue-700'    },
   { key: 'chauffeur', label: 'Chauffeur', emoji: '🚚',  badge: 'bg-orange-100 text-orange-700' },
   { key: 'caissier',  label: 'Caissier',  emoji: '🏦',  badge: 'bg-teal-100 text-teal-700'     },
   { key: 'salarie',   label: 'Salarié',   emoji: '👤',  badge: 'bg-rose-100 text-rose-700'     },
@@ -468,10 +468,10 @@ export default function DirectorPage() {
     const filteredP = filterByDate(parcels, activityDatePreset, activityDateFrom, activityDateTo)
     const filteredCaisse = filterByDate(caisseEntries, activityDatePreset, activityDateFrom, activityDateTo, caisseEntryDate)
     return nonAdminUsers
-      .filter(u => u.role === 'agent' || u.role === 'chauffeur' || u.role === 'caissier')
-      .filter(u => activityRoleFilter === 'all' || u.role === activityRoleFilter)
+      .filter(u => isAgencyStaff(u.role) || u.role === 'chauffeur' || u.role === 'caissier')
+      .filter(u => matchesActivityRole(activityRoleFilter, u.role))
       .map(u => {
-        if (u.role === 'agent') {
+        if (isAgencyStaff(u.role)) {
           const created = filteredP.filter((p: any) => p.agentId === u.id)
           const claimed = filteredP.filter((p: any) => p.destinationAgentId === u.id)
           const all = [...new Map([...created, ...claimed].map(p => [p.id, p])).values()]
@@ -563,7 +563,7 @@ export default function DirectorPage() {
 
       {/* ------ HEADER ------ */}
       <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4">
+        <div className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto px-4">
           {/* Top bar */}
           <div className="flex items-center justify-between py-3">
             <div className="flex items-center gap-3">
@@ -668,7 +668,7 @@ export default function DirectorPage() {
         </div>
       )}
 
-      <main className="max-w-7xl mx-auto p-4 pb-16">
+      <main className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto p-4 pb-16">
 
         {/* ══ ACCUEIL ══ */}
         {mainTab === 'home' && permissions.length > 0 && (() => {
@@ -1203,7 +1203,7 @@ export default function DirectorPage() {
               <div className="flex gap-1.5">
                 {[
                   { key: 'all', label: 'Tous', emoji: '👥' },
-                  { key: 'agent', label: 'Agents', emoji: '🧑‍💼' },
+                  { key: 'agent', label: "Agents d'agence", emoji: '🧑‍💼' },
                   { key: 'chauffeur', label: 'Chauffeurs', emoji: '🚚' },
                   { key: 'caissier', label: 'Caissiers', emoji: '🏦' },
                 ].map(({ key, label, emoji }) => (
@@ -1238,7 +1238,7 @@ export default function DirectorPage() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {activityStats.map(stat => {
-                  const isAgent    = stat.user.role === 'agent'
+                  const isAgent    = isAgencyStaff(stat.user.role)
                   const isCashier  = stat.user.role === 'caissier'
                   const totalCount = isAgent ? stat.created.length : isCashier ? stat.entries.length : (stat.transports.length + stat.deliveries.length)
                   const lastDate   = stat.lastActivity ? new Date(stat.lastActivity).toLocaleDateString('fr-MA', { day:'2-digit', month:'short' }) : '—'

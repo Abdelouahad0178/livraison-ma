@@ -1,4 +1,5 @@
 import { Building2, Wallet, Users, BarChart2, Contact, Car, TrendingUp, AlertTriangle, Calculator, RotateCcw, Download, FileText, Banknote, ShieldCheck, Power, ChevronDown, Upload, Package, Monitor, Star, Archive } from 'lucide-react'
+import { isAgencyStaff } from '../../../utils/roles'
 import { lazy, Suspense } from 'react'
 import { CITIES } from '../../../firebase/constants'
 import { BACKUP_COLLECTIONS } from '../../../firebase/backupCollections'
@@ -75,7 +76,7 @@ export default function AdminHomeTab({
   const enCours  = realStats?.enCours ?? periodParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status)).length
   const livres   = realStats?.livres ?? periodParcels.filter((p: any) => p.status === 'Livré').length
   const codPend  = periodParcels.filter((p: any) => p.codAmount > 0 && (!p.codStatus || p.codStatus === 'pending')).reduce((s: any,p: any) => s+(p.codAmount||0), 0)
-  const agents   = periodUsers.filter((u: any) => u.role === 'agent').length
+  const agents   = periodUsers.filter((u: any) => isAgencyStaff(u.role)).length
   const drivers  = periodUsers.filter((u: any) => u.role === 'chauffeur').length
   const livreurs  = periodUsers.filter((u: any) => u.role === 'livreur').length
   const cashiers = periodUsers.filter((u: any) => u.role === 'caissier').length

@@ -10,7 +10,7 @@ const INFO = {
 export default function CompanyContact() {
   return (
     <div className="bg-blue-700 text-white text-xs py-1.5 px-4 w-full">
-      <div className="max-w-7xl mx-auto flex flex-wrap items-center justify-center gap-x-5 gap-y-0.5">
+      <div className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto flex flex-wrap items-center justify-center gap-x-5 gap-y-0.5">
         <span className="font-bold tracking-wide inline-flex items-center gap-1.5">
           <Truck className="w-3.5 h-3.5" /> BG EXPRESS
         </span>

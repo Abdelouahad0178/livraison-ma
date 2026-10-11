@@ -21,7 +21,7 @@ const EMPTY_FORM = { senderName: '', receiverName: '', weight: '', nbColis: '1',
 
 function makeProps(overrides = {}) {
   return {
-    profile: { name: 'Hassan', city: 'Casablanca', role: 'agent', code: 'A001' },
+    profile: { name: 'Hassan', city: 'Casablanca', role: 'chef_agence', code: 'A001' },
     tab: 'home',
     setTab: vi.fn(),
     menuOpen: false,

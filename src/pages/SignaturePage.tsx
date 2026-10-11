@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
-import { getDoc, doc } from 'firebase/firestore'
+import { getFunctions, httpsCallable } from 'firebase/functions'
 import { db } from '../firebase/db'
 import { submitDeliverySignature } from '../firebase/signatures'
 import { CheckCircle, PenLine, RotateCcw, Package, MapPin, Building2, Upload, Camera } from 'lucide-react'
@@ -25,16 +25,13 @@ export default function SignaturePage() {
 
   useEffect(() => {
     if (!parcelId || !token) { setPageStatus('invalid'); return }
-    getDoc(doc(db, 'parcels', parcelId))
-      .then(snap => {
-        if (!snap.exists()) { setPageStatus('invalid'); return }
-        const data = snap.data()
-        // Vérifier les deux types de tokens (normal et retour)
-        const isValidToken = data.signatureToken === token || data.returnSignatureToken === token
-        if (!isValidToken) { setPageStatus('invalid'); return }
-        // Vérifier si déjà livré (normal) ou retour finalisé
-        if (data.status === 'Livré' || data.status === 'Retour finalisé') { setPageStatus('already_delivered'); return }
-        setParcel({ id: snap.id, ...data })
+    // 🔒 Jeton vérifié CÔTÉ SERVEUR (getSignatureParcel) : les expéditions ne sont plus lisibles sans compte et le
+    // jeton n'est plus envoyé au navigateur ; seules les informations affichées ici sont renvoyées.
+    httpsCallable(getFunctions(), 'getSignatureParcel')({ parcelId, token })
+      .then(({ data }: any) => {
+        if (!data?.valid) { setPageStatus('invalid'); return }
+        if (data.alreadyDelivered) { setPageStatus('already_delivered'); return }
+        setParcel({ ...data.parcel, _isReturn: !!data.isReturn })
         setPageStatus('ready')
       })
       .catch(() => setPageStatus('error'))
@@ -178,7 +175,7 @@ export default function SignaturePage() {
       await submitDeliverySignature(parcelId, token, dataUrl, {
         signatureType: sigMode === 'personal' ? 'personal' : 'company_stamp',
         companyName: sigMode === 'company' ? companyName.trim() : '',
-      })
+      }, parcel)
       setSavedSigUrl(dataUrl)
       setPageStatus('submitted')
     } catch (err: any) {

@@ -517,8 +517,14 @@ export interface CaisseBilanRow {
   livresCount: number
   enCoursCount: number
   tauxLivraison: number
+  /** Livrées avec un port dû NON collecté et/ou un COD NON collecté (chaque expédition une seule fois). */
   livresNonCollectes: any[]
+  /** Total non encaissé = ports dus + COD non collectés des expéditions livrées. */
   montantManquant: number
+  montantManquantPort: number
+  montantManquantCod: number
+  livresNonCollectesPortCount: number
+  livresNonCollectesCodCount: number
   portsCollectesCount: number
   portsCollectesMontant: number
 }
@@ -536,7 +542,13 @@ export const caisseBilanJournee = (
       const portDu = parcels.filter(isPortDuParcel)
       const livres = parcels.filter((p: any) => p.status === 'Livré')
       const enCours = parcels.filter((p: any) => p.status === 'En cours de livraison')
-      const livresNonCollectes = portDu.filter((p: any) => p.status === 'Livré' && !p.portStatus)
+      // 🚨 Livrés non encaissés : port dû ET COD (RETOUR FOND) livrés mais pas encore collectés
+      const portsManquants = portDu.filter((p: any) => p.status === 'Livré' && !p.portStatus)
+      const codTotal = (p: any) => caisseCodAmountOfType(p, 'especes') + caisseCodAmountOfType(p, 'cheque') + caisseCodAmountOfType(p, 'traite')
+      const codsManquants = livres.filter((p: any) => (!p.codStatus || p.codStatus === 'pending') && codTotal(p) > 0)
+      const livresNonCollectes = [...new Map([...portsManquants, ...codsManquants].map((p: any) => [p.id, p])).values()]
+      const montantManquantPort = sumPrice(portsManquants)
+      const montantManquantCod = codsManquants.reduce((s: number, p: any) => s + codTotal(p), 0)
       const collectes = portsCollectesOf(portDu)
       const total = parcels.length
       return {
@@ -550,7 +562,11 @@ export const caisseBilanJournee = (
         enCoursCount: enCours.length,
         tauxLivraison: total ? Math.round(livres.length / total * 100) : 0,
         livresNonCollectes,
-        montantManquant: sumPrice(livresNonCollectes),
+        montantManquant: montantManquantPort + montantManquantCod,
+        montantManquantPort,
+        montantManquantCod,
+        livresNonCollectesPortCount: portsManquants.length,
+        livresNonCollectesCodCount: codsManquants.length,
         portsCollectesCount: collectes.length,
         portsCollectesMontant: sumPrice(collectes),
       }
@@ -620,6 +636,9 @@ export interface CaisseViewInput {
   modifiedParcels?: Record<string, any>
   /** Colis collectés en mode recherche hors données chargées (Caisse Agence). */
   extraCollectedParcels?: Record<string, any>
+  /** Expéditions collectées / reçues pendant les 14 dernières journées mais créées HORS de la période chargée
+   *  (useRecentCollected) : complètent UNIQUEMENT « Collectes par jour » et « Valeurs (COD) collectées par jour ». */
+  recentCollected?: any[]
   depotIds?: Set<string>
   deliveryDelays?: any[]
   /** Filtres supplémentaires propres au Chef d'exploitation (origine / service / port / recherche). */
@@ -653,6 +672,7 @@ export const computeCaisseView = (input: CaisseViewInput) => {
     city, allDisplayParcels, datePreset, dateFrom = '', dateTo = '', operationalDay = null,
     driverFilter = 'all', statusFilter = 'all', searchResults = null, modifiedParcels = {},
     extraCollectedParcels = {}, depotIds, deliveryDelays = [], extraFilter = null, now = new Date(),
+    recentCollected = [],
   } = input
   const searchMode = searchResults !== null
   const passesDateFilter = makePassesDateFilter(datePreset, dateFrom, dateTo, operationalDay)
@@ -670,6 +690,12 @@ export const computeCaisseView = (input: CaisseViewInput) => {
 
   // Solde de caisse (toutes données chargées, hors filtre de date)
   const allWithExtra = withMods([...(allDisplayParcels || []), ...extra], modifiedParcels)
+  // 🧾 Cartes « par jour » (rangées par JOUR DE COLLECTE) : données chargées + expéditions collectées ces 14 derniers
+  // jours mais créées hors période — une collecte d'aujourd'hui apparaît TOUJOURS dans la carte du jour, quel que
+  // soit le filtre de date (les cartes du haut, elles, restent celles des expéditions de la période)
+  const knownIds = new Set(allWithExtra.map((p: any) => p.id))
+  const recentExtra = withMods((recentCollected || []).filter((p: any) => !knownIds.has(p.id)), modifiedParcels)
+  const collectSource = recentExtra.length ? [...allWithExtra, ...recentExtra] : allWithExtra
   const notTransferred = (p: any) => !(p.portAdminTransferred || p.adminTransferred)
   // 📬 Ports payés ramassés au guichet à verser : seulement une fois REMIS par la gare au chef d'exploitation
   // (portPayeExpReceivedAt) — une annulation de cette réception les retire. Ceux « reçus » par le chef
@@ -680,10 +706,18 @@ export const computeCaisseView = (input: CaisseViewInput) => {
     sumPrice(allWithExtra.filter(p => isCollectedPortDuForCaisse(p, city) && notTransferred(p))) +
     sumPrice(allWithExtra.filter(p => isPortPayeCounted(p) && p.originCity === city && p.portStatus === 'received')) +
     ramassesAVerser)
+  // 🏬 Appartenance au livreur filtré. « En gare - <ville> » (GARE_GROUP_ID) n'est jamais un deliveryDriverId : le
+  // groupe réunit les expéditions SANS livreur et celles des comptes « en gare » (depotIds / nom « En gare - ville »),
+  // comme buildCaisseDrivers — avant, ce filtre montrait 0 port dû / COD encaissé au guichet dans « À verser » et
+  // dans les cartes « par jour ».
+  const gareName = `En gare - ${city || ''}`
+  const ofFilteredDriver = (p: any) => driverFilter === GARE_GROUP_ID
+    ? (!p.deliveryDriverId || !!depotIds?.has(p.deliveryDriverId) || p.deliveryDriverName === gareName)
+    : p.deliveryDriverId === driverFilter
   const soldeLivreur = driverFilter === 'all' ? 0 :
-    sumPrice(allWithExtra.filter(p => isCollectedPortDuForCaisse(p, city) && p.deliveryDriverId === driverFilter && notTransferred(p))) +
+    sumPrice(allWithExtra.filter(p => isCollectedPortDuForCaisse(p, city) && ofFilteredDriver(p) && notTransferred(p))) +
     sumPrice(allWithExtra.filter(p => isPortPayeCounted(p) && p.originCity === city && p.portStatus === 'received' &&
-      (p.pickupDriverId === driverFilter || (!p.pickupDriverId && p.deliveryDriverId === driverFilter)))) +
+      (p.pickupDriverId ? p.pickupDriverId === driverFilter : ofFilteredDriver(p)))) +
     (driverFilter === GARE_GROUP_ID ? ramassesAVerser : 0)
 
   // Ports collectés à imprimer / à verser (source datée)
@@ -725,10 +759,10 @@ export const computeCaisseView = (input: CaisseViewInput) => {
     cur[kind].count++; cur[kind].montant += m
     parJour.set(key, cur)
   }
-  allWithExtra.forEach((p: any) => {
+  collectSource.forEach((p: any) => {
     if (p.portStatus !== 'collected' && p.portStatus !== 'received') return
     if (isPortDuParcel(p) && !isPortDuMoneyBeforeStart(p) && p.destinationCity === city) {
-      if (driverFilter !== 'all' && p.deliveryDriverId !== driverFilter) return
+      if (driverFilter !== 'all' && !ofFilteredDriver(p)) return
       addJour(p, toDateSafe(p.portCollectedAt) ?? toDateSafe(p.portReceivedAt), 'portDu')
     } else if (isRamasseGuichet(p, city) && !isReturnedForGroup(p)) {
       if (driverFilter !== 'all' && driverFilter !== GARE_GROUP_ID) return
@@ -744,13 +778,13 @@ export const computeCaisseView = (input: CaisseViewInput) => {
 
   // Valeurs (COD) collectées par journée d'opération (14 dernières) — montants par type comme Caisse Agence
   const codParJour = new Map<string, CodCollecteJour>()
-  // Bloc COD : mêmes filtres que le reste de la page — période (expéditions créées dans la période) + filtres
-  // de l'exploitation (type de service, origine, port, recherche) ; réparties ensuite par JOUR DE COLLECTE
-  allWithExtra.filter((p: any) => (searchMode || passesDateFilter(p)) && (!extraFilter || extraFilter(p))).forEach((p: any) => {
+  // Bloc COD : rangé par JOUR DE COLLECTE comme « Collectes par jour » (complet sur 14 jours, quelle que soit la
+  // période) ; filtres de l'exploitation conservés (type de service, origine, port, recherche)
+  collectSource.filter((p: any) => !extraFilter || extraFilter(p)).forEach((p: any) => {
     if (!p.codStatus || p.codStatus === 'pending' || isCodMoneyBeforeStart(p)) return
     if (safeParseAmount(p.codAmount) <= 0 || isReturnedForGroup(p)) return
     if (p.destinationCity !== city) return
-    if (driverFilter !== 'all' && p.deliveryDriverId !== driverFilter) return
+    if (driverFilter !== 'all' && !ofFilteredDriver(p)) return
     const d = toDateSafe(p.codCollectedAt)
     if (!d) return
     const key = getOperationalDayString(d)
@@ -767,6 +801,8 @@ export const computeCaisseView = (input: CaisseViewInput) => {
   return {
     passesDateFilter, dataSource, stats, soldeCaisseGlobal, soldeLivreur, portsCollectesForPrint,
     drivers, filteredDrivers, filteredStats, bilanJournee, instances, collectesParJour, codCollectesParJour,
+    /** Données chargées + collectées récemment hors période (envoi des valeurs du chef d'exploitation). */
+    collectSource,
     periodLabel: caissePeriodLabel(datePreset, dateFrom, dateTo, operationalDay),
     statusFilterLabel: caisseStatusFilterLabel(statusFilter),
   }

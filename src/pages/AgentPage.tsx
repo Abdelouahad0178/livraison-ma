@@ -15,7 +15,7 @@ import {
   updateParcelStatus, isParcelVisibleInDestinationAgency,
   subscribeAgencyParcels, subscribeAgencyParcelsFull, subscribeAgencyReturnParcels, subscribePendingAideAgentParcels, subscribeAllParcels,
   subscribeAllParcelsWithDateFilter, loadMoreParcelsWithDateFilter,
-  createReturnParcel, searchParcelByTrackingId, searchParcels, getMoreAgencyParcels, getAgencyParcelsDaySlice, getParcelsPage,
+  createReturnParcel, searchParcelByTrackingId, searchParcels, getMoreAgencyParcels, getAgencyParcelsDaySlice, getLiteDaySliceCached, getParcelsPage,
   subscribeAllParcelsWithArchives, loadMoreParcelsWithArchives,
 } from '../firebase/parcels'
 import { shouldTriggerSearch } from '../utils/searchUtils'
@@ -88,8 +88,8 @@ import { buildDaySlices } from '../utils/daySlices'
 import DateFilter from './agent/DateFilter'
 import { useOperationalDaySelector } from '../hooks/useOperationalDay' // 🗓️ Journée opérationnelle
 // ⚡ OPTIMISATION : Lazy loading pour tous les tabs (y compris ParcelsTab) pour chargement rapide
-const ParcelsTab = lazy(() => import('./agent/tabs/ParcelsTab'))
-const DirectorCaisseSimple = lazy(() => import('./director/DirectorCaisseSimple'))
+const loadParcelsTab = () => import('./agent/tabs/ParcelsTab')
+const ParcelsTab = lazy(loadParcelsTab)
 const HomeTab = lazy(() => import('./agent/tabs/HomeTab'))
 const NewTab = lazy(() => import('./agent/tabs/NewTab'))
 const CodTab = lazy(() => import('./agent/tabs/CodTab'))
@@ -129,7 +129,12 @@ const CaisseChefTab = lazy(() => import('./agent/tabs/CaisseChefTab'))
 // false = retour immédiat à la lecture de parcels (aucune autre modification nécessaire).
 const USE_PARCELS_LITE = true
 
-const TABS_NEEDING_PARCELS = ['home', 'parcels', 'cod', 'charge', 'arrivage', 'retours', 'portsDu', 'portsEnCompte', 'caisse']
+// ⚡ 'new' (Saisie) inclus : passer de la Saisie aux Expéditions (aller-retour fréquent) ne coupe plus l'abonnement —
+// avant, chaque retour vidait la liste et rechargeait toute la période. Pendant la saisie, la liste filtrée et les
+// statistiques ne sont PAS recalculées (filteredParcels / dash* limités à leur onglet) : la frappe n'est pas ralentie.
+/** Liste vide STABLE (même référence à chaque rendu : les mémos qui en dépendent ne se recalculent pas). */
+const EMPTY_LIST: any[] = []
+const TABS_NEEDING_PARCELS = ['home', 'parcels', 'cod', 'charge', 'arrivage', 'retours', 'portsDu', 'portsEnCompte', 'caisse', 'new']
 
 const MOD_STATUS = {
   pending:  { label: 'En attente', bg: 'bg-amber-100', text: 'text-amber-700' },
@@ -425,6 +430,10 @@ export default function AgentPage() {
   const [includeArchived, setIncludeArchived] = useState(false) // 🗄️ Inclure archives dans recherche
   const [serverSearchResults, setServerSearchResults] = useState<any[] | null>(null) // Résultats recherche serveur
   const [isSearching, setIsSearching]   = useState(false) // Loading state pour recherche
+  // 🎯 Recherche CIBLÉE avec une période choisie (N° EXP, téléphone, N° LMA) : l'expédition est lue directement
+  // dans la base, sans recharger de période — affichée À PART si elle n'est pas dans la liste (hors période)
+  const [outOfPeriodResults, setOutOfPeriodResults] = useState<any[] | null>(null)
+  const [outOfPeriodSearching, setOutOfPeriodSearching] = useState(false)
   // Utiliser 'all' par défaut pour voir tous les colis, pas seulement ceux du jour de travail
   const [datePreset, setDatePreset]     = useState('all')
   const [dateFrom, setDateFrom]         = useState('')
@@ -506,38 +515,64 @@ export default function AgentPage() {
   useEffect(() => {
     const query = debouncedSearch.trim()
     // debouncedSearch est déjà « complet » (7 chiffres / 3 lettres) ou forcé par Entrée
+    setOutOfPeriodResults(null)
+    setOutOfPeriodSearching(false)
     if (!query) {
       setServerSearchResults(null)
       setIsSearching(false)
       return
     }
     // ⚡ Période précise choisie (Aujourd'hui, 7 j, Mois, Journée, Période…) : les expéditions de
-    // cette période sont déjà chargées pour l'agence → recherche LOCALE uniquement (accents ignorés),
-    // sans interroger toute la base (toutes dates confondues). Recherche serveur seulement sur « Tout ».
+    // cette période sont déjà chargées pour l'agence → recherche LOCALE (accents ignorés), sans interroger
+    // toute la base. 🎯 Exception : N° EXP / téléphone / N° LMA (1 à 2 expéditions) — lus AUSSI directement
+    // dans la base, pour trouver une expédition HORS de la période sans recharger quoi que ce soit.
     if (datePreset !== 'all' && !showAllCities) {
       setServerSearchResults(null)
       setIsSearching(false)
-      return
+      const compact = query.replace(/[\s\-().]/g, '')
+      if (!/^\d{7,}$/.test(compact) && !/^LMA/i.test(compact)) return
+      let cancelledTargeted = false
+      setOutOfPeriodSearching(true)
+      const city = profile?.city
+      searchParcels(query, { includeArchived, lite: USE_PARCELS_LITE })
+        .then(results => {
+          if (cancelledTargeted) return
+          // Chef d'agence : seulement les expéditions de SON agence (départ, arrivée ou retour)
+          const mine = city ? results.filter((p: any) => p.originCity === city || p.destinationCity === city
+            || p.returnToCity === city || p.sender?.city === city || p.receiver?.city === city) : results
+          setOutOfPeriodResults(mine)
+          setOutOfPeriodSearching(false)
+        })
+        .catch(err => {
+          if (cancelledTargeted) return
+          console.error('Recherche ciblée hors période:', err)
+          setOutOfPeriodSearching(false)
+        })
+      return () => { cancelledTargeted = true }
     }
 
     // ⚡ Recherche serveur dans TOUTE la base
-    const performServerSearch = async () => {
-      setIsSearching(true)
-      try {
-        console.warn(`🔍 Recherche serveur AgentPage: "${query}" ${includeArchived ? '(avec archives)' : '(sans archives)'}`)
-        const results = await searchParcels(query, { limit: 50000, includeArchived, nameScope: searchScope })
+    // - Résultats de la recherche PRÉCÉDENTE effacés tout de suite : en attendant le serveur, la liste
+    //   montre aussitôt les expéditions DÉJÀ chargées qui correspondent (recherche locale), au lieu
+    //   d'afficher les anciens résultats.
+    // - Une recherche dépassée (terme changé entre-temps) n'écrase jamais la plus récente.
+    let cancelled = false
+    setServerSearchResults(null)
+    setIsSearching(true)
+    searchParcels(query, { limit: 50000, includeArchived, nameScope: searchScope, lite: USE_PARCELS_LITE })
+      .then(results => {
+        if (cancelled) return
         setServerSearchResults(results)
         setIsSearching(false)
-        console.warn(`✅ Recherche serveur AgentPage: ${results.length} résultats trouvés`)
-      } catch (error) {
+      })
+      .catch(error => {
+        if (cancelled) return
         console.error('❌ Erreur recherche serveur AgentPage:', error)
         setServerSearchResults(null)
         setIsSearching(false)
-      }
-    }
-
-    performServerSearch()
-  }, [debouncedSearch, includeArchived, searchScope, datePreset, showAllCities])
+      })
+    return () => { cancelled = true }
+  }, [debouncedSearch, includeArchived, searchScope, datePreset, showAllCities, profile?.city])
 
   const [editingParcel, setEditingParcel] = useState<any>(null)
   const [editForm, setEditForm]         = useState<any>(null)
@@ -653,10 +688,17 @@ export default function AgentPage() {
   const [confirmDeleteDriverId, setConfirmDeleteDriverId] = useState<any>(null)
   const [authTick, setAuthTick] = useState(0)
 
-  // Restart subscriptions when Firebase Auth token changes (refresh or re-login)
+  // Relance des abonnements quand l'UTILISATEUR change (connexion / reconnexion avec un autre compte).
+  // ⚡ Plus au simple renouvellement automatique du jeton (≈ toutes les heures) : il relançait TOUT le chargement
+  // (liste vidée, roue de chargement, période relue). Les refus d'accès (permission-denied) déclenchent toujours
+  // leur propre relance (getIdToken(true) → setAuthTick) dans chaque abonnement.
+  const authUidRef = useRef<string | null>(null)
   useEffect(() => {
     return onIdTokenChanged(auth, user => {
-      if (user) setAuthTick(t => t + 1)
+      if (user && user.uid !== authUidRef.current) {
+        authUidRef.current = user.uid
+        setAuthTick(t => t + 1)
+      }
     })
   }, [])
 
@@ -742,6 +784,15 @@ export default function AgentPage() {
     const interval = setInterval(loadLostParcels, 5 * 60 * 1000)
     return () => { clearTimeout(timer); clearInterval(interval) }
   }, [profile?.city])
+
+  // ⚡ Onglet Expéditions (le plus utilisé, module lourd) téléchargé EN AVANCE, dès que la page est au repos :
+  // le premier clic l'affiche aussitôt
+  useEffect(() => {
+    const w = window as any
+    const id = w.requestIdleCallback ? w.requestIdleCallback(() => { loadParcelsTab().catch(() => {}) }, { timeout: 4000 })
+      : setTimeout(() => { loadParcelsTab().catch(() => {}) }, 2000)
+    return () => { if (w.cancelIdleCallback && w.requestIdleCallback) w.cancelIdleCallback(id); else clearTimeout(id) }
+  }, [])
 
   // Raccourci Ctrl+Enter depuis l'accueil pour aller à Nouvelle expédition
   useEffect(() => {
@@ -1190,10 +1241,10 @@ export default function AgentPage() {
                 while (nextIdx < slices.length) {
                   const s = slices[nextIdx++]
                   if (gen !== agencyLoadGenRef.current) return
-                  const docs = (await Promise.all([
-                    getAgencyParcelsDaySlice(city, 'originCity', s.start, s.end, s.endInclusive, null, FILTERED_PAGE_SIZE, USE_PARCELS_LITE),
-                    getAgencyParcelsDaySlice(city, 'destinationCity', s.start, s.end, s.endInclusive, null, FILTERED_PAGE_SIZE, USE_PARCELS_LITE),
-                  ])).flat()
+                  // 🧠 Version allégée : journées déjà chargées reprises de la mémoire (getLiteDaySliceCached)
+                  const docs = (await Promise.all((['originCity', 'destinationCity'] as const).map(field => USE_PARCELS_LITE
+                    ? getLiteDaySliceCached(city, field, s, FILTERED_PAGE_SIZE)
+                    : getAgencyParcelsDaySlice(city, field, s.start, s.end, s.endInclusive, null, FILTERED_PAGE_SIZE, false)))).flat()
                   if (gen !== agencyLoadGenRef.current) return
                   loaded += docs.length
                   doneDays += 1
@@ -1970,14 +2021,15 @@ export default function AgentPage() {
     setShowSenderDropdown(false)
   }
 
-  const filteredClientSearch = (() => {
+  // ⚡ Mémoïsé : recalculé quand la liste ou le texte cherché change — plus à CHAQUE frappe dans la fiche de saisie
+  const filteredClientSearch = useMemo(() => {
     const cityClients = clients.filter(c => !profile?.city || c.city === profile.city)
     if (!clientSearch.trim()) return cityClients
     const s = clientSearch.toLowerCase()
     return cityClients.filter(c =>
       normIncludes(c.name, s) || digitAwareIncludes(String(c.tel ?? ''), s) || normIncludes(c.nic, s)
     )
-  })()
+  }, [clients, clientSearch, profile?.city])
   const ef = (field: any) => (e: any) => setEditForm((p: any) => ({ ...p, [field]: e.target.value }))
 
   // ⚡ RÉACTIVITÉ DES BOUTONS DE FILTRE : l'état des filtres (période, direction, port, statut,
@@ -2039,7 +2091,9 @@ export default function AgentPage() {
   const fAllDisplay = useDeferredValue(allDisplayParcels)
   // ⏳ Vrai tant que la liste/les totaux affichés ne reflètent pas encore le dernier filtre cliqué
   const parcelFiltersPending = deferredParcelFilters !== urgentParcelFilters || fSearch !== debouncedSearch
+  // ⚡ Liste filtrée : utilisée SEULEMENT par l'onglet Expéditions → pas de filtrage / tri sur les autres onglets
   const filteredParcels = useMemo(() => {
+    if (tab !== 'parcels') return EMPTY_LIST
     const {
       datePreset, dateFrom, dateTo, dateFilterType, operationalDay, subTab, serviceFilter, parcelStatusFilter,
     parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter,
@@ -2235,7 +2289,7 @@ export default function AgentPage() {
     })
 
     return filtered
-  }, [fAllDisplay, deferredParcelFilters, profileCity, profileRole, uid, fSearch, serverSearchResults, garePendingList])
+  }, [tab, fAllDisplay, deferredParcelFilters, profileCity, profileRole, uid, fSearch, serverSearchResults, garePendingList])
 
   // 📊 Nombre d'expéditions affichées : UNE expédition = UNE ligne = compte 1.
   // ⚠️ Avant, pour la direction « Tous », un colis LOCAL (ville d'expédition = ville de destination) était
@@ -2252,14 +2306,16 @@ export default function AgentPage() {
   // Note: homeChefStats and homeAgentStats are now calculated in HomeTab.tsx
   // to properly respect the date filter selection
 
+  // ⚡ Statistiques du Tableau de bord : calculées SEULEMENT quand cet onglet est ouvert
   const dashCityParcels = useMemo(() => {
+    if (tab !== 'dashboard') return EMPTY_LIST
     const c = profile?.city
     if (!c) return parcels
     return parcels.filter(p =>
       p.sender?.city === c || p.originCity === c ||
       p.destinationCity === c || p.receiver?.city === c
     )
-  }, [parcels, profile?.city])
+  }, [tab, parcels, profile?.city])
 
   const dashKPIs = useMemo(() => {
     const today = new Date()
@@ -2325,12 +2381,15 @@ export default function AgentPage() {
 
   const dashCaisseKPIs = useMemo(() => {
     let totalIn = 0, totalOut = 0
+    if (tab !== 'dashboard') return { totalIn, totalOut }
     agentEntries.forEach(e => {
-      if (e.type === 'in') totalIn += e.amount || 0
-      else if (e.type === 'out') totalOut += e.amount || 0
+      // Les entrées de caisse sont écrites 'entree' / 'sortie' ('in' / 'out' : anciennes valeurs) — le tableau de bord
+      // ne lisait que 'in' / 'out' et affichait toujours 0 DH
+      if (e.type === 'entree' || e.type === 'in') totalIn += e.amount || 0
+      else if (e.type === 'sortie' || e.type === 'out') totalOut += e.amount || 0
     })
     return { totalIn, totalOut }
-  }, [agentEntries])
+  }, [tab, agentEntries])
 
   const whatsappMsg  = createdParcel
     ? encodeURIComponent(
@@ -2399,17 +2458,6 @@ export default function AgentPage() {
       return editPermissions?.aide_agent?.includes(fieldPath) ?? false
     }
 
-    // Agent: correction de SES propres bons (le bouton Modifier n'apparaît que pour le créateur,
-    // et firestore.rules n'autorise que le créateur). Liste configurable via editPermissions.agent,
-    // sinon champs du bon + COD (pas le type de port ni le statut, gérés par le chef).
-    if (profile?.role === 'agent') {
-      const agentFields: string[] = Array.isArray(editPermissions?.agent) ? editPermissions.agent : [
-        'sender.name', 'sender.nic', 'sender.tel', 'sender.city', 'sender.address',
-        'receiver.name', 'receiver.tel', 'receiver.city', 'receiver.address',
-        'weight', 'nbColis', 'serviceType', 'codAmount', 'price', 'notes', 'fragile',
-      ]
-      return agentFields.includes(fieldPath)
-    }
 
     // Par défaut: pas autorisé
     return false
@@ -2446,7 +2494,7 @@ export default function AgentPage() {
     parcel?.status === 'Arrivé en agence' &&
     (parcel?.chefPointedAt || parcel?.destinationArrivedAt)
   const canLoadTransportParcel = (parcel: any) =>
-    (profile?.role === 'agent' || profile?.role === 'chef_agence' || profile?.role === 'agentpro' || profile?.role === 'admin') &&
+    (profile?.role === 'chef_agence' || profile?.role === 'agentpro' || profile?.role === 'admin') &&
     parcel?.status === 'Initialisé'
   // NOUVELLE POLITIQUE : Plus de validation requise
   // Un colis d'aide-agent est "verrouillé" seulement si chargé (transportAssignedAt existe)
@@ -2904,6 +2952,7 @@ export default function AgentPage() {
     searchScope, setSearchScope,
     includeArchived, setIncludeArchived,  // 🗄️ Inclure archives dans recherche
     isSearching,
+    outOfPeriodResults, outOfPeriodSearching,  // 🎯 recherche ciblée hors période (onglet Expéditions)
     datePreset, setDatePreset,
     dateFrom, setDateFrom,
     dateTo, setDateTo,
@@ -3277,21 +3326,19 @@ export default function AgentPage() {
         )}
 
         {/* ── EXPÉDITIONS ── */}
-        {tab === 'parcels' && <ParcelsTab />}
+        {/* Suspense LOCAL : sans lui, le premier affichage (téléchargement du module) remontait jusqu'au
+            chargement général du site (écran noir plein écran) avant d'afficher l'onglet */}
+        {tab === 'parcels' && (
+          <Suspense fallback={<div className="flex items-center justify-center gap-3 py-16 text-sm text-gray-500"><span className="w-6 h-6 border-[3px] border-blue-500 border-t-transparent rounded-full animate-spin" />Chargement des expéditions…</div>}>
+            <ParcelsTab />
+          </Suspense>
+        )}
 
-        {tab === 'caisse' && (
-          profile?.role === 'chef_agence' ? (
-            <Suspense fallback={<div className="text-center py-8">Chargement...</div>}>
-              <CaisseChefTab />
-            </Suspense>
-          ) : (
-            <DirectorCaisseSimple
-              profile={profile}
-              agencyCash={agencyCash}
-              driverVersements={driverVersements}
-              adminTransfers={myAdminTransfers}
-            />
-          )
+        {/* Caisse : uniquement le chef d'agence (l'ancienne « Ma Caisse » de l'agent simple a été supprimée avec ce rôle) */}
+        {tab === 'caisse' && profile?.role === 'chef_agence' && (
+          <Suspense fallback={<div className="text-center py-8">Chargement...</div>}>
+            <CaisseChefTab />
+          </Suspense>
         )}
 
         {tab === 'cod' && (

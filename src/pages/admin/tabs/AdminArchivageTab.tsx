@@ -334,7 +334,7 @@ export default function AdminArchivageTab() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-6 max-w-7xl xl:max-w-none xl:w-[95%] mx-auto">
       <div className="flex items-center gap-3 mb-6">
         <Archive className="w-8 h-8 text-purple-600" />
         <div>
