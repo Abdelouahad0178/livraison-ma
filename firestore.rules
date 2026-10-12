@@ -1383,15 +1383,15 @@ service cloud.firestore {
     // 📊 Gestion commerciale (bgexpress.web.app) : totaux tenus par la Cloud Function syncCommercialStats.
     // Admin / directeur : toutes les agences ; chef d'agence : seulement sa ville (agence d'origine).
     match /commercialClients/{id} {
-      allow read: if isAdminOrDirecteur() || (role() == 'chef_agence' && resource.data.city == userCity());
+      allow read: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
       allow write: if false;
     }
     match /commercialAgencies/{id} {
-      allow read: if isAdminOrDirecteur() || (role() == 'chef_agence' && resource.data.city == userCity());
+      allow read: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
       allow write: if false;
     }
     match /commercialDays/{id} {
-      allow read: if isAdminOrDirecteur() || (role() == 'chef_agence' && resource.data.city == userCity());
+      allow read: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
       allow write: if false;
     }
     match /commercialContrib/{id} {
@@ -1399,11 +1399,15 @@ service cloud.firestore {
     }
     // Contrats / tarifs négociés, devis, factures de recouvrement, relances, compteurs de numéros.
     // Admin / directeur : tout ; chef d'agence : seulement les documents de SA ville (avant ET après écriture).
+    // 🔒 Compte bloqué (users.blocked) : plus aucun accès à la gestion commerciale, même hors de l'application.
     function isCommercialAdmin() {
-      return isAdminOrDirecteur();
+      return isAdminOrDirecteur() && isNotBlocked();
+    }
+    function isCommercialChef() {
+      return role() == 'chef_agence' && isNotBlocked() && userCity() != '';
     }
     function isCommercialChefOf(city) {
-      return role() == 'chef_agence' && city == userCity();
+      return isCommercialChef() && city == userCity();
     }
     match /commercialContracts/{id} {
       allow read, delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
@@ -1418,19 +1422,52 @@ service cloud.firestore {
     match /commercialInvoices/{id} {
       allow read: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
       allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
-      allow update: if isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city));
-      // Une facture n'est jamais supprimée par une cheffe d'agence (annulation = statut « cancelled »)
-      allow delete: if isCommercialAdmin();
+      // Le numéro et l'auteur d'une facture ne changent jamais (numérotation continue)
+      allow update: if (isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city)))
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['number', 'createdAt', 'createdBy', 'createdById']);
+      // Suppression (demandée par l'utilisateur) : admin / directeur partout, chef d'agence dans sa ville
+      allow delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
     }
     match /commercialReminders/{id} {
       allow read, delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
       allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
-      allow update: if false;
+      allow update: if isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city));
+    }
+    // Achats (TVA déductible), employés et bulletins de paie : même découpage par ville.
+    match /commercialPurchases/{id} {
+      allow read, delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
+      allow update: if isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city));
+    }
+    match /commercialEmployees/{id} {
+      allow read, delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
+      allow update: if isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city));
+    }
+    match /commercialPayslips/{id} {
+      allow read, delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
+      allow update: if isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city));
+    }
+    // Déclarations de TVA (société entière) : admin / directeur seulement
+    match /commercialTvaDeclarations/{id} {
+      allow read, write: if isCommercialAdmin();
+    }
+    // Paramètres (société, taux de paie) : lus par les 3 rôles, modifiés par admin / directeur
+    match /commercialSettings/{id} {
+      allow read: if isCommercialAdmin() || isCommercialChef();
+      allow write: if isCommercialAdmin();
     }
     // Compteurs de numérotation : id = {type}_{ville}_{année}
+    // Ne font qu'avancer de 1 (création à 1, puis n → n + 1) : impossible de remettre un compteur à zéro.
     match /commercialCounters/{id} {
-      allow read, create, update: if isCommercialAdmin()
-        || (role() == 'chef_agence' && id.split('_').size() == 3 && id.split('_')[1] == userCity());
+      function canUseCounter() {
+        return isCommercialAdmin()
+          || (isCommercialChef() && id.split('_').size() == 3 && id.split('_')[1] == userCity());
+      }
+      allow read: if canUseCounter();
+      allow create: if canUseCounter() && request.resource.data.n == 1;
+      allow update: if canUseCounter() && request.resource.data.n == resource.data.n + 1;
       allow delete: if false;
     }
 
