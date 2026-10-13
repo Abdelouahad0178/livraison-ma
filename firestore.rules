@@ -289,7 +289,9 @@ service cloud.firestore {
         && isChefAgence()
         && (!changed.hasAny(deliveryAssignmentFields()) || resource.data.agentId == request.auth.uid || isDestinationAgencyChief())
         && keepsDeliveredStatus()
-        && (!touchesOnlyControlFields() || isOwnControlChange());
+        && (!touchesOnlyControlFields() || isOwnControlChange())
+        // 🔒 Avant : statut, remarques, type de port… modifiables sur les colis de N'IMPORTE QUELLE ville
+        && isMyAgencyParcel();
     }
 
     // ✏️ Correction des données d'une expédition par le chef d'agence / l'agent pro, AUTORISÉE PAR L'ADMIN
@@ -321,6 +323,21 @@ service cloud.firestore {
             || (!(resource.data.get('portStatus', null) in ['collected', 'received']) && resource.data.get('invoiced', false) != true))
         && keepsEnComptePortType()
         && isNotBlocked();
+    }
+
+    // 🏢 Colis rattaché à l'agence de l'utilisateur : origine, expéditeur, destination, retour ou ville de
+    // création = sa ville ; ou colis créé par lui / qui lui est assigné en livraison.
+    function isMyAgencyParcel() {
+      let c = userCity();
+      return resource.data.get('agentId', '') == request.auth.uid
+        || resource.data.get('deliveryDriverId', '') == request.auth.uid
+        || (c != '' && (
+          resource.data.get('originCity', '') == c
+          || resource.data.get('destinationCity', '') == c
+          || resource.data.get('returnToCity', '') == c
+          || resource.data.get('createdByCity', '') == c
+          || resource.data.get('sender', {}).get('city', '') == c
+        ));
     }
 
     function isOwnControlChange() {
@@ -377,10 +394,14 @@ service cloud.firestore {
 
       // ⚡ Chef d'agence / Agent Pro / Chef d'exploitation : statut, remarques, etc. (voir chefFastPathUpdate)
       // ⚡ (déplacée en tête, peu coûteuse) Validation arrivée / colis déjà arrivés — comportement inchangé
+      // 🔒 Avant : tout compte de travail pouvait modifier N'IMPORTE QUEL champ de tout colis déjà arrivé, dans
+      // toutes les villes. Désormais : comptes rattachés à une ville → colis de leur agence uniquement ;
+      // comptes centraux sans ville (encaisseur, analyseurs, directeur…) : inchangé.
       allow update: if (signedIn()
         && 'destinationArrivedAt' in request.resource.data
         && 'history' in request.resource.data
-        && !touchesOnlyControlFields()) && isWorkAccount();
+        && !touchesOnlyControlFields()) && isWorkAccount()
+        && (userCity() == '' || isMyAgencyParcel());
       allow update: if chefFastPathUpdate();
       // ✏️ Correction autorisée par l'admin (Admin › Permissions › Expéditions modifiables).
       // Garde en tête, quasi gratuite : seule une correction signée (bonEditedBy = l'auteur, bonEditedAt
@@ -394,6 +415,7 @@ service cloud.firestore {
       allow update: if resource.data.get('wasReturned', false) == true
         && request.resource.data.get('wasReturned', true) == false
         && isChefAgence()
+        && isMyAgencyParcel()
         && !(request.resource.data.status in ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé', 'Livré'])
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status', 'history', 'sender', 'receiver', 'senderNameNorm', 'receiverNameNorm',
@@ -479,7 +501,8 @@ service cloud.firestore {
       // 📅 RÈGLE : Chef d'agence peut corriger la date d'expédition (expeditionDate) et le jour d'opération (workDate)
       allow update: if isChefAgence()
         && keepsDeliveredStatus()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['expeditionDate', 'workDate', 'createdAt', 'createdAtOriginal']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['expeditionDate', 'workDate', 'createdAt', 'createdAtOriginal'])
+        && isMyAgencyParcel();
 
       // 🖐️ RÈGLE : Chef d'agence peut modifier price, portType, codAmount (édition rapide, onglet Caisse)
       // 🔒 Seulement les colis de SON agence (origine, expéditeur, destination ou retour = sa ville, ou créés
