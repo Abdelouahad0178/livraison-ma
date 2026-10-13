@@ -481,11 +481,19 @@ service cloud.firestore {
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['expeditionDate', 'workDate', 'createdAt', 'createdAtOriginal']);
 
-      // 🖐️ RÈGLE : Chef d'agence peut modifier price, portType, codAmount (édition rapide)
+      // 🖐️ RÈGLE : Chef d'agence peut modifier price, portType, codAmount (édition rapide, onglet Caisse)
+      // 🔒 Seulement les colis de SON agence (origine, expéditeur, destination ou retour = sa ville, ou créés
+      // par lui) — avant : n'importe quel chef pouvait changer le prix / le COD d'un colis d'une autre ville.
       allow update: if isChefAgence()
         && keepsDeliveredStatus()
         && !isParcelLocked()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['price', 'portType', 'codAmount', 'codMixed', 'codCashAmount']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['price', 'portType', 'codAmount', 'codMixed', 'codCashAmount'])
+        && isNotBlocked()
+        && (resource.data.get('originCity', '') == userCity()
+          || resource.data.get('destinationCity', '') == userCity()
+          || resource.data.get('returnToCity', '') == userCity()
+          || resource.data.get('sender', {}).get('city', '') == userCity()
+          || resource.data.get('agentId', '') == request.auth.uid);
 
       // ✋ Chef d'exploitation / chef d'agence / Agent PRO : correction du PORT (onglet Soir), même colis
       // chargé — agence de destination uniquement : prix et/ou type entre port dû / en compte expéditeur /
