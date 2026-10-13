@@ -207,9 +207,12 @@ const COD_TYPES = [
  * 💰 Valeurs (COD) collectées par journée d'opération (14 dernières) — cartes cliquables + détail imprimable,
  * montants par type comme Caisse Agence. Données = computeCaisseView().codCollectesParJour.
  */
-export function CodCollectesParJour({ codCollectesParJour, profile }: Readonly<{
+export function CodCollectesParJour({ codCollectesParJour, profile, periodLabel = '14 derniers jours', periodShort = '14 jours' }: Readonly<{
   codCollectesParJour: [string, CodCollecteJour][]
   profile: any
+  /** Libellés de la période (page admin « Contre Remboursement » : période choisie) — défaut : 14 derniers jours. */
+  periodLabel?: string
+  periodShort?: string
 }>) {
   const [day, setDay] = useState<(CodCollecteJour & { dateStr: string }) | null>(null)
   // Bloc replié au démarrage (petite flèche), comme les autres parties des pages
@@ -227,11 +230,11 @@ export function CodCollectesParJour({ codCollectesParJour, profile }: Readonly<{
           <span className="flex items-center gap-2 min-w-0">
             <Calendar className="w-5 h-5 text-indigo-600 shrink-0" />
             <span className="min-w-0">
-              <span className="block text-lg font-bold text-gray-900">Valeurs (COD) collectées par jour (14 derniers jours)</span>
+              <span className="block text-lg font-bold text-gray-900">Valeurs (COD) collectées par jour ({periodLabel})</span>
               {!open && (
                 <span className="block text-xs text-gray-600">
                   Aujourd'hui : <b className="text-indigo-700">{todayData?.count || 0}</b> · {(todayData?.montant || 0).toFixed(0)} DH
-                  {' '}— 14 jours : {sum('count')} expédition(s) · {sum('montant').toFixed(0)} DH
+                  {' '}— {periodShort} : {sum('count')} expédition(s) · {sum('montant').toFixed(0)} DH
                 </span>
               )}
             </span>
@@ -265,7 +268,7 @@ export function CodCollectesParJour({ codCollectesParJour, profile }: Readonly<{
           })}
         </div>
         <div className="mt-3 text-xs text-gray-600 text-center">
-          Total 14 jours: <strong>{sum('count')} expédition(s)</strong> pour <strong>{sum('montant').toFixed(2)} DH</strong>
+          Total {periodShort}: <strong>{sum('count')} expédition(s)</strong> pour <strong>{sum('montant').toFixed(2)} DH</strong>
           {COD_TYPES.filter(t => sum(t.key) > 0).map(t => <span key={t.key}> · {t.emoji} {t.label} {sum(t.key).toFixed(2)} DH</span>)}
         </div>
         </>)}

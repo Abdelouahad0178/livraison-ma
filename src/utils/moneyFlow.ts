@@ -52,6 +52,8 @@ export const isFullyPreStartMoney = (p: any): boolean => {
 export const moneyFromStart = <T,>(list: T[]): T[] => (list || []).filter(p => !isFullyPreStartMoney(p))
 /** Liste réduite à l'argent COD COMPTÉ (sans les COD encaissés avant le 05/10/2026). */
 export const codMoneyOnly = <T,>(list: T[]): T[] => (list || []).filter(p => !isCodMoneyBeforeStart(p))
+/** COD réglé à l'expéditeur (paiement fournisseur de l'encaisseur central ou règlement agence) — règle de l'encaisseur central. */
+export const isCodSenderPaid = (p: any): boolean => !!p?.centralSupplierPaid || !!p?.codSenderPaid || p?.centralSupplierPaymentStatus === 'paid'
 /** Ligne de caisse (caisseEntries, transferts…) antérieure au début du vrai calcul. */
 export const isEntryBeforeStart = (e: any): boolean => beforeStart(e?.createdAt ?? e?.date)
 export const entriesFromStart = <T,>(list: T[]): T[] => (list || []).filter(e => !isEntryBeforeStart(e))

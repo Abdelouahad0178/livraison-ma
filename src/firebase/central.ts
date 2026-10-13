@@ -598,15 +598,15 @@ export interface CodDocument {
   banque: string
   montant: number
   echeance: string // AAAA-MM-JJ (facultatif pour un chèque)
+  /** 🔗 Chèque GROUPÉ : un seul chèque pour plusieurs expéditions du même expéditeur. montant = part de CETTE
+   *  expédition ; groupTotal = montant du chèque ; groupIds / groupNics = toutes les expéditions couvertes. */
+  groupId?: string
+  groupIds?: string[]
+  groupNics?: string[]
+  groupTotal?: number
 }
 export async function saveParcelCodDocuments(parcelId: string, documents: CodDocument[], by: string, byId: string) {
-  const clean = (documents || []).map(d => ({
-    type: d.type === 'traite' ? 'traite' : 'cheque',
-    numero: String(d.numero || '').trim(),
-    banque: String(d.banque || '').trim(),
-    montant: Math.round((Number(d.montant) || 0) * 100) / 100,
-    echeance: String(d.echeance || '').trim(),
-  }))
+  const clean = cleanCodDocuments(documents)
   await updateDoc(doc(db, 'parcels', parcelId), {
     codDocuments: clean,
     codDocumentsSavedBy: by || 'Encaisseur central',
@@ -614,4 +614,44 @@ export async function saveParcelCodDocuments(parcelId: string, documents: CodDoc
     codDocumentsSavedAt: new Date().toISOString(),
   })
   return clean
+}
+
+/**
+ * 🔗 Même écriture que saveParcelCodDocuments, sur PLUSIEURS expéditions en un seul writeBatch (chèque groupé,
+ * annulation d'un pointage) : tout est écrit, ou rien — jamais un groupe à moitié enregistré.
+ * Au-delà de 450 expéditions (annulation en masse), découpé en plusieurs lots.
+ */
+export async function saveParcelsCodDocuments(entries: Record<string, CodDocument[]>, by: string, byId: string) {
+  const ids = Object.keys(entries || {}).filter(Boolean)
+  const out: Record<string, CodDocument[]> = {}
+  if (ids.length === 0) return out
+  const now = new Date().toISOString()
+  for (let i = 0; i < ids.length; i += CONTROL_BATCH_SIZE) {
+    const batch = writeBatch(db)
+    ids.slice(i, i + CONTROL_BATCH_SIZE).forEach(id => {
+      out[id] = cleanCodDocuments(entries[id])
+      batch.update(doc(db, 'parcels', id), {
+        codDocuments: out[id],
+        codDocumentsSavedBy: by || 'Encaisseur central',
+        codDocumentsSavedById: byId || '',
+        codDocumentsSavedAt: now,
+      })
+    })
+    await batch.commit()
+  }
+  return out
+}
+
+function cleanCodDocuments(documents: CodDocument[]): CodDocument[] {
+  return (documents || []).map(d => ({
+    type: d.type === 'traite' ? 'traite' : 'cheque',
+    numero: String(d.numero || '').trim(),
+    banque: String(d.banque || '').trim(),
+    montant: Math.round((Number(d.montant) || 0) * 100) / 100,
+    echeance: String(d.echeance || '').trim(),
+    ...(d.groupId && (d.groupIds || []).length > 1 ? {
+      groupId: String(d.groupId), groupIds: (d.groupIds || []).map(String), groupNics: (d.groupNics || []).map(String),
+      groupTotal: Math.round((Number(d.groupTotal) || 0) * 100) / 100,
+    } : {}),
+  }) as CodDocument)
 }

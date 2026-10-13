@@ -126,12 +126,16 @@ export function subscribeDeliveryDriverParcels(
   callback: any,
   onError: (err?: any) => void = () => {},
   pageLimit = 100, // Limite configurable (100 par défaut)
-  callbackWithLastDoc?: (lastDocs: any) => void // Callback pour retourner les derniers documents (pagination)
+  callbackWithLastDoc?: (lastDocs: any) => void, // Callback pour retourner les derniers documents (pagination)
+  opts: { lite?: boolean } = {}
 ) {
   const since = daysAgoTimestamp(30)
 
   // Deux requêtes : colis assignés + colis retournés par ce livreur (historique)
-  const q1 = query(collection(db, 'parcels'), where('deliveryDriverId', '==', driverId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
+  // ⚡ opts.lite : les expéditions assignées sont lues dans parcelsLite (sans historique ni champs
+  // d'audit). ⚠️ returnedByDriverId N'EST PAS dans parcelsLite (LITE_EXCLUDED_FIELDS) : la 2ᵉ
+  // requête reste donc sur parcels (peu de documents : retours du livreur sur 30 jours).
+  const q1 = query(collection(db, opts.lite ? 'parcelsLite' : 'parcels'), where('deliveryDriverId', '==', driverId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
   const q2 = query(collection(db, 'parcels'), where('returnedByDriverId', '==', driverId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
 
   let assigned: any[] = []

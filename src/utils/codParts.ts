@@ -46,6 +46,25 @@ export function codDocTypeOf(p: any): string {
   return COD_DOC_TYPES.includes(t) ? t : ''
 }
 
+/**
+ * 🔎 Valeurs stockées qui désignent un COD chèque / traite — filtres SERVEUR (where 'in') de l'analyseur
+ * chèques, au lieu de charger toutes les expéditions puis de garder les chèques en mémoire. Le filtre
+ * exact (isDocParcel) reste appliqué ensuite : ces listes doivent seulement ne rien oublier.
+ * - serviceType : type choisi à la création (mixte compris : serviceType = le document), y compris
+ *   les variantes de casse / alias / anciennes listes multi-sélection dont le 1er type est un document ;
+ * - codPaymentType : expéditions dont le serviceType n'est pas un type COD (ex. 'oc', vide) mais
+ *   encaissées en chèque / traite (codDocTypeOf retombe alors sur codPaymentType).
+ */
+export const COD_DOC_SERVICE_TYPE_VALUES = [
+  'cheque', 'traite', 'cod_cheque', 'cod_traite',
+  'Cheque', 'Traite', 'CHEQUE', 'TRAITE', 'COD_CHEQUE', 'COD_TRAITE',
+  'cheque,traite', 'traite,cheque', 'cheque,especes', 'traite,especes',
+  'cheque, traite', 'traite, cheque', 'cheque, especes', 'traite, especes',
+]
+export const COD_DOC_PAYMENT_TYPE_VALUES = [
+  'cheque', 'traite', 'cod_cheque', 'cod_traite', 'Cheque', 'Traite', 'CHEQUE', 'TRAITE', 'COD_CHEQUE', 'COD_TRAITE',
+]
+
 /** Colis à retour de fonds mixte (Espèces + un chèque OU une traite). */
 export function isMixedCod(p: any): boolean {
   return !!p && p.codMixed === true && num(p.codCashAmount) > 0 && !!codDocTypeOf(p) && num(p.codAmount) > 0

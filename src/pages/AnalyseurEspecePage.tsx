@@ -36,7 +36,7 @@ import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
 import { normText, isDigitsOnly, numberStartsWith } from '../utils/normText'
 import { codHasType, isMixedCod, codPartsOf, codPartsBreakdown, codPartsLabel } from '../utils/codParts'
-import { codMoneyOnly } from '../utils/moneyFlow'
+import { codMoneyOnly, isCodSenderPaid } from '../utils/moneyFlow'
 
 const PAGE_SIZE = 800 // Chargement progressif par tranches de 800
 
@@ -54,7 +54,7 @@ const senderKey = (p: any) => `${String(p.sender?.name || '').trim().toLowerCase
 const parcelAgency = (p: any) => p?.centralDepositCity || p?.destinationCity || p?.receiver?.city || p?.originCity || p?.sender?.city || 'Agence non definie'
 const supplierAgency = (p: any) => p?.originCity || p?.sender?.city || 'Agence non definie'
 const supplierAgenciesText = (parcels: any) => [...new Set((parcels || []).map(supplierAgency).filter(Boolean))].join(', ') || '-'
-const isParcelPaid = (p: any) => !!p.centralSupplierPaid || !!p.codSenderPaid || p.centralSupplierPaymentStatus === 'paid'
+const isParcelPaid = isCodSenderPaid
 const isParcelPrepared = (p: any) => !isParcelPaid(p) && (p.centralSupplierPaymentStatus === 'prepared' || !!p.centralSupplierPaymentId)
 const paymentStatus = (pay: any) => pay?.status || 'paid'
 const normalizeSearch = (value: any) => normText(value).replace(/\s+/g, '')

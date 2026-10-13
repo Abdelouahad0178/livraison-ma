@@ -20,13 +20,15 @@ import {
   subscribeDeliveryDelays
 } from '../../../firebase/delivery'
 import { collectPortDu, uncollectPortDu } from '../../../firebase/cod'
-import { updateParcel, searchParcels, subscribeAgencyReturnParcels } from '../../../firebase/parcels'
+import { updateParcel, searchParcels, subscribeAgencyReturnParcels, portTypeChangeFields } from '../../../firebase/parcels'
 import { useRecentCollected } from '../../../hooks/useRecentCollected'
 import { useAgencyParcelsFull } from '../../../hooks/useAgencyParcelsFull'
 import LoadProgress from '../../../components/LoadProgress'
 import { collection, query, where, onSnapshot, documentId, doc as fsDoc, getDoc } from 'firebase/firestore'
 import { db } from '../../../firebase/db'
+import { auth } from '../../../firebase/config'
 import { shouldTriggerSearch } from '../../../utils/searchUtils'
+import { useDebounce } from '../../../components/DebouncedSearchInput'
 import { printPortsCollectes, printVersementParcels, printDriverExpeditionsTable, printBilanJournee, printInstancesRetards } from '../../../utils/agentPrintUtils'
 import HScrollArrows from '../../../components/HScrollArrows'
 import DriverCaisseCard from '../../../components/caisse/DriverCaisseCard'
@@ -312,9 +314,14 @@ export default function CaisseChefTab() {
     return () => unsubscribe()
   }, [profile?.city])
 
+  // ⚡ Recherche lancée 300 ms après la dernière frappe (avant : une recherche serveur PAR touche).
+  // Champ vidé : réinitialisation immédiate.
+  const debouncedSearchQuery = useDebounce(searchQuery, 300)
+  const effectiveSearchQuery = searchQuery.trim() === '' ? '' : debouncedSearchQuery
+
   // 🔍 Recherche serveur dans TOUTES les expéditions + Écoute temps réel
   useEffect(() => {
-    const searchTerm = searchQuery.trim()
+    const searchTerm = effectiveSearchQuery.trim()
 
     // Si champ complètement vide, tout réinitialiser
     if (searchTerm === '') {
@@ -339,12 +346,20 @@ export default function CaisseChefTab() {
     setModifiedParcels({})
 
     let unsubscribeRealtime: (() => void) | null = null
+    // ⚠️ Recherche dépassée (terme changé entre-temps) : ses résultats arrivés APRÈS ceux de la
+    // recherche plus récente les écrasaient. Désormais ignorés (ni résultats, ni écoute temps réel).
+    let cancelled = false
 
     const performSearch = async () => {
       setSearching(true)
       try {
         console.log(`🔍 Recherche serveur: "${searchTerm}" (archives: ${includeArchived})`)
-        const results = await searchParcels(searchTerm, { limit: 50, includeArchived })
+        // 🪶 parcelsLite (archives : version complète) : chaque résultat est aussitôt remplacé par sa version
+        // COMPLÈTE via l'écoute temps réel ci-dessous ; Caisse Agence calcule déjà sur parcelsLite (journées passées).
+        // limit : plafond des recherches par DÉBUT de nom — aucun plafond effectif, comme avant (l'option
+        // était ignorée) : les chiffres affichés en mode recherche restent identiques.
+        const results = await searchParcels(searchTerm, { limit: 50000, includeArchived, lite: true })
+        if (cancelled) return
         // Filtrer par ville si chef d'agence
         const filtered = results.filter((p: any) =>
           p.destinationCity === profile?.city || p.originCity === profile?.city
@@ -405,10 +420,11 @@ export default function CaisseChefTab() {
           console.log(`🔄 Écoute temps réel activée pour ${parcelIds.length} parcels`)
         }
       } catch (error) {
+        if (cancelled) return
         console.error('❌ Erreur recherche:', error)
         setSearchResults([])
       } finally {
-        setSearching(false)
+        if (!cancelled) setSearching(false)
       }
     }
 
@@ -416,12 +432,13 @@ export default function CaisseChefTab() {
 
     // Nettoyage: arrêter l'écoute quand la recherche change
     return () => {
+      cancelled = true
       if (unsubscribeRealtime) {
         unsubscribeRealtime()
         console.log('🔇 Écoute temps réel arrêtée')
       }
     }
-  }, [searchQuery, includeArchived, profile?.city])
+  }, [effectiveSearchQuery, includeArchived, profile?.city])
 
   // Filtrer les résultats de recherche par statut de collecte
   const filteredSearchResults = useMemo(() => {
@@ -2588,7 +2605,7 @@ export default function CaisseChefTab() {
                     }
 
                     if (quickEditModal.portType && quickEditModal.portType !== quickEditModal.parcel.portType) {
-                      updates.portType = quickEditModal.portType
+                      Object.assign(updates, portTypeChangeFields(quickEditModal.parcel, quickEditModal.portType, { uid: auth.currentUser?.uid || null, name: profile?.name || "Chef d'agence" }))
                     }
 
                     if (quickEditModal.codMixed) {

@@ -16,6 +16,7 @@ import { updateParcel, buildParcelCorrectionPatch, describeParcelSaveError } fro
 import { showToast } from '../../../utils/toast'
 import { getGareDriverForCity } from '../../../firebase/delivery'
 import { normIncludes } from '../../../utils/normText'
+import { mergeClientLists } from '../../../utils/clientLookup'
 import { analyzeNbColisShortcut, nbColisDigitsOnly, NB_COLIS_SHORTCUT_HINT, NB_COLIS_SHORTCUT_TITLE, NB_COLIS_SHORTCUT_ENABLED } from '../../../utils/nbColisShortcut'
 import { buildCityInitialsMap, matchCityInitials, CITY_INITIALS_DELAY_MS } from '../../../utils/cityInitials'
 import { getEmptyParcelForm, isParcelFormEmpty } from '../emptyParcelForm'
@@ -109,6 +110,7 @@ export default function NewTab() {
     profile, ticketRef,
     form, setForm, f, loading, error, handleSubmit,
     clients, clientSearch, setClientSearch,
+    ensureCityClients, lookupClients,
     showClientDropdown, setShowClientDropdown,
     showSenderDropdown, setShowSenderDropdown,
     filteredClientSearch, selectExistingClient,
@@ -192,6 +194,35 @@ export default function NewTab() {
   const [showReceiverPopup, setShowReceiverPopup] = useState(false)
   const [senderSearch, setSenderSearch] = useState('')
   const [receiverSearch, setReceiverSearch] = useState('')
+
+  // 🏙️ Ville de destination choisie : ses clients sont chargés (une fois, temps réel) — fenêtre F1 / F2
+  // et recherche du destinataire existant à la création comme avec l'ancienne liste complète.
+  useEffect(() => {
+    const city = form.receiverCity
+    if (!city || !ensureCityClients) return
+    const t = setTimeout(() => ensureCityClients(city), 400)
+    return () => clearTimeout(t)
+  }, [form.receiverCity, ensureCityClients])
+
+  // 🔎 Fenêtres F1 / F2 : clients des AUTRES villes cherchés à la demande (code, téléphone, début du nom)
+  // 300 ms après la dernière frappe — les clients chargés (agence, villes choisies, clients à code)
+  // restent filtrés instantanément.
+  const [lookupRows, setLookupRows] = useState<Client[]>([])
+  const popupSearch = (showReceiverPopup ? receiverSearch : showSenderPopup ? senderSearch : '').trim()
+  useEffect(() => {
+    if (popupSearch.length < 2 || !lookupClients) { setLookupRows([]); return }
+    let cancelled = false
+    const t = setTimeout(() => {
+      lookupClients(popupSearch)
+        .then((rows: Client[]) => { if (!cancelled) setLookupRows(rows) })
+        .catch((err: any) => console.warn('Recherche clients :', err))
+    }, 300)
+    return () => { cancelled = true; clearTimeout(t) }
+  }, [popupSearch, lookupClients])
+  const popupClients = useMemo(
+    () => (lookupRows.length ? mergeClientLists(clients, lookupRows) : clients) as Client[],
+    [clients, lookupRows]
+  )
 
   // Fonction pour créer un nouveau colis
   const handleNewParcel = () => {
@@ -590,20 +621,20 @@ export default function NewTab() {
   const filteredSenderClients = useMemo(() => {
     if (!showSenderPopup) return [] as Client[]
     const searchLower = senderSearch.toLowerCase()
-    return clients.filter((c: Client) =>
+    return popupClients.filter((c: Client) =>
       c.isExpediteur &&
       (normIncludes(c.name, searchLower) ||
        (c.code && normIncludes(c.code, searchLower))))
-  }, [showSenderPopup, clients, senderSearch])
+  }, [showSenderPopup, popupClients, senderSearch])
 
   const filteredReceiverClients = useMemo(() => {
     if (!showReceiverPopup) return [] as Client[]
     const searchLower = receiverSearch.toLowerCase()
-    return clients.filter((c: Client) =>
+    return popupClients.filter((c: Client) =>
       c.isDestinataire &&
       (normIncludes(c.name, searchLower) ||
        (c.code && normIncludes(c.code, searchLower))))
-  }, [showReceiverPopup, clients, receiverSearch])
+  }, [showReceiverPopup, popupClients, receiverSearch])
 
   // Sélectionner un client expéditeur depuis la popup
   const selectSenderClient = (client: Client) => {

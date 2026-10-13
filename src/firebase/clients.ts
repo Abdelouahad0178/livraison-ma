@@ -21,6 +21,7 @@ import { db } from './db'
 import { daysAgoTimestamp } from './firestoreUtils'
 import { normIncludes } from '../utils/normText'
 import { normalizeServiceType, codPaymentTypeForService } from './constants'
+import { mergeClientLists, clientNameVariants, phoneDigits } from '../utils/clientLookup'
 
 const CLIENTS_PAGE_LIMIT = 500
 type FirestoreRow = Record<string, any> & { id: string; createdAt?: any }
@@ -181,6 +182,49 @@ export function subscribeClients(callback: (rows: FirestoreRow[]) => void, onErr
   return onSnapshot(q, snap => {
     callback(snap.docs.map(rowFromDoc))
   }, onError)
+}
+
+/**
+ * 🏙️ Clients d'UNE ville (temps réel) — onglet « Nouvelle expédition » : clients de l'agence, puis ceux d'une
+ * ville de destination choisie (au lieu des ≈ 14 000 clients de toutes les agences, ~10 Mo, 15 s et plus).
+ * fromCache : premier résultat servi par le cache local (peut être incomplet) — la ville n'est considérée
+ * « complète » (recherche de destinataire existant en mémoire) qu'une fois confirmée par le serveur.
+ */
+export function subscribeClientsByCity(
+  city: string,
+  callback: (rows: FirestoreRow[], fromCache: boolean) => void,
+  onError: (err?: any) => void = () => {},
+) {
+  const q = query(collection(db, 'clients'), where('city', '==', city))
+  let last: boolean | null = null
+  return onSnapshot(q, { includeMetadataChanges: true }, snap => {
+    // Métadonnées seules (écriture confirmée…) et même état cache / serveur : rien de nouveau
+    if (last !== null && snap.docChanges().length === 0 && snap.metadata.fromCache === last) return
+    last = snap.metadata.fromCache
+    callback(snap.docs.map(rowFromDoc), snap.metadata.fromCache)
+  }, onError)
+}
+
+/**
+ * 🔎 Recherche PONCTUELLE de clients de toutes les villes (fenêtres de choix F1 / F2) : code exact,
+ * téléphone exact, ou début du nom (variantes de casse). Quelques dizaines de fiches au plus.
+ */
+export async function lookupClients(term: string, max = 30): Promise<FirestoreRow[]> {
+  const t = term.trim()
+  if (t.length < 2) return []
+  const col = collection(db, 'clients')
+  const queries = [query(col, where('code', '==', t.toUpperCase()), limit(5))]
+  const digits = phoneDigits(t)
+  if (digits) {
+    queries.push(query(col, where('tel', '==', digits), limit(10)))
+    if (digits !== t) queries.push(query(col, where('tel', '==', t), limit(10)))
+  }
+  for (const v of clientNameVariants(t)) {
+    queries.push(query(col, where('name', '>=', v), where('name', '<=', v + ''), limit(max)))
+  }
+  const results = await Promise.allSettled(queries.map(q => getDocs(q)))
+  const lists = results.map(r => (r.status === 'fulfilled' ? r.value.docs.map(rowFromDoc) : []))
+  return mergeClientLists(...lists)
 }
 
 /**

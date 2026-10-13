@@ -5,9 +5,11 @@ import { Building2, TrendingUp, Package, Printer, Filter, X, Calendar, ChevronDo
 import { CITIES } from '../../../firebase/constants'
 import { collection, query, orderBy, onSnapshot, where, Timestamp } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
+import { getLiteDaySliceCached, PARCELS_LITE_COLLECTION } from '../../../firebase/parcels'
+import { ALL_CITIES } from '../../../utils/liteDayCache'
 import { getOperationalDayRange, getCurrentOperationalDay } from '../../../config/operationalDay'
 import { useOperationalDay } from '../../../hooks/useOperationalDay'
-import { buildDaySlices } from '../../../utils/daySlices'
+import { buildDaySlices, opDayOf } from '../../../utils/daySlices'
 import { parcelDate } from '../../../utils/dateFilter'
 import { agencyPortAmounts, isInAgencyScope, isSentFromAgency, isReceivedInAgency, type AgencyDirection } from '../../../utils/billingAgency'
 import AdminCaisseView from '../components/AdminCaisseView'
@@ -30,6 +32,9 @@ const DEFAULT_DAYS = 10
 const MAX_DAYS = 45
 // Journées en attente de la 1re réponse serveur en même temps (écoutes temps réel jour par jour)
 const SLICE_CONCURRENCY = 12
+// Journées passées : taille des pages de lecture (parcelsLite) et rafraîchissement (rattrapage) tant que l'onglet est ouvert
+const PAST_PAGE_SIZE = 2000
+const PAST_REFRESH_MS = 60 * 1000
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const pad2 = (n: number) => String(n).padStart(2, '0')
@@ -131,10 +136,15 @@ export default function AdminPortAgenciesTab({
   const periodEndMs = period.end.getTime()
 
   // États de chargement
-  // ⚡ TEMPS RÉEL sur TOUTE la période : une écoute onSnapshot par journée d'opération (mêmes
-  // bornes que l'ancienne lecture ponctuelle jour par jour). Toute modification faite ailleurs
-  // (Chef d'agence, Agent pro, livreurs… : port encaissé, statut, prix, affectation) sur un colis
-  // de la période — y compris des journées passées — est reflétée sans recharger la page.
+  // ⚡ Journée d'opération EN COURS : écoute temps réel (onSnapshot). Journées PASSÉES : lues UNE fois
+  // en version allégée (parcelsLite) via la MÉMOIRE DES JOURNÉES (firebase/parcels getLiteDaySliceCached,
+  // clé « toutes villes ») — réutilisées d'une période à l'autre, au retour sur l'onglet et même après
+  // rechargement de la page (IndexedDB), après rattrapage des expéditions modifiées. Elles sont
+  // rafraîchies chaque minute tant que l'onglet est ouvert (rattrapage, quasi gratuit) : une
+  // modification faite ailleurs sur une journée passée apparaît sans recharger la page.
+  // ⚠️ Avant : une écoute temps réel sur les expéditions COMPLÈTES de toutes les villes pour CHAQUE
+  // journée (≈ 75 Mo pour « Ce mois »), relancée à chaque changement de période.
+  // Champs lus (cet onglet, utils/billingAgency) : tous présents dans parcelsLite → mêmes montants.
   const [periodParcels, setPeriodParcels] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   // ⚠️ Avec le cache local Firestore, un onSnapshot renvoie d'abord un résultat depuis le CACHE
@@ -154,13 +164,14 @@ export default function AdminPortAgenciesTab({
   }, [directionFilter])
 
   // ⚡ CHARGEMENT de la période : mêmes requêtes que la page Chef d'agence (createdAt dans
-  // [début, fin] exacts de la période, archivés inclus), découpées par journée d'opération.
-  // Chaque journée est une écoute TEMPS RÉEL (onSnapshot, includeMetadataChanges) :
-  // - chargement initial : au plus SLICE_CONCURRENCY journées en attente du serveur à la fois
-  //   (la suivante démarre dès qu'une journée est confirmée par le serveur) ;
+  // [début, fin] exacts de la période, archivés inclus), découpées par journée d'opération :
+  // - journée(s) en cours ou à venir : écoute TEMPS RÉEL (onSnapshot, includeMetadataChanges) ;
+  // - journées passées : lecture unique via la mémoire des journées (réutilisée), relancée 2 fois
+  //   en cas d'échec réseau ;
+  // - chargement initial : au plus SLICE_CONCURRENCY journées en attente à la fois ;
   // - « chargé » = TOUTES les journées confirmées par le serveur (pas seulement le cache local) ;
-  // - ensuite, chaque modification (n'importe quelle page) met à jour les totaux (regroupées
-  //   toutes les ~250 ms, en transition React pour ne pas bloquer les clics).
+  // - ensuite, chaque modification met à jour les totaux (regroupées toutes les ~250 ms, en
+  //   transition React pour ne pas bloquer les clics).
   // À CHAQUE changement de période : écoutes coupées, données vidées, progression affichée, aucune
   // donnée de l'ancienne période ne peut revenir (génération).
   useEffect(() => {
@@ -178,6 +189,7 @@ export default function AdminPortAgenciesTab({
     // Tranches contiguës (union = exactement [start, end]), de la plus récente à la plus ancienne :
     // la journée en cours (si incluse) démarre en premier.
     const slices = buildDaySlices(start, end)
+    const todayOp = opDayOf(new Date()) // journées antérieures : mémoire ; en cours / à venir : temps réel
     const sliceDocs: any[][] = slices.map(() => [])
     const confirmed: boolean[] = slices.map(() => false)
     const fromCacheFlags: boolean[] = slices.map(() => true)
@@ -220,10 +232,39 @@ export default function AdminPortAgenciesTab({
       }
     }
 
+    // 🧠 Journée passée : mémoire des journées (lecture réseau seulement si la journée n'y est pas)
+    const readPastSlice = async (i: number) => {
+      const s = slices[i]
+      for (let attempt = 0; ; attempt++) {
+        try { return await getLiteDaySliceCached(ALL_CITIES, 'createdAt', s, PAST_PAGE_SIZE) } catch (err) {
+          if (attempt >= 2 || gen !== loadGenRef.current) throw err
+          await new Promise(r => setTimeout(r, 3000))
+        }
+      }
+    }
+
     function startSlice(i: number) {
       const s = slices[i]
+      if (s.day < todayOp) {
+        readPastSlice(i).then(docs => {
+          if (gen !== loadGenRef.current) return
+          sliceDocs[i] = docs
+          fromCacheFlags[i] = false
+          setSyncing(fromCacheFlags.some((f, k) => f && k < started))
+          setLoadedCount(total())
+          markConfirmed(i)
+        }).catch(err => {
+          console.error(`Port par Agence - erreur de lecture (${s.label}):`, err)
+          if (gen !== loadGenRef.current) return
+          setLoadError(err?.message || 'Erreur de chargement')
+          fromCacheFlags[i] = false
+          setSyncing(fromCacheFlags.some((f, k) => f && k < started))
+          markConfirmed(i)
+        })
+        return
+      }
       const q = query(
-        collection(db, 'parcels'),
+        collection(db, PARCELS_LITE_COLLECTION),
         where('createdAt', '>=', Timestamp.fromDate(s.start)),
         where('createdAt', s.endInclusive ? '<=' : '<', Timestamp.fromDate(s.end)),
         orderBy('createdAt', 'desc')
@@ -264,9 +305,34 @@ export default function AdminPortAgenciesTab({
     setDayProgress({ done: 0, total: slices.length, label: slices[0].label })
     startNext()
 
+    // 🔄 Journées passées rafraîchies chaque minute (page visible, chargement terminé) : rattrapage des
+    // expéditions modifiées via la mémoire — seules les journées réellement changées sont republiées.
+    const pastIdx = slices.map((s, i) => (s.day < todayOp ? i : -1)).filter(i => i >= 0)
+    let refreshing = false
+    const refreshTimer = pastIdx.length ? setInterval(async () => {
+      if (!allReady || refreshing || gen !== loadGenRef.current) return
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      refreshing = true
+      try {
+        let changed = false
+        for (const i of pastIdx) {
+          const docs = await getLiteDaySliceCached(ALL_CITIES, 'createdAt', slices[i], PAST_PAGE_SIZE)
+          if (gen !== loadGenRef.current) return
+          const prev = sliceDocs[i]
+          if (docs.length !== prev.length || docs.some((d, k) => d !== prev[k])) { sliceDocs[i] = docs; changed = true }
+        }
+        if (changed) schedulePublish()
+      } catch (err) {
+        console.warn('Port par Agence - rafraîchissement des journées passées impossible', err)
+      } finally {
+        refreshing = false
+      }
+    }, PAST_REFRESH_MS) : undefined
+
     return () => {
       loadGenRef.current += 1 // ignore toute réponse tardive de cette période
       if (publishTimer) clearTimeout(publishTimer)
+      if (refreshTimer) clearInterval(refreshTimer)
       unsubs.forEach((u) => u())
     }
   }, [periodStartMs, periodEndMs])
@@ -385,8 +451,10 @@ export default function AdminPortAgenciesTab({
           stats[destCity].portDuCheque += price
         }
 
-        // 2️⃣ PORTS PAYÉS REÇUS LOCALEMENT : portType = 'port_paye', from this city, portStatus = 'received'
-        if (portType === 'port_paye' && !p.portPayeMethod && portStatus === 'received' && price > 0 && originCity && stats[originCity]) {
+        // 2️⃣ PORTS PAYÉS ENCAISSÉS : portType = 'port_paye', ville d'origine, portStatus = 'collected' (encaissé au guichet
+        // « En gare » ou par le livreur de ramassage, puis remis au chef d'exploitation) ou 'received' (reçu par le chef
+        // d'agence) — même règle que les ports dus collectés ci-dessus. Avant : 'received' seulement → presque toujours 0.
+        if (portType === 'port_paye' && !p.portPayeMethod && (portStatus === 'collected' || portStatus === 'received') && price > 0 && originCity && stats[originCity]) {
           stats[originCity].portPaye += price
         }
       }
@@ -640,7 +708,7 @@ export default function AdminPortAgenciesTab({
                   <p className="text-blue-100 text-xs sm:text-sm mt-1 hidden sm:block">
                     {viewMode === 'theoretical'
                       ? 'Port Payé et En Compte (collecté par expéditeur) · Port Dû (collecté à destination)'
-                      : 'Situation physique de la caisse - Argent réellement collecté'}
+                      : 'Situation caisse · Ports dus collectés (destination) · Ports payés encaissés (origine)'}
                   </p>
                 </div>
               </div>

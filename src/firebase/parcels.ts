@@ -2,7 +2,7 @@
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, getDoc,
   query, where, orderBy, getDocs, getDocsFromServer, onSnapshot, limit, startAfter, getCountFromServer,
-  serverTimestamp, arrayUnion, increment, writeBatch, setDoc, Timestamp, runTransaction, deleteField, documentId
+  serverTimestamp, arrayUnion, increment, writeBatch, setDoc, Timestamp, runTransaction, deleteField, documentId, GeoPoint
 } from 'firebase/firestore'
 import type { Query, DocumentData } from 'firebase/firestore'
 import { db } from './db'
@@ -16,6 +16,13 @@ import { codPartView, isMixedCod } from '../utils/codParts'
 import { codMoneyOnly } from '../utils/moneyFlow'
 import { getOperationalDayString } from '../config/operationalDay'
 import { buildDaySlices, opDayOf, opStart } from '../utils/daySlices'
+import { planLiveEmit } from '../utils/liveThrottle'
+import {
+  ALL_CITIES, liteDayKey, parseLiteDayKey, createdMsOf as createdMs, opDayOfParcel, applyChangedParcels,
+  citiesInCache, dropCityEntries, encodeLiteValue, decodeLiteValue, selectPersistableKeys, shiftDay,
+  LITE_PERSIST_MAX_DAYS, type LiteDayField,
+} from '../utils/liteDayCache'
+import { loadPersistedLiteDays, savePersistedLiteDays, removePersistedLiteDays, type PersistedLiteTag } from './liteDayStore'
 import { addPayment } from './clients'
 import { bumpPresence } from '../services/presenceCounters'
 import { normName, isVisibleInDestinationAgency } from '../utils/billingAgency'
@@ -143,7 +150,9 @@ export async function ensureFullParcels(list: any[]): Promise<any[]> {
 // entière, onglet Nouvelle expédition). Si fournie, la recherche se fait en mémoire (même règle :
 // même tél + même ville, sinon même nom insensible à la casse + même ville) au lieu de relire
 // Firestore — la requête « tous les clients de la ville » téléchargeait 2 à 5 Mo (Agadir : 7 750 docs).
-async function ensureReceiverClientForAgency(parcel: any, parcelId: any, knownClients?: any[] | null) {
+// knownCities (facultatif) : villes pour lesquelles knownClients est COMPLET (Nouvelle expédition : ville de
+// l'agence + villes de destination chargées) — pour une autre ville, recherche Firestore (comme sans liste).
+async function ensureReceiverClientForAgency(parcel: any, parcelId: any, knownClients?: any[] | null, knownCities?: string[] | null) {
   if (parcel.receiverClientId) {
     const receiver = parcel.receiver || {}
     await updateDoc(doc(db, 'clients', parcel.receiverClientId), {
@@ -165,7 +174,7 @@ async function ensureReceiverClientForAgency(parcel: any, parcelId: any, knownCl
   if (!city || (!name && !tel)) return null
 
   let existing: any = null
-  const useKnown = Array.isArray(knownClients) && knownClients.length > 0
+  const useKnown = Array.isArray(knownClients) && knownClients.length > 0 && (!knownCities || knownCities.includes(city))
   if (tel) {
     if (useKnown) {
       existing = knownClients!.find((c: any) => c?.id && c.tel === tel && c.city === city) || null
@@ -238,7 +247,8 @@ async function ensureReceiverClientForAgency(parcel: any, parcelId: any, knownCl
 }
 export async function createParcel(
   data: Record<string, unknown>,
-  opts?: { knownClients?: any[] | null },
+  // knownCities : villes dont knownClients contient TOUS les clients (sinon recherche Firestore pour cette ville)
+  opts?: { knownClients?: any[] | null; knownCities?: string[] | null },
 ): Promise<Record<string, unknown> & { id: string; trackingId: string }> {
   const trackingId    = generateTrackingId()
   // ⚠️ VALIDATION DÉSACTIVÉE : Les saisies des aides agents et portail client ne nécessitent plus de validation par le chef
@@ -401,7 +411,7 @@ export async function createParcel(
   }
 
   // NOUVELLE POLITIQUE : Toujours créer le client destinataire (pas d'attente de validation)
-  ensureReceiverClientForAgency(parcel, ref.id, opts?.knownClients)
+  ensureReceiverClientForAgency(parcel, ref.id, opts?.knownClients, opts?.knownCities)
     .then(receiverClientId => (receiverClientId ? updateDoc(ref, { receiverClientId }) : undefined))
     .catch((err: any) => {
       if (err?.code !== 'permission-denied') {
@@ -619,6 +629,29 @@ export function parcelSearchFields(sender?: any, receiver?: any): Record<string,
  * et modal de confirmation après saisie). Ne contient QUE les champs réellement modifiés,
  * afin de rester dans la liste autorisée par firestore.rules (parcelBonEditFields).
  */
+/**
+ * 💵 Changement de type de port avec un encaissement cohérent, comme à la création (createParcel) : une expédition
+ * corrigée EN port payé est encaissée au guichet ; corrigée HORS port payé, l'encaissement est retiré tant que
+ * l'argent n'a pas été remis au chef d'exploitation. Avant : 1061664 (corrigée en port payé) restait sans
+ * portStatus et sortait de la caisse (écart de 20 DH Admin / Marrakech).
+ */
+export function portTypeChangeFields(parcel: any, nextType: string, modifier?: { uid?: string | null, name?: string }): Record<string, any> {
+  const out: Record<string, any> = { portType: nextType }
+  const collected = parcel.portStatus === 'collected' || parcel.portStatus === 'received'
+  if (nextType === 'port_paye' && !collected && !parcel.portPayeMethod) {
+    out.portStatus = 'collected'
+    out.portCollectedAt = new Date().toISOString()
+    out.portCollectedBy = modifier?.name || 'Agent'
+    out.portCollectedById = modifier?.uid || null
+  } else if (parcel.portType === 'port_paye' && nextType !== 'port_paye' && parcel.portStatus === 'collected' && !parcel.portPayeExpReceivedAt) {
+    out.portStatus = null
+    out.portCollectedAt = null
+    out.portCollectedBy = null
+    out.portCollectedById = null
+  }
+  return out
+}
+
 export function buildParcelCorrectionPatch(
   parcel: any,
   next: {
@@ -714,7 +747,9 @@ export function buildParcelCorrectionPatch(
     if (parcel.codStatus === 'pending') patch.codStatus = null
   }
 
-  if (next.portType !== undefined && next.portType && next.portType !== (parcel.portType || '')) patch.portType = next.portType
+  if (next.portType !== undefined && next.portType && next.portType !== (parcel.portType || '')) {
+    Object.assign(patch, portTypeChangeFields(parcel, next.portType, modifier))
+  }
   if (next.fragile !== undefined && !!next.fragile !== !!parcel.fragile) patch.fragile = !!next.fragile
   if (next.notes !== undefined && txt(next.notes) !== txt(parcel.notes)) patch.notes = txt(next.notes)
 
@@ -1199,6 +1234,7 @@ export function subscribeAllParcelsWithDateFilter(
     dateFrom?: Date | null  // Date de début (inclusive)
     dateTo?: Date | null    // Date de fin (inclusive)
     lite?: boolean          // 🪶 lire parcelsLite (version allégée) au lieu de parcels
+    whereIn?: { field: string; values: string[] } | null // filtre serveur supplémentaire (ex. COD chèque / traite)
   } = {}
 ) {
   const {
@@ -1206,10 +1242,12 @@ export function subscribeAllParcelsWithDateFilter(
     dateFrom = null,
     dateTo = null,
     lite = false,
+    whereIn = null,
   } = options
 
   // Construction de la requête avec filtres de date
   const queryConstraints: any[] = []
+  if (whereIn) queryConstraints.push(where(whereIn.field, 'in', whereIn.values))
 
   // ⚡ FILTRE DE DATE PRIORITAIRE: appliqué au niveau Firestore, pas en mémoire
   if (dateFrom) {
@@ -1249,6 +1287,7 @@ export async function loadMoreParcelsWithDateFilter(
     dateFrom?: Date | null
     dateTo?: Date | null
     lite?: boolean // 🪶 parcelsLite — doit correspondre à la collection du curseur lastDoc
+    whereIn?: { field: string; values: string[] } | null // même filtre que la page temps réel du curseur
   } = {}
 ) {
   const {
@@ -1256,6 +1295,7 @@ export async function loadMoreParcelsWithDateFilter(
     dateFrom = null,
     dateTo = null,
     lite = false,
+    whereIn = null,
   } = options
 
   if (!lastDoc) {
@@ -1264,6 +1304,7 @@ export async function loadMoreParcelsWithDateFilter(
 
   try {
     const queryConstraints: any[] = []
+    if (whereIn) queryConstraints.push(where(whereIn.field, 'in', whereIn.values))
 
     if (dateFrom) {
       queryConstraints.push(where('createdAt', '>=', Timestamp.fromDate(dateFrom)))
@@ -1630,6 +1671,8 @@ export function subscribeAgencyParcels(
   // que le serveur, Firestore ne redéclenche PAS de callback lors de la confirmation serveur
   // (snapshot "identique" ignoré par défaut), et fromCache resterait bloqué à true à tort.
   const unsub1 = onSnapshot(q1, { includeMetadataChanges: true }, snap => {
+    // ⚡ Métadonnées seules (écriture locale confirmée) et même état cache/serveur : rien à refaire
+    if (snap.docChanges().length === 0 && snap.metadata.fromCache === fromCache1 && lastCreatedDoc !== null) return
     // 🗄️ Filtrer les archivés côté client
     created = (snap.docs
       .map(d => ({ id: d.id, ...d.data() })) as any[])
@@ -1640,6 +1683,7 @@ export function subscribeAgencyParcels(
     merge()
   }, onError)
   const unsub2 = onSnapshot(q2, { includeMetadataChanges: true }, snap => {
+    if (snap.docChanges().length === 0 && snap.metadata.fromCache === fromCache2 && lastArrivedDoc !== null) return
     // 🗄️ Filtrer les archivés côté client
     arrived = (snap.docs
       .map(d => ({ id: d.id, ...d.data() })) as any[])
@@ -1701,7 +1745,9 @@ export function subscribeAgencyParcelsFull(
   let pastDone = pastSlices.length === 0
   const unsubs: (() => void)[] = []
 
+  let settled = false // chargement initial livré (complet) : ensuite, au plus une mise à jour par seconde
   const emitNow = () => {
+    timer = undefined
     if (stopped) return
     lastEmit = Date.now()
     const map = new Map<string, any>()
@@ -1709,14 +1755,19 @@ export function subscribeAgencyParcelsFull(
     liveDocs.forEach(list => list.forEach(p => map.set(p.id, p)))
     const all = [...map.values()].filter(p => includeArchived || !p.isArchived)
     const liveOk = [...liveServer.values()].every(Boolean) && liveServer.size === liveSlices.length * FIELDS.length
+    if (liveOk && pastDone) settled = true
     onData(sortByCreatedDesc(all), { loaded: all.length, complete: liveOk && pastDone, fromCache: !liveOk })
   }
-  // Au plus une mise à jour / 800 ms pendant la lecture des jours passés (chaque mise à jour
-  // relance les calculs de la page), immédiate (60 ms) pour le temps réel et à la fin.
+  // Chargement initial : au plus une mise à jour / 800 ms pendant la lecture des jours passés
+  // (chaque mise à jour relance les calculs de la page), immédiate (60 ms) pour le temps réel et à la fin.
+  // ⚡ Ensuite (settled) : au plus UNE mise à jour par seconde, la dernière toujours livrée
+  // (utils/liveThrottle) — avant, chaque modification d'une expédition relançait tous les calculs
+  // de la page 60 ms après, et deux fois par écriture locale.
   const emit = (urgent = false) => {
+    const plan = planLiveEmit({ settled, timerPending: timer !== undefined, lastEmit, now: Date.now(), urgent })
+    if (plan.action === 'keep') return
     clearTimeout(timer)
-    const wait = urgent ? 60 : Math.max(60, 800 - (Date.now() - lastEmit))
-    timer = setTimeout(emitNow, wait)
+    timer = setTimeout(emitNow, plan.delay)
   }
 
   liveSlices.forEach(sl => FIELDS.forEach(field => {
@@ -1729,8 +1780,13 @@ export function subscribeAgencyParcelsFull(
       orderBy('createdAt', 'desc'))
     unsubs.push(onSnapshot(q, { includeMetadataChanges: true }, snap => {
       if (stopped) return
+      const server = !snap.metadata.fromCache
+      // ⚡ Rien de changé (ex. écriture locale confirmée par le serveur : seul hasPendingWrites
+      // bascule) → pas de nouvelle liste ni de recalcul. docChanges() ignore les changements de
+      // métadonnées seules ; l'état cache/serveur, lui, est vérifié à part (il compte pour `complete`).
+      if (liveDocs.has(key) && snap.docChanges().length === 0 && liveServer.get(key) === server) return
       liveDocs.set(key, snap.docs.map(d => ({ id: d.id, ...d.data() })))
-      liveServer.set(key, !snap.metadata.fromCache)
+      liveServer.set(key, server)
       emit(true)
     }, err => { if (!stopped) onError(err) }))
   }))
@@ -1772,25 +1828,57 @@ export function subscribeAgencyParcelsFull(
 
 // 🧠 MÉMOIRE DES JOURNÉES PASSÉES (parcelsLite) — une période déjà chargée, puis une période incluse ou qui la
 // recoupe : les journées déjà lues ne sont PAS relues. Clé : ville|champ|journée d'opération (journée entière,
-// découpée ensuite aux bornes demandées), partagée par toutes les pages (Caisse Agence, Collecte du soir, Expéditions).
-// Exactitude : avant chaque réutilisation, UNE requête relit seulement les expéditions modifiées depuis la dernière
-// synchronisation (parcelsLite.liteUpdatedAt, posé par syncParcelLite à chaque changement) et les replace dans
-// leur journée (y compris un changement de ville). Trop de changements ou erreur → mémoire vidée (relecture normale).
-// Vidée au rechargement de la page. Une expédition SUPPRIMÉE reste visible jusqu'au rechargement (cas rare).
+// découpée ensuite aux bornes demandées), partagée par toutes les pages (Caisse Agence, Collecte du soir, Expéditions),
+// plus « *|createdAt|journée » = TOUTES les villes (Admin « Port par agence »). Logique pure : utils/liteDayCache.
+// Exactitude, avant chaque réutilisation :
+// 1) RATTRAPAGE : seules les expéditions modifiées depuis la dernière synchronisation (parcelsLite.liteUpdatedAt,
+//    posé par syncParcelLite à chaque changement) sont relues et replacées dans leur journée (y compris un
+//    changement de ville ou un retour). Requêtes limitées aux VILLES présentes en mémoire (départ / arrivée) ;
+//    global seulement si des journées « toutes villes » sont gardées. Trop de changements pour une ville → seules
+//    les journées de CETTE ville sont oubliées (avant : toute la mémoire, ≈ toutes les 2-3 h aux heures chargées).
+// 2) COMPTAGE serveur (getCountFromServer, 1 lecture par 1 000 entrées) d'une journée réutilisée plus de 10 min
+//    après sa lecture / dernière vérification : une expédition sortie de la journée sans passer par le
+//    rattrapage (supprimée, ou partie vers une ville absente de la mémoire) → journée relue.
+// 💾 Les journées passées sont conservées entre deux chargements (IndexedDB, firebase/liteDayStore) : au
+// démarrage elles sont rechargées, rattrapées et vérifiées (comptage) avant toute réutilisation. Jamais la
+// journée en cours. Tout échec IndexedDB → lecture réseau normale.
 const LITE_DAY_CACHE = new Map<string, Map<string, any>>()
-const LITE_DAY_CACHE_MAX = 600 // journées × champs × villes gardées au plus (les plus anciennes sortent)
+const LITE_DAY_CACHE_MAX = 900 // journées × champs × villes gardées au plus (les plus anciennes sortent)
 const LITE_SYNC_MARGIN_MS = 10 * 60 * 1000 // marge (décalage d'horloge, délai de la Cloud Function)
 const LITE_DELTA_MAX = 2000
+const LITE_VALIDATE_TTL_MS = 10 * 60 * 1000
+const LITE_HYDRATE_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000 // mémoire enregistrée plus ancienne : rattrapage trop lourd → ignorée
+const LITE_VALIDATED = new Map<string, number>() // clé → dernière lecture / vérification (0 : à vérifier)
 let liteSyncedAt = 0
 let liteSyncing: Promise<void> | null = null
 let liteLastSyncRun = 0 // une seule synchronisation par chargement (les journées d'une période arrivent ensemble)
-const liteDayKey = (city: string, field: string, day: string) => `${city}|${field}|${day}`
-const createdMs = (p: any): number => {
-  const v = p?.createdAt
-  if (!v) return NaN
-  if (typeof v.toMillis === 'function') return v.toMillis()
-  if (typeof v.seconds === 'number') return v.seconds * 1000
-  return new Date(v).getTime()
+// false : index parcelsLite (ville, liteUpdatedAt) pas encore déployés → rattrapage global (ancien fonctionnement)
+let litePerCityCatchUp = true
+
+type LiteDaySlice = { start: Date; end: Date; endInclusive: boolean; day: string }
+
+// ── Persistance (IndexedDB) : clés à réécrire / à effacer au prochain enregistrement
+const litePersistDirty = new Set<string>()
+const litePersistRemoved = new Set<string>()
+let litePersistTimer: ReturnType<typeof setTimeout> | undefined
+let liteHydrating: Promise<void> | null = null
+// Validité enregistrée (onglet + synchronisation) correspondant à la version EN MÉMOIRE d'une journée
+const litePersistTag = new Map<string, PersistedLiteTag>()
+const LITE_SESSION = Math.random().toString(36).slice(2) + Date.now().toString(36) // cet onglet
+
+function forgetLiteKeys(keys: string[]) {
+  for (const k of keys) { LITE_VALIDATED.delete(k); litePersistDirty.delete(k); litePersistRemoved.add(k) }
+}
+function dropLiteCity(city: string) { forgetLiteKeys(dropCityEntries(LITE_DAY_CACHE, city)) }
+function dropLiteKey(key: string) { if (LITE_DAY_CACHE.delete(key)) forgetLiteKeys([key]) }
+
+/** Expéditions modifiées depuis `since` (toutes villes, ou d'une ville au départ / à l'arrivée). */
+async function readLiteChanges(field: 'originCity' | 'destinationCity' | null, city: string | null, since: number) {
+  const snap = await getDocsServerFirst(query(collection(db, PARCELS_LITE_COLLECTION),
+    ...(field ? [where(field, '==', city)] : []),
+    where('liteUpdatedAt', '>', Timestamp.fromMillis(since)),
+    orderBy('liteUpdatedAt'), limit(LITE_DELTA_MAX)))
+  return { docs: snap.docs.map(d => ({ id: d.id, ...d.data() } as any)), overflow: snap.size >= LITE_DELTA_MAX }
 }
 
 function syncLiteDayCache(): Promise<void> {
@@ -1799,41 +1887,178 @@ function syncLiteDayCache(): Promise<void> {
   if (Date.now() - liteLastSyncRun < 5000) return Promise.resolve()
   liteSyncing = (async () => {
     const startedAt = Date.now()
+    const since = liteSyncedAt - LITE_SYNC_MARGIN_MS
     try {
-      const snap = await getDocsServerFirst(query(collection(db, 'parcelsLite'),
-        where('liteUpdatedAt', '>', Timestamp.fromMillis(liteSyncedAt - LITE_SYNC_MARGIN_MS)),
-        orderBy('liteUpdatedAt'), limit(LITE_DELTA_MAX)))
-      if (snap.size >= LITE_DELTA_MAX) { LITE_DAY_CACHE.clear(); return }
-      const changed = snap.docs.map(d => ({ id: d.id, ...d.data() } as any))
-      if (changed.length) {
-        for (const [key, day] of LITE_DAY_CACHE) {
-          const [city, field, dayKey] = key.split('|')
-          for (const p of changed) {
-            day.delete(p.id)
-            const t = createdMs(p)
-            if (p[field] === city && !isNaN(t) && opDayOf(new Date(t)) === dayKey) day.set(p.id, p)
-          }
-        }
+      const { cities, hasAllCities } = citiesInCache(LITE_DAY_CACHE.keys())
+      const changed: any[] = []
+      // Rattrapage global (toutes villes) : vrai = complet, faux = trop de changements
+      const globalCatchUp = async () => {
+        const r = await readLiteChanges(null, null, since)
+        if (r.overflow) return false
+        for (const p of r.docs) changed.push(p)
+        return true
       }
+      let globalDone = false
+      if (hasAllCities) {
+        try { globalDone = await globalCatchUp() } catch (err) { console.warn('Mémoire des journées : rattrapage global impossible', err) }
+        // Journées « toutes villes » non rattrapées → oubliées ; les journées par ville sont rattrapées ci-dessous
+        if (!globalDone) dropLiteCity(ALL_CITIES)
+      }
+      if (!globalDone && cities.length) {
+        const lost = new Set<string>()
+        if (litePerCityCatchUp) {
+          await Promise.all(cities.map(async city => {
+            try {
+              const [o, d] = await Promise.all([readLiteChanges('originCity', city, since), readLiteChanges('destinationCity', city, since)])
+              for (const p of o.docs) changed.push(p)
+              for (const p of d.docs) changed.push(p)
+              if (o.overflow || d.overflow) lost.add(city)
+            } catch (err: any) {
+              if (err?.code === 'failed-precondition') litePerCityCatchUp = false // index absent
+              else console.warn(`Mémoire des journées : rattrapage ${city} impossible`, err)
+              lost.add(city)
+            }
+          }))
+        }
+        if (!litePerCityCatchUp) {
+          // Index par ville pas encore déployés : rattrapage global (comme avant)
+          changed.length = 0
+          lost.clear()
+          let ok = false
+          try { ok = await globalCatchUp() } catch (err) { console.warn('Mémoire des journées : rattrapage global impossible', err) }
+          if (!ok) cities.forEach(c => lost.add(c))
+        }
+        lost.forEach(dropLiteCity)
+      }
+      applyChangedParcels(LITE_DAY_CACHE, changed).forEach(k => litePersistDirty.add(k))
       liteSyncedAt = startedAt
       liteLastSyncRun = Date.now()
     } catch (err) {
       console.warn('Mémoire des journées : synchronisation impossible, relecture complète', err)
+      forgetLiteKeys([...LITE_DAY_CACHE.keys()])
       LITE_DAY_CACHE.clear()
     } finally {
       liteSyncing = null
+      scheduleLitePersist()
     }
   })()
   return liteSyncing
 }
 
-/** Tranche passée lue en parcelsLite, via la mémoire des journées (journée entière lue une fois, puis découpée). */
+/** Le nombre d'expéditions de la journée en mémoire est-il celui du serveur ? (comptage, sans téléchargement) */
+async function liteDayCountMatches(key: string, size: number): Promise<boolean> {
+  const { city, field, day } = parseLiteDayKey(key)
+  const dStart = opStart(day)
+  const dEnd = new Date(dStart); dEnd.setDate(dEnd.getDate() + 1)
+  const snap = await getCountFromServer(query(collection(db, PARCELS_LITE_COLLECTION),
+    ...(city === ALL_CITIES ? [] : [where(field, '==', city)]),
+    where('createdAt', '>=', Timestamp.fromDate(dStart)),
+    where('createdAt', '<', Timestamp.fromDate(dEnd)),
+    orderBy('createdAt', 'desc')))
+  return snap.data().count === size
+}
+
+/** Recharge (une fois par chargement de page) les journées enregistrées dans IndexedDB. */
+function hydrateLiteDayCache(): Promise<void> {
+  if (liteHydrating) return liteHydrating
+  liteHydrating = (async () => {
+    const saved = await loadPersistedLiteDays()
+    if (!saved || !saved.length) return
+    const today = opDayOf(new Date())
+    const oldest = shiftDay(today, -LITE_PERSIST_MAX_DAYS)
+    const now = Date.now()
+    const dec = { timestamp: (s: number, ns: number) => new Timestamp(s, ns), geoPoint: (a: number, b: number) => new GeoPoint(a, b) }
+    const stale: string[] = []
+    let minSynced = Infinity
+    for (const row of saved) {
+      const { day } = parseLiteDayKey(row.key)
+      // Journée en cours / trop ancienne, ou rattrapage trop lourd (validité de plus de 3 jours) → effacée
+      if (day >= today || day < oldest || now - row.syncedAt > LITE_HYDRATE_MAX_AGE_MS) { stale.push(row.key); continue }
+      if (LITE_DAY_CACHE.has(row.key)) continue
+      const m = new Map<string, any>()
+      for (const enc of row.docs) { const p = decodeLiteValue(enc, dec); if (p?.id) m.set(p.id, p) }
+      LITE_DAY_CACHE.set(row.key, m)
+      LITE_VALIDATED.set(row.key, 0) // vérifiée (comptage serveur) avant la 1re réutilisation
+      litePersistTag.set(row.key, { session: row.session, syncedAt: row.syncedAt })
+      minSynced = Math.min(minSynced, row.syncedAt)
+    }
+    // Rattrapage depuis la plus ancienne validité rechargée (couvre toutes les journées)
+    if (minSynced !== Infinity) {
+      liteSyncedAt = liteSyncedAt ? Math.min(liteSyncedAt, minSynced) : minSynced
+      liteLastSyncRun = 0
+    }
+    if (stale.length) await removePersistedLiteDays(stale)
+  })().catch(err => { console.warn('Mémoire des journées : rechargement IndexedDB impossible', err) })
+  return liteHydrating
+}
+
+function scheduleLitePersist() {
+  if (litePersistTimer || !LITE_DAY_CACHE.size && !litePersistRemoved.size) return
+  litePersistTimer = setTimeout(() => { persistLiteDayCache().catch(() => {}) }, 5000)
+}
+
+/**
+ * Enregistre les journées passées (au plus 45 jours / 120 000 expéditions, jamais la journée en cours) :
+ * journées modifiées réécrites, autres journées seulement « validées » à la dernière synchronisation.
+ */
+async function persistLiteDayCache() {
+  litePersistTimer = undefined
+  if (liteSyncing) await liteSyncing.catch(() => {})
+  const syncedAt = liteSyncedAt
+  if (!syncedAt) return
+  const today = opDayOf(new Date())
+  const keep = new Set(selectPersistableKeys([...LITE_DAY_CACHE].map(([k, m]) => [k, m.size] as [string, number]), today))
+  const dirty = new Set(litePersistDirty)
+  const removed = new Set(litePersistRemoved)
+  litePersistDirty.clear()
+  litePersistRemoved.clear()
+  const requeue = () => { dirty.forEach(k => litePersistDirty.add(k)); removed.forEach(k => litePersistRemoved.add(k)) }
+  const put: { key: string; docs: any[] }[] = []
+  const refresh: { key: string; tag: PersistedLiteTag }[] = []
+  for (const key of keep) {
+    const tag = litePersistTag.get(key)
+    if (!dirty.has(key) && tag) { refresh.push({ key, tag }); continue }
+    const m = LITE_DAY_CACHE.get(key)
+    if (!m) continue
+    put.push({ key, docs: [...m.values()].map(encodeLiteValue) })
+    await new Promise(r => setTimeout(r, 0)) // une journée à la fois : la page reste réactive
+  }
+  // Journées oubliées, ou gardées en mémoire mais hors limites (taille, ancienneté) : effacées d'IndexedDB
+  const remove = [...new Set([...removed, ...[...LITE_DAY_CACHE.keys()].filter(k => !keep.has(k) && litePersistTag.has(k))])]
+  // Mémoire modifiée pendant la préparation (synchronisation) : on recommence avec l'état à jour
+  if (syncedAt !== liteSyncedAt) { requeue(); scheduleLitePersist(); return }
+  if (!put.length && !refresh.length && !remove.length) return
+  const refreshed = await savePersistedLiteDays(LITE_SESSION, syncedAt, put, refresh, remove)
+  if (!refreshed) { requeue(); return }
+  const tag = { session: LITE_SESSION, syncedAt }
+  for (const r of put) if (!litePersistDirty.has(r.key)) litePersistTag.set(r.key, tag)
+  const ok = new Set(refreshed)
+  for (const r of refresh) {
+    if (ok.has(r.key)) litePersistTag.set(r.key, tag)
+    else litePersistTag.delete(r.key) // réécrite par un autre onglet : réécrite par celui-ci au prochain enregistrement
+  }
+  for (const k of remove) litePersistTag.delete(k)
+}
+
+/**
+ * Tranche passée lue en parcelsLite, via la mémoire des journées (journée entière lue une fois, puis découpée).
+ * city = ALL_CITIES ('*') avec field 'createdAt' : toutes les villes (Admin « Port par agence »).
+ */
 export async function getLiteDaySliceCached(
-  city: string, field: 'originCity' | 'destinationCity', sl: { start: Date; end: Date; endInclusive: boolean; day: string }, pageSize: number,
+  city: string, field: LiteDayField, sl: LiteDaySlice, pageSize: number,
 ): Promise<any[]> {
+  await hydrateLiteDayCache()
   await syncLiteDayCache()
   const key = liteDayKey(city, field, sl.day)
   let day = LITE_DAY_CACHE.get(key)
+  if (day && Date.now() - (LITE_VALIDATED.get(key) ?? 0) > LITE_VALIDATE_TTL_MS) {
+    const checked = day
+    let ok = false
+    try { ok = await liteDayCountMatches(key, checked.size) } catch (err) { console.warn('Mémoire des journées : vérification impossible, journée relue', err) }
+    if (LITE_DAY_CACHE.get(key) !== checked) day = LITE_DAY_CACHE.get(key) // remplacée entre-temps (autre lecture)
+    else if (ok) LITE_VALIDATED.set(key, Date.now())
+    else { dropLiteKey(key); day = undefined }
+  }
   if (!day) {
     const fetchedAt = Date.now()
     const dStart = opStart(sl.day)
@@ -1843,15 +2068,16 @@ export async function getLiteDaySliceCached(
     const to = new Date(Math.max(dEnd.getTime(), sl.end.getTime()))
     const docs = await getAgencyParcelsDaySlice(city, field, from, to, true, null, pageSize, true)
     day = new Map()
-    for (const p of docs) {
-      const t = createdMs(p)
-      if (!isNaN(t) && opDayOf(new Date(t)) === sl.day) day.set(p.id, p)
-    }
+    for (const p of docs) if (opDayOfParcel(p) === sl.day) day.set(p.id, p)
     if (!LITE_DAY_CACHE.size) liteSyncedAt = fetchedAt
     LITE_DAY_CACHE.set(key, day)
-    while (LITE_DAY_CACHE.size > LITE_DAY_CACHE_MAX) LITE_DAY_CACHE.delete(LITE_DAY_CACHE.keys().next().value as string)
+    LITE_VALIDATED.set(key, fetchedAt)
+    litePersistRemoved.delete(key)
+    litePersistDirty.add(key)
+    while (LITE_DAY_CACHE.size > LITE_DAY_CACHE_MAX) dropLiteKey(LITE_DAY_CACHE.keys().next().value as string)
+    scheduleLitePersist()
     // Marges hors journée (rattachées à une tranche extrême) : renvoyées sans être gardées en mémoire
-    const extra = docs.filter(p => { const t = createdMs(p); return !isNaN(t) && opDayOf(new Date(t)) !== sl.day })
+    const extra = docs.filter(p => { const d = opDayOfParcel(p); return d !== '' && d !== sl.day })
     return [...day.values(), ...extra].filter(p => inSlice(p, sl))
   }
   return [...day.values()].filter(p => inSlice(p, sl))
@@ -1988,9 +2214,10 @@ async function getDocsServerFirst(q: Query<DocumentData>) {
 // - [start, end[ (ou [start, end] si endInclusive) ;
 // - afterDoc : curseur de la page temps réel — seuls les colis PLUS ANCIENS que lui sont lus
 //   (ceux au-dessus sont déjà affichés par l'écoute temps réel).
+// - city = ALL_CITIES ('*') : toutes les villes (bornes createdAt seules — Admin « Port par agence »).
 export async function getAgencyParcelsDaySlice(
   city: string,
-  field: 'originCity' | 'destinationCity',
+  field: LiteDayField,
   start: Date,
   end: Date,
   endInclusive: boolean,
@@ -2002,7 +2229,7 @@ export async function getAgencyParcelsDaySlice(
   let cursor: any = afterDoc
   for (let guard = 0; guard < 200; guard++) {
     const constraints: any[] = [
-      where(field, '==', city),
+      ...(city === ALL_CITIES ? [] : [where(field, '==', city)]),
       where('createdAt', '>=', Timestamp.fromDate(start)),
       where('createdAt', endInclusive ? '<=' : '<', Timestamp.fromDate(end)),
       orderBy('createdAt', 'desc'),
@@ -2377,7 +2604,8 @@ export async function searchParcels(
     // 🧠 Mémoire courte (60 s) : la même recherche relancée (retour en arrière, filtre changé puis remis…)
     // s'affiche immédiatement, sans nouvelle lecture
     const lite = options.lite ?? false
-    const cacheKey = JSON.stringify([searchTerm, includeArchived, agencyCity || '', nameScope, lite])
+    const prefixLimit = Math.max(1, Math.floor(options.limit ?? 300)) // recherches par début de nom seulement
+    const cacheKey = JSON.stringify([searchTerm, includeArchived, agencyCity || '', nameScope, lite, prefixLimit])
     const hit = SEARCH_CACHE.get(cacheKey)
     if (hit && Date.now() - hit.at < SEARCH_CACHE_TTL_MS) return hit.results
 
@@ -2455,9 +2683,12 @@ export async function searchParcels(
         // seuls : présents et à jour sur toutes les expéditions (vérifié : 53 391 / 53 391). Les préfixes sur
         // …NameLower renvoyaient les MÊMES expéditions une 2e fois (téléchargement doublé) et n'ajoutaient que
         // de fausses correspondances (ancien nom resté dans …NameLower après modification de l'expéditeur).
+        // ⚡ Plafonnées par options.limit (300 par défaut) : l'option était ignorée — un préfixe courant
+        // (« moh ») téléchargeait des milliers d'expéditions de tout le pays. Les recherches EXACTES
+        // (N° EXP, téléphone, N° LMA, nom complet) ne sont pas plafonnées.
         if (doPrefix) {
-          if (wantSender) nameQueryList.push(query(parcelsCol, where('senderNameNorm', '>=', nameNorm), where('senderNameNorm', '<=', nameNorm + PREFIX_END)))
-          if (wantReceiver) nameQueryList.push(query(parcelsCol, where('receiverNameNorm', '>=', nameNorm), where('receiverNameNorm', '<=', nameNorm + PREFIX_END)))
+          if (wantSender) nameQueryList.push(query(parcelsCol, where('senderNameNorm', '>=', nameNorm), where('senderNameNorm', '<=', nameNorm + PREFIX_END), limit(prefixLimit)))
+          if (wantReceiver) nameQueryList.push(query(parcelsCol, where('receiverNameNorm', '>=', nameNorm), where('receiverNameNorm', '<=', nameNorm + PREFIX_END), limit(prefixLimit)))
         }
         groups.push({ isArchived, label: 'nom', queries: nameQueryList })
       }

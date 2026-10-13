@@ -245,6 +245,54 @@ export const caisseCodTotals = (all: any[]) => { const parcels = all.filter((p: 
   traite: parcels.reduce((s: number, p: any) => s + caisseCodAmountOfType(p, 'traite'), 0),
 } }
 
+/** Montant des VALEURS d'un COD = espèces + chèque + traite (mixte : les deux parts) — Retour BL exclu (pas d'argent). */
+export const caisseCodValueTotal = (p: any): number =>
+  caisseCodAmountOfType(p, 'especes') + caisseCodAmountOfType(p, 'cheque') + caisseCodAmountOfType(p, 'traite')
+
+/**
+ * 💰 « COD collecté » d'une agence — règle UNIQUE du bloc « Valeurs (COD) collectées par jour » (Caisse Agence,
+ * Collecte du soir) et de la page admin « Contre Remboursement » : valeur encaissée (codStatus ≠ pending) à
+ * DESTINATION de la ville, hors expéditions retournées et hors argent d'avant le 05/10/2026 (MONEY_START).
+ * Rangée au jour d'opération de sa COLLECTE (codCollectDayKey).
+ */
+export const isCaisseCodCollecte = (p: any, city: string): boolean =>
+  !!p?.codStatus && p.codStatus !== 'pending' && !isCodMoneyBeforeStart(p)
+  && safeParseAmount(p.codAmount) > 0 && !isReturnedForGroup(p) && p.destinationCity === city
+
+/** Journée d'opération ('YYYY-MM-DD') de la collecte du COD (codCollectedAt), ou null. */
+export const codCollectDayKey = (p: any): string | null => {
+  const d = toDateSafe(p?.codCollectedAt)
+  return d ? getOperationalDayString(d) : null
+}
+
+/**
+ * Valeurs (COD) collectées d'une agence, par journée d'opération de collecte (la plus récente d'abord).
+ * `keep` : filtres supplémentaires de la page (livreur, filtres de l'exploitation…).
+ */
+export const groupCodCollectesParJour = (
+  list: any[], city: string, keep: ((p: any) => boolean) | null = null,
+): [string, CodCollecteJour][] => {
+  const codParJour = new Map<string, CodCollecteJour>()
+  list.forEach((p: any) => {
+    if (!isCaisseCodCollecte(p, city)) return
+    if (keep && !keep(p)) return
+    const key = codCollectDayKey(p)
+    if (!key) return
+    const cur = codParJour.get(key) || { count: 0, montant: 0, especes: 0, cheque: 0, traite: 0, parcels: [] as any[] }
+    const especes = caisseCodAmountOfType(p, 'especes'), cheque = caisseCodAmountOfType(p, 'cheque'), traite = caisseCodAmountOfType(p, 'traite')
+    codParJour.set(key, {
+      count: cur.count + 1, montant: cur.montant + especes + cheque + traite,
+      especes: cur.especes + especes, cheque: cur.cheque + cheque, traite: cur.traite + traite,
+      parcels: [...cur.parcels, p],
+    })
+  })
+  return [...codParJour.entries()].sort((a, b) => b[0].localeCompare(a[0]))
+}
+
+/** 🚨 Expédition LIVRÉE dont le COD (valeurs) n'est pas encore collecté — « Livrés non encaissés » du bilan. */
+export const isCodLivreNonCollecte = (p: any): boolean =>
+  p?.status === 'Livré' && (!p.codStatus || p.codStatus === 'pending') && caisseCodValueTotal(p) > 0
+
 // ── Regroupement par livreur ─────────────────────────────────────────────────
 
 export interface CaisseDriverGroup {
@@ -556,8 +604,8 @@ export const caisseBilanJournee = (
       const enCours = parcels.filter((p: any) => p.status === 'En cours de livraison')
       // 🚨 Livrés non encaissés : port dû ET COD (RETOUR FOND) livrés mais pas encore collectés
       const portsManquants = portDu.filter((p: any) => p.status === 'Livré' && !p.portStatus)
-      const codTotal = (p: any) => caisseCodAmountOfType(p, 'especes') + caisseCodAmountOfType(p, 'cheque') + caisseCodAmountOfType(p, 'traite')
-      const codsManquants = livres.filter((p: any) => (!p.codStatus || p.codStatus === 'pending') && codTotal(p) > 0)
+      const codTotal = caisseCodValueTotal
+      const codsManquants = livres.filter(isCodLivreNonCollecte)
       const livresNonCollectes = [...new Map([...portsManquants, ...codsManquants].map((p: any) => [p.id, p])).values()]
       const montantManquantPort = sumPrice(portsManquants)
       const montantManquantCod = codsManquants.reduce((s: number, p: any) => s + codTotal(p), 0)
@@ -789,26 +837,11 @@ export const computeCaisseView = (input: CaisseViewInput) => {
   const collectesParJour = [...parJour.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14)
 
   // Valeurs (COD) collectées par journée d'opération (14 dernières) — montants par type comme Caisse Agence
-  const codParJour = new Map<string, CodCollecteJour>()
   // Bloc COD : rangé par JOUR DE COLLECTE comme « Collectes par jour » (complet sur 14 jours, quelle que soit la
-  // période) ; filtres de l'exploitation conservés (type de service, origine, port, recherche)
-  collectSource.filter((p: any) => !extraFilter || extraFilter(p)).forEach((p: any) => {
-    if (!p.codStatus || p.codStatus === 'pending' || isCodMoneyBeforeStart(p)) return
-    if (safeParseAmount(p.codAmount) <= 0 || isReturnedForGroup(p)) return
-    if (p.destinationCity !== city) return
-    if (driverFilter !== 'all' && !ofFilteredDriver(p)) return
-    const d = toDateSafe(p.codCollectedAt)
-    if (!d) return
-    const key = getOperationalDayString(d)
-    const cur = codParJour.get(key) || { count: 0, montant: 0, especes: 0, cheque: 0, traite: 0, parcels: [] as any[] }
-    const especes = caisseCodAmountOfType(p, 'especes'), cheque = caisseCodAmountOfType(p, 'cheque'), traite = caisseCodAmountOfType(p, 'traite')
-    codParJour.set(key, {
-      count: cur.count + 1, montant: cur.montant + especes + cheque + traite,
-      especes: cur.especes + especes, cheque: cur.cheque + cheque, traite: cur.traite + traite,
-      parcels: [...cur.parcels, p],
-    })
-  })
-  const codCollectesParJour = [...codParJour.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14)
+  // période) ; filtres de l'exploitation conservés (type de service, origine, port, recherche).
+  // Règle « COD collecté » partagée avec la page admin « Contre Remboursement » (groupCodCollectesParJour).
+  const codCollectesParJour = groupCodCollectesParJour(collectSource, city, (p: any) =>
+    (!extraFilter || extraFilter(p)) && (driverFilter === 'all' || ofFilteredDriver(p))).slice(0, 14)
 
   return {
     passesDateFilter, dataSource, stats, soldeCaisseGlobal, soldeLivreur, portsCollectesForPrint,

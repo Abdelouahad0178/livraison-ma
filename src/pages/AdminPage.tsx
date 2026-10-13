@@ -34,7 +34,10 @@ import {
   searchParcelByNicOptimized,
   searchParcels,
 } from '../firebase/firestore'
-import { deleteParcel, getRealParcelsStats } from '../firebase/parcels'
+import { deleteParcel, getRealParcelsStats, subscribeAgencyParcelsFull, subscribeAgencyParcels, getMoreAgencyParcels } from '../firebase/parcels'
+
+// 🏙️ Filtre ville sans période (« Tout ») : borne basse « depuis toujours » des requêtes par ville
+const CITY_ALL_TIME_FROM = new Date(2000, 0, 1)
 import { useLiveParcelPatches } from '../hooks/useLiveParcelPatches'
 import {
   createAgentCodRequest, subscribeAllAgentCodRequests, addAgentCodRequestReply, resolveAgentCodRequest,
@@ -84,6 +87,7 @@ const AdminNotesTab = lazy(() => import('./admin/tabs/AdminNotesTab'))
 const AdminReturnsTab = lazy(() => import('./admin/tabs/AdminReturnsTab'))
 const AdminHomeTab   = lazy(() => import('./admin/tabs/AdminHomeTab'))
 const AdminCodTab    = lazy(() => import('./admin/tabs/AdminCodTab'))
+const AdminCodControlTab = lazy(() => import('./admin/tabs/AdminCodControlTab'))
 const AdminAgenciesTab = lazy(() => import('./admin/tabs/AdminAgenciesTab'))
 const AdminAlertsTab = lazy(() => import('./admin/tabs/AdminAlertsTab'))
 const AdminTariffsTab = lazy(() => import('./admin/tabs/AdminTariffsTab'))
@@ -352,6 +356,8 @@ export default function AdminPage() {
 
   // Main tab
   const [mainTab, setMainTab] = useState('home')
+  // Onglet RETOUR FOND : « Contrôle des agences » (vue de contrôle, par défaut) ou « Règlements & demandes » (actions)
+  const [codView, setCodView] = useState<'control' | 'operations'>('control')
   // 👁️ Présence : onglet courant (libellé affiché dans la carte « L'œil qui ne dort pas » de l'Admin)
   useEffect(() => { setPresenceTab(mainTab); return () => setPresenceTab('') }, [mainTab])
   const [menuOpen, setMenuOpen] = useState(false)
@@ -390,6 +396,10 @@ export default function AdminPage() {
   const [moreParcels,  setMoreParcels]  = useState<any[]>([]) // Chargés progressivement
   const lastPageDocRef = useRef<any>(null)
   const pagedRef = useRef(false) // true si on a déjà chargé des pages
+  const cityPeriodModeRef = useRef(false) // chargement « ville + période » (complet, sans « Charger plus »)
+  const cityRecentModeRef = useRef(false) // chargement « ville, sans période » (plus récentes de la ville)
+  const cityCursorRef = useRef<{ city: string; lastDocs: any } | null>(null) // curseurs départ / arrivée de la ville
+  const cityPagedRef = useRef(false) // « Charger plus » déjà utilisé en mode ville (curseurs avancés)
   const [hasMore,      setHasMore]      = useState(true)
   const [loadingMore,  setLoadingMore]  = useState(false)
   const [loadingAll,   setLoadingAll]   = useState(false)
@@ -601,17 +611,23 @@ export default function AdminPage() {
     return () => { unsubParcels(); unsubUsers(); unsubLocks(); unsubTariffs(); unsubClientMessages(); unsubSectors(); unsubCentralCash(); unsubAgencyCashes(); unsubReglements(); unsubRapports() }
   }, [])
 
+  // ⚡ Statut, service, type de port et livreur sont filtrés EN MÉMOIRE (useMemo `filtered`) : seul le passage
+  // « aucun filtre » (50 dernières) ↔ « filtré » (1000) change la requête. Avant, chaque clic sur un statut ou
+  // un type de paiement coupait et relançait l'écoute temps réel (relecture complète des expéditions).
+  const adminFilteredPage =
+    cityFilter !== 'Toutes' ||
+    statusFilter.length > 0 ||
+    serviceTypeFilter.length > 0 ||
+    portTypeFilter.length > 0 ||
+    driverFilter !== 'Tous'
+
   // ⚡ Abonnement temps réel : 50 premiers colis (optimisé avec filtre de date prioritaire)
   useEffect(() => {
     console.warn(`🔍 DIAGNOSTIC CHARGEMENT:`, {
       isSearchActive,
       autoReloadEnabled,
       cityFilter,
-      statusFilter,
-      serviceTypeFilter,
-      portTypeFilter,
-      driverFilter,
-      fuseDebouncedSearch: fuseDebouncedSearch.trim()
+      adminFilteredPage,
     })
 
     if (isSearchActive) {
@@ -632,12 +648,7 @@ export default function AdminPage() {
 
     // 🔍 Détecter si des filtres sont actifs (date, ville, statut, service, port, driver)
     const hasDateFilter = datePreset !== 'all'
-    const hasOtherFilters =
-      cityFilter !== 'Toutes' ||
-      statusFilter.length > 0 ||
-      serviceTypeFilter.length > 0 ||
-      portTypeFilter.length > 0 ||
-      driverFilter !== 'Tous'
+    const hasOtherFilters = adminFilteredPage
 
     const hasFilters = hasDateFilter || hasOtherFilters
     const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
@@ -648,16 +659,6 @@ export default function AdminPage() {
       PAGE_SIZE,
       FILTERED_PAGE_SIZE
     })
-
-    if (hasFilters) {
-      console.warn(`✅ FILTRES ACTIFS → Chargement de ${effectivePageSize} colis`, {
-        ville: cityFilter,
-        statuts: statusFilter,
-        services: serviceTypeFilter,
-        ports: portTypeFilter,
-        driver: driverFilter
-      })
-    }
 
     // ⚡ PRIORITÉ AU FILTRE DE DATE: si actif, filtrer directement dans Firestore
     // hasDateFilter déjà calculé plus haut (ligne 591)
@@ -686,6 +687,66 @@ export default function AdminPage() {
         dateFromObj = range.start
         dateToObj = range.end
       }
+    }
+
+    // 🏙️ VILLE + PÉRIODE : expéditions de la ville (départ OU arrivée, comme le filtre ville plus bas) lues
+    // JUSQU'À ÉPUISEMENT sur la période (subscribeAgencyParcelsFull : journées passées en lecture ponctuelle,
+    // journée en cours en temps réel, archivés inclus comme la requête toutes villes).
+    // ⚠️ Avant : les 1000 expéditions les plus récentes de TOUTES les villes, puis filtre ville en mémoire —
+    // « Ce mois » à Marrakech / Agadir n'en montrait qu'une partie (résultats et totaux incomplets).
+    // Mêmes bornes que la requête toutes villes (fin = fin de la journée de dateTo).
+    const cityPeriodMode = hasDateFilter && !!dateFromObj && cityFilter !== 'Toutes'
+    // 🏙️ VILLE SANS PÉRIODE (« Tout ») : les expéditions LES PLUS RÉCENTES DE LA VILLE (départ OU arrivée,
+    // archivés inclus comme la requête toutes villes), au lieu des 1000 plus récentes de TOUTES les villes
+    // filtrées ensuite en mémoire (où une ville n'en gardait qu'une petite partie). « Charger plus » suit la ville.
+    const cityRecentMode = !hasDateFilter && cityFilter !== 'Toutes'
+    // Retour au mode toutes villes : « Charger plus » de nouveau possible (masqué par le mode ville)
+    if (!cityPeriodMode && !cityRecentMode && (cityPeriodModeRef.current || cityRecentModeRef.current)) setHasMore(true)
+    cityPeriodModeRef.current = cityPeriodMode
+    cityRecentModeRef.current = cityRecentMode
+    cityCursorRef.current = null
+    cityPagedRef.current = false
+    if (cityRecentMode) {
+      const city = cityFilter
+      const unsubCity = subscribeAgencyParcels(
+        city,
+        (data: any) => {
+          setLiveParcels(data)
+          setLoading(false)
+        },
+        (err: any) => {
+          console.error('❌ Erreur chargement (ville):', err)
+          setLoading(false)
+        },
+        effectivePageSize,
+        (lastDocs: any) => {
+          if (cityPagedRef.current) return
+          cityCursorRef.current = { city, lastDocs }
+          setHasMore(!!(lastDocs?.createdFull || lastDocs?.arrivedFull))
+        },
+        CITY_ALL_TIME_FROM, // « Tout » : aucune borne de date (comme la requête toutes villes)
+        null,
+        true
+      )
+      return () => unsubCity()
+    }
+    if (cityPeriodMode && dateFromObj) {
+      const endOfDay = dateToObj ? new Date(dateToObj) : null
+      if (endOfDay) endOfDay.setHours(23, 59, 59, 999)
+      setHasMore(false) // tout est lu : pas de « Charger plus » (il paginerait toutes les villes)
+      const unsubCity = subscribeAgencyParcelsFull(
+        cityFilter,
+        { dateFrom: dateFromObj, dateTo: endOfDay, includeArchived: true, lite: false, liteLive: false },
+        (data) => {
+          setLiveParcels(data)
+          setLoading(false)
+        },
+        (err: any) => {
+          console.error('❌ Erreur chargement (ville + période):', err)
+          setLoading(false)
+        }
+      )
+      return () => unsubCity()
     }
 
     if (hasDateFilter && (dateFromObj || dateToObj)) {
@@ -736,7 +797,7 @@ export default function AdminPage() {
 
       return () => unsubParcels()
     }
-  }, [isSearchActive, autoReloadEnabled, datePreset, dateFrom, dateTo, operationalDayFormatted, cityFilter, statusFilter, serviceTypeFilter, portTypeFilter, driverFilter])
+  }, [isSearchActive, autoReloadEnabled, datePreset, dateFrom, dateTo, operationalDayFormatted, cityFilter, adminFilteredPage])
 
   // 🔄 Écouter les mises à jour de prix depuis d'autres pages (ex: Facturier)
   useEffect(() => {
@@ -795,6 +856,30 @@ export default function AdminPage() {
 
   // Charger 500 colis de plus (optimisé)
   const loadMoreParcels = async () => {
+    // 🏙️ Mode ville sans période : page suivante de la VILLE (départ + arrivée)
+    if (cityRecentModeRef.current) {
+      const cur = cityCursorRef.current
+      if (!hasMore || loadingMore || loadingAll || !cur) return
+      setLoadingMore(true)
+      try {
+        const result = await getMoreAgencyParcels(cur.city, cur.lastDocs, LOAD_MORE_SIZE, CITY_ALL_TIME_FROM, null, true)
+        if (cityCursorRef.current !== cur) return // filtre changé entre-temps
+        cityPagedRef.current = true
+        setMoreParcels(prev => {
+          const map = new Map()
+          prev.forEach((p: any) => map.set(p.id, p))
+          result.docs.forEach((p: any) => map.set(p.id, p))
+          return [...map.values()]
+        })
+        cityCursorRef.current = { city: cur.city, lastDocs: result.lastDocs }
+        if (!result.hasMore) setHasMore(false)
+      } catch (err) {
+        console.error('AdminPage loadMore (ville):', err)
+      } finally {
+        setLoadingMore(false)
+      }
+      return
+    }
     if (!hasMore || loadingMore || loadingAll || !lastPageDocRef.current) return
     setLoadingMore(true)
     try {
@@ -1951,6 +2036,21 @@ export default function AdminPage() {
 
         {/* TAB: RETOUR */}
         {mainTab === 'cod' && (
+          <div className="mt-4 flex flex-wrap gap-2">
+            {([['control', '🔎 Contrôle des agences'], ['operations', '⚙️ Règlements & demandes']] as const).map(([k, l]) => (
+              <button key={k} onClick={() => setCodView(k)}
+                className={`px-4 py-2 rounded-xl text-sm font-black transition ${codView === k ? 'bg-emerald-600 text-white shadow' : 'bg-white border border-gray-200 text-gray-700 hover:bg-emerald-50'}`}>
+                {l}
+              </button>
+            ))}
+          </div>
+        )}
+        {mainTab === 'cod' && codView === 'control' && (
+          <Suspense fallback={<div className="mt-4 h-72 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <div className="mt-4"><AdminCodControlTab /></div>
+          </Suspense>
+        )}
+        {mainTab === 'cod' && codView === 'operations' && (
           <Suspense fallback={<div className="mt-4 h-72 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
             <AdminCodTab
               codDatePreset={codDatePreset}

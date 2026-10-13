@@ -1,10 +1,9 @@
 // 🧾 Encaisseur Central — chèques & traites des retours de fonds :
 //  • ChequeEntryModal : formulaire ouvert au POINTAGE d'un colis payé par chèque / traite
-//    (type, N°, banque, montant, échéance ; plusieurs documents possibles pour un même colis) ;
+//    (type, N°, banque, montant ; plusieurs documents possibles pour un même colis — plus de date d'échéance au pointage) ;
 //  • ReceptionSheetModal : « Fiche de réception des chèques et traites » d'un client expéditeur,
 //    à imprimer (A4 portrait), joindre aux chèques / traites et faire signer par le client.
-import DateInput from '../../components/DateInput'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { X, Plus, Trash2, Printer, Save } from 'lucide-react'
 import { codDocTypeOf, codDocPartOf } from '../../utils/codParts'
 import type { CodDocument } from '../../firebase/central'
@@ -18,9 +17,9 @@ const toDate = (v: any): Date | null => {
 }
 const fmtD = (v: any) => { const d = toDate(v); return d ? d.toLocaleDateString('fr-MA') : '' }
 const fmtYmd = (s: string) => (s && /^\d{4}-\d{2}-\d{2}$/.test(s) ? s.split('-').reverse().join('/') : s || '')
-const nicOf = (p: any) => p?.senderNic || p?.sender?.nic || p?.trackingId || ''
+export const nicOf = (p: any) => p?.senderNic || p?.sender?.nic || p?.trackingId || ''
 const senderNameOf = (p: any) => String(p?.sender?.name || p?.senderName || p?.clientName || '').trim()
-const clientKeyOf = (p: any) => senderNameOf(p).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ')
+export const clientKeyOf = (p: any) => senderNameOf(p).toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ')
 
 /** Le retour de fonds contient-il un chèque ou une traite (y compris la part document d'un RF mixte) ? */
 export const isDocParcel = (p: any): boolean => !!codDocTypeOf(p) && (codDocPartOf(p) > 0 || (parseFloat(p?.codAmount) || 0) > 0)
@@ -34,44 +33,104 @@ export const hasDocData = (p: any): boolean => docsOf(p).some(d => d.numero && d
 // ─────────────────────────────────────────────────────────────────────────────
 interface Row { type: 'cheque' | 'traite'; numero: string; banque: string; montant: string; echeance: string }
 
-export function ChequeEntryModal({ parcel, alreadyControlled, onClose, onSave }: {
+/** 🔗 Chèque groupé déjà enregistré sur cette expédition (un seul chèque pour plusieurs expéditions). */
+export const groupOf = (p: any): CodDocument | null => docsOf(p).find(d => (d.groupIds || []).length > 1) || null
+
+export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, findByNic, onClose, onSave }: {
   parcel: any
   alreadyControlled: boolean
+  /** Expéditions chèque / traite du MÊME expéditeur, TOUTES DATES (recherche en base, pour un chèque groupé) */
+  loadCandidates?: () => Promise<any[]>
+  /** Recherche d'une expédition par N° EXP dans toute la base (renvoie un message si elle ne peut pas être groupée) */
+  findByNic?: (nic: string) => Promise<{ parcel?: any; error?: string }>
   onClose: () => void
-  /** point = true : enregistrer PUIS pointer le colis */
-  onSave: (docs: CodDocument[], point: boolean) => Promise<void>
+  /** point = true : enregistrer PUIS pointer ; group = expéditions couvertes par le même chèque (celle-ci comprise) */
+  onSave: (docs: CodDocument[], point: boolean, group?: any[]) => Promise<void>
 }) {
   const expected = docAmountOf(parcel)
   const defType = (codDocTypeOf(parcel) === 'traite' ? 'traite' : 'cheque') as Row['type']
+  const existingGroup = groupOf(parcel)
   const [rows, setRows] = useState<Row[]>(() => {
     const existing = docsOf(parcel)
+    // Chèque groupé : une seule ligne, montant = TOTAL du chèque
+    if (existingGroup) return [{ type: existingGroup.type, numero: existingGroup.numero, banque: existingGroup.banque, montant: String(existingGroup.groupTotal ?? existingGroup.montant ?? ''), echeance: existingGroup.echeance || '' }]
     if (existing.length) return existing.map(d => ({ type: d.type, numero: d.numero, banque: d.banque, montant: String(d.montant ?? ''), echeance: d.echeance || '' }))
     return [{ type: defType, numero: '', banque: '', montant: expected ? String(expected) : '', echeance: '' }]
   })
+  const [grouped, setGrouped] = useState(!!existingGroup)
+  const [picked, setPicked] = useState<Set<string>>(() => new Set((existingGroup?.groupIds || []).filter(id => id !== parcel.id)))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [candidates, setCandidates] = useState<any[]>([])
+  const [searching, setSearching] = useState(false)
+  const [loadFailed, setLoadFailed] = useState(false)
+  const [q, setQ] = useState('')
+  const [qMsg, setQMsg] = useState('')
+  // Recherche lancée dès que « plusieurs expéditions » est coché (les expéditions d'un même chèque peuvent
+  // avoir des dates de création différentes : recherche sur toute la base, pas seulement la période affichée)
+  useEffect(() => {
+    if (!grouped || !loadCandidates || candidates.length) return
+    let alive = true
+    setSearching(true)
+    setLoadFailed(false)
+    loadCandidates().then(c => { if (alive) setCandidates(c) }).catch(() => { if (alive) setLoadFailed(true) }).finally(() => alive && setSearching(false))
+    return () => { alive = false }
+  }, [grouped])
 
+  // Expéditions proposées : même expéditeur, sans chèque saisi, ou déjà dans CE groupe
+  const options = useMemo(() => candidates
+    .filter(c => c.id !== parcel.id)
+    .sort((a, b) => (toDate(b.createdAt)?.getTime() || 0) - (toDate(a.createdAt)?.getTime() || 0)), [candidates, parcel.id])
+  // 🔎 Filtre de la liste : N° EXP, destinataire, date (jj/mm/aaaa) ou montant
+  const qn = q.trim().toLowerCase()
+  const shownOptions = !qn ? options : options.filter(c =>
+    String(nicOf(c)).toLowerCase().includes(qn) || String(c?.receiver?.name || '').toLowerCase().includes(qn)
+    || fmtD(c.createdAt).includes(qn) || String(docAmountOf(c)).includes(qn.replace(',', '.')) || picked.has(c.id))
+  // N° EXP absent de la liste : recherche dans toute la base, ajoutée et cochée si elle peut être groupée
+  const searchNic = async () => {
+    setQMsg('')
+    const v = q.trim()
+    if (!v || !findByNic) return
+    const known = options.find(x => String(nicOf(x)) === v)
+    if (known) {
+      if (known._blocked) { setQMsg(`${v} : ${known._blocked} — ne peut pas être groupée ici.`); return }
+      setPicked(s => new Set(s).add(known.id)); setQMsg(`✓ ${v} cochée.`); return
+    }
+    const r: { parcel?: any; error?: string } = await findByNic(v).catch(e => ({ error: String(e?.message || e) }))
+    if (r.error || !r.parcel) { setQMsg(r.error || `N° EXP ${v} introuvable.`); return }
+    if (r.parcel.id === parcel.id) { setQMsg(`✓ ${v} est l'expédition en cours : elle est déjà incluse (en tête de liste).`); return }
+    setCandidates(cs => (cs.some(c => c.id === r.parcel.id) ? cs : [r.parcel, ...cs]))
+    setPicked(s => new Set(s).add(r.parcel.id))
+    setQMsg(`✓ ${v} ajoutée au chèque.`)
+  }
+  const members = grouped ? [parcel, ...options.filter(c => picked.has(c.id) && !c._blocked)] : [parcel]
+  const expectedTotal = members.reduce((s, m) => s + docAmountOf(m), 0)
   const total = rows.reduce((s, r) => s + (parseFloat(String(r.montant).replace(',', '.')) || 0), 0)
-  const diff = Math.round((total - expected) * 100) / 100
+  const diff = Math.round((total - expectedTotal) * 100) / 100
   const set = (i: number, patch: Partial<Row>) => setRows(rs => rs.map((r, k) => (k === i ? { ...r, ...patch } : r)))
+  const togglePick = (id: string) => setPicked(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
 
   const submit = async (point: boolean) => {
     setError('')
+    // Liste des expéditions pas encore (ou mal) chargée : un enregistrement maintenant retirerait du chèque
+    // groupé les expéditions qui n'apparaissent pas encore
+    if (grouped && searching) return setError('Recherche des expéditions de cet expéditeur en cours… patientez.')
+    if (grouped && loadFailed && existingGroup) return setError('Impossible de charger les expéditions de ce chèque groupé : fermez puis rouvrez la fenêtre.')
+    if (grouped && members.length < 2) return setError('Cochez au moins une autre expédition couverte par ce chèque.')
     for (const [i, r] of rows.entries()) {
       const n = i + 1
       if (!r.numero.trim()) return setError(`Ligne ${n} : saisissez le N° du ${r.type === 'traite' ? 'la traite' : 'chèque'}.`)
       if (!r.banque.trim()) return setError(`Ligne ${n} : saisissez la banque.`)
       if (!(parseFloat(String(r.montant).replace(',', '.')) > 0)) return setError(`Ligne ${n} : montant invalide.`)
-      if (r.type === 'traite' && !r.echeance) return setError(`Ligne ${n} : l'échéance est obligatoire pour une traite.`)
     }
-    if (expected > 0 && Math.abs(diff) >= 0.01
-      && !confirm(`Le total saisi (${money(total)} DH) est différent du montant attendu (${money(expected)} DH).\n\nEnregistrer quand même ?`)) return
+    if (expectedTotal > 0 && Math.abs(diff) >= 0.01
+      && !confirm(`Le total saisi (${money(total)} DH) est différent du montant attendu (${money(expectedTotal)} DH${grouped ? ` pour ${members.length} expéditions` : ''}).\n\nEnregistrer quand même ?`)) return
     setSaving(true)
     try {
       await onSave(rows.map(r => ({
         type: r.type, numero: r.numero.trim(), banque: r.banque.trim().toUpperCase(),
         montant: parseFloat(String(r.montant).replace(',', '.')) || 0, echeance: r.echeance,
-      })), point)
+      })), point, grouped ? members : undefined)
     } catch (e: any) {
       setError(e?.message || 'Erreur lors de l\'enregistrement.')
     } finally {
@@ -94,10 +153,56 @@ export function ChequeEntryModal({ parcel, alreadyControlled, onClose, onSave }:
         </div>
 
         <div className="p-5 space-y-3">
+          {/* 🔗 Un seul chèque pour plusieurs expéditions du même expéditeur */}
+          <div className={`rounded-2xl border p-3 ${grouped ? 'border-indigo-300 bg-indigo-50/60' : 'border-slate-200'}`}>
+            <label className="flex items-center gap-2 text-sm font-black text-indigo-800 cursor-pointer">
+              <input type="checkbox" className="w-4 h-4 accent-indigo-600" checked={grouped}
+                onChange={e => { setGrouped(e.target.checked); if (e.target.checked) setRows(rs => [rs[0]]) }} />
+              🔗 Ce chèque couvre plusieurs expéditions de {senderNameOf(parcel) || 'cet expéditeur'}
+            </label>
+            {grouped && (
+              searching ? <p className="text-xs text-slate-500 mt-2">Recherche des expéditions de cet expéditeur (toutes dates)…</p>
+              : options.length === 0 && !findByNic
+                ? <p className="text-xs text-slate-500 mt-2">Aucune autre expédition chèque / traite de cet expéditeur sans données de chèque (toutes dates).</p>
+                : (
+                  <>
+                  <div className="mt-2 flex gap-2">
+                    <input value={q} onChange={e => { setQ(e.target.value); setQMsg('') }} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); searchNic() } }}
+                      placeholder="Chercher : N° EXP, destinataire, date, montant… (Entrée = chercher le N° EXP partout)"
+                      className="flex-1 px-3 py-2 rounded-xl border-2 border-indigo-200 focus:border-indigo-400 focus:outline-none text-xs font-semibold" />
+                    {findByNic && <button type="button" onClick={searchNic} className="px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-black">Ajouter</button>}
+                  </div>
+                  {qMsg && <p className={`text-xs font-bold mt-1 ${qMsg.startsWith('✓') ? 'text-emerald-700' : 'text-amber-700'}`}>{qMsg}</p>}
+                  <div className="mt-2 max-h-48 overflow-y-auto divide-y divide-indigo-100 rounded-xl bg-white border border-indigo-100">
+                    {shownOptions.length === 0 && <p className="px-3 py-2 text-xs text-slate-400">Aucune autre expédition ne correspond. Tapez le N° EXP complet puis Entrée pour la chercher dans toute la base.</p>}
+                    {/* Expédition en cours : toujours incluse dans le chèque (cochée d'office, en tête) */}
+                    <label className="flex items-center gap-2 px-3 py-1.5 text-xs bg-indigo-50/70">
+                      <input type="checkbox" className="w-4 h-4 accent-indigo-600" checked disabled />
+                      <span className="font-mono font-bold">{nicOf(parcel)}</span>
+                      <span className="text-slate-400">{fmtD(parcel.createdAt)}</span>
+                      <span className="flex-1 truncate">→ {parcel?.receiver?.name || '—'} <span className="ml-1 px-1 rounded bg-indigo-600 text-white text-[9px] font-black">EN COURS · incluse</span></span>
+                      <b className="text-emerald-700">{money(docAmountOf(parcel))} DH</b>
+                    </label>
+                    {shownOptions.map(c => (
+                      <label key={c.id} className={`flex items-center gap-2 px-3 py-1.5 text-xs ${c._blocked ? 'opacity-60 cursor-not-allowed' : 'cursor-pointer hover:bg-indigo-50'}`} title={c._blocked || ''}>
+                        <input type="checkbox" className="w-4 h-4 accent-indigo-600" disabled={!!c._blocked} checked={picked.has(c.id)} onChange={() => togglePick(c.id)} />
+                        <span className="font-mono font-bold">{nicOf(c)}</span>
+                        <span className="text-slate-400">{fmtD(c.createdAt)}</span>
+                        <span className="flex-1 truncate">→ {c?.receiver?.name || '—'}{c._blocked && <span className="ml-1 text-amber-700 font-bold">· {c._blocked}</span>}</span>
+                        <b className="text-emerald-700">{money(docAmountOf(c))} DH</b>
+                      </label>
+                    ))}
+                  </div>
+                  </>
+                )
+            )}
+            {grouped && <p className="text-xs font-bold text-indigo-800 mt-2">{members.length} expédition(s) · montant attendu du chèque : {money(expectedTotal)} DH</p>}
+          </div>
+
           {rows.map((r, i) => (
             <div key={i} className="rounded-2xl border border-slate-200 p-3 bg-slate-50/60">
               <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs font-black text-slate-500">Document {i + 1}</span>
+                <span className="text-xs font-black text-slate-500">{grouped ? 'Chèque groupé' : `Document ${i + 1}`}</span>
                 <div className="flex gap-1">
                   {(['cheque', 'traite'] as const).map(t => (
                     <button key={t} type="button" onClick={() => set(i, { type: t })}
@@ -112,18 +217,15 @@ export function ChequeEntryModal({ parcel, alreadyControlled, onClose, onSave }:
                   </button>
                 )}
               </div>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 <label className="text-[11px] font-bold text-slate-500">N° {r.type === 'traite' ? 'traite' : 'chèque'} *
                   <input autoFocus={i === 0} className={inp} value={r.numero} onChange={e => set(i, { numero: e.target.value })} placeholder="ex. 0012345" />
                 </label>
                 <label className="text-[11px] font-bold text-slate-500">Banque *
                   <input className={inp} value={r.banque} onChange={e => set(i, { banque: e.target.value })} placeholder="ex. BMCE, CIH…" list="cc-banques" />
                 </label>
-                <label className="text-[11px] font-bold text-slate-500">Montant (DH) *
+                <label className="text-[11px] font-bold text-slate-500">{grouped ? 'Montant TOTAL du chèque (DH) *' : 'Montant (DH) *'}
                   <input className={inp} inputMode="decimal" value={r.montant} onChange={e => set(i, { montant: e.target.value })} />
-                </label>
-                <label className="text-[11px] font-bold text-slate-500">Échéance {r.type === 'traite' ? '*' : ''}
-                  <DateInput className={inp} value={r.echeance} onChange={e => set(i, { echeance: e.target.value })} />
                 </label>
               </div>
             </div>
@@ -132,10 +234,12 @@ export function ChequeEntryModal({ parcel, alreadyControlled, onClose, onSave }:
             {['ATTIJARIWAFA BANK', 'BMCE BANK OF AFRICA', 'BANQUE POPULAIRE', 'CIH BANK', 'SOCIÉTÉ GÉNÉRALE', 'CRÉDIT DU MAROC', 'CRÉDIT AGRICOLE', 'BMCI', 'AL BARID BANK', 'CFG BANK'].map(b => <option key={b} value={b} />)}
           </datalist>
 
-          <button type="button" onClick={() => setRows(rs => [...rs, { type: defType, numero: '', banque: rs[rs.length - 1]?.banque || '', montant: '', echeance: '' }])}
-            className="flex items-center gap-1.5 text-xs font-black text-purple-700 hover:underline">
-            <Plus className="w-4 h-4" /> Ajouter un autre chèque / traite pour ce colis
-          </button>
+          {!grouped && (
+            <button type="button" onClick={() => setRows(rs => [...rs, { type: defType, numero: '', banque: rs[rs.length - 1]?.banque || '', montant: '', echeance: '' }])}
+              className="flex items-center gap-1.5 text-xs font-black text-purple-700 hover:underline">
+              <Plus className="w-4 h-4" /> Ajouter un autre chèque / traite pour ce colis
+            </button>
+          )}
 
           <div className={`rounded-xl px-3 py-2 text-sm font-bold ${Math.abs(diff) < 0.01 ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
             Total saisi : {money(total)} DH {Math.abs(diff) < 0.01 ? '✓ conforme' : `— écart ${diff > 0 ? '+' : ''}${money(diff)} DH avec le montant attendu`}
@@ -145,7 +249,7 @@ export function ChequeEntryModal({ parcel, alreadyControlled, onClose, onSave }:
 
         <div className="px-5 py-4 border-t border-slate-100 flex flex-wrap justify-end gap-2">
           <button type="button" onClick={onClose} disabled={saving} className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-black">Annuler</button>
-          {alreadyControlled ? (
+          {alreadyControlled && !grouped ? (
             <button type="button" onClick={() => submit(false)} disabled={saving}
               className="px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-black flex items-center gap-2">
               <Save className="w-4 h-4" /> {saving ? 'Enregistrement…' : 'Enregistrer'}
@@ -158,7 +262,7 @@ export function ChequeEntryModal({ parcel, alreadyControlled, onClose, onSave }:
               </button>
               <button type="button" onClick={() => submit(true)} disabled={saving}
                 className="px-4 py-2.5 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-black flex items-center gap-2">
-                <Save className="w-4 h-4" /> {saving ? 'Enregistrement…' : 'Enregistrer et pointer'}
+                <Save className="w-4 h-4" /> {saving ? 'Enregistrement…' : grouped ? `Enregistrer et pointer les ${members.length}` : 'Enregistrer et pointer'}
               </button>
             </>
           )}
@@ -198,15 +302,17 @@ export function printReceptionSheet(parcels: any[], profileName: string) {
   const nbTraites = lines.filter(l => typeOfLine(l) === 'traite').length
   const total = lines.reduce((s, l) => s + (l.d ? Number(l.d.montant) || 0 : docAmountOf(l.p)), 0)
   const minRows = 9
+  // Échéance : plus saisie au pointage ; colonne gardée seulement si un ancien document en a une
+  const withEch = lines.some(l => !!l.d?.echeance)
   const body = lines.map(l => `<tr>
       <td>${typeOfLine(l) === 'traite' ? 'Traite' : 'Chèque'}</td>
-      <td class="b">${esc(l.d?.numero || '')}</td>
+      <td class="b">${esc(l.d?.numero || '')}${(l.d?.groupIds || []).length > 1 ? `<div style="font-size:8px;font-weight:normal;color:#4338ca">chèque groupé ${money(l.d?.groupTotal)} DH</div>` : ''}</td>
       <td>${esc(l.d?.banque || '')}</td>
       <td class="r b">${money(l.d ? l.d.montant : docAmountOf(l.p))}</td>
-      <td>${esc(fmtYmd(l.d?.echeance || ''))}</td>
+      ${withEch ? `<td>${esc(fmtYmd(l.d?.echeance || ''))}</td>` : ''}
       <td class="s">${esc(nicOf(l.p))}</td>
       <td class="s">${esc(l.p.receiver?.name || '')}</td>
-    </tr>`).join('') + Array.from({ length: Math.max(0, minRows - lines.length) }, () => '<tr class="empty"><td></td><td></td><td></td><td></td><td></td><td></td><td></td></tr>').join('')
+    </tr>`).join('') + Array.from({ length: Math.max(0, minRows - lines.length) }, () => `<tr class="empty">${'<td></td>'.repeat(withEch ? 7 : 6)}</tr>`).join('')
   const plural = lines.length > 1
   const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Fiche de réception — ${esc(client)}</title><style>
     *{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
@@ -238,9 +344,9 @@ export function printReceptionSheet(parcels: any[], profileName: string) {
       <div><b>Nombre de traites :</b> ${nbTraites}</div>
     </div>
     <table>
-      <thead><tr><th>Type</th><th>N°</th><th>Banque</th><th>Montant (DH)</th><th>Échéance</th><th>N° EXP</th><th>Destinataire</th></tr></thead>
+      <thead><tr><th>Type</th><th>N°</th><th>Banque</th><th>Montant (DH)</th>${withEch ? '<th>Échéance</th>' : ''}<th>N° EXP</th><th>Destinataire</th></tr></thead>
       <tbody>${body}</tbody>
-      <tfoot><tr><td colspan="3">TOTAL — ${lines.length} document${plural ? 's' : ''}</td><td class="r">${money(total)}</td><td colspan="3"></td></tr></tfoot>
+      <tfoot><tr><td colspan="3">TOTAL — ${lines.length} document${plural ? 's' : ''}</td><td class="r">${money(total)}</td><td colspan="${withEch ? 3 : 2}"></td></tr></tfoot>
     </table>
     <div class="txt">
       <p>Déclare avoir reçu de la société BGEXPRESS ${plural ? 'les chèques et traites ci-dessus, correspondant aux expéditions mentionnées' : 'le chèque ci-dessus, correspondant à l\'expédition mentionnée'}.</p>

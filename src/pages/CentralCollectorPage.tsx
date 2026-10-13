@@ -34,15 +34,19 @@ import {
 } from '../firebase/firestore'
 import { Banknote, Building2, CheckCircle2, ClipboardCheck, Database, LogOut, MapPin, Package, Search, FileText, X, Save, Printer, Calendar, Filter, Edit, Trash2, Sparkles, TrendingUp, Wallet, Archive, Undo2 } from 'lucide-react'
 import ProfilePhotoUpload from '../components/ProfilePhotoUpload'
+import { useDebounce } from '../components/DebouncedSearchInput'
 import { subscribeAllParcelsWithDateFilter, loadMoreParcelsWithDateFilter } from '../firebase/parcels'
 import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
-import { saveParcelCodDocuments, type CodDocument } from '../firebase/central'
-import { ChequeEntryModal, ReceptionSheetModal, isDocParcel, hasDocData, docsOf } from './central/ChequeReception'
+import { saveParcelsCodDocuments, type CodDocument } from '../firebase/central'
+import { ChequeEntryModal, ReceptionSheetModal, isDocParcel, hasDocData, docsOf, docAmountOf, groupOf } from './central/ChequeReception'
+import { COD_DOC_SERVICE_TYPE_VALUES, COD_DOC_PAYMENT_TYPE_VALUES } from '../utils/codParts'
+import { planPointageCancel, planGroupChequeWrites, groupMemberIdsToFetch } from './central/pointageCancel'
+import { ControlReportsPanel, controlReportHtml, saveControlReport, openPrint, type ReportLine } from './central/ControlReports'
 import { normText, isDigitsOnly, numberStartsWith } from '../utils/normText'
 import { codPartView, codHasType, isMixedCod, codPartsOf, codTypeDisplay, codPartsBreakdown, codPartsLabel } from '../utils/codParts'
-import { codMoneyOnly } from '../utils/moneyFlow'
+import { codMoneyOnly, isCodSenderPaid } from '../utils/moneyFlow'
 
 // ⚡ Système de chargement optimisé (Option 3 - comme AdminPage)
 const PAGE_SIZE = 50 // Chargement initial réduit
@@ -69,7 +73,7 @@ const senderKey = (p: any) => `${String(p.sender?.name || '').trim().toLowerCase
 const parcelAgency = (p: any) => p?.centralDepositCity || p?.destinationCity || p?.receiver?.city || p?.originCity || p?.sender?.city || 'Agence non definie'
 const supplierAgency = (p: any) => p?.originCity || p?.sender?.city || 'Agence non definie'
 const supplierAgenciesText = (parcels: any) => [...new Set((parcels || []).map(supplierAgency).filter(Boolean))].join(', ') || '-'
-const isParcelPaid = (p: any) => !!p.centralSupplierPaid || !!p.codSenderPaid || p.centralSupplierPaymentStatus === 'paid'
+const isParcelPaid = isCodSenderPaid
 const isParcelPrepared = (p: any) => !isParcelPaid(p) && (p.centralSupplierPaymentStatus === 'prepared' || !!p.centralSupplierPaymentId)
 const paymentStatus = (pay: any) => pay?.status || 'paid'
 const normalizeSearch = (value: any) => normText(value).replace(/\s+/g, '')
@@ -164,7 +168,9 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
   }
   const [depositsAll, setDeposits] = useState<any[]>([])
   const [paymentsAll, setPayments] = useState<any[]>([])
-  const [activeTab, setActiveTab] = useState<'controle' | 'fournisseurs' | 'archives'>('controle')
+  const [activeTab, setActiveTab] = useState<'controle' | 'rapports' | 'fournisseurs' | 'archives'>('controle')
+  // N° du dernier rapport imprimé et enregistré (message de confirmation)
+  const [lastReport, setLastReport] = useState('')
 
   // 📦 Archives
   const [archivedParcels, setArchivedParcels] = useState<any[]>([])
@@ -285,19 +291,35 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
       fbLimit(500)
     )
     const unsubControlled = onSnapshot(qControlled, snap => {
+      const changes = snap.docChanges()
+      // ⚠️ "removed" = le colis ne matche plus la requête : soit il vient d'être DÉ-pointé, soit il est
+      // simplement sorti de la fenêtre des 500 pointages les plus récents (un nouveau pointage l'a poussé
+      // dehors) — dans ce 2e cas il est TOUJOURS pointé. change.doc.data() peut encore montrer l'ancienne
+      // valeur : on relit l'état réel avant de l'afficher « non contrôlé ».
+      const removedIds = changes.filter(c => c.type === 'removed').map(c => c.doc.id)
+      if (removedIds.length) {
+        Promise.all(removedIds.map(id => getDoc(doc(db, 'parcels', id)).then(sn => ({ id, d: sn.data() as any })).catch(() => null)))
+          .then(rows => setControlOverrides(prev => {
+            const next = { ...prev }
+            rows.forEach(r => {
+              if (!r) return
+              const d = r.d || {}
+              next[r.id] = {
+                ...(next[r.id] || {}),
+                controlled: !!d.controlled,
+                controlledBy: d.controlled ? d.controlledBy || '' : '',
+                controlledById: d.controlled ? d.controlledById || '' : '',
+                controlledAt: d.controlled ? d.controlledAt || '' : '',
+                ...(Array.isArray(d.codDocuments) ? { codDocuments: d.codDocuments } : {}),
+              }
+            })
+            return next
+          }))
+      }
       setControlOverrides(prev => {
         const next = { ...prev }
-        snap.docChanges().forEach(change => {
-          // ⚠️ Sur un changement "removed" (le colis ne matche plus controlled==true, donc
-          // vient d'être démarqué), change.doc.data() peut encore refléter l'ancienne valeur
-          // controlled:true — on force explicitement l'état "non contrôlé" dans ce cas.
-          if (change.type === 'removed') {
-            next[change.doc.id] = {
-              ...(next[change.doc.id] || {}),
-              controlled: false, controlledBy: '', controlledById: '', controlledAt: '',
-            }
-            return
-          }
+        changes.forEach(change => {
+          if (change.type === 'removed') return // traité ci-dessus (état relu en base)
           const d = change.doc.data()
           next[change.doc.id] = {
             ...(next[change.doc.id] || {}),
@@ -345,6 +367,18 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     return () => { unsubControlled(); unsubDelivery() }
   }, [])
 
+  // ⚡ Ville et type de paiement ne changent la requête QUE sans plage de dates (« Tout ») — et seulement
+  // via la taille de page (50 → filtrée). Avec une plage, ils sont appliqués en mémoire : changer de ville
+  // ne doit pas détruire l'écoute et relire toute la période. Seul ce booléen entre dans les dépendances.
+  const loadHasRange = (activeTab === 'controle' || activeTab === 'rapports')
+    ? presetRange(ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay) !== null
+    : activeTab === 'fournisseurs'
+      ? presetRange(datePreset, dateFrom, dateTo, operationalDay) !== null
+      : false
+  const loadBigPage = !loadHasRange && (cityFilter !== 'all' || (paymentFilter !== 'all' && paymentFilter !== 'unpaid'))
+  // Analyseur chèques : taille de page fixe (requêtes chèque / traite) → ville et paiement ne rechargent rien
+  const loadBigPageKey = chequeOnly ? false : loadBigPage
+
   // ⚡ Chargement optimisé avec détection de filtres (Option 3)
   // NOTE: query n'est PAS dans les dépendances - la recherche est gérée par searchParcels
   useEffect(() => {
@@ -352,7 +386,8 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
 
     // 📅 Plage de dates demandée par l'onglet actif → filtre appliqué côté serveur
     let range: { start: Date | null; end: Date | null } | null = null
-    if (activeTab === 'controle') {
+    // « Rapports envoyés » : même plage que Contrôle (pas de rechargement de toute la base)
+    if (activeTab === 'controle' || activeTab === 'rapports') {
       range = presetRange(ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay)
     } else if (activeTab === 'fournisseurs') {
       range = presetRange(datePreset, dateFrom, dateTo, operationalDay)
@@ -365,11 +400,64 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     pagedRef.current = false
     lastDocRef.current = null
 
+    // 🧾 ANALYSEUR CHÈQUES : seules les expéditions dont le COD est un chèque / une traite sont lues (filtre
+    // SERVEUR : serviceType, et codPaymentType pour les services non COD), au lieu de TOUTES les expéditions
+    // de la période puis tri en mémoire. Expéditions COMPLÈTES (controlled* / deliveryControlled* absents de
+    // parcelsLite). Le filtre exact (isDocParcel + son agence) reste appliqué plus bas → mêmes expéditions.
+    // - Avec plage : temps réel sur la plage + chargement automatique des pages restantes (comme avant) ;
+    // - « Tout » : les FILTERED_PAGE_SIZE expéditions chèque / traite les plus récentes de chaque requête
+    //   (avant : les 50 dernières expéditions toutes catégories, d'où presque aucun chèque).
+    if (chequeOnly) {
+      let cancelled = false
+      let restLoads = 0
+      const streams = [
+        { field: 'serviceType', values: COD_DOC_SERVICE_TYPE_VALUES },
+        { field: 'codPaymentType', values: COD_DOC_PAYMENT_TYPE_VALUES },
+      ]
+      const live: any[][] = streams.map(() => [])
+      setHasMore(false)
+      const unsubs = streams.map((whereIn, k) => {
+        let fetchingRest = false
+        return subscribeAllParcelsWithDateFilter((docs: any[], lastSnap: any) => {
+          if (cancelled) return
+          live[k] = docs
+          const merged = new Map<string, any>()
+          live.forEach(list => list.forEach((p: any) => merged.set(p.id, p)))
+          setLiveParcels([...merged.values()])
+          if (!range || docs.length < FILTERED_PAGE_SIZE || !lastSnap || fetchingRest) return
+          fetchingRest = true
+          ;(async () => {
+            restLoads += 1
+            setLoadingAll(true)
+            let cursor = lastSnap
+            let safety = 0
+            try {
+              while (cursor && !cancelled && safety < 200) {
+                const page = await loadMoreParcelsWithDateFilter(cursor, { pageSize: FILTERED_PAGE_SIZE, dateFrom: range!.start, dateTo: range!.end, whereIn })
+                if (cancelled) break
+                if (page.docs.length) {
+                  setMoreParcels(prev => { const m = new Map(prev.map((p: any) => [p.id, p])); page.docs.forEach((p: any) => m.set(p.id, p)); return [...m.values()] })
+                  setLoadAllProgress(prev => prev + page.docs.length)
+                }
+                cursor = page.hasMore ? page.lastSnap : null
+                safety += 1
+              }
+            } catch (err) {
+              console.error('CentralCollectorPage range load (chèques):', err)
+            } finally {
+              restLoads -= 1
+              if (!cancelled && restLoads === 0) setLoadingAll(false)
+            }
+          })()
+        }, (err: any) => console.error(`CentralCollectorPage (chèques, ${whereIn.field}):`, err),
+        { pageSize: FILTERED_PAGE_SIZE, dateFrom: range?.start ?? null, dateTo: range?.end ?? null, whereIn })
+      })
+      return () => { cancelled = true; unsubs.forEach(u => u()); setLoadingAll(false) }
+    }
+
     // Sans plage : comportement paginé classique (50 derniers + "charger plus")
     if (!range) {
-      const hasCityFilter = cityFilter !== 'all'
-      const hasPaymentFilter = paymentFilter !== 'all' && paymentFilter !== 'unpaid'
-      const effectivePageSize = (hasCityFilter || hasPaymentFilter) ? FILTERED_PAGE_SIZE : PAGE_SIZE
+      const effectivePageSize = loadBigPage ? FILTERED_PAGE_SIZE : PAGE_SIZE
       setHasMore(true)
       const unsubParcels = subscribeAllParcels((docs: any[], lastSnap: any) => {
         setLiveParcels(docs)
@@ -412,7 +500,7 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     }, onError, { pageSize: FILTERED_PAGE_SIZE, dateFrom: range.start, dateTo: range.end })
 
     return () => { cancelled = true; unsubParcels(); setLoadingAll(false) }
-  }, [activeTab, datePreset, dateFrom, dateTo, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay, cityFilter, paymentFilter])
+  }, [activeTab, datePreset, dateFrom, dateTo, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay, loadBigPageKey, chequeOnly])
 
   // ❌ DÉSACTIVÉ: Chargement automatique (Option 3 - charge seulement ce dont on a besoin)
   // useEffect(() => {
@@ -432,25 +520,35 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
   // 🔍 RECHERCHE SERVEUR Option 3 (comme AdminPage)
   // Recherche dans TOUTE la base Firestore, pas seulement les colis chargés
   // Écoute AUSSI ctlDebounced pour l'onglet Contrôle
+  // ⚡ Lancée 300 ms après la dernière frappe (avant : une recherche serveur PAR touche) ; champ vidé :
+  // réinitialisation immédiate. Le filtrage local du tableau garde `query` (instantané).
+  const debouncedQuery = useDebounce(query, 300)
+  const serverQuery = query.trim() === '' ? '' : debouncedQuery
   useEffect(() => {
     // Prendre la recherche active (Fournisseurs OU Contrôle)
-    const searchQuery = (query.trim() || ctlDebounced.trim())
+    const searchQuery = (serverQuery.trim() || ctlDebounced.trim())
     if (!searchQuery || searchQuery.length < 5) {
       setServerResults([])
       setDeepSearching(false)
       return
     }
 
+    // ⚠️ Recherche dépassée (terme changé entre-temps) : ses résultats ne doivent jamais écraser ceux
+    // de la recherche plus récente (réponses arrivant dans le désordre).
+    let cancelled = false
     // ⚡ Recherche serveur dans TOUTE la base
+    // (expéditions COMPLÈTES : controlled* / deliveryControlled* ne sont pas dans parcelsLite)
     const performServerSearch = async () => {
       setDeepSearching(true)
       try {
         console.warn(`🔍 Recherche serveur CentralCollector: "${searchQuery}" dans TOUTE la base...`)
         const results = await searchParcels(searchQuery, { limit: 50000 })
+        if (cancelled) return
         setServerResults(results)
         setDeepSearching(false)
         console.warn(`✅ Recherche serveur CentralCollector: ${results.length} résultats trouvés`)
       } catch (error) {
+        if (cancelled) return
         console.error('❌ Erreur recherche serveur CentralCollector:', error)
         setServerResults([])
         setDeepSearching(false)
@@ -458,7 +556,8 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     }
 
     performServerSearch()
-  }, [query, ctlDebounced])
+    return () => { cancelled = true }
+  }, [serverQuery, ctlDebounced])
 
   // 📦 Charger les archives quand l'onglet est sélectionné
   useEffect(() => {
@@ -722,6 +821,15 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
   }, [ctlFilteredAllCities, ctlCity, ctlDebounced])
 
   const ctlDisplayed = useMemo(() => ctlFiltered.slice(0, ctlDisplayLimit), [ctlFiltered, ctlDisplayLimit])
+  // 🖨️ Sélection = panier « à imprimer » : une expédition cherchée, pointée et cochée reste sélectionnée quand on
+  // cherche la suivante. selCache garde l'expédition cochée ; l'état le plus récent (pointage…) vient de « parcels ».
+  const selCache = useRef(new Map<string, any>())
+  const ctlSelectedParcels = useMemo(() => {
+    const byId = new Map(parcels.map((p: any) => [p.id, p]))
+    return [...ctlSelected].map(id => byId.get(id) || selCache.current.get(id)).filter(Boolean) as any[]
+  }, [ctlSelected, parcels])
+  // 🧾 Expédition du formulaire chèque : version la plus récente (pointage / données surchargés), pas l'instantané du clic
+  const chequeModalParcel = chequeModal ? (parcels.find((x: any) => x.id === chequeModal.id) || chequeModal) : null
 
   // KPIs contrôle
   const ctlKpis = useMemo(() => {
@@ -795,13 +903,103 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
 
   // 🧾 Enregistrer les données des chèques / traites PUIS (option) pointer le colis.
   // Deux écritures séparées : le pointage garde sa règle « appartient à son auteur ».
-  const saveChequeDocs = async (p: any, docs: CodDocument[], point: boolean) => {
+  // 🔄 État FRAIS d'expéditions (relu en base) : les membres d'un chèque groupé ne sont pas forcément chargés dans
+  // la page, et ceux qui le sont peuvent être périmés (pages « Charger plus » = lectures ponctuelles).
+  // Expédition introuvable / supprimée → absente de la Map.
+  const readFreshParcels = async (ids: string[]): Promise<Map<string, any>> => {
+    const uniq = [...new Set(ids.filter(Boolean))]
+    const rows = await Promise.all(uniq.map(id => getDoc(doc(db, 'parcels', id))
+      .then(sn => (sn.exists() ? { id, ...sn.data() } : null))))
+    return new Map(rows.filter(Boolean).map((x: any) => [x.id, x]))
+  }
+
+  const saveChequeDocs = async (p0: any, docs: CodDocument[], point: boolean, group?: any[]) => {
     const name = profile?.name || 'Encaisseur central'
     const uid = auth.currentUser?.uid || ''
-    const clean = await saveParcelCodDocuments(p.id, docs, name, uid)
-    setControlOverrides(prev => ({ ...prev, [p.id]: { ...(prev[p.id] || {}), codDocuments: clean } }))
+    const nicOfP = (x: any) => String(x?.senderNic || x?.sender?.nic || x?.trackingId || '')
+    const isGroup = !!(group && group.length > 1)
+    // Tout est relu en base AVANT d'écrire : l'expédition en cours (son ancien groupe), les membres cochés et les
+    // anciens membres du groupe — jamais les données affichées, qui peuvent dater
+    const first = await readFreshParcels([p0.id, ...(isGroup ? group!.map((m: any) => m.id) : [])])
+    const p = first.get(p0.id)
+    if (!p) throw new Error('Expédition introuvable en base (supprimée ?).')
+    const prevGroup = groupOf(p)
+    const byId = new Map(first)
+    const more = (prevGroup?.groupIds || []).filter((id: string) => !byId.has(id))
+    if (more.length) (await readFreshParcels(more)).forEach((v, k) => byId.set(k, v))
+
+    let members: any[] | undefined
+    if (isGroup) {
+      const missing = group!.filter((m: any) => !byId.has(m.id)).map(nicOfP)
+      if (missing.length) throw new Error(`Expédition(s) introuvable(s) en base : ${missing.join(', ')}. Décochez-la(les) puis réessayez.`)
+      members = group!.map((m: any) => byId.get(m.id))
+      // Une expédition a pu recevoir SES propres données de chèque entre-temps (autre poste) : on ne l'écrase pas
+      const taken = members.filter((m: any) => m.id !== p.id && hasDocData(m)
+        && !(prevGroup?.groupId && docsOf(m).some((d: any) => d.groupId === prevGroup.groupId)))
+      if (taken.length) throw new Error(`${taken.map(nicOfP).join(', ')} : a déjà ses propres données de chèque (saisies entre-temps). Décochez-la(les) puis réessayez.`)
+    }
+    // 🔗 Un seul writeBatch pour toutes les expéditions concernées : tout le groupe est écrit, ou rien
+    const writes = planGroupChequeWrites(p, docs, members, byId, docAmountOf, () => `G${Date.now()}-${p.id.slice(0, 6)}`)
+    let saved: Record<string, CodDocument[]>
+    try {
+      saved = await saveParcelsCodDocuments(writes, name, uid)
+    } catch (e: any) {
+      if (e?.code === 'permission-denied') throw new Error('Enregistrement refusé : au moins une expédition du chèque n\'est pas modifiable depuis votre compte (autre agence). Rien n\'a été enregistré.')
+      throw e
+    }
+    setControlOverrides(prev => {
+      const next = { ...prev }
+      Object.entries(saved).forEach(([id, d]) => { next[id] = { ...(next[id] || {}), codDocuments: d } })
+      return next
+    })
     setChequeModal(null)
-    if (point) await applyControl([p.id], true)
+    if (point) {
+      // Pointer toutes les expéditions du chèque, sauf celles déjà pointées (état relu juste avant l'écriture)
+      const ids = (members || [p]).map((m: any) => m.id)
+      const todo = ids.filter(id => !byId.get(id)?.controlled)
+      if (todo.length) await applyControl(todo, true)
+    }
+  }
+
+  // 🔎 Une expédition à grouper, cherchée par N° EXP dans toute la base (mêmes conditions que la liste proposée)
+  const findGroupCandidate = async (p: any, nicIn: string): Promise<{ parcel?: any; error?: string }> => {
+    const nic = nicIn.trim()
+    const snap = await getDocs(fbQuery(collection(db, 'parcelsLite'), where('senderNic', '==', nic), fbLimit(5)))
+    const x: any = snap.docs.map(d => ({ id: d.id, ...d.data() }))[0]
+    if (!x) return { error: `N° EXP ${nic} introuvable.` }
+    const norm = (v: any) => String(v || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim()
+    if (norm(x.senderNameNorm || x.sender?.name) !== norm(p.senderNameNorm || p.sender?.name || p.senderName)) return { error: `${nic} : autre expéditeur (${x.sender?.name || '—'}) — un chèque groupé concerne un seul expéditeur.` }
+    if (!isDocParcel(x)) return { error: `${nic} : pas de COD chèque / traite.` }
+    if (!canPoint(x) || (chequeOnly && !inMyAgency(x))) return { error: `${nic} : se pointe dans l'agence de destination (${x.destinationCity || x.receiver?.city || '—'}).` }
+    const pg = docsOf(p).find((d: any) => (d.groupIds || []).length > 1)
+    if (hasDocData(x) && !(pg && docsOf(x).some((d: any) => d.groupId === pg.groupId))) return { error: `${nic} : a déjà ses propres données de chèque.` }
+    return { parcel: x }
+  }
+
+  // 🔗 Expéditions chèque / traite du MÊME expéditeur, TOUTES DATES (version allégée, index senderNameNorm + codAmount)
+  const loadChequeCandidates = async (p: any): Promise<any[]> => {
+    const norm = p.senderNameNorm || String(p.sender?.name || p.senderName || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim()
+    if (!norm) return []
+    const snap = await getDocs(fbQuery(collection(db, 'parcelsLite'), where('senderNameNorm', '==', norm), where('codAmount', '>', 0), fbLimit(400)))
+    const pg = groupOf(p)
+    const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as any))
+    // 🔗 Membres DÉJÀ dans ce chèque groupé : toujours dans la liste, même absents de la recherche (limite, COD
+    // modifié, version allégée pas encore à jour…) — sinon ils seraient retirés du groupe sans que personne le voie
+    const absent = (pg?.groupIds || []).filter((id: string) => id !== p.id && !list.some((x: any) => x.id === id))
+    if (absent.length) (await readFreshParcels(absent)).forEach(x => list.push(x))
+    const inPg = (x: any) => !!pg?.groupId && docsOf(x).some((d: any) => d.groupId === pg.groupId)
+    // Toutes les expéditions chèque / traite de l'expéditeur ; celles qui ne peuvent pas être groupées restent
+    // visibles (grisées) avec la raison, pour qu'aucune ne « disparaisse » de la liste sans explication
+    return list
+      .filter((x: any) => x.id !== p.id && (isDocParcel(x) || inPg(x)))
+      .map((x: any) => {
+        let blocked = ''
+        // Un membre déjà dans CE groupe n'est jamais grisé (il serait sinon retiré du chèque en silence)
+        if (inPg(x)) return x
+        if (!canPoint(x) || (chequeOnly && !inMyAgency(x))) blocked = `à pointer à ${x.destinationCity || x.receiver?.city || '—'}`
+        else if (hasDocData(x)) blocked = `a déjà son chèque (N° ${docsOf(x)[0]?.numero || '—'})`
+        return blocked ? { ...x, _blocked: blocked } : x
+      })
   }
 
   // ✅ Pointage : marquer / dé-marquer contrôlé (batch Firestore + MAJ optimiste)
@@ -817,17 +1015,17 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
       const now = new Date().toISOString()
       setControlOverrides(prev => {
         const next = { ...prev }
+        // Fusion (pas de remplacement) : garder les autres champs déjà surchargés (codDocuments d'un chèque
+        // tout juste enregistré, confirmation d'arrivée…)
         clean.forEach(id => {
-          next[id] = value
-            ? { controlled: true, controlledBy: name, controlledById: uid, controlledAt: now }
-            : { controlled: false, controlledBy: '', controlledById: '', controlledAt: '' }
+          next[id] = {
+            ...(next[id] || {}),
+            ...(value
+              ? { controlled: true, controlledBy: name, controlledById: uid, controlledAt: now }
+              : { controlled: false, controlledBy: '', controlledById: '', controlledAt: '' }),
+          }
         })
         return next
-      })
-      setCtlSelected(prev => {
-        const s = new Set(prev)
-        clean.forEach(id => s.delete(id))
-        return s
       })
     } catch (err: any) {
       if (err?.code === 'permission-denied') {
@@ -875,11 +1073,99 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     }
   }
 
-  const toggleSelect = (id: string) => {
+  // ↩️ « Pointer » en bascule : annuler MON pointage ET tout ce qui en découle (voir planPointageCancel) :
+  // dé-pointage, données du chèque / de la traite effacées, chèque groupé dissous (ses expéditions que j'ai
+  // pointées sont dé-pointées). Bloqué si l'arrivée est déjà confirmée par l'agence de destination.
+  // Utilisé par le bouton de la ligne ET par « Annuler contrôle » de la barre de sélection.
+  const cancelPointage = async (list: any[]) => {
+    const ids = [...new Set(list.map((p: any) => p?.id).filter(Boolean))] as string[]
+    if (ids.length === 0 || pointing) return
+    setPointing(true)
+    const nicOfP = (x: any) => String(x?.senderNic || x?.sender?.nic || x?.trackingId || x?.id || '')
+    const nics = (bs: { nic: string; by: string }[]) => bs.map(b => `${b.nic} (${b.by})`).join(', ')
+    try {
+      // 1) État FRAIS des expéditions demandées puis des membres de leurs chèques groupés (pas forcément chargés)
+      const byId = await readFreshParcels(ids)
+      const more = groupMemberIdsToFetch([...byId.values()], new Set(byId.keys()))
+      if (more.length) (await readFreshParcels(more)).forEach((v, k) => byId.set(k, v))
+      // Affichage resynchronisé sur l'état relu (seulement pointage, arrivée et données du chèque)
+      setControlOverrides(prev => {
+        const next = { ...prev }
+        byId.forEach((v: any, k) => {
+          next[k] = {
+            ...(next[k] || {}),
+            controlled: !!v.controlled, controlledBy: v.controlledBy || '', controlledById: v.controlledById || '', controlledAt: v.controlledAt || '',
+            deliveryControlled: !!v.deliveryControlled, deliveryControlledBy: v.deliveryControlledBy || '', deliveryControlledById: v.deliveryControlledById || '', deliveryControlledAt: v.deliveryControlledAt || '',
+            codDocuments: Array.isArray(v.codDocuments) ? v.codDocuments : [],
+          }
+        })
+        return next
+      })
+      const plan = planPointageCancel(ids.map(id => byId.get(id) || { id }), byId, myUid)
+
+      const blockedMsg = plan.arrivalBlocked.length
+        ? `⛔ Arrivée déjà confirmée par l'agence de destination pour : ${nics(plan.arrivalBlocked)}.\nCette confirmation appartient à un autre utilisateur : l'agence de destination doit d'abord annuler SA confirmation d'arrivée. Rien n'a été annulé pour ${plan.arrivalBlocked.length > 1 ? 'ces expéditions' : 'cette expédition'} (ni pour son chèque groupé).`
+        : ''
+      const othersMsg = plan.othersPointed.length
+        ? `⚠️ Pointage d'un autre utilisateur, non annulé : ${nics(plan.othersPointed)}.${plan.groupsKept ? '\nLe chèque groupé qui les contient est GARDÉ tel quel (données non effacées) : seul votre pointage est annulé.' : ''}`
+        : ''
+      if (plan.unpoint.length === 0) {
+        alert([blockedMsg, othersMsg].filter(Boolean).join('\n\n') || 'Aucun pointage à vous à annuler dans la sélection.')
+        return
+      }
+
+      // 2) Confirmation claire de tout ce qui va être annulé
+      const unpointNics = plan.unpoint.map(id => nicOfP(byId.get(id)))
+      const lines = [
+        `Annuler le pointage de ${plan.unpoint.length} expédition(s) : ${unpointNics.slice(0, 15).join(', ')}${unpointNics.length > 15 ? '…' : ''} ?`,
+        plan.groupsDissolved ? `🔗 ${plan.groupsDissolved} chèque(s) groupé(s) dissous : les données du chèque seront effacées sur toutes ses expéditions (à ressaisir).` : '',
+        plan.clearDocs.length ? `🧾 Données de chèque / traite effacées sur ${plan.clearDocs.length} expédition(s).` : '',
+        othersMsg, blockedMsg,
+      ].filter(Boolean)
+      if (!confirm(lines.join('\n\n'))) return
+
+      // 3) Dé-pointage d'abord (règle « le pointage appartient à son auteur », écriture séparée) : s'il est refusé,
+      //    rien d'autre n'est touché. Puis effacement des données de chèque en un seul lot.
+      try {
+        await unmarkParcelsControlled(plan.unpoint)
+      } catch (err: any) {
+        if (err?.code === 'permission-denied') { await resyncAfterOwnershipDenial(plan.unpoint, 'annuler le pointage'); return }
+        throw err
+      }
+      const unpointed = plan.unpoint
+      setControlOverrides(prev => {
+        const next = { ...prev }
+        unpointed.forEach(id => { next[id] = { ...(next[id] || {}), controlled: false, controlledBy: '', controlledById: '', controlledAt: '' } })
+        return next
+      })
+      if (plan.clearDocs.length) {
+        try {
+          const name = profile?.name || 'Encaisseur central'
+          const cleared = await saveParcelsCodDocuments(Object.fromEntries(plan.clearDocs.map(id => [id, [] as CodDocument[]])), name, myUid)
+          setControlOverrides(prev => {
+            const next = { ...prev }
+            Object.keys(cleared).forEach(id => { next[id] = { ...(next[id] || {}), codDocuments: [] } })
+            return next
+          })
+        } catch (err: any) {
+          alert(`⚠️ Pointage annulé, mais les données du chèque / de la traite n'ont pas pu être effacées (${err?.message || err}).\nLe chèque reste enregistré tel quel : ouvrez « Pointer 🧾 » pour le corriger.`)
+          return
+        }
+      }
+      if (othersMsg || blockedMsg) alert(`✓ Pointage annulé pour ${plan.unpoint.length} expédition(s).\n\n${[othersMsg, blockedMsg].filter(Boolean).join('\n\n')}`)
+    } catch (err: any) {
+      alert(err?.message || 'Erreur lors de l\'annulation du pointage.')
+    } finally {
+      setPointing(false)
+    }
+  }
+
+  const toggleSelect = (p: any) => {
+    selCache.current.set(p.id, p)
     setCtlSelected(prev => {
       const s = new Set(prev)
-      if (s.has(id)) s.delete(id)
-      else s.add(id)
+      if (s.has(p.id)) s.delete(p.id)
+      else s.add(p.id)
       return s
     })
   }
@@ -889,7 +1175,7 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     setCtlSelected(prev => {
       const s = new Set(prev)
       if (allDisplayedSelected) ctlDisplayed.forEach((p: any) => s.delete(p.id))
-      else ctlDisplayed.forEach((p: any) => s.add(p.id))
+      else ctlDisplayed.forEach((p: any) => { selCache.current.set(p.id, p); s.add(p.id) })
       return s
     })
   }
@@ -1318,17 +1604,12 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
 
   const printControle = () => {
     // Imprimer les colis sélectionnés ou tous les colis filtrés
-    const toPrint = ctlSelected.size > 0
-      ? ctlFiltered.filter((p: any) => ctlSelected.has(p.id))
-      : ctlFiltered
+    const toPrint = ctlSelected.size > 0 ? ctlSelectedParcels : ctlFiltered
 
     if (toPrint.length === 0) {
       alert('Aucun colis à imprimer.')
       return
     }
-
-    const totalAmount = toPrint.reduce((sum: number, p: any) => sum + (parseFloat(p.codAmount) || 0), 0)
-    const controlledCount = toPrint.filter((p: any) => isControlled(p)).length
 
     // Déterminer la période affichée
     let periodeText = 'Toutes les périodes'
@@ -1346,80 +1627,38 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     // Déterminer la ville concernée
     const villeText = ctlCity === 'all' ? 'Toutes les villes' : ctlCity
 
-    const rows = toPrint.map((p: any) => `
-      <tr>
-        <td>${p.sender?.nic || p.senderNic || '-'}</td>
-        <td>${p.sender?.name || p.senderName || '-'}</td>
-        <td>${p.receiver?.name || p.receiverName || '-'}</td>
-        <td>${p.receiver?.tel || p.receiverTel || '-'}</td>
-        <td>${parcelCity(p)}</td>
-        <td>${codTypeLabel(p) || '-'}</td>
-        <td style="text-align:right;font-weight:bold">${money(p.codAmount)} DH${isMixedCod(p) ? `<br><span style="font-size:8pt;font-weight:normal">${codPartsBreakdown(p)}</span>` : ''}</td>
-        <td style="text-align:center">${isControlled(p) ? '✓' : ''}</td>
-      </tr>
-    `).join('')
-
-    const html = `<!doctype html><html><head><meta charset="utf-8"><title>Rapport Contrôle & Pointage - ${villeText}</title>
-      <style>
-        body{font-family:Arial,sans-serif;margin:22px;font-size:11px}
-        h1{font-size:20px;margin:0 0 4px;color:#7c3aed}
-        h2{font-size:16px;margin:0 0 8px;color:#6b7280;font-weight:normal}
-        .info{background:#f3f4f6;padding:12px;border-radius:8px;margin:12px 0}
-        .info p{margin:4px 0;font-size:12px}
-        table{width:100%;border-collapse:collapse;margin-top:14px}
-        th{background:#7c3aed;color:white;text-align:left;padding:8px;font-size:11px}
-        td{border-bottom:1px solid #e5e7eb;padding:7px;font-size:11px}
-        .total{background:#f9fafb;padding:12px;margin-top:14px;border-radius:8px}
-        .total p{margin:4px 0;font-weight:bold}
-        .footer{margin-top:20px;padding-top:12px;border-top:2px solid #e5e7eb;text-align:center;color:#6b7280;font-size:10px}
-      </style>
-    </head><body>
-      <h1>📋 Rapport Contrôle & Pointage - ${villeText}</h1>
-      <h2>Période: ${periodeText}</h2>
-      <div class="info">
-        <p><strong>${chequeOnly ? 'Analyseur Chèque' : 'Encaisseur Central'}:</strong> ${profile?.name || 'Encaisseur central'}${myCity ? ` — Agence de ${myCity}` : ''}</p>
-        <p><strong>Date d'impression:</strong> ${new Date().toLocaleDateString('fr-MA')} - ${new Date().toLocaleTimeString('fr-MA')}</p>
-        <p><strong>Type de rapport:</strong> ${ctlSelected.size > 0 ? 'Colis sélectionnés' : 'Tous les colis filtrés'}</p>
-      </div>
-      <table>
-        <thead>
-          <tr>
-            <th>N° EXP (NIC)</th>
-            <th>Expéditeur</th>
-            <th>Destinataire</th>
-            <th>Téléphone</th>
-            <th>Ville</th>
-            <th>Type Paiement</th>
-            <th>Montant</th>
-            <th>Contrôlé</th>
-          </tr>
-        </thead>
-        <tbody>${rows}</tbody>
-      </table>
-      <div class="total">
-        <p>Total colis: ${toPrint.length}</p>
-        <p>Total montant: ${money(totalAmount)} DH</p>
-        <p>Contrôlés: ${controlledCount} / ${toPrint.length} (${Math.round((controlledCount / toPrint.length) * 100)}%)</p>
-        <p>Non contrôlés: ${toPrint.length - controlledCount}</p>
-      </div>
-      <div class="footer">
-        <p>Document généré par le système de gestion - Encaisseur Central</p>
-      </div>
-    </body></html>`
-
-    const w: any = window.open('', '_blank')
-    if (!w) return
-    w.document.write(html)
-    w.document.close()
-    w.focus()
-    setTimeout(() => w.print(), 300)
+    // Lignes du rapport (contenu figé, réutilisé tel quel pour l'enregistrement et la réimpression)
+    const lines: ReportLine[] = toPrint.map((p: any) => {
+      const created = asDate(p.createdAt)
+      return {
+        id: p.id, nic: String(p.sender?.nic || p.senderNic || ''),
+        createdAt: created && !Number.isNaN(created.getTime()) ? created.toISOString() : '',
+        sender: p.sender?.name || p.senderName || '', receiver: p.receiver?.name || p.receiverName || '',
+        tel: p.receiver?.tel || p.receiverTel || '', city: parcelCity(p),
+        originCity: p.originCity || p.sender?.city || '', destinationCity: p.destinationCity || p.receiver?.city || '',
+        payType: codTypeLabel(p) || '', amount: parseFloat(p.codAmount) || 0, mixed: isMixedCod(p) ? codPartsBreakdown(p) : '',
+        controlled: !!isControlled(p), isDoc: !!isDocParcel(p),
+        docs: docsOf(p).map((d: any) => ({ type: d.type, numero: String(d.numero || ''), banque: String(d.banque || ''), montant: Number(d.montant) || 0, ...(d.echeance ? { echeance: d.echeance } : {}),
+          ...((d.groupIds || []).length > 1 ? { groupNics: (d.groupNics || []).map(String), groupTotal: Number(d.groupTotal) || 0 } : {}) })),
+      }
+    })
+    const meta = {
+      title: villeText, period: periodeText,
+      scope: ctlSelected.size > 0 ? 'Expéditions sélectionnées' : 'Toutes les expéditions filtrées',
+      createdBy: profile?.name || 'Encaisseur central', createdById: auth.currentUser?.uid || '',
+      createdByRole: chequeOnly ? 'Analyseur Chèque' : 'Encaisseur Central', createdByCity: myCity,
+    }
+    // 1) Impression immédiate ; 2) sauvegarde du rapport (onglet « Rapports envoyés ») — jamais bloquante
+    openPrint(controlReportHtml({ ...meta, lines }))
+    if (lines.length > 2500) { alert('Rapport trop volumineux pour être enregistré (plus de 2 500 expéditions) : imprimé seulement.'); return }
+    saveControlReport({ ...meta, lines })
+      .then(number => { setLastReport(number) })
+      .catch(err => alert(`Rapport imprimé mais NON enregistré : ${err?.message || err}`))
   }
 
   const exportToExcel = async () => {
     // Exporter les colis sélectionnés ou tous les colis filtrés
-    const toExport = ctlSelected.size > 0
-      ? ctlFiltered.filter((p: any) => ctlSelected.has(p.id))
-      : ctlFiltered
+    const toExport = ctlSelected.size > 0 ? ctlSelectedParcels : ctlFiltered
 
     if (toExport.length === 0) {
       alert('Aucun colis à exporter.')
@@ -1601,6 +1840,16 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
             <ClipboardCheck className="w-4 h-4" /> Contrôle & Pointage
           </button>
           <button
+            onClick={() => setActiveTab('rapports')}
+            className={`px-4 py-2.5 rounded-xl text-sm font-black flex items-center gap-2 transition-all duration-300 ${
+              activeTab === 'rapports'
+                ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg'
+                : 'text-purple-600 hover:bg-purple-50'
+            }`}
+          >
+            <FileText className="w-4 h-4" /> Rapports envoyés
+          </button>
+          <button
             onClick={() => setActiveTab('fournisseurs')}
             className={`px-4 py-2.5 rounded-xl text-sm font-black flex items-center gap-2 transition-all duration-300 ${
               activeTab === 'fournisseurs'
@@ -1622,8 +1871,19 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
           </button>
         </div>
 
+        {activeTab === 'rapports' && (
+          <ControlReportsPanel myCity={myCity} me={{ uid: auth.currentUser?.uid || '', name: profile?.name || '' }} isAdmin={profile?.role === 'admin'} />
+        )}
+
         {activeTab === 'controle' && (
           <>
+            {lastReport && (
+              <div className="rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-2.5 text-sm font-bold text-emerald-800 flex flex-wrap items-center gap-2">
+                ✅ Rapport <span className="font-mono">{lastReport}</span> enregistré.
+                <button onClick={() => setActiveTab('rapports')} className="underline">Voir les rapports envoyés</button>
+                <button onClick={() => setLastReport('')} className="ml-auto text-emerald-600"><X className="w-4 h-4" /></button>
+              </div>
+            )}
             {/* ✅ SUPPRIMÉ: Bandeau de chargement progressif - Utilise maintenant système Option 3 */}
 
             {/* KPIs contrôle */}
@@ -1860,11 +2120,19 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
             {/* Barre d'actions sélection */}
             {ctlSelected.size > 0 && (
               <section className="sticky top-24 z-10 bg-slate-900 text-white rounded-2xl px-4 py-3 shadow-2xl flex flex-wrap items-center gap-3">
-                <p className="text-sm font-black">{ctlSelected.size.toLocaleString('fr-MA')} colis sélectionné{ctlSelected.size > 1 ? 's' : ''}</p>
+                <p className="text-sm font-black">🖨️ {ctlSelected.size.toLocaleString('fr-MA')} expédition{ctlSelected.size > 1 ? 's' : ''} à imprimer
+                  {ctlSelectedParcels.some((p: any) => !ctlFiltered.some((x: any) => x.id === p.id)) && <span className="block text-[11px] font-semibold text-white/70">dont {ctlSelectedParcels.filter((p: any) => !ctlFiltered.some((x: any) => x.id === p.id)).length} hors de la recherche affichée (gardées)</span>}
+                </p>
                 <div className="ml-auto flex flex-wrap gap-2">
                   <button
+                    onClick={printControle}
+                    className="px-4 py-2 rounded-xl bg-purple-500 hover:bg-purple-600 text-white text-xs font-black flex items-center gap-2 transition"
+                  >
+                    <Printer className="w-3.5 h-3.5" /> Imprimer ({ctlSelected.size})
+                  </button>
+                  <button
                     onClick={() => {
-                      const selAll = ctlFiltered.filter((p: any) => ctlSelected.has(p.id))
+                      const selAll = ctlSelectedParcels.filter((p: any) => !isControlled(p))
                       // Seules les valeurs encaissées dans ma ville (destination) se pointent ici
                       const notMine = selAll.filter((p: any) => !canPoint(p))
                       if (notMine.length && !confirm(`${notMine.length} valeur(s) sélectionnée(s) sont à pointer par l'agence de destination (encaissés ailleurs) : ils seront ignorés.
@@ -1872,9 +2140,9 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
 Continuer ?`)) return
                       const sel = selAll.filter((p: any) => canPoint(p))
                       const noData = sel.filter((p: any) => isDocParcel(p) && !hasDocData(p) && !isControlled(p))
-                      if (noData.length && !confirm(`${noData.length} chèque(s) / traite(s) sélectionné(s) n'ont pas encore leurs données (N°, banque, échéance).\n\nIls ne seront PAS pointés : utilisez « Pointer » sur chaque ligne pour saisir leurs données.\n\nPointer les ${sel.length - noData.length} autre(s) ?`)) return
+                      if (noData.length && !confirm(`${noData.length} chèque(s) / traite(s) sélectionné(s) n'ont pas encore leurs données (N°, banque).\n\nIls ne seront PAS pointés : utilisez « Pointer » sur chaque ligne pour saisir leurs données.\n\nPointer les ${sel.length - noData.length} autre(s) ?`)) return
                       const skip = new Set([...noData, ...notMine].map((p: any) => p.id))
-                      applyControl([...ctlSelected].filter(id => !skip.has(id)), true)
+                      applyControl(selAll.map((p: any) => p.id).filter((id: string) => !skip.has(id)), true)
                     }}
                     disabled={pointing}
                     className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-600 disabled:opacity-50 text-white text-xs font-black flex items-center gap-2 transition"
@@ -1883,7 +2151,7 @@ Continuer ?`)) return
                     Pointer contrôlé
                   </button>
                   <button
-                    onClick={() => applyControl([...ctlSelected], false)}
+                    onClick={() => cancelPointage(ctlSelectedParcels)}
                     disabled={pointing}
                     className="px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-white text-xs font-black transition"
                   >
@@ -1902,10 +2170,12 @@ Continuer ?`)) return
 
             {chequeModal && (
               <ChequeEntryModal
-                parcel={ctlFiltered.find((x: any) => x.id === chequeModal.id) || chequeModal}
-                alreadyControlled={isControlled(ctlFiltered.find((x: any) => x.id === chequeModal.id) || chequeModal)}
+                parcel={chequeModalParcel}
+                alreadyControlled={isControlled(chequeModalParcel)}
                 onClose={() => setChequeModal(null)}
-                onSave={(docs, point) => saveChequeDocs(chequeModal, docs, point)}
+                loadCandidates={() => loadChequeCandidates(chequeModalParcel)}
+                findByNic={(nic: string) => findGroupCandidate(chequeModalParcel, nic)}
+                onSave={(docs, point, group) => saveChequeDocs(chequeModal, docs, point, group)}
               />
             )}
             {receptionOpen && (
@@ -1977,12 +2247,13 @@ Continuer ?`)) return
                             <input
                               type="checkbox"
                               checked={selected}
-                              onChange={() => toggleSelect(p.id)}
+                              onChange={() => toggleSelect(p)}
                               className="w-4 h-4 rounded accent-purple-600 cursor-pointer"
                             />
                           </td>
                           <td className="px-3 py-2.5">
                             <p className="font-mono text-xs font-bold text-blue-700">{p.trackingId || '-'}</p>
+                            {selected && <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded-md bg-purple-100 text-purple-700 text-[10px] font-black">🖨️ à imprimer</span>}
                             <p className="text-[11px] text-slate-500">
                               {(p.senderNic || p.sender?.nic) ? `N° EXP ${p.senderNic || p.sender?.nic} · ` : ''}{fmtDate(p.createdAt)}
                             </p>
@@ -1998,11 +2269,11 @@ Continuer ?`)) return
                           <td className="px-3 py-2.5 text-right font-black text-emerald-700 whitespace-nowrap">{money(p.codAmount)} DH{isMixedCod(p) && <div className="text-[10px] font-semibold text-slate-500">{codPartsBreakdown(p)}</div>}</td>
                           <td className="px-3 py-2.5">
                             {payTypeBadge(p)}
-                            {isDocParcel(p) && (
-                              <button type="button" onClick={() => setChequeModal(p)} className="block mt-1 text-left text-[10px] leading-tight hover:underline" title="Saisir / modifier les données du chèque ou de la traite">
-                                {hasDocData(p)
-                                  ? docsOf(p).map((d: any, i: number) => <span key={i} className="block text-slate-600">N° {d.numero} · {d.banque}{d.echeance ? ` · éch. ${d.echeance.split('-').reverse().join('/')}` : ''}</span>)
-                                  : <span className="font-bold text-amber-700">⚠️ Données à saisir ✏️</span>}
+                            {/* Données déjà saisies (clic = modifier). Pas encore saisies : rien ici, la saisie se fait par « Pointer 🧾 ». */}
+                            {isDocParcel(p) && hasDocData(p) && (
+                              <button type="button" onClick={() => setChequeModal(p)} className="block mt-1 text-left text-[10px] leading-tight hover:underline" title="Modifier les données du chèque ou de la traite">
+                                {docsOf(p).map((d: any, i: number) => <span key={i} className="block text-slate-600">N° {d.numero} · {d.banque}{d.echeance ? ` · éch. ${d.echeance.split('-').reverse().join('/')}` : ''}
+                                  {(d.groupIds || []).length > 1 && <span className="ml-1 px-1 rounded bg-indigo-100 text-indigo-700 font-black" title={`Chèque groupé de ${money(d.groupTotal)} DH : ${(d.groupNics || []).join(', ')}`}>🔗 groupé ×{d.groupIds.length}</span>}</span>)}
                               </button>
                             )}
                           </td>
@@ -2015,26 +2286,27 @@ Continuer ?`)) return
                                 indépendantes en base — voir markParcelsControlled/DeliveryControlled). */}
                             <div className="flex flex-col items-start gap-1.5">
                               {/* 1er contrôle */}
-                              {controlled ? (
-                                <div className="flex items-center gap-2">
-                                  <div>
-                                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-black bg-green-100 text-green-700">
-                                      <CheckCircle2 className="w-3 h-3" /> Contrôlé
-                                    </span>
-                                    <p className="text-[10px] text-slate-400 mt-0.5">{withCity(p.controlledBy, p.controlledById)} {p.controlledAt ? `· ${fmtDate(p.controlledAt)}` : ''}</p>
-                                  </div>
-                                  {/* ⚠️ Chaque pointage n'appartient qu'à son auteur : seul l'utilisateur qui a
-                                      contrôlé ce colis peut annuler SON contrôle (comparaison sur controlledById). */}
-                                  {p.controlledById === myUid && (
-                                    <button
-                                      onClick={() => applyControl([p.id], false)}
-                                      disabled={pointing}
-                                      className="p-1.5 rounded-lg bg-amber-50 hover:bg-amber-100 text-amber-600 disabled:opacity-50 transition"
-                                      title="Annuler mon contrôle"
-                                    >
-                                      <X className="w-3.5 h-3.5" />
-                                    </button>
-                                  )}
+                              {controlled && p.controlledById === myUid ? (
+                                // ↩️ Bascule : pointé PAR MOI → un clic annule le pointage et tout ce qui en
+                                // découle (données du chèque, chèque groupé) — voir cancelPointage
+                                <div>
+                                  <button
+                                    onClick={() => cancelPointage([p])}
+                                    disabled={pointing}
+                                    className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-amber-500 disabled:opacity-50 text-white text-[11px] font-black transition"
+                                    title="Pointé par vous — cliquer pour annuler le pointage (et les données du chèque / de la traite)"
+                                  >
+                                    <CheckCircle2 className="w-3 h-3" /> Pointé
+                                  </button>
+                                  <p className="text-[10px] text-slate-400 mt-0.5">{withCity(p.controlledBy, p.controlledById)} {p.controlledAt ? `· ${fmtDate(p.controlledAt)}` : ''}</p>
+                                </div>
+                              ) : controlled ? (
+                                // ⚠️ Chaque pointage n'appartient qu'à son auteur : pointé par un autre → lecture seule
+                                <div>
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-black bg-green-100 text-green-700">
+                                    <CheckCircle2 className="w-3 h-3" /> Contrôlé
+                                  </span>
+                                  <p className="text-[10px] text-slate-400 mt-0.5">{withCity(p.controlledBy, p.controlledById)} {p.controlledAt ? `· ${fmtDate(p.controlledAt)}` : ''}</p>
                                 </div>
                               ) : !canPoint(p) ? (
                                 <span className="text-[10px] font-semibold text-slate-400" title="Le chèque est pointé par l'agence où il a été encaissé (ville de destination), avant son envoi">
