@@ -1,6 +1,20 @@
 {
   "indexes": [
     {
+      "collectionGroup": "commercialPurchases",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "city",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [

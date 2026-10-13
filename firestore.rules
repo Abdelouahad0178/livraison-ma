@@ -292,6 +292,37 @@ service cloud.firestore {
         && (!touchesOnlyControlFields() || isOwnControlChange());
     }
 
+    // ✏️ Correction des données d'une expédition par le chef d'agence / l'agent pro, AUTORISÉE PAR L'ADMIN
+    // (settings/editPermissions.parcelEditScope.<rôle> : created = expéditions créées par lui ou par les
+    // aides-agents / le portail client de son agence ; received = expéditions reçues par son agence).
+    // Tout statut SAUF « Livré » (même chargée dans un camion). Uniquement les champs du bon ; le COD, le prix
+    // et le type de port seulement si l'admin les a cochés pour ce rôle et tant qu'ils ne sont pas encaissés.
+    function adminScopedBonEdit() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let perms = get(/databases/$(database)/documents/settings/editPermissions).data;
+      let scope = perms.get('parcelEditScope', {}).get(role(), {});
+      let fields = perms.get(role(), []);
+      return changed.hasOnly(parcelBonEditFields().concat(['bonEditedAt', 'bonEditedBy', 'bonEditedByName']))
+        && !(resource.data.get('status', '') in ['Livré', 'LivrÃ©'])
+        && (
+          (scope.get('received', false) == true && resource.data.get('destinationCity', '') == userCity())
+          || (scope.get('created', false) == true && (
+            resource.data.get('agentId', '') == request.auth.uid
+            || (resource.data.get('agentRole', '') in ['aide_agent', 'client_portal']
+                && (resource.data.get('originCity', '') == userCity() || resource.data.get('sender', {}).get('city', '') == userCity()))
+          ))
+        )
+        && (!changed.hasAny(['codAmount', 'codAmountHistory', 'codMixed', 'codCashAmount']) || fields.hasAny(['codAmount']))
+        && (!changed.hasAny(['codAmount', 'codAmountHistory', 'codMixed', 'codCashAmount', 'codStatus', 'codPaymentType', 'serviceType'])
+            || resource.data.get('codStatus', null) in [null, '', 'pending'])
+        && (!changed.hasAny(['price']) || fields.hasAny(['price']))
+        && (!changed.hasAny(['portType']) || fields.hasAny(['portType']))
+        && (!changed.hasAny(['price', 'portType'])
+            || (!(resource.data.get('portStatus', null) in ['collected', 'received']) && resource.data.get('invoiced', false) != true))
+        && keepsEnComptePortType()
+        && isNotBlocked();
+    }
+
     function isOwnControlChange() {
       // ⚠️ resource.data.controlled LÈVE UNE ERREUR (pas juste null) si le champ n'existe pas
       // encore sur le colis — cas du tout premier pointage. .get(clé, défaut) évite ce piège.
@@ -351,6 +382,13 @@ service cloud.firestore {
         && 'history' in request.resource.data
         && !touchesOnlyControlFields()) && isWorkAccount();
       allow update: if chefFastPathUpdate();
+      // ✏️ Correction autorisée par l'admin (Admin › Permissions › Expéditions modifiables).
+      // Garde en tête, quasi gratuite : seule une correction signée (bonEditedBy = l'auteur, bonEditedAt
+      // nouveau) va plus loin — les autres mises à jour ne consomment pas le budget de 1000 expressions.
+      allow update: if request.resource.data.get('bonEditedBy', '') == request.auth.uid
+        && request.resource.data.get('bonEditedAt', '') != resource.data.get('bonEditedAt', '')
+        && (role() == 'chef_agence' || role() == 'agentpro')
+        && adminScopedBonEdit();
       // ↩️ Annulation d'un retour (chefs) : seulement depuis un colis marqué retourné, vers un état
       // non retourné, avec les seuls champs du retour.
       allow update: if resource.data.get('wasReturned', false) == true
@@ -834,7 +872,9 @@ service cloud.firestore {
     match /settings/{settingId} {
       // adminSetup, workingDate, editPermissions, operationalDay lisibles publiquement
       allow read:  if settingId == 'adminSetup' || settingId == 'workingDate' || settingId == 'editPermissions' || settingId == 'operationalDay' ? true : signedIn();
-      allow write: if settingId == 'tariffs' ? isAdmin() : isStaff();
+      // 🔒 Tarifs et permissions de modification : admin seul (avant : tout le personnel pouvait
+      // s'accorder des droits en écrivant editPermissions)
+      allow write: if settingId in ['tariffs', 'editPermissions'] ? isAdmin() : isStaff();
       // CrÃ©ation du document adminSetup lors de la premiÃ¨re inscription admin
       allow create: if settingId == 'adminSetup'
         && !exists(/databases/$(database)/documents/settings/adminSetup);
@@ -1540,6 +1580,18 @@ service cloud.firestore {
           'actionsToday', 'parcelsCreatedToday', 'parcelsUpdatedToday', 'codCollectedToday'
         ]);
       allow delete: if isAdmin();
+    }
+
+    // 📦 Rapports Contrôle & Pointage enregistrés (suivi des envois de chèques vers la ville qui les reçoit)
+    match /controlReports/{id} {
+      allow read: if isCentralCollector() || isChequeAnalyst() || isAdminOrDirecteur();
+      allow create: if (isCentralCollector() || isChequeAnalyst() || isAdmin())
+        && request.resource.data.createdById == request.auth.uid;
+      // « Envoi reçu » : seule l'entrée de SA ville dans receivedBy, rien d'autre
+      allow update: if (isCentralCollector() || isChequeAnalyst())
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['receivedBy'])
+        && request.resource.data.receivedBy.diff(resource.data.get('receivedBy', {})).affectedKeys().hasOnly([userCity()]);
+      allow delete: if resource.data.createdById == request.auth.uid || isAdmin();
     }
 
     // Règle par défaut — la collection presence est exclue (lecture réservée Admin/Directeur ci-dessus)

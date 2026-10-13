@@ -1633,7 +1633,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   const handleSubmit = async (e: any) => {
     const {
       setError, setLoading, setCreatedParcel, profile,
-      allSectors, drivers, clients, allClientsLoaded, price, loading,
+      allSectors, drivers, clients, clientsKnownCities, price, loading,
     } = s.current
     // ⚡ N° EXP relu dans le champ lui-même : sa saisie est transmise au formulaire en arrière-plan (NewTab),
     // le dernier chiffre tapé juste avant l'enregistrement est donc toujours pris en compte
@@ -1793,9 +1793,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         agentRole:            profile?.role || 'agent',
         hasRetourBL:          form.hasRetourBL || false,  // ⭐ Retour BL obligatoire
         deliveryMethod:       form.enGare ? 'gare' : 'domicile',  // 🚉 Mode de livraison
-      // ⚡ clients déjà chargés en direct : pas de relecture Firestore. Tant que seule la petite
-      // liste des clients à code est arrivée, on relit Firestore (sinon risque de client en double).
-      }, { knownClients: allClientsLoaded ? clients : null })
+      // ⚡ clients déjà chargés en direct : pas de relecture Firestore — seulement pour les villes dont TOUS les
+      // clients sont chargés et confirmés par le serveur (agence, villes de destination choisies). Autre ville,
+      // ou liste pas encore arrivée : relecture Firestore (sinon risque de client en double).
+      }, { knownClients: clientsKnownCities?.length ? clients : null, knownCities: clientsKnownCities || [] })
 
       // 🚀 OPÉRATIONS POST-CRÉATION EN ARRIÈRE-PLAN (sans bloquer l'UI)
 
@@ -1929,7 +1930,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   }
 
   const handleEditSave = async () => {
-    const { editForm, editingParcel, setEditLoading, setEditError, setEditingParcel, setParcels, profile } = s.current
+    const { editForm, editingParcel, setEditLoading, setEditError, setEditingParcel, setParcels, profile, adminScopeAllowsEdit } = s.current
 
     console.log('🔍 DEBUG DEBUT handleEditSave:', {
       editFormStatus: editForm?.status,
@@ -1997,7 +1998,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         }, { uid: auth.currentUser?.uid || null, name: profile?.name || 'Utilisateur' })
 
         // 🔒 Colis chargé dans un camion : seul l'admin peut encore modifier le bon
-        if (Object.keys(detailsPatch).length > 0 && editingParcel.shipmentLoadedAt && profile?.role !== 'admin') {
+        // (sauf autorisation de l'admin : Permissions › Expéditions modifiables)
+        if (Object.keys(detailsPatch).length > 0 && editingParcel.shipmentLoadedAt && profile?.role !== 'admin' && !adminScopeAllowsEdit?.(editingParcel)) {
           throw Object.assign(new Error('locked'), { code: 'permission-denied' })
         }
 
@@ -2027,6 +2029,12 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
           }
         }
 
+        // ✏️ Correction signée (qui, quand) : exigée par la règle Firestore « Expéditions modifiables »
+        if (Object.keys(detailsPatch).length > 0 && (profile?.role === 'chef_agence' || profile?.role === 'agentpro')) {
+          detailsPatch.bonEditedAt = new Date().toISOString()
+          detailsPatch.bonEditedBy = auth.currentUser?.uid || null
+          detailsPatch.bonEditedByName = profile?.name || ''
+        }
         if (Object.keys(detailsPatch).length > 0) {
           await updateParcel(editingParcel.id, detailsPatch)
           detailsSaved = true

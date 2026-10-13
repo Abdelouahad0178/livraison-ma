@@ -3,7 +3,7 @@ import {
   AlertTriangle, Banknote, Calendar, Car, Check, CheckSquare,
   ChevronDown, ChevronLeft, ChevronRight, Download, Edit, Edit2, Filter, Hand,
   LayoutGrid, Lock, Package, Pencil, PenTool, Printer, Search, Table2, Trash2, Truck,
-  Unlock, User, X,
+  ShieldCheck, Unlock, User, X,
 } from 'lucide-react'
 import { useState, useRef, useEffect, useMemo, useDeferredValue } from 'react'
 import PendingBadge from '../../../components/PendingBadge'
@@ -141,6 +141,7 @@ export default function ParcelsTab() {
     loadingMore, setLoadingMore,
     setExtraParcels,
     hasMoreAgency,
+    agencyCapReached, agencyCapSize,
     loadMoreAgencyParcels,
     loadingMoreAgency,
 
@@ -180,6 +181,7 @@ export default function ParcelsTab() {
     // Parcel logic helpers
     canActAsParcelOwner,
     canEditParcelDetails,
+    adminScopeAllowsEdit,
     canEditField,
     canManageStatus,
     canManageReturnDelivery,
@@ -2157,6 +2159,12 @@ export default function ParcelsTab() {
                           agencyLoading={!!loadingAllAgency}
                           citiesProgress={loadAllCitiesProgress || 0}
                         />
+                      )}
+                      {/* ⚠️ « Récent » + filtre : plafond par sens atteint (la suite n'est chargée que pour une période) */}
+                      {agencyCapReached && datePreset === 'all' && (
+                        <span className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-orange-50 border border-orange-200 text-orange-700 text-[11px] font-semibold">
+                          ⚠️ Affichage limité aux {Number(agencyCapSize || 2000).toLocaleString('fr-FR')} expéditions les plus récentes par sens — choisissez une période pour tout voir
+                        </span>
                       )}
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
@@ -5191,7 +5199,13 @@ export default function ParcelsTab() {
               }}
             >
               {editError && <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {editError}</div>}
-              {editingParcel.shipmentLoadedAt && profile?.role !== 'admin' && (
+              {profile?.role !== 'admin' && adminScopeAllowsEdit?.(editingParcel) && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-3 rounded-xl text-sm flex items-start gap-2">
+                  <ShieldCheck className="w-4 h-4 mt-0.5 shrink-0" />
+                  <span>Modification autorisée par l'administrateur ({String(editingParcel.destinationCity || '').trim().toLowerCase() === String(profile?.city || '').trim().toLowerCase() ? 'expédition reçue par votre agence' : 'expédition créée par vous ou votre agence'}). Seuls les champs non verrouillés 🔒 peuvent être changés.</span>
+                </div>
+              )}
+              {editingParcel.shipmentLoadedAt && profile?.role !== 'admin' && !adminScopeAllowsEdit?.(editingParcel) && (
                 <div className="bg-amber-50 border border-amber-200 text-amber-800 p-3 rounded-xl text-sm flex items-start gap-2">
                   <Lock className="w-4 h-4 mt-0.5 shrink-0" />
                   <span>Colis déjà chargé dans un camion : les données du bon sont verrouillées (seul l'administrateur peut les modifier).</span>
