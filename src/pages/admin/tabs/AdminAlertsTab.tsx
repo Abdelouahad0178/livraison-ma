@@ -1,5 +1,6 @@
 import { AlertTriangle, Banknote, Wallet, MessageCircle, Download, Trash2 } from 'lucide-react'
 import { fmt } from '../../../utils/formatNumber'
+import { ParcelParties } from '../../../components/ParcelParties'
 
 interface AdminAlertsTabProps {
   delayedAlerts: any[]
@@ -174,8 +175,9 @@ export default function AdminAlertsTab({
                       {isCod ? 'RETOUR FOND collecté non remis' : `Retard statut "${p.status}"`}
                       <span className="font-mono text-xs text-blue-600 bg-blue-50 px-2 py-0.5 rounded-lg ml-2">{p.trackingId}</span>
                     </p>
-                    <p className="text-xs text-gray-500 mt-1">
-                      {p.receiver?.name} · {p.receiver?.city} · {a.ageHours}h écoulées
+                    <ParcelParties parcel={p} className="mt-1" />
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      📍 {p.receiver?.city} · {a.ageHours}h écoulées
                       {a.overdue > 0 && <span className="text-red-600 font-semibold"> · +{a.overdue}h de dépassement</span>}
                     </p>
                   </div>

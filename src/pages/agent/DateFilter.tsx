@@ -52,7 +52,8 @@ export default function DateFilter({
   const presets = operationalMode ? OPERATIONAL_FILTER_PRESETS : FILTER_PRESETS
   // 📅 « Période » : la recherche ne part qu'une fois les DEUX dates choisies (et dans l'ordre). D'ici là,
   // les dates restent en brouillon ici et la période précédente reste appliquée sur la page.
-  const [draft, setDraft] = useState<{ from: string; to: string } | null>(null)
+  // toPicked : la date de fin a été CHOISIE dans ce brouillon (et pas seulement reprise de l'ancienne période)
+  const [draft, setDraft] = useState<{ from: string; to: string; toPicked?: boolean } | null>(null)
   // Période changée ailleurs (réinitialisation, raccourci…) : brouillon abandonné
   useEffect(() => { setDraft(null) }, [value, from, to])
   const showCustom = value === 'custom' || draft !== null
@@ -62,8 +63,12 @@ export default function DateFilter({
     onChange(key)
   }
   const editPeriod = (part: 'from' | 'to', v: string) => {
-    const next = { from: draft ? draft.from : (from || ''), to: draft ? draft.to : (to || ''), [part]: v }
-    if (next.from && next.to && next.from <= next.to) {
+    const next = { from: draft ? draft.from : (from || ''), to: draft ? draft.to : (to || ''), toPicked: !!draft?.toPicked, [part]: v }
+    if (part === 'to') next.toPicked = true
+    // Nouvelle date de début : la date de fin est à (re)choisir, sauf si elle vient d'être choisie dans ce brouillon
+    else if (!next.toPicked) next.to = ''
+    // La recherche ne part qu'une fois la DATE DE FIN choisie : changer la date de début seule ne lance rien
+    if (next.toPicked && next.from && next.to && next.from <= next.to) {
       onFromChange?.(next.from)
       onToChange?.(next.to)
       if (value !== 'custom') onChange('custom')
@@ -116,7 +121,8 @@ export default function DateFilter({
         <p className="pl-6 text-[11px] text-amber-700">
           {draft.from && draft.to && draft.from > draft.to
             ? '⚠️ La date de début doit précéder la date de fin.'
-            : 'Choisissez les deux dates : la recherche se lance ensuite.'}
+            : draft.from ? 'Choisissez maintenant la date de fin : la recherche se lance ensuite.'
+            : 'Choisissez les deux dates : la recherche se lance au choix de la date de fin.'}
         </p>
       )}
     </div>

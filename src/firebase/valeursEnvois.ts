@@ -13,6 +13,9 @@ import { caisseEntryDoc } from './caisse'
  * Collection `valeursEnvois` — statuts : 'envoye' → 'valide' | 'rejete' | 'annule'.
  */
 export type ValeurKind = 'port_du' | 'cod' | 'port_paye'
+/** 📤 Type de versement : Ports (dus + payés ramassés), COD espèces, COD chèques / traites (« cod » = anciens envois). */
+export type EnvoiGroup = 'ports' | 'cod' | 'cod_especes' | 'cod_docs'
+export const ENVOI_GROUP_LABEL: Record<EnvoiGroup, string> = { ports: '💵 Ports', cod: '💰 COD', cod_especes: '💵 COD espèces', cod_docs: '📋 COD chèques / traites' }
 export const VALEUR_KIND_LABEL: Record<ValeurKind, string> = { port_du: 'Port dû', cod: 'COD', port_paye: 'Port payé à ramasser' }
 export type ValeurType = 'especes' | 'cheque' | 'traite'
 
@@ -38,6 +41,12 @@ export interface Envoi {
   validatedByName?: string
   validatedAt?: any
   rejectReason?: string
+  /** 📤 Versement « Ports » (dus + payés ramassés) ou « COD » (tous types) — absent sur les anciens envois */
+  group?: EnvoiGroup
+  /** Période choisie par le chef d'exploitation (journées d'opération) et son libellé */
+  periodLabel?: string
+  periodFrom?: string | null
+  periodTo?: string | null
   caisseEntryIds?: string[]
   validationErrors?: string[]
 }
@@ -57,7 +66,10 @@ export function subscribeEnvois(city: string, cb: (list: Envoi[]) => void, onErr
   return onSnapshot(q, snap => cb(snap.docs.map(d => ({ id: d.id, ...d.data() } as Envoi))), onError)
 }
 
-export async function createEnvoi(p: { city: string; byId: string; byName: string; items: EnvoiItem[]; note?: string }) {
+export async function createEnvoi(p: {
+  city: string; byId: string; byName: string; items: EnvoiItem[]; note?: string
+  group?: EnvoiGroup; periodLabel?: string; periodFrom?: string | null; periodTo?: string | null
+}) {
   if (p.items.length === 0) throw new Error('Aucune valeur à envoyer.')
   const ref = await addDoc(collection(db, 'valeursEnvois'), {
     city: p.city,
@@ -68,6 +80,8 @@ export async function createEnvoi(p: { city: string; byId: string; byName: strin
     note: p.note || '',
     items: p.items,
     totals: computeTotals(p.items),
+    ...(p.group ? { group: p.group } : {}),
+    ...(p.periodLabel ? { periodLabel: p.periodLabel, periodFrom: p.periodFrom ?? null, periodTo: p.periodTo ?? null } : {}),
   })
   return ref.id
 }

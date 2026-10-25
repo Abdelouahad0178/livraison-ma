@@ -210,6 +210,8 @@ export default function LivePresenceCard({ users = [] }: { users?: any[] }) {
     updated: filtered.reduce((s, r) => s + r.updated, 0),
   }), [filtered])
 
+  // 📂 Repliée au démarrage (gain de place) : compteurs visibles, liste des utilisateurs au clic sur la flèche
+  const [open, setOpen] = useState(false)
   const live = filtered.filter(r => r.status !== 'offline')
   const offline = filtered.filter(r => r.status === 'offline')
 
@@ -232,6 +234,11 @@ export default function LivePresenceCard({ users = [] }: { users?: any[] }) {
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
+            <button type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
+              className="bg-white/10 hover:bg-white/20 border border-white/20 text-white text-xs font-bold rounded-xl px-3 py-2 flex items-center gap-1">
+              {open ? 'Replier' : 'Voir les utilisateurs'}
+              <ChevronDown className={`w-4 h-4 transition-transform ${open ? 'rotate-180' : ''}`} />
+            </button>
             <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)}
               className="bg-white/10 border border-white/20 text-white text-xs font-semibold rounded-xl px-3 py-2 [&>option]:text-gray-900">
               <option value="all">Tous les rôles</option>
@@ -255,7 +262,8 @@ export default function LivePresenceCard({ users = [] }: { users?: any[] }) {
         </div>
       </div>
 
-      {/* Corps */}
+      {/* Corps (replié au démarrage) */}
+      {open && (
       <div className="p-3 sm:p-4 space-y-3 bg-slate-50/60">
         {error && <div className="text-xs font-semibold text-red-700 bg-red-50 border border-red-100 rounded-xl px-3 py-2">{error}</div>}
 
@@ -296,6 +304,7 @@ export default function LivePresenceCard({ users = [] }: { users?: any[] }) {
           </div>
         )}
       </div>
+      )}
     </div>
   )
 }

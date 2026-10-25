@@ -253,7 +253,6 @@ const AdminExpeditionsPage = () => {
           loading={loading}
           setCodEditModal={() => {}}
           setNicEditModal={() => {}}
-          setNewParcelModal={() => {}}
           setStatusModal={() => {}}
           openAdminEdit={() => {}}
           allParcels={allParcels}

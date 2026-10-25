@@ -1,6 +1,8 @@
 import { showToast } from '../utils/toast'
+import { docPartKeepingTotal } from '../utils/codParts'
 import { isAgencyStaff, matchesActivityRole } from '../utils/roles'
-import { lazy, Suspense, useEffect, useRef, useState, useMemo } from 'react'
+import { lazy, Suspense, useEffect, useRef, useState, useMemo, useDeferredValue } from 'react'
+import PendingBadge from '../components/PendingBadge'
 import { setPresenceTab } from '../services/presenceCounters'
 import { codPaymentTypeOf } from '../firebase/constants'
 import { codSplitAmount, codHasType, isMixedCod, codPartsLabel } from '../utils/codParts'
@@ -11,7 +13,7 @@ import { useNavigate } from 'react-router-dom'
 import { useFuseSearch } from '../hooks/useFuseSearch'
 import { ADMIN_SEARCH_CONFIG, SEARCH_PLACEHOLDERS } from '../config/searchConfig'
 import { useOperationalDaySelector } from '../hooks/useOperationalDay'
-import { getOperationalDayRange } from '../config/operationalDay'
+import { getCurrentOperationalDay, getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
 import { startAutoSync } from '../firebase/operationalDaySync'
 import {
@@ -35,6 +37,8 @@ import {
   searchParcels,
 } from '../firebase/firestore'
 import { deleteParcel, getRealParcelsStats, subscribeAgencyParcelsFull, subscribeAgencyParcels, getMoreAgencyParcels } from '../firebase/parcels'
+import { ALL_CITIES } from '../utils/liteDayCache'
+import AdminDriverSection from './admin/components/AdminDriverSection'
 
 // 🏙️ Filtre ville sans période (« Tout ») : borne basse « depuis toujours » des requêtes par ville
 const CITY_ALL_TIME_FROM = new Date(2000, 0, 1)
@@ -69,9 +73,12 @@ import {
   Building2, AlertTriangle, Download, Calculator, RotateCcw, Lock, CheckCircle2, FileText, Upload, Power, Copy, MessageCircle, Monitor, Star, Archive, Settings,
 } from 'lucide-react'
 import CompanyContact from '../components/CompanyContact'
+import { CitySelect } from '../components/CitySelect'
 import SignatureViewerModal from '../components/SignatureViewerModal'
 import LiveClock from '../components/LiveClock'
 import WorkingDateIndicator from '../components/WorkingDateIndicator'
+import LivraisonDuJourStats from '../components/admin/LivraisonDuJourStats'
+import MaintenanceToggleButton from '../components/MaintenanceToggleButton'
 import { normIncludes, normText, isDigitsOnly, numberStartsWith } from '../utils/normText'
 
 const AdminCaisseTab = lazy(() => import('./admin/tabs/AdminCaisseTab'))
@@ -93,7 +100,9 @@ const AdminAlertsTab = lazy(() => import('./admin/tabs/AdminAlertsTab'))
 const AdminTariffsTab = lazy(() => import('./admin/tabs/AdminTariffsTab'))
 const AdminExportsTab = lazy(() => import('./admin/tabs/AdminExportsTab'))
 const AdminArchivageTab = lazy(() => import('./admin/tabs/AdminArchivageTab'))
+const AdminControleurTab = lazy(() => import('./admin/tabs/AdminControleurTab'))
 const AdminPortAgenciesTab = lazy(() => import('./admin/tabs/AdminPortAgenciesTab'))
+const AdminCodAgenciesTab = lazy(() => import('./admin/tabs/AdminCodAgenciesTab'))
 const AdminLostParcelsTab = lazy(() => import('./admin/tabs/AdminLostParcelsTab'))
 const AdminClientsTab = lazy(() => import('./admin/tabs/AdminClientsTab'))
 const AdminUtilitiesTab = lazy(() => import('./admin/tabs/AdminUtilitiesTab'))
@@ -107,7 +116,6 @@ import DirectorLogsModal from './admin/modals/DirectorLogsModal'
 import DriverPortDuModal from './admin/modals/DriverPortDuModal'
 import AdminEditParcelModal from './admin/modals/AdminEditParcelModal'
 import { fmt } from '../utils/formatNumber'
-import { analyzeNbColisShortcut, nbColisDigitsOnly, NB_COLIS_SHORTCUT_TITLE } from '../utils/nbColisShortcut'
 import { codMoneyOnly, isPortDuMoneyBeforeStart } from '../utils/moneyFlow'
 
 const parcelDate = (p: any) => {
@@ -364,6 +372,16 @@ export default function AdminPage() {
   const [adminDatePreset, setAdminDatePreset] = useState('all') // « Tout » = 50 expéditions les plus récentes au démarrage
   const [adminDateFrom,   setAdminDateFrom]   = useState('')
   const [adminDateTo,     setAdminDateTo]     = useState('')
+  // 📅 Période « Personnalisée » : les champs de date sont libres pendant la saisie, mais la période n'est
+  // APPLIQUÉE (chargement, filtres) qu'une fois les DEUX dates choisies (ou les deux effacées).
+  const [dateFromInput, setDateFromInput] = useState('')
+  const [dateToInput, setDateToInput] = useState('')
+  useEffect(() => {
+    if ((dateFromInput && dateToInput) || (!dateFromInput && !dateToInput)) {
+      setAdminDateFrom(dateFromInput)
+      setAdminDateTo(dateToInput)
+    }
+  }, [dateFromInput, dateToInput])
 
   // 🗓️ Journée opérationnelle
   const {
@@ -383,6 +401,15 @@ export default function AdminPage() {
     }
   }
 
+  // 📅 « COD par agence » / « Port par agence » : filtre de date PROPRE (partagé entre ces deux onglets seulement).
+  // Ils démarrent sur la veille travaillée (useStartOnPreviousWorkedDay) ; avant (24/10/2026), ce choix passait aussi
+  // dans le filtre de l'onglet Expéditions, qui doit rester comme avant (« Tout »).
+  const [agDatePreset, setAgDatePreset] = useState('all')
+  const [agDateFrom, setAgDateFrom] = useState('')
+  const [agDateTo, setAgDateTo] = useState('')
+  const [agOperationalDay, setAgOperationalDayRaw] = useState<Date>(() => getCurrentOperationalDay())
+  const setAgOperationalDay = (day: Date | null) => setAgOperationalDayRaw(day ?? getCurrentOperationalDay())
+
   const [codDatePreset, setCodDatePreset] = useState('all')
   const [codDateFrom,   setCodDateFrom]   = useState('')
   const [codDateTo,     setCodDateTo]     = useState('')
@@ -394,6 +421,7 @@ export default function AdminPage() {
   const [parcels,      setParcels]      = useState<any[]>([]) // Pour compatibilité - alias de liveParcels
   const [liveParcels,  setLiveParcels]  = useState<any[]>([]) // Temps réel (premiers 800)
   const [moreParcels,  setMoreParcels]  = useState<any[]>([]) // Chargés progressivement
+  const [rowPatches,   setRowPatches]   = useState<Map<string, any>>(() => new Map()) // lignes affichées écoutées à part
   const lastPageDocRef = useRef<any>(null)
   const pagedRef = useRef(false) // true si on a déjà chargé des pages
   const cityPeriodModeRef = useRef(false) // chargement « ville + période » (complet, sans « Charger plus »)
@@ -418,10 +446,10 @@ export default function AdminPage() {
   const [isServerSearching, setIsServerSearching] = useState(false) // État recherche serveur en cours
 
   // ⚡ CONTRÔLE DU RECHARGEMENT AUTOMATIQUE
-  const [autoReloadEnabled, setAutoReloadEnabled] = useState(true) // true = temps réel actif, false = mode manuel
+  const autoReloadEnabled = true // toujours en temps réel (bouton « Mode manuel » retiré le 23/10/2026)
 
   // Limite d'affichage des expéditions filtrées
-  const DISPLAY_LIMIT = 150
+  const DISPLAY_LIMIT = 50 // 50 expéditions affichées au démarrage
   const [displayLimit, setDisplayLimit] = useState(DISPLAY_LIMIT)
 
   const [statusModal,       setStatusModal]       = useState<any>(null)
@@ -548,7 +576,6 @@ export default function AdminPage() {
   const [contractModal,    setContractModal]    = useState<any>(null) // null | { employee, form }
   const [codEditModal,     setCodEditModal]     = useState<any>(null) // null | { parcel, value, loading, error }
   const [nicEditModal,     setNicEditModal]     = useState<any>(null) // null | { parcel, value, loading, error }
-  const [newParcelModal,   setNewParcelModal]   = useState<any>(null) // null | { form, loading, error }
   const [adminEditModal,   setAdminEditModal]   = useState<any>(null) // null | { parcel, form, loading, error }
   const [backupBusy,       setBackupBusy]       = useState(false)
   const [backupMessage,    setBackupMessage]    = useState<any>(null)
@@ -562,11 +589,16 @@ export default function AdminPage() {
   const [tariffMessage,    setTariffMessage]    = useState<any>(null)
 
   const datePreset = adminDatePreset
+  // Préréglage APPLIQUÉ au chargement : « Personnalisé » seulement une fois les deux dates choisies (sinon le
+  // chargement en cours est gardé, au lieu de recharger dès le clic sur « Personnalisé » ou la seule date de début)
+  const loadPresetRef = useRef(adminDatePreset)
+  if (adminDatePreset !== 'custom' || (adminDateFrom && adminDateTo)) loadPresetRef.current = adminDatePreset
+  const loadPreset = loadPresetRef.current
   const dateFrom = adminDateFrom
   const dateTo = adminDateTo
   const setDatePreset = setAdminDatePreset
-  const setDateFrom = setAdminDateFrom
-  const setDateTo = setAdminDateTo
+  const setDateFrom = setDateFromInput
+  const setDateTo = setDateToInput
   // codDatePreset, codDateFrom, codDateTo and their setters are now independent states (defined above)
   // 👥 Utilisateurs : filtre de date PROPRE à l'onglet, « Tout » par défaut (la liste des comptes ne
   // doit pas dépendre de la période des expéditions)
@@ -577,8 +609,8 @@ export default function AdminPage() {
   const activityDateFrom = adminDateFrom
   const activityDateTo = adminDateTo
   const setActivityDatePreset = setAdminDatePreset
-  const setActivityDateFrom = setAdminDateFrom
-  const setActivityDateTo = setAdminDateTo
+  const setActivityDateFrom = setDateFromInput
+  const setActivityDateTo = setDateToInput
   const periodLabel = formatPeriod(adminDatePreset, adminDateFrom, adminDateTo, operationalDay)
 
   // ✅ useEffect de recherche déplacés après useFuseSearch hook (ligne ~1090)
@@ -620,6 +652,9 @@ export default function AdminPage() {
     serviceTypeFilter.length > 0 ||
     portTypeFilter.length > 0 ||
     driverFilter !== 'Tous'
+  // Seulement sur « Tout » (50 ↔ 1 000 dernières) : avec une période, toute la période est déjà lue — cocher un statut
+  // ne doit PAS relancer la lecture (avant : liste vidée et « 0 résultat » pendant tout le rechargement)
+  const filteredPageForQuery = loadPreset === 'all' && adminFilteredPage
 
   // ⚡ Abonnement temps réel : 50 premiers colis (optimisé avec filtre de date prioritaire)
   useEffect(() => {
@@ -647,8 +682,8 @@ export default function AdminPage() {
     setLoading(true)
 
     // 🔍 Détecter si des filtres sont actifs (date, ville, statut, service, port, driver)
-    const hasDateFilter = datePreset !== 'all'
-    const hasOtherFilters = adminFilteredPage
+    const hasDateFilter = loadPreset !== 'all'
+    const hasOtherFilters = filteredPageForQuery
 
     const hasFilters = hasDateFilter || hasOtherFilters
     const effectivePageSize = hasFilters ? FILTERED_PAGE_SIZE : PAGE_SIZE
@@ -667,22 +702,23 @@ export default function AdminPage() {
 
     if (hasDateFilter) {
       const now = new Date()
-      if (datePreset === 'today') {
-        dateFromObj = new Date()
-        dateFromObj.setHours(0, 0, 0, 0)
+      // Mêmes bornes que l'affichage (utils/dateFilter) : JOURNÉES D'OPÉRATION (08:00 → 06:00 le lendemain).
+      // Avant : minuit du jour calendaire → la nuit (00:00–06:00), « Aujourd'hui » perdait la journée en cours.
+      const todayOp = getCurrentOperationalDay()
+      if (loadPreset === 'today') {
+        dateFromObj = getOperationalDayRange(todayOp).start
         dateToObj = now
-      } else if (datePreset === 'week') {
-        dateFromObj = new Date()
-        dateFromObj.setDate(now.getDate() - 6)
-        dateFromObj.setHours(0, 0, 0, 0)
+      } else if (loadPreset === 'week') {
+        const weekAgoOp = new Date(todayOp); weekAgoOp.setDate(weekAgoOp.getDate() - 6)
+        dateFromObj = getOperationalDayRange(weekAgoOp).start
         dateToObj = now
-      } else if (datePreset === 'month') {
-        dateFromObj = new Date(now.getFullYear(), now.getMonth(), 1)
+      } else if (loadPreset === 'month') {
+        dateFromObj = getOperationalDayRange(new Date(todayOp.getFullYear(), todayOp.getMonth(), 1)).start
         dateToObj = now
-      } else if (datePreset === 'custom') {
+      } else if (loadPreset === 'custom') {
         if (dateFrom) dateFromObj = new Date(dateFrom + 'T00:00:00')
         if (dateTo) dateToObj = new Date(dateTo + 'T23:59:59')
-      } else if (datePreset === 'operational' && operationalDay) {
+      } else if (loadPreset === 'operational' && operationalDay) {
         const range = getOperationalDayRange(operationalDay)
         dateFromObj = range.start
         dateToObj = range.end
@@ -695,7 +731,9 @@ export default function AdminPage() {
     // ⚠️ Avant : les 1000 expéditions les plus récentes de TOUTES les villes, puis filtre ville en mémoire —
     // « Ce mois » à Marrakech / Agadir n'en montrait qu'une partie (résultats et totaux incomplets).
     // Mêmes bornes que la requête toutes villes (fin = fin de la journée de dateTo).
-    const cityPeriodMode = hasDateFilter && !!dateFromObj && cityFilter !== 'Toutes'
+    // 🌍 22/10/2026 : même lecture COMPLÈTE pour TOUTES les villes (ALL_CITIES). Avant, une période sans ville ne lisait
+    // que les 1 000 expéditions les plus récentes (≈ 20 000 par mois) : statuts, types, ports, totaux étaient faux.
+    const cityPeriodMode = hasDateFilter && !!dateFromObj
     // 🏙️ VILLE SANS PÉRIODE (« Tout ») : les expéditions LES PLUS RÉCENTES DE LA VILLE (départ OU arrivée,
     // archivés inclus comme la requête toutes villes), au lieu des 1000 plus récentes de TOUTES les villes
     // filtrées ensuite en mémoire (où une ville n'en gardait qu'une petite partie). « Charger plus » suit la ville.
@@ -731,12 +769,17 @@ export default function AdminPage() {
       return () => unsubCity()
     }
     if (cityPeriodMode && dateFromObj) {
+      // Fin : lendemain 08:00 de la dernière date (journée d'opération complète, sessions de nuit comprises) —
+      // la liste est ensuite bornée exactement par journée d'opération (periodParcels, workDate)
       const endOfDay = dateToObj ? new Date(dateToObj) : null
-      if (endOfDay) endOfDay.setHours(23, 59, 59, 999)
+      if (endOfDay) { endOfDay.setDate(endOfDay.getDate() + 1); endOfDay.setHours(8, 0, 0, 0) }
       setHasMore(false) // tout est lu : pas de « Charger plus » (il paginerait toutes les villes)
       const unsubCity = subscribeAgencyParcelsFull(
-        cityFilter,
-        { dateFrom: dateFromObj, dateTo: endOfDay, includeArchived: true, lite: false, liteLive: false },
+        cityFilter !== 'Toutes' ? cityFilter : ALL_CITIES,
+        // liveDays 7 (23/10/2026) : les 7 DERNIÈRES journées en temps réel (là où se font les modifications), les plus
+        // anciennes lues une fois — « tout en temps réel » sur un mois toutes villes (~20 000 expéditions) alourdissait la page.
+        // Les modifications faites DEPUIS cette page restent visibles aussitôt sur les lignes affichées (écoute des lignes).
+        { dateFrom: dateFromObj, dateTo: endOfDay, includeArchived: true, lite: false, liteLive: false, liveDays: 7 },
         (data) => {
           setLiveParcels(data)
           setLoading(false)
@@ -797,7 +840,7 @@ export default function AdminPage() {
 
       return () => unsubParcels()
     }
-  }, [isSearchActive, autoReloadEnabled, datePreset, dateFrom, dateTo, operationalDayFormatted, cityFilter, adminFilteredPage])
+  }, [isSearchActive, autoReloadEnabled, loadPreset, dateFrom, dateTo, operationalDayFormatted, cityFilter, filteredPageForQuery])
 
   // 🔄 Écouter les mises à jour de prix depuis d'autres pages (ex: Facturier)
   useEffect(() => {
@@ -1083,7 +1126,6 @@ export default function AdminPage() {
     archiveDone, setArchiveDone, archiving, setArchiving,
     codEditModal, setCodEditModal,
     nicEditModal, setNicEditModal,
-    newParcelModal, setNewParcelModal,
     createModal, setCreateModal, createLoading, setCreateLoading, createError, setCreateError,
     deleteConfirmUser, setDeleteConfirmUser,
     copyMessage, setCopyMessage, mainTab, setMainTab,
@@ -1098,7 +1140,7 @@ export default function AdminPage() {
   const adminHandlers = useAdminHandlers(_as)
   const {
     handleDeleteBankDeposit, openAdminEdit, handleAdminEditSave,
-    handleSaveCodAmount, handleSaveNic, handleCreateParcel, handleAddPortDuTx, handleDeletePortDuTx,
+    handleSaveCodAmount, handleSaveNic, handleAddPortDuTx, handleDeletePortDuTx,
     handleSavePortDuEdit, handleConfirmDriverVersement,
     handleStatusUpdate, handleCreateReturnParcel,
     handleRemitCod, handleSettleCodAdmin, handleBatchSettleAdmin,
@@ -1128,6 +1170,11 @@ export default function AdminPage() {
     }
     // 3. Le temps réel gagne (données les plus fraîches)
     liveParcels.forEach((p: any) => map.set(p.id, p))
+    // 4. Lignes affichées écoutées à part (jours lus une seule fois) : leur version fraîche gagne (null = supprimée)
+    rowPatches.forEach((fresh: any, id: string) => {
+      if (!map.has(id)) return
+      if (fresh) map.set(id, { ...fresh, isArchived: map.get(id).isArchived ?? fresh.isArchived }); else map.delete(id)
+    })
 
     const arr = [...map.values()]
     console.warn(`📊 allParcels: ${arr.length} colis (liveParcels: ${liveParcels.length}, moreParcels: ${moreParcels.length}, serverSearch: ${serverSearchResults?.length || 0})`)
@@ -1138,7 +1185,7 @@ export default function AdminPage() {
       const tb = b.createdAt?.toDate?.()?.getTime() || (b.createdAt ? new Date(b.createdAt).getTime() : 0)
       return tb - ta
     })
-  }, [liveParcels, moreParcels, serverSearchResults])
+  }, [liveParcels, moreParcels, serverSearchResults, rowPatches])
 
   // Alias pour compatibilité (setParcels met à jour liveParcels)
   useEffect(() => {
@@ -1148,15 +1195,21 @@ export default function AdminPage() {
   // Mise à jour de allParcels dans _as.current après sa définition
   _as.current.allParcels = allParcels
 
+  // ⚡ Filtre de date appliqué « en douceur » (comme Caisse Agence / Collecte du soir) : les gros calculs utilisent ces
+  // valeurs différées ; le clic reste instantané et un badge « Mise à jour… » s'affiche pendant le recalcul.
+  const dDatePreset = useDeferredValue(adminDatePreset)
+  const dDateFrom = useDeferredValue(adminDateFrom)
+  const dDateTo = useDeferredValue(adminDateTo)
+  const adminDatePending = dDatePreset !== adminDatePreset || dDateFrom !== adminDateFrom || dDateTo !== adminDateTo
   const periodParcels = useMemo(() =>
-    filterByDate(allParcels, adminDatePreset, adminDateFrom, adminDateTo, (p: any) => {
+    filterByDate(allParcels, dDatePreset, dDateFrom, dDateTo, (p: any) => {
       // 📅 Utiliser workDate (date de travail) au lieu de createdAt pour respecter les shifts de nuit
       if (p.workDate) return new Date(p.workDate + 'T12:00:00')
       if (p.createdAt?.toDate) return p.createdAt.toDate()
       if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
       return new Date(0)
     }, operationalDay)
-  , [allParcels, adminDatePreset, adminDateFrom, adminDateTo, operationalDay])
+  , [allParcels, dDatePreset, dDateFrom, dDateTo, operationalDay])
 
   // Date de création d'un compte : chaîne ISO OU Timestamp Firestore (56 comptes) — new Date(Timestamp)
   // donnait « Invalid Date », et ces comptes passaient tous les filtres de date.
@@ -1171,9 +1224,9 @@ export default function AdminPage() {
   , [users, usersDatePreset, usersDateFrom, usersDateTo, operationalDay])
 
   const periodDirectorLogs = useMemo(() =>
-    filterByDate(directorLogs, adminDatePreset, adminDateFrom, adminDateTo, (l: any) =>
+    filterByDate(directorLogs, dDatePreset, dDateFrom, dDateTo, (l: any) =>
       l.timestamp?.toDate ? l.timestamp.toDate() : l.timestamp ? new Date(l.timestamp) : new Date(0), operationalDay)
-  , [directorLogs, adminDatePreset, adminDateFrom, adminDateTo, operationalDay])
+  , [directorLogs, dDatePreset, dDateFrom, dDateTo, operationalDay])
 
   const codDateFiltered = useMemo(() =>
     filterByDate(codMoneyOnly(allParcels).filter((p: any) => parseFloat(p.codAmount) > 0), // 📅 COD comptés depuis le 05/10/2026
@@ -1417,7 +1470,7 @@ export default function AdminPage() {
 
   // ⏎ Entrée dans la zone de recherche : recherche immédiate (N° EXP de moins de 7 chiffres)
   useEffect(() => {
-    const onForce = () => { try { fuseForceSearch?.() } catch { /* */ } }
+    const onForce = (e: Event) => { try { fuseForceSearch?.((e as CustomEvent).detail) } catch { /* */ } }
     window.addEventListener('force-search', onForce)
     return () => window.removeEventListener('force-search', onForce)
   }, [fuseForceSearch])
@@ -1474,13 +1527,13 @@ export default function AdminPage() {
   // periodParcels (workDate en priorité, cf. juste au-dessus).
   const dateFilteredServerResults = useMemo(() => {
     if (!serverSearchResults) return serverSearchResults
-    return filterByDate(serverSearchResults, adminDatePreset, adminDateFrom, adminDateTo, (p: any) => {
+    return filterByDate(serverSearchResults, dDatePreset, dDateFrom, dDateTo, (p: any) => {
       if (p.workDate) return new Date(p.workDate + 'T12:00:00')
       if (p.createdAt?.toDate) return p.createdAt.toDate()
       if (p.history?.[0]?.timestamp) return new Date(p.history[0].timestamp)
       return new Date(0)
     }, operationalDay)
-  }, [serverSearchResults, adminDatePreset, adminDateFrom, adminDateTo, operationalDay])
+  }, [serverSearchResults, dDatePreset, dDateFrom, dDateTo, operationalDay])
 
   const filtered = useMemo(() => {
     if (!Array.isArray(periodParcels)) return []
@@ -1547,9 +1600,13 @@ export default function AdminPage() {
 
       // Filtre type de service multi-select
       if (serviceTypeFilter.length > 0) {
-        const serviceTypes = p.serviceType?.split(',').filter(Boolean) || ['simple']
-        const hasMatch = serviceTypes.some((st: string) => serviceTypeFilter.includes(st))
-        if (!hasMatch) return false
+        // « Retour BL » = aussi les expéditions avec BL à retourner (hasRetourBL : ≈ 800 / mois, avant ignorées).
+        // COD mixte (chèque/traite + espèces) : aussi dans « C/Espèces ».
+        const types = new Set<string>(String(p.serviceType || 'simple').split(',').map((t: string) => t.trim().toLowerCase()).filter(Boolean))
+        if (!types.size) types.add('simple')
+        if (p.hasRetourBL) types.add('retour_bl')
+        if (p.codMixed === true) types.add('especes')
+        if (!serviceTypeFilter.some((st: string) => types.has(st))) return false
       }
 
       if (portTypeFilter.length > 0 && !portTypeFilter.includes(p.portType)) {
@@ -1584,23 +1641,10 @@ export default function AdminPage() {
     return results
   }, [periodParcels, cityFilter, driverFilter, statusFilter, serviceTypeFilter, portTypeFilter, debouncedSearch, fuseResults, fuseTotalResults, fuseIsSearching, serverSearchResults, dateFilteredServerResults])
 
-  // Expéditions affichées avec limite (200 premiers)
-  // ⚠️ EXCEPTION: Si filtres actifs → afficher TOUS les résultats
-  const displayedFiltered = useMemo(() => {
-    const hasActiveFilters =
-      datePreset !== 'all' ||
-      cityFilter !== 'Toutes' ||
-      statusFilter.length > 0 ||
-      serviceTypeFilter.length > 0 ||
-      portTypeFilter.length > 0 ||
-      driverFilter !== 'Tous'
-
-    if (hasActiveFilters) {
-      console.warn(`🔍 FILTRES ACTIFS → Affichage de TOUS les ${filtered.length} résultats`)
-      return filtered // TOUS les résultats
-    }
-    return filtered.slice(0, displayLimit)
-  }, [filtered, displayLimit, datePreset, cityFilter, statusFilter, serviceTypeFilter, portTypeFilter, driverFilter])
+  // ⚡ Expéditions AFFICHÉES : toujours limitées (50, puis « Afficher plus » / « Tout afficher »), même avec un filtre de
+  // date ou une recherche — avant, un filtre actif dessinait TOUTES les lignes (jusqu'à des milliers avec la recherche
+  // dans toute la base) et figeait la page. Totaux, impressions et exports utilisent toujours la liste complète.
+  const displayedFiltered = useMemo(() => filtered.slice(0, displayLimit), [filtered, displayLimit])
 
   // ⚡ TEMPS RÉEL des colis lus en PONCTUEL (pages « Charger plus » = moreParcels, résultats de
   // recherche serveur) : écoute par paquets de 30 identifiants (useLiveParcelPatches). Les lignes
@@ -1612,17 +1656,29 @@ export default function AdminPage() {
     const out: string[] = []
     // Résultats venant de parcels_archive (isArchived = collection d'origine) : rien à écouter
     const seen = new Set<string>((serverSearchResults || []).filter((r: any) => r.isArchived === true).map((r: any) => r.id))
-    const push = (p: any) => {
+    const push = (p: any, always = false) => {
       const id = p?.id
-      if (!id || liveIdSet.has(id) || seen.has(id)) return
+      if (!id || (!always && liveIdSet.has(id)) || seen.has(id)) return
       seen.add(id)
       out.push(id)
     }
-    displayedFiltered.forEach(push)
-    moreParcels.forEach(push)
-    serverSearchResults?.forEach(push)
+    // Lignes AFFICHÉES : toujours écoutées (une période ne suit en temps réel que ses 7 derniers jours — liveDays)
+    displayedFiltered.forEach(p => push(p, true))
+    moreParcels.forEach(p => push(p))
+    serverSearchResults?.forEach(p => push(p))
     return out
   }, [displayedFiltered, moreParcels, serverSearchResults, liveIdSet])
+  // Une ligne qui n'est plus écoutée (sortie de l'affichage) : sa version gardée à part est oubliée — elle ne doit
+  // jamais masquer une donnée plus fraîche du temps réel
+  useEffect(() => {
+    const watched = new Set(patchIds)
+    setRowPatches(prev => {
+      let changed = false
+      const m = new Map<string, any>()
+      prev.forEach((v, k) => { if (watched.has(k)) m.set(k, v); else changed = true })
+      return changed ? m : prev
+    })
+  }, [patchIds])
   useLiveParcelPatches(patchIds, (updates) => {
     // Données fraîches du serveur (remplacement complet : un champ supprimé ailleurs, ex. livreur
     // désaffecté, disparaît aussi ici). null = colis supprimé → retiré de la liste.
@@ -1640,6 +1696,8 @@ export default function AdminPage() {
     setMoreParcels(prev => apply(prev, false))
     // Recherche serveur : isArchived y indique la COLLECTION d'origine (parcels / parcels_archive)
     setServerSearchResults(prev => (prev ? apply(prev, true) : prev))
+    // Lignes d'un jour lu une seule fois (période, au-delà des 7 derniers jours) : version fraîche gardée à part
+    setRowPatches(prev => { const m = new Map(prev); updates.forEach((v: any, k: string) => m.set(k, v)); return m })
   }, { enabled: autoReloadEnabled })
 
   // 🏙️ Expéditions LOCALES parmi les résultats filtrés : même ville d'expédition et de destination
@@ -1664,7 +1722,7 @@ export default function AdminPage() {
   // Réinitialiser la limite quand les filtres changent
   useEffect(() => {
     setDisplayLimit(DISPLAY_LIMIT)
-  }, [cityFilter, driverFilter, statusFilter, serviceTypeFilter, portTypeFilter, debouncedSearch])
+  }, [cityFilter, driverFilter, statusFilter, serviceTypeFilter, portTypeFilter, debouncedSearch, adminDatePreset, adminDateFrom, adminDateTo])
 
   const handleAdjustCentralCash = async () => {
     const amount = parseFloat(centralCashForm.amount)
@@ -1796,6 +1854,8 @@ export default function AdminPage() {
       {/* Section */}
       <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-10">
         <div className="w-[95%] mx-auto px-4">
+          {/* 🚚 Téléphone : cartes de la livraison du jour sur une ligne à part (l'en-tête est trop étroit) */}
+          <div className="md:hidden pt-2"><LivraisonDuJourStats mobile /></div>
           {/* Top bar */}
           <div className="flex items-center justify-between py-3">
             <div className="flex items-center gap-3">
@@ -1806,46 +1866,12 @@ export default function AdminPage() {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              {/* 🚚 Argent de la livraison du jour (expéditions d'hier encore en livraison / en gare) */}
+              <LivraisonDuJourStats />
               <LiveClock className="text-gray-400 hidden sm:inline" />
               <WorkingDateIndicator />
 
-              {/* ⚡ Bouton Toggle Rechargement Automatique */}
-              <button
-                onClick={() => setAutoReloadEnabled(prev => !prev)}
-                className={`hidden sm:flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg transition ${
-                  autoReloadEnabled
-                    ? 'bg-green-50 text-green-700 hover:bg-green-100 border border-green-200'
-                    : 'bg-gray-100 text-gray-500 hover:bg-gray-200 border border-gray-300'
-                }`}
-                title={autoReloadEnabled ? 'Cliquer pour DÉSACTIVER le rechargement automatique' : 'Cliquer pour ACTIVER le rechargement automatique'}
-              >
-                {autoReloadEnabled ? (
-                  <>
-                    <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-                    <Power className="w-3.5 h-3.5" />
-                    Temps réel
-                  </>
-                ) : (
-                  <>
-                    <Power className="w-3.5 h-3.5" />
-                    Mode manuel
-                  </>
-                )}
-              </button>
-
-              {/* 🔄 Bouton Rechargement Manuel (affiché uniquement en mode manuel) */}
-              {!autoReloadEnabled && (
-                <button
-                  onClick={manualReload}
-                  disabled={loading}
-                  className="hidden sm:flex items-center gap-1.5 text-xs font-semibold px-3 py-1.5 rounded-lg bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200 transition disabled:opacity-50 disabled:cursor-not-allowed"
-                  title="Recharger manuellement les données"
-                >
-                  <RotateCcw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-                  {loading ? 'Chargement...' : 'Actualiser'}
-                </button>
-              )}
-
+              {/* Bouton « Temps réel / Mode manuel » retiré (23/10/2026) : la page est toujours en temps réel */}
               <button onClick={() => signOut(auth).then(() => navigate('/login'))}
                 className="hidden md:flex items-center gap-1.5 text-sm text-red-500 hover:text-red-600 transition">
                 <LogOut className="w-4 h-4" /> Déconnexion
@@ -1866,7 +1892,7 @@ export default function AdminPage() {
               </button>
               <span className="text-gray-200 font-light">/</span>
               <span className="text-sm font-bold text-blue-600">
-                {{ expeditions:'Expéditions', doublons:'Doublons', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', exports:'Exports', caisse:'Caisse', versements:'Versements Admin', invoices:'Facturation', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires' }[mainTab] || mainTab}
+                {{ expeditions:'Expéditions', doublons:'Doublons', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', exports:'Exports', caisse:'Caisse', versements:'Versements Admin', invoices:'Facturation', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires', controleur:'Rapports du Contrôleur', cod_agencies:'COD par agence', port_agencies:'Port par agence', archivage:'Archives', clients:'Clients', banque:'Banque RETOUR FOND', permissions:'Permissions' }[mainTab] || mainTab}
               </span>
             </div>
           )}
@@ -1881,8 +1907,9 @@ export default function AdminPage() {
               {[
                 { key: 'expeditions', label: 'Expéditions',         icon: Package   },
                 { key: 'doublons',    label: '⚠️ Doublons',         icon: AlertTriangle },
-                { key: 'cod',         label: 'RETOUR FOND / Remboursement', icon: Wallet    },
+                { key: 'cod_agencies', label: '💰 COD par agence',   icon: Wallet    },
                 { key: 'port_agencies', label: '📮 Port par agence', icon: Building2 },
+                { key: 'controleur',  label: '🤖 Rapports du Contrôleur', icon: AlertTriangle },
                 { key: 'archivage',   label: '🗄️ Archives',          icon: Archive   },
                 { key: 'users',       label: 'Utilisateurs',         icon: Users     },
                 { key: 'activity',    label: 'Activité',             icon: BarChart2 },
@@ -1909,7 +1936,7 @@ export default function AdminPage() {
                   }`}>
                   <Icon className="w-5 h-5" />
                   <span className="flex-1 text-left">{label}</span>
-                  {key === 'cod' && codStats.collectedDH > 0 && (
+                  {key === 'cod_agencies' && codStats.collectedDH > 0 && (
                     <span className="bg-orange-500 text-white text-xs px-2 py-0.5 rounded-full">{fmt(codStats.collectedDH)} DH</span>
                   )}
                 </button>
@@ -1918,14 +1945,13 @@ export default function AdminPage() {
                 className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">
                 <Car className="w-5 h-5" /> Parc véhicules
               </button>
+              {/* 🚧 Message « plateforme occupée » (caché dans le menu) */}
+              <div className="px-3 py-1"><MaintenanceToggleButton userName={auth.currentUser?.email || 'Admin'} /></div>
               <button onClick={() => { navigate('/dashboard'); setMenuOpen(false) }}
                 className="w-full flex items-center gap-3 px-3 py-3 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-50 transition">
                 <TrendingUp className="w-5 h-5" /> Tableau de bord
               </button>
-              <div className="flex items-center justify-between px-3 pt-2 border-t border-gray-100">
-                <span className="flex items-center gap-1.5 text-xs text-green-600 font-medium">
-                  <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" /> Temps réel
-                </span>
+              <div className="flex items-center justify-end px-3 pt-2 border-t border-gray-100">
                 <button onClick={() => signOut(auth).then(() => navigate('/login'))}
                   className="flex items-center gap-1.5 text-sm text-red-500 hover:text-red-600 py-1 transition">
                   <LogOut className="w-4 h-4" /> Déconnexion
@@ -1974,6 +2000,8 @@ export default function AdminPage() {
         )}
 
         {/* TAB: EXPEDITIONS */}
+        {/* ⏳ Filtre de date en cours d'application (calcul différé) */}
+        <PendingBadge show={adminDatePending} />
         {mainTab === 'expeditions' && (
           <Suspense fallback={<div className="py-10 text-center text-sm text-gray-400">Chargement des expeditions...</div>}>
             <AdminExpeditionsTab
@@ -1998,11 +2026,12 @@ export default function AdminPage() {
               users={users}
               datePreset={datePreset}
               setDatePreset={setDatePreset}
-              dateFrom={dateFrom}
+              dateFrom={dateFromInput}
               setDateFrom={setDateFrom}
-              dateTo={dateTo}
+              dateTo={dateToInput}
               setDateTo={setDateTo}
               filtered={displayedFiltered}
+              allFiltered={filtered}
               totalFiltered={filtered.length}
               localFilteredCount={localFilteredCount}
               displayLimit={displayLimit}
@@ -2011,7 +2040,6 @@ export default function AdminPage() {
               loading={loading}
               setCodEditModal={setCodEditModal}
               setNicEditModal={setNicEditModal}
-              setNewParcelModal={setNewParcelModal}
               setStatusModal={setStatusModal}
               openAdminEdit={openAdminEdit}
               allParcels={allParcels}
@@ -2284,9 +2312,9 @@ export default function AdminPage() {
               setActivityRoleFilter={setActivityRoleFilter}
               activityDatePreset={activityDatePreset}
               setActivityDatePreset={setActivityDatePreset}
-              activityDateFrom={activityDateFrom}
+              activityDateFrom={dateFromInput}
               setActivityDateFrom={setActivityDateFrom}
-              activityDateTo={activityDateTo}
+              activityDateTo={dateToInput}
               setActivityDateTo={setActivityDateTo}
               activityStats={Array.isArray(activityStats) ? activityStats : []}
               activityFeed={Array.isArray(activityFeed) ? activityFeed : []}
@@ -2408,18 +2436,41 @@ export default function AdminPage() {
         )}
 
         {/* TAB: PORT PAR AGENCE */}
+        {/* TAB: 💰 COD PAR AGENCE (même organisation que Port par agence) */}
+        {mainTab === 'cod_agencies' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminCodAgenciesTab
+              datePreset={agDatePreset}
+              setDatePreset={setAgDatePreset}
+              dateFrom={agDateFrom}
+              setDateFrom={setAgDateFrom}
+              dateTo={agDateTo}
+              setDateTo={setAgDateTo}
+              operationalDay={agOperationalDay}
+              setOperationalDay={setAgOperationalDay}
+            />
+          </Suspense>
+        )}
+
         {mainTab === 'port_agencies' && (
           <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
             <AdminPortAgenciesTab
-              datePreset={datePreset}
-              setDatePreset={setDatePreset}
-              dateFrom={dateFrom}
-              setDateFrom={setDateFrom}
-              dateTo={dateTo}
-              setDateTo={setDateTo}
-              operationalDay={operationalDay}
-              setOperationalDay={setOperationalDay}
+              datePreset={agDatePreset}
+              setDatePreset={setAgDatePreset}
+              dateFrom={agDateFrom}
+              setDateFrom={setAgDateFrom}
+              dateTo={agDateTo}
+              setDateTo={setAgDateTo}
+              operationalDay={agOperationalDay}
+              setOperationalDay={setAgOperationalDay}
             />
+          </Suspense>
+        )}
+
+        {/* TAB: 🤖 RAPPORTS DU CONTRÔLEUR */}
+        {mainTab === 'controleur' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminControleurTab />
           </Suspense>
         )}
 
@@ -2738,7 +2789,7 @@ export default function AdminPage() {
                   <input
                     type="number" min="0" step="0.01"
                     value={codEditModal.cashValue}
-                    onChange={e => setCodEditModal((m: any) => ({ ...m, cashValue: e.target.value }))}
+                    onChange={e => setCodEditModal((m: any) => ({ ...m, cashValue: e.target.value, value: docPartKeepingTotal(m.value, m.cashValue, e.target.value) }))}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-orange-400 focus:outline-none bg-gray-50 focus:bg-white transition font-bold text-green-700"
                   />
                 </div>
@@ -2753,7 +2804,7 @@ export default function AdminPage() {
                   className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-orange-400 focus:outline-none bg-gray-50 focus:bg-white transition font-bold text-orange-600"
                   autoFocus
                 />
-                <p className="text-xs text-gray-400 mt-1">Mettre 0 pour supprimer le RETOUR FOND.</p>
+                <p className="text-xs text-gray-400 mt-1">{codEditModal.mixed ? `Total : ${((parseFloat(codEditModal.value) || 0) + (parseFloat(codEditModal.cashValue) || 0)).toLocaleString('fr-MA')} DH ${'— espèces retirées du chèque / de la traite, total inchangé'}` : 'Mettre 0 pour supprimer le RETOUR FOND.'}</p>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <button onClick={() => setCodEditModal(null)}
@@ -2812,96 +2863,6 @@ export default function AdminPage() {
         </div>
       )}
 
-      {/* MODAL NOUVELLE EXPÉDITION */}
-      {newParcelModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-2xl">
-            <div className="sticky top-0 bg-white border-b p-5 flex items-center justify-between z-10">
-              <h3 className="font-bold text-xl text-gray-800">📦 Nouvelle Expédition</h3>
-              <button onClick={() => setNewParcelModal(null)} className="p-2 hover:bg-gray-100 rounded-xl transition"><X className="w-5 h-5" /></button>
-            </div>
-            <form autoComplete="off" className="p-6 space-y-6">
-              {newParcelModal.error && (<div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {newParcelModal.error}</div>)}
-
-              {/* Expéditeur */}
-              <div className="bg-pink-50 border border-pink-200 rounded-xl p-4 space-y-3">
-                <h4 className="font-bold text-pink-700">📤 Expéditeur</h4>
-                <div className="grid grid-cols-2 gap-3">
-                  <input placeholder="N° EXP" value={newParcelModal.form.senderNic} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, senderNic: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
-                  <input placeholder="Nom *" value={newParcelModal.form.senderName} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, senderName: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
-                  <input placeholder="Téléphone" value={newParcelModal.form.senderTel} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, senderTel: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
-                  <input placeholder="Ville" value={newParcelModal.form.senderCity} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, senderCity: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
-                  <input placeholder="Adresse" value={newParcelModal.form.senderAddress} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, senderAddress: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm col-span-2" />
-                </div>
-              </div>
-
-              {/* Destinataire */}
-              <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 space-y-3">
-                <h4 className="font-bold text-blue-700">📥 Destinataire</h4>
-                <div className="grid grid-cols-2 gap-3">
-                  <input placeholder="Nom *" value={newParcelModal.form.receiverName} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, receiverName: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
-                  <input placeholder="Téléphone" value={newParcelModal.form.receiverTel} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, receiverTel: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
-                  <input placeholder="Ville *" value={newParcelModal.form.receiverCity} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, receiverCity: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm" />
-                  <input placeholder="Adresse" value={newParcelModal.form.receiverAddress} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, receiverAddress: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm col-span-2" />
-                </div>
-              </div>
-
-              {/* Détails */}
-              <div className="grid grid-cols-3 gap-3">
-                <div><label className="text-xs font-semibold text-gray-500 block mb-1">Poids (kg)</label><input type="number" min="0" step="0.1" value={newParcelModal.form.weight} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, weight: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
-                <div><label className="text-xs font-semibold text-gray-500 block mb-1">Nb Colis</label><input type="text" autoComplete="off" placeholder="ex. 2 ou 2ds45e500" title={NB_COLIS_SHORTCUT_TITLE} value={newParcelModal.form.nbColis} onChange={e => { const v = e.target.value.slice(0, 40); setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, nbColis: v } })) }}
-                  onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur() } }}
-                  onBlur={e => {
-                    // ⚡ Raccourci étendu (port ds/ps/dc/ce/cd, retour de fonds e/c/t, poids k ; nature p/b ignorée : pas de champ nature ici) — voir utils/nbColisShortcut
-                    const raw = e.currentTarget.value; const res = analyzeNbColisShortcut(raw)
-                    if (res?.error !== undefined) { const msg = '⚡ ' + res.error; setNewParcelModal((m: any) => ({ ...m, error: msg })); return }
-                    const sc = res?.shortcut
-                    setNewParcelModal((m: any) => ({ ...m, ...(sc ? { error: '' } : {}), form: sc ? {
-                      ...m.form, nbColis: sc.nbColis, portType: sc.portType, portPrice: sc.amount,
-                      ...(sc.cod ? { serviceType: sc.cod.serviceType, codAmount: sc.cod.codAmount, codMixed: sc.cod.codMixed, codCashAmount: sc.cod.codCashAmount } : { serviceType: 'simple', codAmount: '', codMixed: false, codCashAmount: '' }),
-                      ...(sc.weight ? { weight: sc.weight } : {}),
-                    } : { ...m.form, nbColis: nbColisDigitsOnly(raw) } }))
-                  }}
-                  className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
-                <div><label className="text-xs font-semibold text-gray-500 block mb-1">Type</label><select value={newParcelModal.form.serviceType} onChange={e => { const st = e.target.value; setNewParcelModal((m: any) => ({ ...m, error: '', form: { ...m.form, serviceType: st, codAmount: st === 'simple' ? '' : m.form.codAmount, ...((st === 'cheque' || st === 'traite') ? {} : { codMixed: false, codCashAmount: '' }) } })) }} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full"><option value="simple">Simple</option><option value="especes">C/Espèces</option><option value="cheque">C/Chèque</option><option value="traite">C/Traite</option></select></div>
-              </div>
-
-              {/* Port */}
-              <div className="bg-purple-50 border border-purple-200 rounded-xl p-4 space-y-3">
-                <h4 className="font-bold text-purple-700">💰 Port</h4>
-                <div className="flex gap-2 mb-2">
-                  {[{k:'port_paye',l:'Port Payé'},{k:'port_du',l:'Port Dû'},{k:'port_en_compte',l:'En Compte'}].map(p=><button key={p.k} onClick={()=>setNewParcelModal((m:any)=>({...m,form:{...m.form,portType:p.k}}))} className={`px-3 py-2 rounded-xl text-xs font-bold ${newParcelModal.form.portType===p.k?'bg-purple-600 text-white':'bg-white border'}`}>{p.l}</button>)}
-                </div>
-                <input type="number" min="0" step="0.01" placeholder="Montant port (DH)" value={newParcelModal.form.portPrice} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, portPrice: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" />
-              </div>
-
-              {/* RETOUR FOND (mixte possible : Espèces + chèque OU traite) */}
-              {(newParcelModal.form.serviceType === 'cheque' || newParcelModal.form.serviceType === 'traite') && (
-                <label className="flex items-center gap-2 text-xs font-semibold text-green-800 bg-green-50 border border-green-200 rounded-xl px-3 py-2 cursor-pointer">
-                  <input type="checkbox" checked={newParcelModal.form.codMixed === true} onChange={e => { const on = e.target.checked; setNewParcelModal((m: any) => ({ ...m, error: '', form: { ...m.form, codMixed: on, codCashAmount: on ? m.form.codCashAmount : '' } })) }} />
-                  💵 + Espèces (retour de fonds mixte : espèces + {newParcelModal.form.serviceType === 'traite' ? 'traite' : 'chèque'})
-                </label>
-              )}
-              <div className={newParcelModal.form.codMixed === true ? 'grid grid-cols-2 gap-3' : ''}>
-                {newParcelModal.form.codMixed === true && (
-                  <div><label className="text-xs font-semibold text-gray-500 block mb-1">💵 Montant espèces (DH)</label><input type="number" min="0" step="0.01" value={newParcelModal.form.codCashAmount || ''} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, codCashAmount: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
-                )}
-                <div><label className="text-xs font-semibold text-gray-500 block mb-1">{newParcelModal.form.codMixed === true ? (newParcelModal.form.serviceType === 'traite' ? '📝 Montant traite (DH)' : '📋 Montant chèque (DH)') : 'RETOUR FOND (DH)'}</label><input type="number" min="0" step="0.01" value={newParcelModal.form.codAmount} onChange={e => setNewParcelModal((m: any) => ({ ...m, form: { ...m.form, codAmount: e.target.value } }))} className="border border-gray-200 rounded-xl px-3 py-2 text-sm w-full" /></div>
-              </div>
-              {newParcelModal.form.codMixed === true && (
-                <div className="text-xs font-bold text-gray-700">Total retour de fonds : {((parseFloat(newParcelModal.form.codCashAmount) || 0) + (parseFloat(newParcelModal.form.codAmount) || 0)).toLocaleString('fr-MA')} DH</div>
-              )}
-
-              {/* Actions */}
-              <div className="grid grid-cols-2 gap-3 pt-4 border-t">
-                <button type="button" onClick={() => setNewParcelModal(null)} className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition">Annuler</button>
-                <button type="button" onClick={handleCreateParcel} disabled={newParcelModal.loading} className="py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-semibold transition disabled:opacity-50">{newParcelModal.loading ? 'Création...' : 'Créer l\'expédition'}</button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
       {statusModal && (
         <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4">
           <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-md shadow-2xl max-h-[90vh] overflow-y-auto">
@@ -2927,6 +2888,12 @@ export default function AdminPage() {
                   ?? Voir la signature �lectronique du destinataire
                 </button>
               )}
+              {/* 🚚 Livreur actuel + changement (livreurs de la même ville) */}
+              <AdminDriverSection
+                parcel={statusModal.parcel}
+                users={users}
+                onChanged={patch => setStatusModal((m: any) => m && ({ ...m, parcel: { ...m.parcel, ...patch }, status: patch.status || m.status }))}
+              />
               <div className="grid grid-cols-2 gap-2">
                 {STATUSES.map(s => {
                   const sc = STATUS_COLORS[s] || STATUS_COLORS['Initialisé']

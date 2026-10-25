@@ -3,6 +3,8 @@ import { db } from '../../../firebase/config'
 import { collection, query, where, getDocs, updateDoc, doc, deleteDoc, getDoc } from 'firebase/firestore'
 import { AlertCircle, CheckCircle2, Wrench, Trash2, Package } from 'lucide-react'
 import WorkingDateManager from '../../../components/WorkingDateManager'
+import MaintenanceToggleButton from '../../../components/MaintenanceToggleButton'
+import { auth } from '../../../firebase/config'
 import { codPaymentTypeOf } from '../../../firebase/constants'
 
 export default function AdminUtilitiesTab() {
@@ -495,6 +497,14 @@ export default function AdminUtilitiesTab() {
 
       {/* Gestionnaire de date de travail */}
       <WorkingDateManager />
+      {/* 🚧 Message « plateforme occupée par l'équipe de programmation » pour tous les utilisateurs */}
+      <div className="bg-white rounded-xl border border-gray-200 p-4 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="font-bold text-gray-800">🚧 Plateforme occupée</div>
+          <div className="text-xs text-gray-500">Grand écran rouge sur toutes les pages pour bloquer les utilisateurs pendant des travaux (l'admin n'est jamais bloqué).</div>
+        </div>
+        <MaintenanceToggleButton userName={auth.currentUser?.email || 'Admin'} />
+      </div>
 
       {/* Message résultat */}
       {result && (

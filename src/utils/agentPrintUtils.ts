@@ -2,6 +2,7 @@ import { openPrintWindow } from './printWindow'
 import { doc, getDoc } from 'firebase/firestore'
 import { db } from '../firebase/db'
 import { codSplitAmount, isMixedCod, codPartsBreakdown, codServiceLabel } from './codParts'
+import { caisseCodAmountOfType } from './agencyCaisseRules'
 
 export function printCharge(groups: any[], profileData: any): void {
   const printDate = new Date().toLocaleDateString('fr-MA', { day: '2-digit', month: 'long', year: 'numeric' })
@@ -1704,8 +1705,15 @@ export function printInstancesRetards(instancesData: any[], profileData: any, da
     { key: '30j+', label: 'Plus de 30 jours', color: '#fca5a5', textColor: '#7f1d1d' }
   ]
 
+  // 💰 COD de l'expédition (mixte : chaque part dans son type)
+  const COD_LABEL: Record<string, string> = { especes: 'Espèces', cheque: 'Chèque', traite: 'Traite' }
+  const codOf = (p: any) => {
+    const parts = (['especes', 'cheque', 'traite'] as const).map(k => [k, caisseCodAmountOfType(p, k)] as const).filter(([, a]) => a > 0)
+    return { total: parts.reduce((t, [, a]) => t + a, 0), label: parts.map(([k]) => COD_LABEL[k]).join(' + ') }
+  }
   const rows = instancesData.map((inst, i) => {
     const { parcel, ageJours, delay, bucket, driverName } = inst
+    const cod = codOf(parcel)
     const badgeColor = bucket === '<24h' ? '#fef3c7' : bucket === '1-7j' ? '#fed7aa' : bucket === '7-30j' ? '#fecaca' : '#fca5a5'
     const badgeText = bucket === '<24h' ? '#92400e' : bucket === '1-7j' ? '#9a3412' : bucket === '7-30j' ? '#991b1b' : '#7f1d1d'
     const delayReason = delay ? delayReasons.find((r: any) => r.key === delay.reason) : null
@@ -1714,12 +1722,13 @@ export function printInstancesRetards(instancesData: any[], profileData: any, da
       <tr style="background:${i % 2 === 0 ? '#ffffff' : '#f9fafb'}">
         <td style="padding:8px;text-align:center">
           <span style="padding:4px 8px;border-radius:4px;font-weight:bold;font-size:9pt;background:${badgeColor};color:${badgeText}">
-            ${ageJours}j
+            depuis le ${new Date(Date.now() - ageJours * 86400000).toLocaleDateString('fr-FR')}
           </span>
         </td>
         <td style="padding:8px;font-family:monospace;font-weight:bold;color:#2563eb">${parcel.senderNic || parcel.sender?.nic || parcel.trackingId || '—'}</td>
         <td style="padding:8px;font-weight:600;color:#111827">${driverName}</td>
         <td style="padding:8px;text-align:right;font-weight:bold;color:#111827">${parseFloat(parcel.price || 0).toFixed(2)} DH</td>
+        <td style="padding:8px;text-align:right">${cod.total > 0 ? `<b style="color:#047857">${cod.total.toFixed(2)} DH</b><div style="font-size:7.5pt;color:#6b7280">${cod.label}</div>` : '<span style="color:#9ca3af">—</span>'}</td>
         <td style="padding:8px">
           ${delayReason ? `<span style="background:#f3f4f6;padding:3px 8px;border-radius:4px;font-size:8pt">${delayReason.label}</span>` : '<span style="color:#9ca3af">—</span>'}
         </td>
@@ -1731,11 +1740,13 @@ export function printInstancesRetards(instancesData: any[], profileData: any, da
   const summary = buckets.map(b => {
     const count = instancesData.filter(i => i.bucket === b.key).length
     const montant = instancesData.filter(i => i.bucket === b.key).reduce((s, i) => s + parseFloat(i.parcel.price || 0), 0)
-    return { ...b, count, montant }
+    const codMontant = instancesData.filter(i => i.bucket === b.key).reduce((s, i) => s + codOf(i.parcel).total, 0)
+    return { ...b, count, montant, codMontant }
   })
 
   const totalColis = instancesData.length
   const totalMontant = instancesData.reduce((s, i) => s + parseFloat(i.parcel.price || 0), 0)
+  const totalCod = instancesData.reduce((s, i) => s + codOf(i.parcel).total, 0)
 
   const html = `<!DOCTYPE html>
 <html>
@@ -1785,7 +1796,8 @@ export function printInstancesRetards(instancesData: any[], profileData: any, da
       <div class="summary-box" style="background:${s.color}">
         <div style="font-size:8pt;font-weight:600;color:${s.textColor};margin-bottom:4px">${s.label}</div>
         <div style="font-size:18pt;font-weight:bold;color:${s.textColor}">${s.count}</div>
-        <div style="font-size:8pt;color:#6b7280;margin-top:4px">${s.montant.toFixed(2)} DH</div>
+        <div style="font-size:8pt;color:#6b7280;margin-top:4px">Port : ${s.montant.toFixed(2)} DH</div>
+        <div style="font-size:8pt;color:#047857;margin-top:2px">COD : ${s.codMontant.toFixed(2)} DH</div>
       </div>
     `).join('')}
   </div>
@@ -1793,12 +1805,13 @@ export function printInstancesRetards(instancesData: any[], profileData: any, da
   <table>
     <thead>
       <tr>
-        <th style="width:10%;text-align:center">Âge</th>
+        <th style="width:13%;text-align:center">Depuis</th>
         <th style="width:15%">N° EXP</th>
         <th style="width:20%">Livreur</th>
-        <th style="width:15%;text-align:right">Montant</th>
-        <th style="width:20%">Raison</th>
-        <th style="width:20%">Détail</th>
+        <th style="width:11%;text-align:right">Port</th>
+        <th style="width:14%;text-align:right">COD</th>
+        <th style="width:15%">Raison</th>
+        <th style="width:15%">Détail</th>
       </tr>
     </thead>
     <tbody>
@@ -1807,13 +1820,14 @@ export function printInstancesRetards(instancesData: any[], profileData: any, da
   </table>
 
   <div style="margin-top:20px;padding:12px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:6px;text-align:center;font-weight:bold">
-    Total: <span style="color:#2563eb">${totalColis} colis</span> en instance pour 
-    <span style="color:#dc2626">${totalMontant.toFixed(2)} DH</span>
+    Total: <span style="color:#2563eb">${totalColis} colis</span> en instance —
+    port <span style="color:#dc2626">${totalMontant.toFixed(2)} DH</span> ·
+    COD <span style="color:#047857">${totalCod.toFixed(2)} DH</span>
   </div>
 
   <div style="margin-top:12px;padding:12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;font-size:8pt;color:#6b7280">
     <strong style="color:#111827">Légende:</strong>
-    <strong>Âge:</strong> Nombre de jours depuis la création de l'expédition |
+    <strong>Depuis :</strong> date de création de l'expédition |
     🟡 <strong>&lt;24h:</strong> Instance récente (surveillance) |
     🟠 <strong>1-7j:</strong> Retard modéré (suivi requis) |
     🔴 <strong>7-30j:</strong> Retard sérieux (action urgente) |

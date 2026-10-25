@@ -32,13 +32,19 @@ import {
 import { createBankDeposit } from '../../../firebase/bankDeposits'
 import { createParticularPortalAccount } from '../../../firebase/portalAccounts'
 import { getGareDriverForCity } from '../../../firebase/delivery'
-import { printCharge, printTable, printBonRamassage } from '../../../utils/agentPrintUtils'
+// ⚡ Impressions (agentPrintUtils, ~57 Ko) chargées au premier clic « Imprimer », pas au démarrage de la page
+const printUtils = () => import('../../../utils/agentPrintUtils')
+import { printAgentTicket } from '../../../utils/printAgentTicket'
 import { printFeuilleDeCharge } from '../../../utils/printFeuilleDeCharge'
+import { deliveryCityBlock } from '../../../utils/deliveryCity'
 import { ALL_SERVICE_TYPES, codPaymentTypeOf, normalizeServiceType, codPaymentTypeForService } from '../../../firebase/constants'
 import { buildCodWriteFields, validateCodChoice, codCashPartOf, codDocPartOf, isMixedCod, codPartsDetailLabel, codEditResult } from '../../../utils/codParts'
-import { buildParcelCorrectionPatch, describeParcelSaveError, ensureFullParcel, ensureFullParcels, markDeliveredAfterCollect } from '../../../firebase/parcels'
-import { chefReceiveCod } from '../../../firebase/chefPortReception'
+import { buildParcelCorrectionPatch, describeParcelSaveError, ensureFullParcel, ensureFullParcels, markDeliveredAfterCollect, findParcelByNic } from '../../../firebase/parcels'
+import { chefCancelLinkedPortDu, chefReceiveCod } from '../../../firebase/chefPortReception'
 import { showToast } from '../../../utils/toast'
+import { agentProCanEditBon } from '../../../utils/agentProAccess'
+import { agencyCanDeliver, deliveryStatusChangeBlock } from '../../../utils/agencyDeliveryAccess'
+import { canBulkLoadTransport, canBulkAssignDelivery } from '../../../utils/parcelBulkSelection'
 import { blockDirectChefReception } from '../../../utils/moneyFlow'
 
 // ALL_SERVICE_TYPES importé depuis constants.ts
@@ -125,8 +131,12 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   // ── Transport / Assignment ─────────────────────────────────────────────────
 
   const handleAssignTransport = async () => {
-    const { transportModal, setTransportModal } = s.current
+    const { transportModal, setTransportModal, profile } = s.current
     const { parcel, chauffeurName, chauffeurPhone } = transportModal
+    if (!canBulkLoadTransport(profile, parcel)) {
+      setTransportModal((m: any) => ({ ...m, error: "Seules les expéditions initialisées dans votre agence peuvent être chargées." }))
+      return
+    }
     if (!chauffeurName.trim()) { setTransportModal((m: any) => ({ ...m, error: 'Nom du chauffeur requis.' })); return }
     setTransportModal((m: any) => ({ ...m, loading: true, error: '' }))
     try {
@@ -149,7 +159,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const loadableById = new Map<any, any>((loadableParcels || []).map((p: any) => [p.id, p]))
     const selectedParcels = bulkLoadSelectedIds
       .map((id: any) => loadableById.get(id))
-      .filter(Boolean)
+      .filter((parcel: any) => parcel && canBulkLoadTransport(s.current.profile, parcel))
     if (selectedParcels.length === 0) {
       setBulkLoadError('Sélectionnez au moins un colis à charger.')
       return
@@ -177,6 +187,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   const handleBulkAssignDriver = async (assignableParcels: any) => {
     const { bulkAssignSelectedIds, bulkAssignDriverId, bulkAssignSectorId, setBulkAssignError, setBulkAssignBusy, setBulkAssignSelectedIds, setBulkAssignDriverId, setBulkAssignSectorId } = s.current
     setBulkAssignError('')
+    if ((assignableParcels || []).some((parcel: any) => bulkAssignSelectedIds.includes(parcel.id) && !canBulkAssignDelivery(s.current.profile, parcel))) {
+      setBulkAssignError("La sélection contient une expédition qui ne peut pas être assignée à la livraison par votre agence.")
+      return
+    }
     if (!bulkAssignDriverId) {
       setBulkAssignError('Sélectionnez un livreur.')
       console.log('❌ Pas de livreur sélectionné')
@@ -272,6 +286,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   const handleAssignDelivery = async () => {
     const { deliveryModal, setDeliveryModal, drivers, allSectors, vehicles, profile } = s.current
     const { parcel, sectorId, driverId, vehicleId } = deliveryModal
+    if (!agencyCanDeliver(profile, parcel)) {
+      setDeliveryModal((m: any) => ({ ...m, error: "La livraison et le livreur sont gérés par l'agence de destination." }))
+      return
+    }
     if (!driverId) { setDeliveryModal((m: any) => ({ ...m, error: 'Sélectionnez un livreur.' })); return }
     setDeliveryModal((m: any) => ({ ...m, loading: true, error: '' }))
     try {
@@ -333,6 +351,9 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const { codCollectModal, setCodCollectModal, setPortCollectModal, profile, collectedCodIds } = s.current
     const { parcel, paymentType, withDelivery } = codCollectModal
     if (!paymentType) return
+    // 🚚 Retrait + livraison : réservé à l'agence de destination (avant toute collecte)
+    const blocked = withDelivery ? deliveryCityBlock(profile?.role, profile?.city, parcel) : null
+    if (blocked) { alert(`❌ ${blocked}`); return }
     if (collectedCodIds.current.has(parcel.id) || ['collected', 'remis'].includes(parcel.codStatus)) {
       setCodCollectModal({ open: false, parcel: null, paymentType: '', loading: false, withDelivery: false })
       return
@@ -390,6 +411,9 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const { portCollectModal, setPortCollectModal, profile } = s.current
     const { parcel, paymentType } = portCollectModal
     if (!paymentType) return
+    // 🚚 Retrait + livraison : réservé à l'agence de destination (avant d'encaisser le port)
+    const blocked = deliveryCityBlock(profile?.role, profile?.city, parcel)
+    if (blocked) { alert(`❌ ${blocked}`); return }
     const uid  = auth.currentUser?.uid
     const name = profile?.name || 'Agent'
     setPortCollectModal((m: any) => ({ ...m, loading: true }))
@@ -534,6 +558,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         amount,
         note:     adminTransferForm.note,
         codParcelIds,  // Inclure les COD pour marquage
+        kind: 'cod',   // COD encaissés : seule la marque « COD versé »
       })
       setAdminTransferForm({ amount: '', note: '', loading: false, error: '', success: `Transfert envoyé à l'Admin (${codParcelIds.length} COD inclus). En attente de confirmation.` })
     } catch (err: any) {
@@ -847,7 +872,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       // 🔒 Même réception que Caisse Agence (chefReceiveCod) : une seule opération (remise + entrée de caisse),
       // état relu, refus si déjà reçue (par le chef d'exploitation ou ailleurs) ; une valeur encore « en attente »
       // est collectée au passage (codCollectedAt → « Valeurs (COD) collectées par jour ») et passe « Livré ».
-      const fields = await chefReceiveCod(parcel, { id: uid || '', name, city: profile?.city || '' })
+      const { linkedError, ...fields } = await chefReceiveCod(parcel, { id: uid || '', name, city: profile?.city || '' })
+      if (linkedError) setReceptionCodError(`${parcel.senderNic || parcel.trackingId} : ${linkedError}`)
       patchAllCod(parcel.id, fields)
     } catch (err: any) {
       console.error('handleReceptionCod:', err)
@@ -881,6 +907,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         await deleteCaisseEntry(parcel.codCaisseEntryId).catch((e: any) =>
           console.error('Suppression entrée caisse:', e))
       }
+      // 🔗 Port dû espèces lié, reçu par moi (chef d'agence) : annulé aussi (collectés ensemble → annulés ensemble)
+      const linkedPort = await chefCancelLinkedPortDu(parcel, { id: uid || '', name, city: profile?.city || '' })
+      if (linkedPort.linkedError) setReceptionCodError(`${parcel.senderNic || parcel.trackingId} : ${linkedPort.linkedError}`)
+      else Object.assign(restored, linkedPort)
       patchAllCod(parcel.id, restored)
     } catch (err: any) {
       console.error('handleCancelCodRemise:', err)
@@ -898,7 +928,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     try {
       // 🏢 Chef d'agence EN REMPLACEMENT du chef d'exploitation (absent) : reçu à son nom, écrit en caisse —
       // même réception sécurisée que Caisse Agence (une seule opération, refus si déjà reçue)
-      const fields = await chefReceiveCod(parcel, { id: uid || '', name, city: profile?.city || '' })
+      const { linkedError, ...fields } = await chefReceiveCod(parcel, { id: uid || '', name, city: profile?.city || '' })
+      if (linkedError) alert(`⚠️ ${parcel.senderNic || parcel.trackingId} : ${linkedError}`)
       setParcels((prev: any) => prev.map((p: any) => p.id === parcel.id ? { ...p, ...fields } : p))
     } catch (err: any) {
       console.error('handleReceiveCodFromDriver:', err)
@@ -1247,7 +1278,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const list = Array.isArray(groups) ? groups : []
     const fullGroups = await Promise.all(list.map(async (g: any) =>
       Array.isArray(g?.parcels) ? { ...g, parcels: await ensureFullParcels(g.parcels) } : g))
-    return printCharge(fullGroups, profileData)
+    return (await printUtils()).printCharge(fullGroups, profileData)
   }
 
   const handlePrintTable = async (
@@ -1336,7 +1367,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       if (driverName) {
         printFeuilleDeCharge(driverName, s.current.profile?.city || '', parcelsArg, s.current.profile?.name)
       } else {
-        await printTable(parcelsArg, driverName, s.current.profile, visibleColumns, orientation)
+        await (await printUtils()).printTable(parcelsArg, driverName, s.current.profile, visibleColumns, orientation)
       }
       console.log('✅ Impression terminée')
     } catch (err: any) {
@@ -1346,166 +1377,12 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   }
 
   const handlePrintBonRamassage = async (nexpCodes: any, batchRef: any, sectorCode: any, chauffeurName: any) =>
-    printBonRamassage(nexpCodes, batchRef, sectorCode, chauffeurName)
+    (await printUtils()).printBonRamassage(nexpCodes, batchRef, sectorCode, chauffeurName)
 
   const handlePrintTicket = async (parcelArg: any) => {
     // 🪶 Ticket imprimé à partir du document COMPLET (la liste peut être la version allégée)
     const parcel: any = await ensureFullParcel(parcelArg)
-    const [{ default: JsBarcode }, { default: QRCodeForPrint }, { createRoot }, { flushSync }] = await Promise.all([
-      import('jsbarcode'),
-      import('../../../components/QRCodeSvg'),
-      import('react-dom/client'),
-      import('react-dom'),
-    ])
-    const logoUrl   = window.location.origin + '/LOGO.jpg'
-    const parcelCreatedAt = parcel.createdAt?.toDate ? parcel.createdAt.toDate() : (parcel.createdAt ? new Date(parcel.createdAt) : new Date())
-    const printDate = parcelCreatedAt.toLocaleDateString('fr-MA')
-
-    const barcodeSvgEl = document.createElementNS('http://www.w3.org/2000/svg', 'svg')
-    JsBarcode(barcodeSvgEl, parcel.trackingId, { width: 1.3, height: 48, fontSize: 10, margin: 0, displayValue: true })
-    const barcodeSvgStr = barcodeSvgEl.outerHTML
-
-    const qrContainer = document.createElement('div')
-    const qrRoot = createRoot(qrContainer)
-    flushSync(() => {
-      qrRoot.render(
-        React.createElement(QRCodeForPrint, {
-          value: `https://arelanc.web.app/track?id=${parcel.trackingId}`,
-          size: 64,
-          level: 'M',
-          includeMargin: false,
-        })
-      )
-    })
-    const qrSvgStr = qrContainer.innerHTML
-    qrRoot.unmount()
-
-    const PORT_TYPE_LABELS: Record<string, { label: string; color: string }> = {
-      port_du: { label: 'Port dû', color: '#ea580c' },
-      port_paye: { label: 'Port payé', color: '#16a34a' },
-      port_en_compte_destinataire: { label: 'Port en compte (Dest.)', color: '#7c3aed' },
-      port_en_compte_expediteur: { label: 'Port en compte (Exp.)', color: '#4f46e5' },
-      port_en_compte: { label: 'Port en compte', color: '#7c3aed' },
-    }
-    const portInfo = PORT_TYPE_LABELS[parcel.portType] || PORT_TYPE_LABELS.port_paye
-
-    const checks = ALL_SERVICE_TYPES.map((st: any) => {
-      // Cas spécial: Retour BL se base sur hasRetourBL au lieu de serviceType
-      const isChecked = st.key === 'retour_bl'
-        ? (parcel.hasRetourBL === true)
-        : (parcel.serviceType === st.key || (st.key === 'especes' && isMixedCod(parcel)))
-      return `
-      <label style="display:flex;align-items:center;gap:4px;font-size:9pt;font-weight:600">
-        <span style="width:12px;height:12px;border:1px solid #9ca3af;border-radius:2px;display:flex;align-items:center;justify-content:center;font-size:8px;${isChecked ? 'background:#2563eb;border-color:#2563eb;color:white' : ''}">${isChecked ? '✓' : ''}</span>
-        ${st.label}
-      </label>`
-    }).join('')
-
-    const renderCopy = () => `
-  <div style="border:1px solid #d1d5db;max-width:148mm;margin:0 auto">
-    <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #d1d5db;padding:8px 10px">
-      <img src="${logoUrl}" style="height:36px;object-fit:contain" onerror="this.style.display='none'">
-      <div style="text-align:center;flex:1">
-        ${parcel.sender?.nic ? `<div style="font-weight:bold;color:#000;font-size:16pt;font-family:monospace;letter-spacing:1px">N EXP : ${parcel.sender.nic}</div>` : ''}
-        <div style="font-weight:normal;color:#6b7280;font-size:7pt;letter-spacing:0.5px;font-family:monospace;margin-top:2px">${parcel.trackingId}</div>
-      </div>
-      <div style="text-align:right;font-size:10pt;color:#000;font-weight:600">${printDate}</div>
-    </div>
-    <table style="border-bottom:1px solid #d1d5db">
-      <tr>
-        <td style="width:50%;border-right:1px solid #d1d5db">
-          <div style="font-weight:bold;font-size:8pt;text-transform:uppercase;color:#1d4ed8;margin-bottom:4px">Expéditeur</div>
-          <div><span style="color:#6b7280">Nom : </span><strong>${parcel.sender?.name || '—'}</strong></div>
-          ${parcel.sender?.address ? `<div><span style="color:#6b7280">Adresse : </span>${parcel.sender.address}</div>` : ''}
-          <div><span style="color:#6b7280">Ville : </span><strong>${parcel.sender?.city || '—'}</strong></div>
-          <div><span style="color:#6b7280">Tél : </span>${parcel.sender?.tel || '—'}</div>
-        </td>
-        <td style="width:50%">
-          <div style="font-weight:bold;font-size:8pt;text-transform:uppercase;color:#1d4ed8;margin-bottom:4px">Destinataire</div>
-          <div><span style="color:#6b7280">Nom : </span><strong>${parcel.receiver?.name || '—'}</strong></div>
-          ${parcel.receiver?.address ? `<div><span style="color:#6b7280">Adresse : </span>${parcel.receiver.address}</div>` : ''}
-          <div><span style="color:#6b7280">Ville : </span><strong style="color:#1d4ed8">${parcel.receiver?.city || '—'}</strong></div>
-          <div><span style="color:#6b7280">Tél : </span>${parcel.receiver?.tel || '—'}</div>
-        </td>
-      </tr>
-    </table>
-    <table style="border-bottom:1px solid #d1d5db;background:#eff6ff">
-      <tr>
-        <td style="width:50%;border-right:1px solid #d1d5db">
-          <div style="font-size:8pt;color:#6b7280;text-transform:uppercase">Nature de marchandise</div>
-          <div style="font-weight:bold;font-size:13pt;color:#1e40af">${parcel.natureOfGoods || '—'}</div>
-        </td>
-        <td style="width:50%">
-          <div style="font-size:8pt;color:#6b7280;text-transform:uppercase">Nombre de colis</div>
-          <div style="font-weight:bold;font-size:13pt;color:#1e40af">${parcel.nbColis || 1}</div>
-        </td>
-      </tr>
-    </table>
-    <div style="display:flex;gap:16px;padding:5px 10px;border-bottom:1px solid #e5e7eb;background:#f9fafb">${checks}</div>
-    <table style="border-bottom:1px solid #d1d5db;text-align:center">
-      <tr>
-        <td style="width:33%;border-right:1px solid #e5e7eb">
-          <div style="font-size:8pt;color:#9ca3af;text-transform:uppercase">Poids</div>
-          <div style="font-weight:bold;font-size:12pt">${parcel.weight ? parcel.weight + ' kg' : '—'}</div>
-        </td>
-        <td style="width:33%;border-right:1px solid #e5e7eb">
-          <div style="font-size:8pt;color:#9ca3af;text-transform:uppercase">Prix</div>
-          <div style="font-weight:bold;font-size:12pt;color:#1d4ed8">${parcel.price > 0 ? parcel.price + ' DH' : '—'}</div>
-          <div style="font-weight:bold;font-size:8pt;text-transform:uppercase;color:${portInfo.color};margin-top:2px">${portInfo.label}</div>
-        </td>
-        <td style="width:33%">
-          <div style="font-size:8pt;color:#9ca3af;text-transform:uppercase">RETOUR FOND</div>
-          <div style="font-weight:bold;font-size:12pt;color:${parcel.codAmount > 0 ? '#ea580c' : '#d1d5db'}">${parcel.codAmount > 0 ? parcel.codAmount + ' DH' : '—'}</div>
-          ${isMixedCod(parcel) ? `<div style="font-size:8pt;font-weight:bold;color:#c2410c">${codPartsDetailLabel(parcel)}</div>` : ''}
-        </td>
-      </tr>
-    </table>
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:6px 10px;border-bottom:1px solid #e5e7eb">
-      ${barcodeSvgStr}
-      <div style="display:flex;flex-direction:column;align-items:center;gap:2px;margin-left:8px">
-        ${qrSvgStr}
-        <div style="font-size:7pt;color:#9ca3af">Suivi en ligne</div>
-      </div>
-    </div>
-    <table style="border-top:1px solid #d1d5db;font-size:8pt;color:#9ca3af">
-      <tr>
-        <td style="width:50%;border-right:1px solid #e5e7eb">Cachet et Signature expéditeur</td>
-        <td style="width:50%">Cachet et Signature destinataire</td>
-      </tr>
-    </table>
-  </div>`
-
-    const ticketHtml = `<!DOCTYPE html>
-<html lang="fr">
-<head>
-  <meta charset="UTF-8">
-  <title>Bon-Ramassage-${parcel.trackingId}</title>
-  <style>
-    @page { size: A4 portrait; margin: 6mm; }
-    * { box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
-    body { font-family:Arial,sans-serif; font-size:10pt; margin:0; padding:0; }
-    table { border-collapse:collapse; width:100%; }
-    td { vertical-align:top; padding:6px 10px; }
-    .cut-line { max-width:148mm; margin:0 auto; text-align:center; color:#9ca3af; font-size:8pt; border-top:1px dashed #9ca3af; padding-top:2px; }
-  </style>
-</head>
-<body>
-  ${renderCopy()}
-  <div class="cut-line">✂ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ✂</div>
-  ${renderCopy()}
-  <script>window.onload = function() { window.print(); };<\/script>
-</body>
-</html>`
-
-    // Créer un Blob URL pour que le document soit partageable via WhatsApp
-    const blob = new Blob([ticketHtml], { type: 'text/html' })
-    const blobUrl = URL.createObjectURL(blob)
-    const win = window.open(blobUrl, '_blank', 'width=700,height=900')
-
-    // Nettoyer l'URL après 30 secondes
-    if (win) {
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 30000)
-    }
+    await printAgentTicket(parcel)
   }
 
   // ── Driver management ─────────────────────────────────────────────────────
@@ -1713,6 +1590,21 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         setLoading(false)
         return
       }
+      // 🚫 N° EXP DÉJÀ EXISTANT : contrôle BLOQUANT au moment d'enregistrer (le contrôle du champ, à la sortie
+      // du N° EXP, ne se fait pas si on renvoie un formulaire déjà rempli — ex. doublon 1212579 du 19/10/2026).
+      // Réseau indisponible / délai dépassé (4 s) : l'enregistrement n'est pas bloqué (comme avant).
+      const nicToCheck = String(form.senderNic || '').trim()
+      const existingNic = await findParcelByNic(nicToCheck)
+      if (existingNic) {
+        setError(`🚫 N° EXP DÉJÀ EXISTANT : « ${nicToCheck} »\n\n`
+          + `Il est déjà enregistré (${existingNic.trackingId || existingNic.id}${existingNic.originCity ? ` — agence ${existingNic.originCity}` : ''}`
+          + `${existingNic.sender?.name ? ` — expéditeur ${existingNic.sender.name}` : ''}).\n\n`
+          + 'L\'expédition n\'a PAS été enregistrée une deuxième fois. Pour corriger l\'expédition existante, faites une demande de modification.')
+        setLoading(false)
+        setTimeout(() => document.getElementById('senderNic')?.focus(), 50)
+        return
+      }
+
       const selectedDeliverySector = allSectors.find((sec: any) => sec.id === form.deliverySectorId)
       let selectedDeliveryDriver = drivers.find((d: any) => d.id === form.deliveryDriverId)
 
@@ -1760,8 +1652,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       const autoPortType = form.portType || 'port_paye'; // Par défaut port_paye si non spécifié
 
       const { createParcel } = await import('../../../firebase/firestore')
+      // 🔒 Agent pro : il ne saisit que les expéditions de SA ville (règle Firestore identique)
+      const senderCity = profile?.role === 'agentpro' ? (profile?.city || '') : form.senderCity
       const parcel = await createParcel({
-        sender:        { name: form.senderName, nic: form.senderNic, address: form.senderAddress, tel: form.senderTel, city: form.senderCity },
+        sender:        { name: form.senderName, nic: form.senderNic, address: form.senderAddress, tel: form.senderTel, city: senderCity },
         receiver:      { name: form.receiverName, address: form.receiverAddress, tel: form.receiverTel, city: form.receiverCity },
         weight:        form.weight,
         nbColis:       form.nbColis,
@@ -1781,7 +1675,7 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         clientId:        form.clientId   || null,
         clientName:      form.clientName || null,
         agentId:         auth.currentUser?.uid,
-        agentName:       profile?.name || '',
+        agentName:       profile?.name || (profile?.adminSaisie ? (profile?.email || 'Admin') : ''),
         deliverySectorId:     selectedDeliverySector?.id || null,
         deliverySectorCode:   selectedDeliverySector?.code || '',
         deliverySectorName:   selectedDeliverySector?.name || '',
@@ -1790,7 +1684,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         deliveryAssignedAt:   (form.enGare && selectedDeliveryDriver) ? new Date().toISOString() : null,
         deliveryAssignedBy:   (form.enGare && selectedDeliveryDriver) ? 'Système (auto-gare)' : null,
         operationDate:        form.operationDate || null,
-        agentRole:            profile?.role || 'agent',
+        // Saisie ADMIN (mode agent pro, toutes villes) : le vrai rôle « admin » est enregistré
+        agentRole:            profile?.realRole || profile?.role || 'agent',
         hasRetourBL:          form.hasRetourBL || false,  // ⭐ Retour BL obligatoire
         deliveryMethod:       form.enGare ? 'gare' : 'domicile',  // 🚉 Mode de livraison
       // ⚡ clients déjà chargés en direct : pas de relecture Firestore — seulement pour les villes dont TOUS les
@@ -1864,6 +1759,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   const openEditModal = async (parcelArg: any) => {
     // 🪶 Liste « version allégée » (parcelsLite) : le modal travaille sur le document COMPLET
     const parcel: any = await ensureFullParcel(parcelArg)
+    if (!agentProCanEditBon(s.current.profile, parcel)) {
+      showToast('Lecture seule : le bon est géré par son agence de création.', 'error')
+      return
+    }
     const { setEditingParcel, setEditForm, setEditError } = s.current
     setEditingParcel(parcel)
     setEditForm({
@@ -1896,21 +1795,26 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   }
 
   const handleEditClick = (parcel: any) => {
+    if (!agentProCanEditBon(s.current.profile, parcel)) {
+      showToast('Lecture seule : le bon est géré par son agence de création.', 'error')
+      return
+    }
     openEditModal(parcel)
   }
 
   const handleDeleteClick = (parcel: any) => {
-    const { canEditParcelDetails, setDeleteConfirm } = s.current
+    const { canDeleteParcel, setDeleteConfirm } = s.current
 
-    if (canEditParcelDetails(parcel)) {
+    if (canDeleteParcel(parcel)) {
       setDeleteConfirm(parcel)
     } else {
-      window.alert('Lecture seule : seul le createur de ce bon peut le supprimer.')
+      window.alert('Suppression interdite : seules les expéditions créées dans votre agence et encore modifiables peuvent être supprimées.')
     }
   }
 
   const confirmDelete = async (parcel: any) => {
-    const { setDeleteConfirm } = s.current
+    const { canDeleteParcel, setDeleteConfirm } = s.current
+    if (!canDeleteParcel(parcel)) throw new Error('Suppression interdite : cette expédition ne peut pas être supprimée par votre agence.')
     await deleteParcel(parcel.id)
     setDeleteConfirm(null)
   }
@@ -1918,6 +1822,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
   const handleCodeVerify = async () => {
     const { codeModal, setCodeModal } = s.current
     const { parcel, action, code } = codeModal
+    if (action === 'delete' && !s.current.canDeleteParcel(parcel)) {
+      setCodeModal((m: any) => ({ ...m, error: 'Suppression interdite : cette expédition ne peut pas être supprimée par votre agence.' }))
+      return
+    }
     if (!code.trim()) { setCodeModal((m: any) => ({ ...m, error: 'Entrez le code.' })); return }
     const agentCode = await getAgentCode(parcel.agentId)
     if (agentCode === null || code.trim() === String(agentCode)) {
@@ -1931,6 +1839,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 
   const handleEditSave = async () => {
     const { editForm, editingParcel, setEditLoading, setEditError, setEditingParcel, setParcels, profile, adminScopeAllowsEdit } = s.current
+    if (!agentProCanEditBon(profile, editingParcel)) {
+      setEditError('Lecture seule : le bon est géré par son agence de création.')
+      return
+    }
 
     console.log('🔍 DEBUG DEBUT handleEditSave:', {
       editFormStatus: editForm?.status,
@@ -1941,13 +1853,10 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 
     const statusChanging = editForm.status !== editingParcel.status
     const isReturning    = statusChanging && editForm.status === 'Retourné'
-    const canManageStatus = (parcel: any) => {
-      // Le chef d'agence peut modifier le statut de n'importe quelle expédition
-      if (profile?.role === 'chef_agence') return true
-      // Pour les autres rôles, on garde la restriction par ville de destination
-      if (!profile?.city) return true
-      const dest = parcel.destinationCity || parcel.receiver?.city
-      return !dest || profile.city === dest
+    const canManageStatus = s.current.canManageStatus
+    if (statusChanging && !canManageStatus(editingParcel)) {
+      setEditError("Statut de livraison réservé à l'agence de destination.")
+      return
     }
 
     // 💵+📋 RF mixte : Espèces + UN chèque OU UNE traite, un montant par type
@@ -2038,6 +1947,12 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         if (Object.keys(detailsPatch).length > 0) {
           await updateParcel(editingParcel.id, detailsPatch)
           detailsSaved = true
+          // 🚚 Destination corrigée : livreur « En gare » / d'une autre ville réaligné (diagnostic 2.1, jamais bloquant)
+          if (detailsPatch.destinationCity !== undefined) {
+            const { realignDeliveryAfterDestinationChange } = await import('../../../firebase/delivery')
+            const msg = await realignDeliveryAfterDestinationChange(editingParcel.id, profile?.name || 'Agent').catch(() => null)
+            if (msg) showToast(`🚚 ${msg}`, 'success', 5000)
+          }
           setParcels((prev: any) => prev.map((p: any) => p.id === editingParcel.id ? { ...p, ...detailsPatch } : p))
         }
 
@@ -2184,11 +2099,11 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       return
     }
 
-    if (!window.confirm(`Voulez-vous vraiment changer le statut vers "${newStatus}" ?`)) {
-      return
-    }
-
     try {
+      const snapshot = await getDoc(doc(db, 'parcels', parcelId))
+      const blocked = deliveryStatusChangeBlock(profile, snapshot.data(), newStatus)
+      if (blocked) { alert(blocked); return }
+      if (!window.confirm(`Voulez-vous vraiment changer le statut vers "${newStatus}" ?`)) return
       await updateParcelStatus(parcelId, newStatus)
       // Le colis sera automatiquement mis à jour via la subscription
     } catch (e: any) {
@@ -2478,6 +2393,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         agentId:            auth.currentUser?.uid,
         agentName:          profile.name || profile.email || 'Agent',
       })
+      // 🔒 Expéditions déjà en livraison / livrées / en retour : statut conservé (pas remises « Arrivé en agence »)
+      if (result.skippedParcelIds?.length) alert(`${result.skippedParcelIds.length} expédition(s) de cet arrivage étaient déjà en livraison, livrées ou en retour : leur statut a été conservé.`)
       setArrivageSuccess({
         arrivageRef:          result.arrivageRef,
         arrivedCount:         arrArrivedParcels.length,

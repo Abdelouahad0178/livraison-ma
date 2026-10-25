@@ -154,7 +154,7 @@ export default function HomePage() {
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="bg-white rounded-xl px-3 py-1.5 shadow-lg">
-              <img src="/LOGO.jpg" alt="BG Express" className="h-8 object-contain" />
+              <img src="/LOGO.jpg" alt="BG Express" width={770} height={244} className="h-8 w-auto object-contain" />
             </div>
           </div>
           <div className="flex items-center gap-2 sm:gap-3">

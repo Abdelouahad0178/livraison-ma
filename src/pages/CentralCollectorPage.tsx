@@ -1,7 +1,7 @@
 import DateInput from '../components/DateInput'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { signOut } from 'firebase/auth'
-import { doc, onSnapshot, getDoc, getDocs, collection, query as fbQuery, where, orderBy, limit as fbLimit } from 'firebase/firestore'
+import { doc, onSnapshot, updateDoc, getDoc, getDocs, collection, query as fbQuery, where, orderBy, limit as fbLimit } from 'firebase/firestore'
 import { auth, db } from '../firebase/config'
 import { loadExcel } from '../utils/loadExcel'
 import {
@@ -32,20 +32,22 @@ import {
   STATUS_COLORS,
   STATUSES,
 } from '../firebase/firestore'
-import { Banknote, Building2, CheckCircle2, ClipboardCheck, Database, LogOut, MapPin, Package, Search, FileText, X, Save, Printer, Calendar, Filter, Edit, Trash2, Sparkles, TrendingUp, Wallet, Archive, Undo2 } from 'lucide-react'
+import { Banknote, Building2, CheckCircle2, ClipboardCheck, Database, LogOut, MapPin, Package, Search, FileText, X, Save, Printer, Calendar, Filter, Edit, Trash2, Sparkles, TrendingUp, Wallet, Archive, Undo2, Inbox } from 'lucide-react'
 import ProfilePhotoUpload from '../components/ProfilePhotoUpload'
 import { useDebounce } from '../components/DebouncedSearchInput'
 import { subscribeAllParcelsWithDateFilter, loadMoreParcelsWithDateFilter } from '../firebase/parcels'
 import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
-import { saveParcelsCodDocuments, type CodDocument } from '../firebase/central'
+import { saveParcelsCodDocuments, changeCodValueType, type CodDocument } from '../firebase/central'
 import { ChequeEntryModal, ReceptionSheetModal, isDocParcel, hasDocData, docsOf, docAmountOf, groupOf } from './central/ChequeReception'
 import { COD_DOC_SERVICE_TYPE_VALUES, COD_DOC_PAYMENT_TYPE_VALUES } from '../utils/codParts'
 import { planPointageCancel, planGroupChequeWrites, groupMemberIdsToFetch } from './central/pointageCancel'
-import { ControlReportsPanel, controlReportHtml, saveControlReport, openPrint, type ReportLine } from './central/ControlReports'
+import { ValeursEnvoiPanel } from './central/ValeursEnvoiPanel'
+import { ReceptionValeursPanel } from './central/ReceptionValeursPanel'
+import { ControlReportsPanel,controlReportHtml, saveControlReport, openPrint, type ReportLine } from './central/ControlReports'
 import { normText, isDigitsOnly, numberStartsWith } from '../utils/normText'
-import { codPartView, codHasType, isMixedCod, codPartsOf, codTypeDisplay, codPartsBreakdown, codPartsLabel } from '../utils/codParts'
+import { codPartView, codHasType, isMixedCod, codPartsOf, codTypeDisplay, codPartsBreakdown, codPartsLabel, codDocPartOf, codDocTypeOf } from '../utils/codParts'
 import { codMoneyOnly, isCodSenderPaid } from '../utils/moneyFlow'
 
 // ⚡ Système de chargement optimisé (Option 3 - comme AdminPage)
@@ -60,6 +62,25 @@ const codTypeOf = codPaymentTypeOf
 const codTypeLabel = (p: any) => isMixedCod(p) ? codTypeDisplay(p) : codPaymentTypeLabel(p)
 
 const money = (n: any) => (parseFloat(n) || 0).toLocaleString('fr-MA')
+/** 🔗 Chèque groupé de l'expédition (avec la liste de ses N° EXP), sinon null */
+const groupDocOf = (p: any): any | null => {
+  const d = (Array.isArray(p?.codDocuments) ? p.codDocuments : []).find((x: any) => (x.groupIds || []).length > 1)
+  return d && (d.groupNics || []).length > 0 ? d : null
+}
+/** Expédition avec une valeur à contrôler : montant > 0, service autre que simple / Retour BL, et une part espèces,
+ *  chèque ou traite (mixte compris). */
+const hasValueToControl = (p: any): boolean => {
+  if (!((parseFloat(p?.codAmount) || 0) > 0)) return false
+  const service = String(p?.serviceType ?? '').trim().toLowerCase()
+  if (service === 'simple' || service === 'retour_bl' || service === 'bon_livraison') return false
+  return codHasType(p, ['especes', 'cheque', 'traite'])
+}
+/**
+ * Valeur encaissée : expédition LIVRÉE (le livreur / la gare a encaissé), ou COD marqué collecté / remis.
+ * ⚠️ Pas seulement codStatus : la plupart des expéditions livrées gardent codStatus « pending ».
+ * Seule une valeur encaissée peut être pointée puis envoyée.
+ */
+export const isValueCollected = (p: any): boolean => p?.status === 'Livré' || (!!p?.codStatus && p.codStatus !== 'pending')
 const asDate = (value: any) => {
   if (!value) return null
   if (value.toDate) return value.toDate()
@@ -142,6 +163,9 @@ const presetRange = (preset: any, from: any, to: any, operationalDay?: Date): { 
  * COD est un chèque ou une traite (part document d'un COD mixte), sans les actions de suppression massive.
  * Une seule page : toute amélioration de l'encaisseur central profite aussi à l'analyseur chèques.
  */
+/** ⚡ Plafond des recherches par nom (encaisseur central / analyseur chèque) */
+const SEARCH_CAP = 300
+
 export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'central' | 'cheque' } = {}) {
   const chequeOnly = mode === 'cheque'
   const [profile, setProfile] = useState<any>(null)
@@ -168,7 +192,7 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
   }
   const [depositsAll, setDeposits] = useState<any[]>([])
   const [paymentsAll, setPayments] = useState<any[]>([])
-  const [activeTab, setActiveTab] = useState<'controle' | 'rapports' | 'fournisseurs' | 'archives'>('controle')
+  const [activeTab, setActiveTab] = useState<'controle' | 'rapports' | 'envoi' | 'reception' | 'fournisseurs' | 'archives'>('controle')
   // N° du dernier rapport imprimé et enregistré (message de confirmation)
   const [lastReport, setLastReport] = useState('')
 
@@ -247,6 +271,8 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
   const [ctlDatePreset, setCtlDatePreset] = useState('all')
   const [ctlDateFrom, setCtlDateFrom] = useState('')
   const [ctlDateTo, setCtlDateTo] = useState('')
+  // 📌 La période porte sur la date de CRÉATION de l'expédition, ou sur la date de POINTAGE (controlledAt)
+  const [ctlDateBasis, setCtlDateBasis] = useState<'created' | 'pointed'>('created')
   const [ctlMinAmount, setCtlMinAmount] = useState('')
   const [ctlMaxAmount, setCtlMaxAmount] = useState('')
   const [ctlSelected, setCtlSelected] = useState<Set<string>>(new Set())
@@ -255,14 +281,14 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
 
   // ⚡ Debounce de la recherche contrôle (150ms — filtre dynamique réactif)
   useEffect(() => {
-    const timer = setTimeout(() => setCtlDebounced(ctlQuery), 150)
+    const timer = setTimeout(() => setCtlDebounced(ctlQuery), 500) // ⚡ recherche après une pause de frappe (avant 150 ms)
     return () => clearTimeout(timer)
   }, [ctlQuery])
 
   // Réinitialiser la limite d'affichage quand les filtres changent
   useEffect(() => {
     setCtlDisplayLimit(200)
-  }, [ctlDebounced, ctlCity, ctlPayType, ctlCodStatus, ctlControl, ctlParcelStatus, ctlDatePreset, ctlDateFrom, ctlDateTo, ctlMinAmount, ctlMaxAmount])
+  }, [ctlDebounced, ctlCity, ctlPayType, ctlCodStatus, ctlControl, ctlParcelStatus, ctlDatePreset, ctlDateFrom, ctlDateTo, ctlDateBasis, ctlMinAmount, ctlMaxAmount])
 
   useEffect(() => {
     const uid = auth.currentUser?.uid
@@ -288,7 +314,7 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
       collection(db, 'parcels'),
       where('controlled', '==', true),
       orderBy('controlledAt', 'desc'),
-      fbLimit(500)
+      fbLimit(200) // ⚡ 200 pointages les plus récents (avant 500) : un colis sorti de la fenêtre est relu en base (ci-dessous)
     )
     const unsubControlled = onSnapshot(qControlled, snap => {
       const changes = snap.docChanges()
@@ -338,7 +364,7 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
       collection(db, 'parcels'),
       where('deliveryControlled', '==', true),
       orderBy('deliveryControlledAt', 'desc'),
-      fbLimit(500)
+      fbLimit(200) // ⚡ 200 pointages les plus récents (avant 500) : un colis sorti de la fenêtre est relu en base (ci-dessous)
     )
     const unsubDelivery = onSnapshot(qDelivery, snap => {
       setControlOverrides(prev => {
@@ -399,6 +425,18 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     setLoadAllProgress(0)
     pagedRef.current = false
     lastDocRef.current = null
+
+    // 📌 Période sur la DATE DE POINTAGE : expéditions pointées dans la plage (temps réel), quelle que soit
+    // leur date de création. Index : controlled ASC + controlledAt DESC. Filtres chèques / ville en mémoire.
+    if (activeTab === 'controle' && ctlDateBasis === 'pointed' && range) {
+      setHasMore(false)
+      const cons: any[] = [where('controlled', '==', true)]
+      if (range.start) cons.push(where('controlledAt', '>=', range.start.toISOString()))
+      if (range.end) cons.push(where('controlledAt', '<=', range.end.toISOString()))
+      return onSnapshot(fbQuery(collection(db, 'parcels'), ...cons, orderBy('controlledAt', 'desc')),
+        snap => setLiveParcels(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+        err => console.error('CentralCollectorPage (date de pointage):', err))
+    }
 
     // 🧾 ANALYSEUR CHÈQUES : seules les expéditions dont le COD est un chèque / une traite sont lues (filtre
     // SERVEUR : serviceType, et codPaymentType pour les services non COD), au lieu de TOUTES les expéditions
@@ -500,7 +538,7 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     }, onError, { pageSize: FILTERED_PAGE_SIZE, dateFrom: range.start, dateTo: range.end })
 
     return () => { cancelled = true; unsubParcels(); setLoadingAll(false) }
-  }, [activeTab, datePreset, dateFrom, dateTo, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay, loadBigPageKey, chequeOnly])
+  }, [activeTab, datePreset, dateFrom, dateTo, ctlDatePreset, ctlDateFrom, ctlDateTo, ctlDateBasis, operationalDay, loadBigPageKey, chequeOnly])
 
   // ❌ DÉSACTIVÉ: Chargement automatique (Option 3 - charge seulement ce dont on a besoin)
   // useEffect(() => {
@@ -522,12 +560,14 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
   // Écoute AUSSI ctlDebounced pour l'onglet Contrôle
   // ⚡ Lancée 300 ms après la dernière frappe (avant : une recherche serveur PAR touche) ; champ vidé :
   // réinitialisation immédiate. Le filtrage local du tableau garde `query` (instantané).
+  const [searchCapped, setSearchCapped] = useState(false)
   const debouncedQuery = useDebounce(query, 300)
   const serverQuery = query.trim() === '' ? '' : debouncedQuery
   useEffect(() => {
     // Prendre la recherche active (Fournisseurs OU Contrôle)
     const searchQuery = (serverQuery.trim() || ctlDebounced.trim())
     if (!searchQuery || searchQuery.length < 5) {
+      setSearchCapped(false)
       setServerResults([])
       setDeepSearching(false)
       return
@@ -542,8 +582,11 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
       setDeepSearching(true)
       try {
         console.warn(`🔍 Recherche serveur CentralCollector: "${searchQuery}" dans TOUTE la base...`)
-        const results = await searchParcels(searchQuery, { limit: 50000 })
+        // ⚡ Plafond 300 (avant 50 000 : « moham » ramenait > 1 200 expéditions complètes) — N° EXP, téléphone,
+        // N° LMA : recherches exactes, non concernées. Plafond atteint → message « affinez la recherche ».
+        const results = await searchParcels(searchQuery, { limit: SEARCH_CAP })
         if (cancelled) return
+        setSearchCapped(results.length >= SEARCH_CAP)
         setServerResults(results)
         setDeepSearching(false)
         console.warn(`✅ Recherche serveur CentralCollector: ${results.length} résultats trouvés`)
@@ -757,6 +800,8 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     const mn = ctlMinAmount === '' ? null : parseFloat(ctlMinAmount)
     const mx = ctlMaxAmount === '' ? null : parseFloat(ctlMaxAmount)
     return parcels.filter((p: any) => {
+      // 💰 Seulement les expéditions avec une VALEUR à contrôler (espèces, chèque, traite) — jamais les simples / Retour BL
+      if (!hasValueToControl(p)) return false
       if (ctlPayType !== 'all') {
         const t = codTypeOf(p)
         if (ctlPayType === 'none' && t) return false
@@ -766,7 +811,10 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
       if (ctlControl === 'controlled' && !isControlled(p)) return false
       if (ctlControl === 'uncontrolled' && isControlled(p)) return false
       if (ctlParcelStatus !== 'all' && p.status !== ctlParcelStatus) return false
-      if (!inDateRange(p.createdAt, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay)) return false
+      if (ctlDateBasis === 'pointed') {
+        // Période = date de pointage : seules les expéditions pointées dans la plage
+        if (ctlDatePreset !== 'all' && (!isControlled(p) || !inDateRange(p.controlledAt, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay))) return false
+      } else if (!inDateRange(p.createdAt, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay)) return false
       const n = parseFloat(p.codAmount) || 0
       if (mn !== null && !Number.isNaN(mn) && n < mn) return false
       if (mx !== null && !Number.isNaN(mx) && n > mx) return false
@@ -783,7 +831,7 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
         p.receiver?.city, p.codAmount, p.status, p.controlledBy,
       ], qq)
     })
-  }, [parcels, ctlDebounced, ctlPayType, ctlCodStatus, ctlControl, ctlParcelStatus, ctlDatePreset, ctlDateFrom, ctlDateTo, operationalDay, ctlMinAmount, ctlMaxAmount, serverResults])
+  }, [parcels, ctlDebounced, ctlPayType, ctlCodStatus, ctlControl, ctlParcelStatus, ctlDatePreset, ctlDateFrom, ctlDateTo, ctlDateBasis, operationalDay, ctlMinAmount, ctlMaxAmount, serverResults])
 
   // Compteurs par ville (pointage ville par ville) - par ville d'ORIGINE
   const ctlCityStats = useMemo(() => {
@@ -836,11 +884,12 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     let totalAmount = 0, controlledCount = 0, controlledAmount = 0
     const byType: Record<string, { count: number; amount: number }> = {}
     ctlFiltered.forEach((p: any) => {
-      const amt = parseFloat(p.codAmount) || 0
+      // 🧾 Analyseur chèque : un COD MIXTE ne compte que sa part chèque / traite (sa part espèces n'est pas un document)
+      const amt = chequeOnly && isMixedCod(p) ? codDocPartOf(p) : (parseFloat(p.codAmount) || 0)
       totalAmount += amt
       if (isControlled(p)) { controlledCount += 1; controlledAmount += amt }
       // RF mixte : chaque part dans son type
-      const splits = isMixedCod(p) ? codPartsOf(p) : [{ type: codTypeOf(p) || 'none', amount: amt }]
+      const splits = isMixedCod(p) ? codPartsOf(p).filter(x => !chequeOnly || x.type !== 'especes') : [{ type: codTypeOf(p) || 'none', amount: amt }]
       splits.forEach(({ type: t, amount }) => {
         if (!byType[t]) byType[t] = { count: 0, amount: 0 }
         byType[t].count += 1
@@ -857,7 +906,7 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
       pct: ctlFiltered.length ? Math.round((controlledCount / ctlFiltered.length) * 100) : 0,
       byType,
     }
-  }, [ctlFiltered])
+  }, [ctlFiltered, chequeOnly])
 
   const clearCtlFilters = () => {
     setCtlQuery('')
@@ -913,7 +962,7 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     return new Map(rows.filter(Boolean).map((x: any) => [x.id, x]))
   }
 
-  const saveChequeDocs = async (p0: any, docs: CodDocument[], point: boolean, group?: any[]) => {
+  const saveChequeDocs = async (p0: any, docs: CodDocument[], point: boolean, group?: any[], cashRest?: { cash: number; expected: number; received: number; note: string }) => {
     const name = profile?.name || 'Encaisseur central'
     const uid = auth.currentUser?.uid || ''
     const nicOfP = (x: any) => String(x?.senderNic || x?.sender?.nic || x?.trackingId || '')
@@ -947,9 +996,20 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
       if (e?.code === 'permission-denied') throw new Error('Enregistrement refusé : au moins une expédition du chèque n\'est pas modifiable depuis votre compte (autre agence). Rien n\'a été enregistré.')
       throw e
     }
+    // ⚠️ Signalement « le reste payé en espèces » (chèque reçu < attendu) : visible par l'admin (Contrôle COD → filtre
+    // « Chèque + espèces signalé ») ; le COD n'est PAS modifié ici — l'admin le corrige en « chèque + espèces »
+    let signal: Record<string, any> = {}
+    if (cashRest && !isGroup) {
+      signal = {
+        codDocMismatch: true, codDocMismatchCash: cashRest.cash, codDocMismatchExpected: cashRest.expected,
+        codDocMismatchReceived: cashRest.received, codDocMismatchNote: cashRest.note || '',
+        codDocMismatchAt: new Date().toISOString(), codDocMismatchBy: name, codDocMismatchById: uid,
+      }
+      await updateDoc(doc(db, 'parcels', p.id), signal)
+    }
     setControlOverrides(prev => {
       const next = { ...prev }
-      Object.entries(saved).forEach(([id, d]) => { next[id] = { ...(next[id] || {}), codDocuments: d } })
+      Object.entries(saved).forEach(([id, d]) => { next[id] = { ...(next[id] || {}), codDocuments: d, ...(id === p.id ? signal : {}) } })
       return next
     })
     setChequeModal(null)
@@ -968,21 +1028,42 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     const x: any = snap.docs.map(d => ({ id: d.id, ...d.data() }))[0]
     if (!x) return { error: `N° EXP ${nic} introuvable.` }
     const norm = (v: any) => String(v || '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim()
-    if (norm(x.senderNameNorm || x.sender?.name) !== norm(p.senderNameNorm || p.sender?.name || p.senderName)) return { error: `${nic} : autre expéditeur (${x.sender?.name || '—'}) — un chèque groupé concerne un seul expéditeur.` }
+    // 🔗 (24/10/2026) Expéditeur écrit autrement (« GENERAL BENS EQUIP NEGOCE » / « … EQUIPEMENTS … ») ou différent :
+    // plus de refus — l'expédition est marquée et la fenêtre demande une confirmation avant de l'ajouter
+    const otherSender = norm(x.senderNameNorm || x.sender?.name) !== norm(p.senderNameNorm || p.sender?.name || p.senderName)
     if (!isDocParcel(x)) return { error: `${nic} : pas de COD chèque / traite.` }
     if (!canPoint(x) || (chequeOnly && !inMyAgency(x))) return { error: `${nic} : se pointe dans l'agence de destination (${x.destinationCity || x.receiver?.city || '—'}).` }
     const pg = docsOf(p).find((d: any) => (d.groupIds || []).length > 1)
     if (hasDocData(x) && !(pg && docsOf(x).some((d: any) => d.groupId === pg.groupId))) return { error: `${nic} : a déjà ses propres données de chèque.` }
-    return { parcel: x }
+    return { parcel: otherSender ? { ...x, _otherSender: x.sender?.name || x.clientName || '—' } : x }
   }
 
   // 🔗 Expéditions chèque / traite du MÊME expéditeur, TOUTES DATES (version allégée, index senderNameNorm + codAmount)
   const loadChequeCandidates = async (p: any): Promise<any[]> => {
-    const norm = p.senderNameNorm || String(p.sender?.name || p.senderName || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim()
-    if (!norm) return []
-    const snap = await getDocs(fbQuery(collection(db, 'parcelsLite'), where('senderNameNorm', '==', norm), where('codAmount', '>', 0), fbLimit(400)))
+    const normOf = (v: any) => String(v || '').toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim()
+    const norm = p.senderNameNorm || normOf(p.sender?.name || p.senderName)
+    const recv = p.receiverNameNorm || normOf(p.receiver?.name)
+    if (!norm && !recv) return []
+    // \ud83d\udd17 (24/10/2026) Un ch\u00e8que unique peut couvrir des exp\u00e9ditions de DATES diff\u00e9rentes, dont l'exp\u00e9diteur a \u00e9t\u00e9 saisi
+    // autrement : on propose le m\u00eame exp\u00e9diteur, le m\u00eame DESTINATAIRE (celui qui signe le ch\u00e8que) et le m\u00eame client
+    const col = collection(db, 'parcelsLite')
+    const qs = [
+      norm ? getDocs(fbQuery(col, where('senderNameNorm', '==', norm), where('codAmount', '>', 0), fbLimit(400))) : null,
+      recv ? getDocs(fbQuery(col, where('receiverNameNorm', '==', recv), fbLimit(400))) : null,
+      p.clientId ? getDocs(fbQuery(col, where('clientId', '==', p.clientId), fbLimit(400))) : null,
+    ]
+    const snaps = await Promise.all(qs.map(q => (q ? q.catch(() => null) : null)))
     const pg = groupOf(p)
-    const list = snap.docs.map(d => ({ id: d.id, ...d.data() } as any))
+    const seen = new Set<string>()
+    const list: any[] = []
+    snaps.forEach(s => s?.docs.forEach(d => {
+      if (seen.has(d.id)) return
+      seen.add(d.id)
+      const x: any = { id: d.id, ...d.data() }
+      if (!((parseFloat(x.codAmount) || 0) > 0)) return
+      if (normOf(x.senderNameNorm || x.sender?.name) !== normOf(norm)) x._otherSender = x.sender?.name || x.clientName || '\u2014'
+      list.push(x)
+    }))
     // 🔗 Membres DÉJÀ dans ce chèque groupé : toujours dans la liste, même absents de la recherche (limite, COD
     // modifié, version allégée pas encore à jour…) — sinon ils seraient retirés du groupe sans que personne le voie
     const absent = (pg?.groupIds || []).filter((id: string) => id !== p.id && !list.some((x: any) => x.id === id))
@@ -1004,7 +1085,16 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
 
   // ✅ Pointage : marquer / dé-marquer contrôlé (batch Firestore + MAJ optimiste)
   const applyControl = async (ids: string[], value: boolean) => {
-    const clean = ids.filter(Boolean)
+    let clean = ids.filter(Boolean)
+    // 🔒 Pointage seulement d'une valeur ENCAISSÉE (jamais « En attente » : rien à envoyer)
+    if (value) {
+      const notCollected = clean.map(id => parcelById.get(id)).filter((p: any) => p && !isValueCollected(p))
+      if (notCollected.length) {
+        alert(`⛔ Valeur non encaissée (expédition pas encore livrée) — pointage impossible pour : ${notCollected.map((p: any) => p.senderNic || p.sender?.nic || p.trackingId).join(', ')}.\n\nUne valeur se pointe une fois l'expédition livrée.`)
+        const bad = new Set(notCollected.map((p: any) => p.id))
+        clean = clean.filter(id => !bad.has(id))
+      }
+    }
     if (clean.length === 0 || pointing) return
     setPointing(true)
     try {
@@ -1178,6 +1268,29 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
       else ctlDisplayed.forEach((p: any) => { selCache.current.set(p.id, p); s.add(p.id) })
       return s
     })
+  }
+
+  // 🔁 Changement du type de la valeur (avant pointage)
+  const [typeEditId, setTypeEditId] = useState<string | null>(null)
+  const [typeSaving, setTypeSaving] = useState(false)
+  const changeType = async (p: any, newType: 'especes' | 'cheque' | 'traite') => {
+    const label = COD_PAYMENT_TYPES.find((t: any) => t.key === newType)?.label || newType
+    const old = COD_PAYMENT_TYPES.find((t: any) => t.key === codTypeOf(p))?.label || '—'
+    const collected = (p.codStatus || 'pending') !== 'pending'
+    if (!window.confirm(`Changer le type de la valeur de ${p.senderNic || p.sender?.nic || p.trackingId} : ${old} → ${label} ?`
+      + (collected ? `\n\n⚠️ Cette valeur est déjà encaissée (${COD_STATUS[p.codStatus]?.label || p.codStatus}) : les caisses l'afficheront désormais en ${label}.` : '')
+      + (docsOf(p).length ? '\n\nLes données du chèque / de la traite déjà saisies seront retirées.' : ''))) { setTypeEditId(null); return }
+    setTypeSaving(true)
+    try {
+      await changeCodValueType(p.id, newType, profile?.name || 'Encaisseur central', auth.currentUser?.uid || '')
+      // Affichage immédiat (l'écoute temps réel apporte ensuite la valeur enregistrée)
+      setControlOverrides(prev => ({ ...prev, [p.id]: { ...(prev[p.id] || {}), serviceType: newType, codPaymentType: newType, codTypeChangedAt: new Date().toISOString(), codTypeChangedBy: profile?.name || '', ...(docsOf(p).length ? { codDocuments: [] } : {}) } }))
+    } catch (e: any) {
+      alert(`❌ ${e?.message || e}`)
+    } finally {
+      setTypeSaving(false)
+      setTypeEditId(null)
+    }
   }
 
   const payTypeBadge = (p: any) => {
@@ -1622,7 +1735,10 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
       periodeText = `Depuis le ${new Date(ctlDateFrom).toLocaleDateString('fr-MA')}`
     } else if (ctlDatePreset === 'custom' && ctlDateTo) {
       periodeText = `Jusqu'au ${new Date(ctlDateTo).toLocaleDateString('fr-MA')}`
+    } else if (ctlDatePreset === 'operational') {
+      periodeText = `Journée du ${operationalDay.toLocaleDateString('fr-MA')}`
     }
+    if (ctlDatePreset !== 'all' && ctlDateBasis === 'pointed') periodeText += ' (date de pointage)'
 
     // Déterminer la ville concernée
     const villeText = ctlCity === 'all' ? 'Toutes les villes' : ctlCity
@@ -1636,7 +1752,7 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
         sender: p.sender?.name || p.senderName || '', receiver: p.receiver?.name || p.receiverName || '',
         tel: p.receiver?.tel || p.receiverTel || '', city: parcelCity(p),
         originCity: p.originCity || p.sender?.city || '', destinationCity: p.destinationCity || p.receiver?.city || '',
-        payType: codTypeLabel(p) || '', amount: parseFloat(p.codAmount) || 0, mixed: isMixedCod(p) ? codPartsBreakdown(p) : '',
+        payType: codTypeLabel(p) || '', amount: chequeOnly && isMixedCod(p) ? codDocPartOf(p) : (parseFloat(p.codAmount) || 0), mixed: isMixedCod(p) ? codPartsBreakdown(p) : '',
         controlled: !!isControlled(p), isDoc: !!isDocParcel(p),
         docs: docsOf(p).map((d: any) => ({ type: d.type, numero: String(d.numero || ''), banque: String(d.banque || ''), montant: Number(d.montant) || 0, ...(d.echeance ? { echeance: d.echeance } : {}),
           ...((d.groupIds || []).length > 1 ? { groupNics: (d.groupNics || []).map(String), groupTotal: Number(d.groupTotal) || 0 } : {}) })),
@@ -1840,14 +1956,24 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
             <ClipboardCheck className="w-4 h-4" /> Contrôle & Pointage
           </button>
           <button
-            onClick={() => setActiveTab('rapports')}
+            onClick={() => setActiveTab('envoi')}
             className={`px-4 py-2.5 rounded-xl text-sm font-black flex items-center gap-2 transition-all duration-300 ${
-              activeTab === 'rapports'
+              activeTab === 'envoi'
                 ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg'
                 : 'text-purple-600 hover:bg-purple-50'
             }`}
           >
-            <FileText className="w-4 h-4" /> Rapports envoyés
+            <Package className="w-4 h-4" /> Envoi des valeurs
+          </button>
+          <button
+            onClick={() => setActiveTab('reception')}
+            className={`px-4 py-2.5 rounded-xl text-sm font-black flex items-center gap-2 transition-all duration-300 ${
+              activeTab === 'reception'
+                ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg'
+                : 'text-purple-600 hover:bg-purple-50'
+            }`}
+          >
+            <Inbox className="w-4 h-4" /> Réception des valeurs
           </button>
           <button
             onClick={() => setActiveTab('fournisseurs')}
@@ -1871,8 +1997,14 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
           </button>
         </div>
 
-        {activeTab === 'rapports' && (
-          <ControlReportsPanel myCity={myCity} me={{ uid: auth.currentUser?.uid || '', name: profile?.name || '' }} isAdmin={profile?.role === 'admin'} />
+        {/* 👤 Encaisseur / analyseur : SES envois et SES lots seulement (plusieurs encaisseurs par ville) — admin : tout */}
+        {activeTab === 'envoi' && (
+          <ValeursEnvoiPanel myCity={myCity} myUid={myUid} myName={profile?.name || ''} staffCities={staffCities} docOnly={chequeOnly}
+            ownOnly={profile?.role !== 'admin'} />
+        )}
+
+        {activeTab === 'reception' && (
+          <ReceptionValeursPanel myCity={myCity} myUid={myUid} myName={profile?.name || ''} />
         )}
 
         {activeTab === 'controle' && (
@@ -1880,7 +2012,6 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
             {lastReport && (
               <div className="rounded-2xl bg-emerald-50 border border-emerald-200 px-4 py-2.5 text-sm font-bold text-emerald-800 flex flex-wrap items-center gap-2">
                 ✅ Rapport <span className="font-mono">{lastReport}</span> enregistré.
-                <button onClick={() => setActiveTab('rapports')} className="underline">Voir les rapports envoyés</button>
                 <button onClick={() => setLastReport('')} className="ml-auto text-emerald-600"><X className="w-4 h-4" /></button>
               </div>
             )}
@@ -1979,8 +2110,9 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
                         Recherche...
                       </div>
                     ) : (
-                      <div className="text-[10px] font-bold text-purple-600 bg-purple-50 px-2 py-1 rounded-full">
-                        {ctlFiltered.length}
+                      <div className={`text-[10px] font-bold px-2 py-1 rounded-full ${searchCapped ? 'text-amber-800 bg-amber-100' : 'text-purple-600 bg-purple-50'}`}
+                        title={searchCapped ? `Plus de ${SEARCH_CAP} résultats : précisez le nom (ou cherchez par N° EXP / téléphone)` : undefined}>
+                        {ctlFiltered.length}{searchCapped ? ' · affinez la recherche' : ''}
                       </div>
                     )}
                   </div>
@@ -2020,9 +2152,9 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
                   <option value="remis">✅ Remis agence</option>
                 </select>
                 <select value={ctlControl} onChange={e => setCtlControl(e.target.value)} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-semibold text-purple-700 cursor-pointer transition-all duration-300">
-                  <option value="all">🔎 Contrôle : tous</option>
-                  <option value="uncontrolled">🔲 Non contrôlés</option>
-                  <option value="controlled">✅ Contrôlés</option>
+                  <option value="all">📌 Pointage : toutes</option>
+                  <option value="uncontrolled">🔲 Non pointées</option>
+                  <option value="controlled">✅ Pointées</option>
                 </select>
                 <select value={ctlParcelStatus} onChange={e => setCtlParcelStatus(e.target.value)} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-semibold text-purple-700 cursor-pointer transition-all duration-300">
                   <option value="all">📦 Tous statuts colis</option>
@@ -2030,7 +2162,13 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
                 </select>
               </div>
 
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
+                <select value={ctlDateBasis} onChange={e => setCtlDateBasis(e.target.value as 'created' | 'pointed')}
+                  title="La période choisie porte sur la date de création de l'expédition, ou sur la date à laquelle elle a été pointée"
+                  className={`px-3 py-3 rounded-2xl border-2 text-sm font-semibold cursor-pointer transition-all duration-300 ${ctlDateBasis === 'pointed' ? 'border-emerald-300 bg-emerald-50 text-emerald-700' : 'border-pink-100 focus:border-pink-300 bg-white/50 text-purple-700'}`}>
+                  <option value="created">📦 Date de création</option>
+                  <option value="pointed">📌 Date de pointage</option>
+                </select>
                 <div className="relative group">
                   <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-purple-400" />
                   <select value={ctlDatePreset} onChange={e => setCtlDatePreset(e.target.value)} className="w-full pl-9 pr-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-semibold text-purple-700 cursor-pointer transition-all duration-300">
@@ -2106,7 +2244,7 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
                         </span>
                       </div>
                       <div className={`mt-1.5 text-[11px] font-bold ${isActive ? 'text-blue-100' : 'text-slate-500'}`}>
-                        {money(s.amount)} DH · {pct}% contrôlé
+                        {money(s.amount)} DH · {s.controlled} pointée{s.controlled > 1 ? 's' : ''} · {s.count - s.controlled} non pointée{s.count - s.controlled > 1 ? 's' : ''} ({pct}%)
                       </div>
                       <div className={`mt-1.5 h-1.5 rounded-full overflow-hidden ${isActive ? 'bg-white/20' : 'bg-slate-200'}`}>
                         <div className={`h-full rounded-full ${pct === 100 ? 'bg-green-400' : 'bg-emerald-500'}`} style={{ width: `${pct}%` }} />
@@ -2175,7 +2313,7 @@ Continuer ?`)) return
                 onClose={() => setChequeModal(null)}
                 loadCandidates={() => loadChequeCandidates(chequeModalParcel)}
                 findByNic={(nic: string) => findGroupCandidate(chequeModalParcel, nic)}
-                onSave={(docs, point, group) => saveChequeDocs(chequeModal, docs, point, group)}
+                onSave={(docs, point, group, cashRest) => saveChequeDocs(chequeModal, docs, point, group, cashRest)}
               />
             )}
             {receptionOpen && (
@@ -2254,9 +2392,18 @@ Continuer ?`)) return
                           <td className="px-3 py-2.5">
                             <p className="font-mono text-xs font-bold text-blue-700">{p.trackingId || '-'}</p>
                             {selected && <span className="inline-block mt-0.5 px-1.5 py-0.5 rounded-md bg-purple-100 text-purple-700 text-[10px] font-black">🖨️ à imprimer</span>}
-                            <p className="text-[11px] text-slate-500">
-                              {(p.senderNic || p.sender?.nic) ? `N° EXP ${p.senderNic || p.sender?.nic} · ` : ''}{fmtDate(p.createdAt)}
-                            </p>
+                            {/* 🔗 Chèque groupé : TOUS les N° EXP couverts par le chèque (celui de la ligne en gras) — 24/10/2026 */}
+                            {groupDocOf(p) ? (
+                              <p className="text-[11px] text-slate-500 max-w-52">
+                                N° EXP {(groupDocOf(p)!.groupNics || []).map((n: string, i: number) => (
+                                  <span key={n + i}>{i > 0 && ', '}<span className={n === String(p.senderNic || p.sender?.nic) ? 'font-black text-slate-800' : ''}>{n}</span></span>
+                                ))} · {fmtDate(p.createdAt)}
+                              </p>
+                            ) : (
+                              <p className="text-[11px] text-slate-500">
+                                {(p.senderNic || p.sender?.nic) ? `N° EXP ${p.senderNic || p.sender?.nic} · ` : ''}{fmtDate(p.createdAt)}
+                              </p>
+                            )}
                           </td>
                           <td className="px-3 py-2.5">
                             <p className="font-bold text-slate-800 truncate max-w-36">{p.sender?.name || p.senderName || '-'}</p>
@@ -2266,9 +2413,41 @@ Continuer ?`)) return
                             <p className="font-bold text-slate-800 truncate max-w-36">{p.receiver?.name || p.receiverName || '-'}</p>
                             <p className="text-[11px] text-slate-500">{parcelCity(p)}</p>
                           </td>
-                          <td className="px-3 py-2.5 text-right font-black text-emerald-700 whitespace-nowrap">{money(p.codAmount)} DH{isMixedCod(p) && <div className="text-[10px] font-semibold text-slate-500">{codPartsBreakdown(p)}</div>}</td>
+                          <td className="px-3 py-2.5 text-right font-black text-emerald-700 whitespace-nowrap">{groupDocOf(p) ? (
+                            // 🔗 Chèque groupé : montant GLOBAL du chèque (la part de cette expédition en dessous). Les totaux de la page
+                            // restent calculés par expédition (aucun double compte).
+                            <><span title="Montant total du chèque groupé">{money(groupDocOf(p)!.groupTotal)} DH</span>
+                              <div className="text-[10px] font-semibold text-slate-500">chèque global · dont cette exp. {money(chequeOnly && isMixedCod(p) ? codDocPartOf(p) : p.codAmount)} DH</div></>
+                          ) : <>{money(chequeOnly && isMixedCod(p) ? codDocPartOf(p) : p.codAmount)} DH</>}{isMixedCod(p) && (<>
+                            <div className="mt-0.5"><span className="inline-block rounded-full bg-amber-100 border border-amber-300 px-1.5 py-0.5 text-[10px] font-black text-amber-800" title="Le destinataire a payé une partie en chèque / traite et le reste en espèces">MIXTE · {codDocTypeOf(p) === 'traite' ? 'traite' : 'chèque'} attendu {money(codDocPartOf(p))} DH</span></div>
+                            <div className="text-[10px] font-semibold text-slate-500">{codPartsBreakdown(p)}{chequeOnly ? ` · total COD ${money(p.codAmount)} DH` : ''}</div>
+                          </>)}
+                          {p.codDocMismatch === true && !isMixedCod(p) && (
+                            <div className="mt-0.5"><span className="inline-block rounded-full bg-amber-100 border border-amber-300 px-1.5 py-0.5 text-[10px] font-black text-amber-800"
+                              title={`Signalé par ${p.codDocMismatchBy || '—'}${p.codDocMismatchNote ? ` : ${p.codDocMismatchNote}` : ''} — en attente de correction par l'admin`}>
+                              ⚠️ Signalé : chèque {money(p.codDocMismatchReceived)} DH + {money(p.codDocMismatchCash)} DH espèces
+                            </span></div>
+                          )}</td>
                           <td className="px-3 py-2.5">
                             {payTypeBadge(p)}
+                            {/* 🔁 Changer le type de la valeur (espèces / chèque / traite), dans les deux sens : avant pointage,
+                                par la VILLE DE DESTINATION (celle qui encaisse et envoie la valeur) — compte sans ville : partout */}
+                            {!controlled && !isMixedCod(p) && (!myCity || parcelCity(p) === myCity) && (
+                              typeEditId === p.id ? (
+                                <select autoFocus defaultValue="" disabled={typeSaving}
+                                  onChange={e => { const v = e.target.value as any; if (v) changeType(p, v) }}
+                                  onBlur={() => !typeSaving && setTypeEditId(null)}
+                                  className="block mt-1 text-[11px] font-bold rounded-lg border border-purple-300 bg-white px-1.5 py-1 text-purple-700">
+                                  <option value="">Nouveau type…</option>
+                                  {COD_PAYMENT_TYPES.filter((t: any) => ['especes', 'cheque', 'traite'].includes(t.key) && t.key !== codTypeOf(p)).map((t: any) => <option key={t.key} value={t.key}>{t.emoji} {t.label}</option>)}
+                                </select>
+                              ) : (
+                                <button type="button" onClick={() => setTypeEditId(p.id)} className="block mt-1 text-[10px] font-bold text-purple-600 hover:underline" title="Changer le type de la valeur (espèces / chèque / traite)">
+                                  ✏️ Changer le type
+                                </button>
+                              )
+                            )}
+                            {p.codTypeChangedAt && <span className="block mt-0.5 text-[10px] text-slate-400" title={`Changé le ${fmtDate(p.codTypeChangedAt)} par ${p.codTypeChangedBy || '—'}`}>🔁 type modifié ({p.codTypeChangedBy || '—'})</span>}
                             {/* Données déjà saisies (clic = modifier). Pas encore saisies : rien ici, la saisie se fait par « Pointer 🧾 ». */}
                             {isDocParcel(p) && hasDocData(p) && (
                               <button type="button" onClick={() => setChequeModal(p)} className="block mt-1 text-left text-[10px] leading-tight hover:underline" title="Modifier les données du chèque ou de la traite">
@@ -2285,6 +2464,12 @@ Continuer ?`)) return
                                 disparaître l'affichage de l'état de l'autre (données déjà
                                 indépendantes en base — voir markParcelsControlled/DeliveryControlled). */}
                             <div className="flex flex-col items-start gap-1.5">
+                              {/* 🔀 Circuit de la valeur : ville qui pointe (ou doit pointer) → ville qui la reçoit */}
+                              <span className="text-[10px] font-bold whitespace-nowrap" title="Ville qui a pointé (ou doit pointer) la valeur → ville qui doit la recevoir">
+                                <span className="px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">📌 {controlled ? (staffCities.get(p.controlledById) || parcelCity(p)) : parcelCity(p)}</span>
+                                {' → '}
+                                <span className="px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-700 border border-violet-200">📦 {parcelOriginCity(p)}</span>
+                              </span>
                               {/* 1er contrôle */}
                               {controlled && p.controlledById === myUid ? (
                                 // ↩️ Bascule : pointé PAR MOI → un clic annule le pointage et tout ce qui en
@@ -2308,6 +2493,10 @@ Continuer ?`)) return
                                   </span>
                                   <p className="text-[10px] text-slate-400 mt-0.5">{withCity(p.controlledBy, p.controlledById)} {p.controlledAt ? `· ${fmtDate(p.controlledAt)}` : ''}</p>
                                 </div>
+                              ) : canPoint(p) && !isValueCollected(p) ? (
+                                <span className="text-[10px] font-semibold text-amber-600" title="L'expédition n'est pas encore livrée : la valeur se pointe une fois encaissée">
+                                  ⏳ Pas encore livrée — pointage après la livraison
+                                </span>
                               ) : !canPoint(p) ? (
                                 <span className="text-[10px] font-semibold text-slate-400" title="Le chèque est pointé par l'agence où il a été encaissé (ville de destination), avant son envoi">
                                   Pointage : agence de destination ({p.destinationCity || p.receiver?.city || '—'})
@@ -2550,6 +2739,11 @@ Continuer ?`)) return
                 placeholder="Rechercher tracking, fournisseur, client, agence..."
                 className="w-full pl-11 pr-20 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm focus:outline-none text-sm font-medium placeholder:text-purple-300 transition-all duration-300"
               />
+              {!deepSearching && searchCapped && (
+                <div className="absolute right-3 top-1/2 -translate-y-1/2 text-[10px] font-bold text-amber-800 bg-amber-100 px-2 py-1 rounded-full" title={`Plus de ${SEARCH_CAP} résultats : précisez le nom (ou cherchez par N° EXP / téléphone)`}>
+                  ⚠️ {SEARCH_CAP}+ résultats : affinez la recherche
+                </div>
+              )}
               {deepSearching && (
                 <div className="absolute right-3 top-1/2 -translate-y-1/2 flex items-center gap-2 text-[10px] font-bold text-purple-600 bg-purple-50 px-2 py-1 rounded-full animate-pulse">
                   <div className="w-3 h-3 border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />

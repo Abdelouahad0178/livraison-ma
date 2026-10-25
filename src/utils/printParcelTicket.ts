@@ -3,7 +3,7 @@
  */
 import { isMixedCod, codPartsDetailLabel } from './codParts'
 
-export function printParcelTicket(parcel: any) {
+export function printParcelTicket(parcel: any, targetWindow?: Window | null) {
   if (!parcel) {
     console.error('Pas de colis fourni pour l\'impression')
     return
@@ -574,13 +574,15 @@ export function printParcelTicket(parcel: any) {
 </html>
   `.trim()
 
-  // Ouvrir dans une nouvelle fenêtre
-  const printWindow = window.open('', '_blank')
+  // Ouvrir dans une nouvelle fenêtre (ou celle ouverte dès le clic par l'appelant, avant une lecture asynchrone :
+  // une fenêtre ouverte après un await serait bloquée par le navigateur)
+  const printWindow = targetWindow || window.open('', '_blank')
   if (!printWindow) {
     alert('Impossible d\'ouvrir la fenêtre d\'impression. Veuillez autoriser les popups.')
     return
   }
 
+  if (targetWindow) printWindow.document.open() // efface le message « Chargement… » de l'appelant
   printWindow.document.write(ticketHTML)
   printWindow.document.close()
 }

@@ -1,4 +1,5 @@
 import DateInput from '../components/DateInput'
+import { ParcelParties } from '../components/ParcelParties'
 import { useState, useEffect, useRef } from 'react'
 import { signOut } from 'firebase/auth'
 import { auth, db } from '../firebase/config'
@@ -1409,7 +1410,7 @@ export default function PointeurPage() {
                             <p className="text-sm font-bold text-gray-800 font-mono">{p.trackingId}</p>
                             <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${mi.badge}`}>{mi.emoji} {mi.label}</span>
                           </div>
-                          <p className="text-xs text-gray-500 mt-0.5">{p.sender?.name} → {p.receiver?.name}</p>
+                          <ParcelParties parcel={p} className="mt-0.5" />
                           <p className="text-xs text-indigo-600 mt-0.5">🚴 {p.deliveryDriverName || p.codCollectedBy || '—'}</p>
                         </div>
                         <div className="text-right shrink-0">
@@ -1444,7 +1445,7 @@ export default function PointeurPage() {
                           <p className="text-sm font-bold text-gray-800 font-mono">{p.trackingId}</p>
                           <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-semibold">💵 Port dû espèces</span>
                         </div>
-                        <p className="text-xs text-gray-500 mt-0.5">{p.sender?.name} → {p.receiver?.name}</p>
+                        <ParcelParties parcel={p} className="mt-0.5" />
                         <p className="text-xs text-indigo-500 mt-0.5">🚴 {p.portCollectedBy || p.deliveryDriverName || '—'}</p>
                       </div>
                       <div className="text-right shrink-0">

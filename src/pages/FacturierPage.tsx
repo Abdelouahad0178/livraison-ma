@@ -15,6 +15,9 @@ export default function FacturierPage() {
   const [profile, setProfile] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<'expeditions' | 'factures'>('expeditions')
+  // ⚡ Onglet Factures chargé au 1er clic seulement (500 factures + clients en moins au démarrage), puis gardé monté
+  const [facturesOpened, setFacturesOpened] = useState(false)
+  useEffect(() => { if (activeTab === 'factures') setFacturesOpened(true) }, [activeTab])
 
   useEffect(() => {
     console.log('FacturierPage - useEffect chargement profil')
@@ -138,12 +141,14 @@ export default function FacturierPage() {
             <div style={{ display: activeTab === 'expeditions' ? 'block' : 'none' }}>
               <FacturierExpeditionsTab userName={profile?.name || profile?.email || 'Facturier'} />
             </div>
-            <div style={{ display: activeTab === 'factures' ? 'block' : 'none' }}>
-              <AdminInvoicesTab
-                uid={auth.currentUser?.uid}
-                userName={profile?.name || profile?.email || 'Facturier'}
-              />
-            </div>
+            {facturesOpened && (
+              <div style={{ display: activeTab === 'factures' ? 'block' : 'none' }}>
+                <AdminInvoicesTab
+                  uid={auth.currentUser?.uid}
+                  userName={profile?.name || profile?.email || 'Facturier'}
+                />
+              </div>
+            )}
           </>
         ) : (
           <>

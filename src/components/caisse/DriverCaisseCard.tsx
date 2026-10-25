@@ -34,11 +34,13 @@ export default function DriverCaisseCard({ driver, statusFilter, statusFilterLab
   // - carte d'un livreur : ses ramassages à recevoir — un port payé encaissé au guichet n'est PAS à ramasser par
   //   le livreur qui livre l'expédition (avant : toutes ses expéditions en port payé étaient comptées).
   const isGare = driver.id === GARE_GROUP_ID
-  const guichetEncaisses = isGare
-    ? driver.parcels.filter((p: any) => p.portType === 'port_paye' && !p.portPayeMethod && !p.pickupDriverId && p.portStatus === 'collected' && !isPortPayeMoneyBeforeStart(p))
-    : []
+  // 🏬 Ports payés du guichet de CETTE carte : « En gare » (sans détenteur) ou détenteur en gare (rachida, … — 23/10/2026)
+  const ownsGuichet = (p: any) => (isGare ? !p.portGuichetHolderId : p.portGuichetHolderId === driver.id)
+  const guichetEncaisses = driver.parcels.filter((p: any) => p.portType === 'port_paye' && !p.portPayeMethod && !p.pickupDriverId
+    && p.portStatus === 'collected' && !isPortPayeMoneyBeforeStart(p) && ownsGuichet(p))
+  const isGuichetCard = isGare || guichetEncaisses.length > 0
   const remisCount = guichetEncaisses.filter((p: any) => !!p.portPayeExpReceivedAt).length
-  const aRamasserCount = isGare
+  const aRamasserCount = isGuichetCard
     ? guichetEncaisses.length - remisCount
     : driver.portsPayesARecevoirCount
   return (
@@ -60,7 +62,7 @@ export default function DriverCaisseCard({ driver, statusFilter, statusFilterLab
               {statusFilter !== 'all'
                 ? `${h.total} expédition${h.total > 1 ? 's' : ''} (${statusFilterLabel.toLowerCase()})`
                 : `${h.total} expéditions${h.enCompte > 0 ? ` (dont ${h.enCompte} en compte)` : ''}`}
-              {statusFilter === 'all' && aRamasserCount > 0 && ` -${aRamasserCount} à ramasser-`}
+              {statusFilter === 'all' && aRamasserCount > 0 && ` -${aRamasserCount} ${isGuichetCard ? 'port(s) payé(s) guichet à recevoir' : 'à ramasser'}-`}
             </p>
           </div>
         </div>
@@ -79,7 +81,7 @@ export default function DriverCaisseCard({ driver, statusFilter, statusFilterLab
             {aRamasserCount > 0 && (
               <div className="text-center">
                 <div className="text-indigo-600 font-bold">{aRamasserCount}</div>
-                <div className="text-xs text-gray-500">À ramasser</div>
+                <div className="text-xs text-gray-500">{isGuichetCard ? 'PP guichet à recevoir' : 'À ramasser'}</div>
               </div>
             )}
             {remisCount > 0 && (

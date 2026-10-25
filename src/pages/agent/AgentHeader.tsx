@@ -1,5 +1,9 @@
 import { signOut } from 'firebase/auth'
 import { auth } from '../../firebase/config'
+import { Flower, isFloralUser } from '../../components/FloralTheme'
+import { canManageClientAccounts } from '../../config/clientAccountsAccess'
+import { livraisonStatsCitiesFor } from '../../config/livraisonStatsAccess'
+import { lazy, Suspense } from 'react'
 import {
   Package, LogOut, MapPin, Archive, Menu, X, Plus, Wallet, Users, Printer,
   LayoutGrid, Truck, MessageCircle, User, BarChart2, ChevronDown, FileText,
@@ -7,6 +11,7 @@ import {
 import LiveClock from '../../components/LiveClock'
 import ProfilePhotoUpload from '../../components/ProfilePhotoUpload'
 import WorkingDateIndicator from '../../components/WorkingDateIndicator'
+const LivraisonDuJourStats = lazy(() => import('../../components/admin/LivraisonDuJourStats'))
 
 interface AgentHeaderProps {
   profile: any
@@ -27,6 +32,7 @@ interface AgentHeaderProps {
   arrivedBoxes?: any         // ⭐ Pour badge arrivages
   newCodCount?: number       // ⭐ Pour badge COD
   lostParcelsCount?: number  // ⭐ Pour badge Colis perdus
+  pendingVersementsCount?: number // 📥 Versements du chef d'exploitation à confirmer
 }
 
 export default function AgentHeader({
@@ -48,6 +54,7 @@ export default function AgentHeader({
   arrivedBoxes = {},     // ⭐ Badge arrivages
   newCodCount = 0,       // ⭐ Badge COD
   lostParcelsCount = 0,  // ⭐ Badge Colis perdus
+  pendingVersementsCount = 0,
 }: AgentHeaderProps) {
   // ⭐ Compter les colis en transit non encore tous traités
   const newArrivagesCount = transitParcels.filter((p: any) => {
@@ -55,16 +62,23 @@ export default function AgentHeader({
     const arrived = (arrivedBoxes as any)[p.id] || 0
     return arrived < total  // Pas tous les colis arrivés
   }).length
+  // 🌸 Quatre fleurs pour certains comptes (components/FloralTheme)
+  const floral = isFloralUser(auth.currentUser?.email || profile?.email)
+  const clientAccounts = canManageClientAccounts(auth.currentUser?.email || profile?.email)
+  // 🚚 Cartes « Livraison du jour » de l'admin (COD espèces + Ports), limitées aux villes du compte
+  const statsCities = livraisonStatsCitiesFor(auth.currentUser?.email || profile?.email)
   return (
     <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-10">
       <div className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto px-4">
         {/* Top bar */}
         <div className="flex items-center justify-between gap-3 py-3 min-w-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <img src="/LOGO.jpg" alt="BG Express" className="h-9 object-contain shrink-0" />
-            {/* Photo de profil pour chef d'agence */}
+          {/* 📱 overflow-hidden : sur téléphone, le bloc de gauche se rétrécit au lieu de passer sous le Scanner */}
+          <div className="flex items-center gap-2 min-w-0 overflow-hidden">
+            {floral && <Flower e="🌸" className="hidden sm:inline" />}
+            <img src="/LOGO.jpg" alt="BG Express" className="h-9 object-contain shrink-0 max-w-[96px] sm:max-w-none" />
+            {/* Photo de profil pour chef d'agence (masquée sur téléphone : place du Scanner) */}
             {profile?.role === 'chef_agence' && auth.currentUser?.uid && (
-              <div className="border-l border-gray-200 pl-2">
+              <div className="border-l border-gray-200 pl-2 hidden sm:block shrink-0">
                 <ProfilePhotoUpload
                   userId={auth.currentUser.uid}
                   currentPhotoURL={profile?.photoURL}
@@ -74,49 +88,27 @@ export default function AgentHeader({
                 />
               </div>
             )}
-            <div className="flex items-center gap-1.5 border-l border-gray-200 pl-2 min-w-0">
+            <div className="hidden sm:flex items-center gap-1.5 border-l border-gray-200 pl-2 min-w-0">
               <Package className="w-4 h-4 text-blue-600" />
-              <span className="font-bold text-gray-800 hidden sm:inline">Interface Agent</span>
+              <span className="font-bold text-gray-800 hidden sm:inline whitespace-nowrap">Interface Agent</span>
+              {floral && <Flower e="🌷" className="hidden sm:inline" />}
             </div>
-            {profile?.name && <span className="text-gray-400 text-sm hidden md:inline">— {profile.name}</span>}
+            {profile?.name && <span className="text-gray-400 text-sm hidden md:inline truncate">— {profile.name}</span>}
             {profile?.city && (
-              <span className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-600 border border-blue-200 px-2 py-0.5 rounded-full font-medium hidden sm:inline-flex">
+              <span className="items-center gap-1 text-xs bg-blue-50 text-blue-600 border border-blue-200 px-2 py-0.5 rounded-full font-medium hidden sm:inline-flex whitespace-nowrap shrink-0">
                 <MapPin className="w-3 h-3" /> {profile.city}
               </span>
             )}
           </div>
           <div className="flex items-center gap-2 shrink-0">
-            {/* Scanner masqué pour les aides agents */}
-            {profile?.role !== 'aide_agent' && (
-              <button
-                onClick={openScanModal}
-                className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-700 text-white px-3 py-1.5 rounded-lg text-xs font-semibold transition shadow-sm"
-                title="Scanner un code-barres"
-              >
-                <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M3 5v3M3 5h3M21 5h-3M21 5v3M3 19v-3M3 19h3M21 19h-3M21 19v-3"/>
-                  <line x1="7" y1="8" x2="7" y2="16"/><line x1="10" y1="8" x2="10" y2="16"/>
-                  <line x1="13" y1="8" x2="13" y2="12"/><line x1="16" y1="8" x2="16" y2="16"/>
-                  <line x1="13" y1="14" x2="13" y2="16"/>
-                </svg>
-                <span className="hidden sm:inline">Scanner</span>
-              </button>
-            )}
+            {floral && <Flower e="🌺" className="hidden md:inline" />}
+            {/* Boutons « Scanner » et « Archives » retirés de l'en-tête (demande du 22/10/2026) */}
             <LiveClock className="text-gray-400 hidden sm:inline" />
             <WorkingDateIndicator />
             {profile?.code && (
               <span className="text-xs bg-blue-50 text-blue-600 px-2.5 py-1 rounded-lg font-mono border border-blue-200 hidden sm:inline">
                 Code : <strong>{profile.code}</strong>
               </span>
-            )}
-            {profile?.role === 'chef_agence' && (
-              <button
-                onClick={() => navigate('/archive')}
-                className="hidden md:flex items-center gap-1.5 text-sm text-teal-600 hover:text-teal-700 transition"
-              >
-                <Archive className="w-4 h-4" />
-                <span>Archives</span>
-              </button>
             )}
             <button
               onClick={() => signOut(auth).then(() => navigate('/login'))}
@@ -125,6 +117,7 @@ export default function AgentHeader({
               <LogOut className="w-4 h-4" />
               <span>Déconnexion</span>
             </button>
+            {floral && <Flower e="🌼" className="hidden md:inline" />}
             <button
               onClick={() => setMenuOpen(v => !v)}
               className="md:hidden p-2 rounded-lg text-gray-600 hover:bg-gray-100 transition"
@@ -133,6 +126,15 @@ export default function AgentHeader({
             </button>
           </div>
         </div>
+        {/* 🚚 Chiffres du jour sur LEUR ligne (dans la barre du haut, ils écrasaient le nom et « Interface Agent ») */}
+        {statsCities && (
+          <div className="pb-2 flex justify-center">
+            <Suspense fallback={null}>
+              <LivraisonDuJourStats mobile cities={statsCities} />
+              <LivraisonDuJourStats cities={statsCities} />
+            </Suspense>
+          </div>
+        )}
 
         {/* Desktop nav tabs */}
         <div className="hidden md:flex items-center gap-1 border-t border-gray-100 pt-1 pb-2 responsive-scroll -mx-4 px-4">
@@ -142,7 +144,7 @@ export default function AgentHeader({
             { key: 'parcels',       label: profile?.role === 'aide_agent' ? '📋 Mes saisies' : '📦 Expéditions', onClick: () => setTab('parcels'),                                                               hidden: false },
             { key: 'caisse',        label: '🏛️ Caisse Agence', onClick: () => setTab('caisse'),                                                              hidden: profile?.role !== 'chef_agence' },
             { key: 'cod',           label: '💰 RETOUR FOND Clients',    onClick: () => setTab('cod'),                                                                                                             hidden: profile?.role === 'aide_agent' },
-            { key: 'valeurs',       label: '✅ Valeurs à valider',      onClick: () => setTab('valeurs'),                                                                                                         hidden: profile?.role !== 'chef_agence' },
+            { key: 'valeurs',       label: "📥 Versements du chef d'exploitation", onClick: () => setTab('valeurs'),                                                                                                         hidden: profile?.role !== 'chef_agence' },
             { key: 'clientportdu',  label: '🏦 Ports en compte',        onClick: () => setTab('clientportdu'),                                                                                                    hidden: profile?.role !== 'chef_agence' && profile?.role !== 'agentpro' },
             { key: 'portducheque',  label: '📋 Ports dû chèque',        onClick: () => setTab('portducheque'),                                                                                                    hidden: profile?.role !== 'chef_agence' && profile?.role !== 'agentpro' },
             { key: 'versements',    label: '💸 Versements Admin',       onClick: () => setTab('versements'),                                                                                                      hidden: true }, // Caché pour tous les rôles
@@ -152,6 +154,7 @@ export default function AgentHeader({
             { key: 'deliverysheets', label: '📄 Bons de livraison',     onClick: () => setTab('deliverysheets'),                                                                                                  hidden: true }, // Caché pour tous les rôles
             { key: 'secteurs',      label: '🏢 Secteurs',               onClick: () => setTab('secteurs'),                                                                                                        hidden: profile?.role === 'aide_agent' },
             { key: 'arrivage',      label: '🚛 Arrivages',              onClick: () => { setTab('arrivage'); setArrivageTab('nouveau'); setArrivageSuccess(null) },                                               hidden: profile?.role === 'aide_agent' },
+            { key: 'comptes',       label: '📝 Comptes clients',        onClick: () => setTab('comptes'),                                                                                                         hidden: !clientAccounts },
             { key: 'retours',       label: '↩️ Retours',                onClick: () => setTab('retours'),                                                                                                         hidden: profile?.role === 'aide_agent' },
             { key: 'lostparcels',   label: '🚨 Colis perdus',           onClick: () => setTab('lostparcels'),                                                                                                     hidden: true }, // Caché pour tous les rôles
             { key: 'modifications', label: '📋 Modif. clients',         onClick: () => setTab('modifications'),                                                                                                   hidden: true }, // Caché pour tous les rôles
@@ -167,6 +170,12 @@ export default function AgentHeader({
               {t.key === 'arrivage' && newArrivagesCount > 0 && (
                 <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
                   {newArrivagesCount}
+                </span>
+              )}
+              {/* 📥 Versements du chef d'exploitation à confirmer */}
+              {t.key === 'valeurs' && pendingVersementsCount > 0 && (
+                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-xs font-bold rounded-full w-5 h-5 flex items-center justify-center">
+                  {pendingVersementsCount}
                 </span>
               )}
               {/* ⭐ Badge COD */}
@@ -197,7 +206,7 @@ export default function AgentHeader({
             </button>
             <span className="text-gray-300">/</span>
             <span className="text-sm font-semibold text-blue-600">
-              {tab === 'new' ? '+ Nouveau colis' : tab === 'caisse' ? `Caisse Agence ${profile?.city || ''}` : tab === 'cod' ? 'RETOUR FOND Clients' : tab === 'valeurs' ? '✅ Valeurs à valider' : tab === 'clientportdu' ? '🏦 Ports en compte clients' : tab === 'portpayecheque' ? '📋 Ports payés chèque' : tab === 'portducheque' ? '📋 Ports dû chèque' : tab === 'invoices' ? '🧾 Factures' : tab === 'clients' ? 'Mes clients' : tab === 'charge' ? 'Feuille de charge' : tab === 'secteurs' ? 'Secteurs' : tab === 'drivers' ? 'Port dû' : tab === 'arrivage' ? 'Arrivages' : tab === 'retours' ? '↩️ Retours' : tab === 'lostparcels' ? '🚨 Colis perdus' : tab === 'modifications' ? 'Modif. clients' : tab === 'aideagents' ? 'Aide Agents' : tab === 'dashboard' ? 'Dashboard' : tab === 'notes' ? 'Notes agents' : (profile?.role === 'aide_agent' ? 'Mes saisies' : 'Expéditions')}
+              {tab === 'new' ? '+ Nouveau colis' : tab === 'caisse' ? `Caisse Agence ${profile?.city || ''}` : tab === 'cod' ? 'RETOUR FOND Clients' : tab === 'valeurs' ? "📥 Versements du chef d'exploitation" : tab === 'clientportdu' ? '🏦 Ports en compte clients' : tab === 'portpayecheque' ? '📋 Ports payés chèque' : tab === 'portducheque' ? '📋 Ports dû chèque' : tab === 'invoices' ? '🧾 Factures' : tab === 'clients' ? 'Mes clients' : tab === 'charge' ? 'Feuille de charge' : tab === 'secteurs' ? 'Secteurs' : tab === 'drivers' ? 'Port dû' : tab === 'arrivage' ? 'Arrivages' : tab === 'comptes' ? '📝 Comptes clients' : tab === 'retours' ? '↩️ Retours' : tab === 'lostparcels' ? '🚨 Colis perdus' : tab === 'modifications' ? 'Modif. clients' : tab === 'aideagents' ? 'Aide Agents' : tab === 'dashboard' ? 'Dashboard' : tab === 'notes' ? 'Notes agents' : (profile?.role === 'aide_agent' ? 'Mes saisies' : 'Expéditions')}
             </span>
           </div>
         )}
@@ -263,6 +272,17 @@ export default function AgentHeader({
                 )}
               </>
             )}
+            {profile?.role === 'chef_agence' && (
+              <button
+                onClick={() => { setTab('valeurs'); setMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition relative ${tab === 'valeurs' ? 'bg-violet-50 text-violet-700' : 'text-gray-600 hover:bg-gray-50'}`}
+              >
+                📥 Versements du chef d'exploitation
+                {pendingVersementsCount > 0 && (
+                  <span className="ml-auto bg-red-500 text-white text-xs font-bold rounded-full px-2 py-0.5">{pendingVersementsCount}</span>
+                )}
+              </button>
+            )}
             {profile?.role !== 'aide_agent' && (
               <button
                 onClick={() => { setTab('clients'); setMenuOpen(false) }}
@@ -300,6 +320,14 @@ export default function AgentHeader({
                     {newArrivagesCount}
                   </span>
                 )}
+              </button>
+            )}
+            {clientAccounts && (
+              <button
+                onClick={() => { setTab('comptes'); setMenuOpen(false) }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition ${tab === 'comptes' ? 'bg-blue-50 text-blue-600' : 'text-gray-600 hover:bg-gray-50'}`}
+              >
+                <FileText className="w-4 h-4" /> Comptes clients
               </button>
             )}
             {profile?.role !== 'aide_agent' && (

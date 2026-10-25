@@ -114,6 +114,7 @@ export default function MesSaisiesView() {
   const {
     uid, profile,
     canEditParcelDetails,
+    canDeleteParcel,
     handlePrintTicket, handleEditClick, handleDeleteClick,
     needsAzertyFix, azertyFix,
   } = useAgentCtx() as any
@@ -220,7 +221,7 @@ export default function MesSaisiesView() {
     return 'saved'
   }
   const canEdit = (p: any) => canEditParcelDetails(p) && (p.validatedByChef !== true || p.aideEditUnlocked === true)
-  const canDelete = (p: any) => canEditParcelDetails(p) && p.validatedByChef !== true
+  const canDelete = (p: any) => canDeleteParcel(p) && p.validatedByChef !== true
 
   const searched = useMemo(() => {
     const match = makeMatcher(dSearch, dScope)

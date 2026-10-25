@@ -30,6 +30,7 @@ import {
 } from 'lucide-react'
 import CompanyContact from '../components/CompanyContact'
 import LiveClock from '../components/LiveClock'
+import { ParcelParties } from '../components/ParcelParties'
 import { printDeliveryList } from '../utils/printDeliveryList'
 import SignatureViewerModal from '../components/SignatureViewerModal'
 import VersementChefModal from './driver/components/VersementChefModal'
@@ -2084,8 +2085,14 @@ export default function DriverPage() {
                       {/* Destinataire + Téléphone + Infos sur UNE ligne */}
                       <div className="flex items-center justify-between gap-2 mb-1">
                         <div className="flex-1 min-w-0">
-                          <p className={`font-semibold truncate ${isDeliveryView ? 'text-slate-950 text-base font-bold' : 'text-xs text-white'}`}>{parcel.receiver?.name}</p>
-
+                          <p className={`truncate ${isDeliveryView ? 'text-xs text-slate-700' : 'text-[10px] text-gray-300'}`}>
+                            📤 Expéditeur : <b className={isDeliveryView ? 'text-slate-950' : 'text-white'}>{parcel.sender?.name || parcel.senderName || '—'}</b>
+                          </p>
+                          <p className={`font-semibold truncate ${isDeliveryView ? 'text-slate-950 text-base font-bold' : 'text-xs text-white'}`}>
+                            <span className={`font-normal ${isDeliveryView ? 'text-sm text-slate-700' : 'text-gray-300'}`}>👤 Destinataire : </span>
+                            {parcel.receiver?.name || parcel.receiverName || '—'}
+                            {parcel.portType === 'port_en_compte_destinataire' && <span className="ml-1" title="Port en compte destinataire">🖐️</span>}
+                          </p>
                         </div>
                         <a href={`tel:${parcel.receiver?.tel}`}
                           className={`inline-flex items-center gap-0.5 font-medium shrink-0 ${isDeliveryView ? 'text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded-md px-2 py-1' : 'text-[10px] text-blue-400 hover:text-blue-300'}`}
@@ -2632,7 +2639,7 @@ export default function DriverPage() {
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
                           <p className="text-white font-bold text-sm truncate">EXP {p.trackingId}</p>
-                          <p className="text-white text-xs truncate">{p.receiver?.name}</p>
+                          <ParcelParties parcel={p} dark />
                           {p.codCollectedAt && (
                             <p className="text-gray-400 text-xs">
                               Collecté le {fmtDate(collectedDate)}

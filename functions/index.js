@@ -5,14 +5,28 @@ const { getFirestore, FieldValue, Timestamp } = require('firebase-admin/firestor
 const { getStorage }              = require('firebase-admin/storage')
 const { onDocumentWritten }       = require('firebase-functions/v2/firestore')
 const { onSchedule }              = require('firebase-functions/v2/scheduler')
-const { onCall, onRequest }       = require('firebase-functions/v2/https')
+const { onCall, onRequest, HttpsError } = require('firebase-functions/v2/https')
 initializeApp({
   storageBucket: 'arelanc.firebasestorage.app'
 })
 const db = getFirestore()
+const { createArchiveBrowser } = require('./archiveBrowser')
+exports.browseAdminArchives = onCall(
+  { maxInstances: 1, memory: '512MiB', timeoutSeconds: 120 },
+  createArchiveBrowser(db, HttpsError)
+)
+exports.alignParcelDestination = onDocumentWritten(
+  { document: 'parcels/{parcelId}', retry: true, maxInstances: 5 },
+  require('./destinationAssignment').createDestinationAssignmentHandler(db, FieldValue)
+)
 
 // ── Backup automatique ─────────────────────────────────────────────────────
-const BACKUP_API_KEY = '5hYgTzDPr7NvO9b6ecqJkZG1jWw28naiVMUsAXpS'
+// 🔒 Clé de sauvegarde : secret Firebase (Secret Manager), jamais écrite dans le code.
+// Lire : firebase functions:secrets:access BACKUP_API_KEY
+const { defineSecret } = require('firebase-functions/params')
+const BACKUP_API_KEY = defineSecret('BACKUP_API_KEY')
+const { timingSafeEqual } = require('crypto')
+const sameKey = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && timingSafeEqual(x, y) }
 
 const BACKUP_COLLECTIONS = [
   'settings', 'parcels', 'users', 'clients', 'payments',
@@ -102,10 +116,14 @@ exports.scheduledWeeklyBackup = onSchedule({
 exports.downloadBackup = onRequest({
   memory:         '1GiB',
   timeoutSeconds: 300,
+  maxInstances:   1,
+  secrets:        [BACKUP_API_KEY],
 }, async (req, res) => {
-  const key = req.query.key || req.headers['x-backup-key'] || ''
+  // Clé uniquement dans l'en-tête x-backup-key (plus dans l'adresse : elle apparaissait dans les journaux)
+  const key = req.headers['x-backup-key'] || ''
+  const expected = BACKUP_API_KEY.value()
 
-  if (!BACKUP_API_KEY || key !== BACKUP_API_KEY) {
+  if (!expected || !key || !sameKey(key, expected)) {
     console.log('[downloadBackup] Authentification échouée')
     res.status(401).json({ error: 'Clé invalide' })
     return
@@ -383,8 +401,13 @@ exports.onParcelWrite = onDocumentWritten('parcels/{parcelId}', async (event) =>
   }
 
   // ── Commit all updates in a single batch ──────────────────────────────
+  // ⚡ (21/10/2026) stats/global n'est écrit QUE si un compteur change (avant : à CHAQUE écriture d'expédition, rien
+  // que pour updatedAt → document unique saturé lors des lots, ~37 écritures / seconde, et page Admin réveillée).
+  // Aucune écriture du tout si aucun compteur ne change. Les valeurs des compteurs restent identiques.
+  const hasGlobal = Object.keys(globalUpdate).some(k => k !== 'updatedAt')
+  if (!hasGlobal && !Object.keys(cityMap).length && !Object.keys(dayMap).length && !Object.keys(agentMap).length && !Object.keys(driverMap).length) return
   const batch = db.batch()
-  batch.set(db.doc('stats/global'), globalUpdate, { merge: true })
+  if (hasGlobal) batch.set(db.doc('stats/global'), globalUpdate, { merge: true })
   for (const [city, u] of Object.entries(cityMap)) {
     batch.set(db.doc(`stats/global/agencies/${city}`), u, { merge: true })
   }
@@ -431,6 +454,24 @@ exports.syncParcelLite = onDocumentWritten({ document: 'parcels/{parcelId}', ret
   await liteRef.set({ ...projectParcelLite(fresh.data()), liteUpdatedAt: FieldValue.serverTimestamp() })
 })
 
+// ── 🧾 Copie « facturier » (parcelsFacturier) — voir functions/parcelFacturier.js ──
+// Même modèle que syncParcelLite : rien à faire si les champs du Facturier n'ont pas changé ; sinon relecture
+// du colis à jour (idempotent → retry sûr) et remplacement complet de la copie.
+const { projectParcelFacturier } = require('./parcelFacturier')
+exports.syncParcelFacturier = onDocumentWritten({ document: 'parcels/{parcelId}', retry: true }, async (event) => {
+  const id = event.params.parcelId
+  const ref = db.collection('parcelsFacturier').doc(id)
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after  = event.data?.after?.exists  ? event.data.after.data()  : null
+  if (before && after && liteKey(projectParcelFacturier(before)) === liteKey(projectParcelFacturier(after))) return
+  const fresh = await db.collection('parcels').doc(id).get()
+  if (!fresh.exists) {
+    await ref.delete()
+    return
+  }
+  await ref.set({ ...projectParcelFacturier(fresh.data()), facturierUpdatedAt: FieldValue.serverTimestamp() })
+})
+
 // ── Totaux de la gestion commerciale (bgexpress.web.app) — voir functions/commercial.js ──
 // Relit le colis à jour puis applique la différence en transaction (idempotent → retry sûr).
 // Suppression causée par l'ARCHIVAGE (copie présente dans parcels_archive) : totaux inchangés.
@@ -449,6 +490,9 @@ exports.syncCommercialStats = onDocumentWritten({ document: 'parcels/{parcelId}'
   }
   await syncCommercial(db, FieldValue, id, fresh.data())
 })
+
+// ── 🤖 Rapport du Contrôleur (Admin › 🤖 Rapports, à la demande, admin seulement) — voir functions/controlReport.js ──
+exports.generateControlReport = require('./controlReport').generateControlReport
 
 // ── Rebuild all stats from existing parcels (callable — admin only) ────────
 // Call once after first deploy to bootstrap stats from historical data.
@@ -552,443 +596,8 @@ exports.rebuildStats = onCall({
   return { success: true, processed, statDocs: allWrites.length }
 })
 
-// ── 🤖 IA Vocal - Extraction de données d'expédition ──────────────────────────
-// Fonction sécurisée pour l'agent IA vocal
-// La clé API Claude est stockée dans Firebase Config, pas dans le code !
-
-const { defineString } = require('firebase-functions/params')
-const Anthropic = require('@anthropic-ai/sdk').default
-
-// Configuration sécurisée - la clé est en variable d'environnement
-const CLAUDE_API_KEY = defineString('CLAUDE_API_KEY')
-
-/**
- * 🤖 Extraction de données d'expédition via Claude AI
- * Appelable depuis le client - nécessite authentification
- */
-exports.extractParcelData = onCall({
-  cors: ['https://arelanc.web.app', 'http://localhost:5173'],
-  timeoutSeconds: 60,
-  region: 'europe-west1',
-}, async (request) => {
-  // 🔒 Vérifier authentification
-  if (!request.auth) {
-    throw new Error('🔒 Authentification requise')
-  }
-  // 🔒 Personnel de saisie uniquement (API IA payante) : un compte inscrit seul ne peut pas l'appeler en boucle
-  const callerSnap = await db.collection('users').doc(request.auth.uid).get()
-  const callerRole = callerSnap.exists ? callerSnap.data().role : null
-  if (!['admin', 'directeur', 'chef_agence', 'chef_exploitation', 'agentpro', 'aide_agent'].includes(callerRole)) {
-    const { HttpsError } = require('firebase-functions/v2/https')
-    throw new HttpsError('permission-denied', 'Réservé au personnel de saisie.')
-  }
-
-  const { transcript } = request.data
-
-  // Validation
-  if (!transcript || typeof transcript !== 'string') {
-    throw new Error('❌ Transcription invalide')
-  }
-
-  if (transcript.length > 2000) {
-    throw new Error('❌ Texte trop long (max 2000 caractères)')
-  }
-
-  try {
-    // 🤖 Appeler Claude AI avec clé sécurisée
-    const anthropic = new Anthropic({
-      apiKey: CLAUDE_API_KEY.value(),
-    })
-
-    console.log('🤖 Appel Claude AI pour utilisateur:', request.auth.uid)
-
-    const message = await anthropic.messages.create({
-      model: 'claude-sonnet-4-6',
-      max_tokens: 1024,
-      system: `🚨 CRITIQUE: Tu DOIS comprendre et traiter l'ARABE et la DARIJA MAROCAINE ! 🚨
-
-Tu es un expert en extraction de données d'expédition au Maroc.
-
-═══ RÈGLE ABSOLUE ═══
-L'utilisateur parle en :
-1. DARIJA MAROCAINE (dialecte) - Exemple: "3andi colis mn Mohamed"
-2. ARABE LITTÉRAL - Exemple: "عندي طرد من أحمد"
-3. FRANÇAIS mélangé
-4. TOUT MÉLANGÉ - Exemple: "عندي colis من Mohamed"
-
-⚠️ SI TU VOIS DES CARACTÈRES ARABES (ع، غ، خ، etc.) = C'EST DE L'ARABE/DARIJA !
-⚠️ SI TU VOIS "3", "7", "9" dans les mots = C'EST DE LA DARIJA TRANSLITTÉRÉE !
-
-TU DOIS EXTRAIRE LES DONNÉES MÊME SI C'EST EN ARABE PUR !
-
-═══ TRADUCTION ARABE ➜ FRANÇAIS (MEMORISE!) ═══
-عندي / 3andi = J'AI
-من / mn / men = DE (provenance)
-ل / إلى / l / ila = À (destination)
-غادي / ghadi = VA À / ALLER
-ديال / dyal = DE (possession)
-في / f / fi = DANS / À
-رقم / rqam = NUMÉRO
-تليفون / telephone = TÉLÉPHONE
-وزن / wazn = POIDS
-كيلو / kilo = KILOGRAMME
-طرد / colis = COLIS
-يخلص / ykhales = IL PAIE
-خلصتو / khalsatou = PAYÉ
-فلوس / flous = ARGENT
-درهم / dirham = DIRHAM (monnaie)
-اسمه / سميتو / smitou = IL S'APPELLE
-ساكن / saken = IL HABITE
-زنقة / zanqa = RUE
-حي / hay = QUARTIER
-عنوان / 3nwan = ADRESSE
-
-═══ VILLES EN ARABE ═══
-الدار البيضاء = Casablanca
-الرباط = Rabat
-مراكش = Marrakech
-فاس = Fès
-طنجة = Tanger
-أكادير = Agadir
-مكناس = Meknès
-وجدة = Oujda
-
-═══ VOCABULAIRE DARIJA ESSENTIEL ═══
-POSSESSION & AVOIR:
-- "3andi" / "عندي" / "andi" = j'ai
-- "3andou" / "عندو" = il a
-- "dyal" / "ديال" / "dial" = de (possession)
-
-DIRECTION & DESTINATION:
-- "mn" / "men" / "من" = de (provenance)
-- "l" / "lel" / "ل" / "ila" = à (destination)
-- "ghadi" / "غادي" / "gadi" = va à / aller à
-- "f" / "fi" / "في" = dans / à (localisation)
-
-PERSONNES & TITRES:
-- "smitou" / "سميتو" = il s'appelle (masculin)
-- "smitha" / "سميتها" = elle s'appelle (féminin)
-- "smiya" / "اسمه" = son nom est
-- "rajel" / "راجل" = homme / monsieur
-- "mra" / "مرا" = femme / madame
-- "ssi" / "سي" = monsieur (titre respect)
-- "lalla" / "لالة" = madame (titre respect)
-- "khti" / "ختي" = ma sœur (familier femme)
-- "khouya" / "خويا" = mon frère (familier homme)
-- "3ammi" / "عمي" = oncle / monsieur (respect)
-- "khali" / "خالي" = oncle maternel
-
-COLIS & POIDS:
-- "colis" / "colit" / "الطرد" / "trd" = colis
-- "wazn" / "الوزن" / "le poids" = poids
-- "kilo" / "كيلو" = kilogramme
-- "tqil" / "ثقيل" = lourd
-
-PAIEMENT:
-- "khalsatou" / "خلصتو" / "khalas" = payé / payer
-- "makhlouss" / "مخلوص" = déjà payé
-- "ykhales" / "يخلص" = il paie / va payer
-- "flous" / "فلوس" / "flouss" = argent
-- "cash" / "كاش" = espèces
-- "dirham" / "درهم" = dirham (monnaie marocaine)
-
-ADRESSE & LOCALISATION:
-- "saken" / "ساكن" / "kay sken" / "sakin" = il habite
-- "3nwan" / "عنوان" / "3inwan" / "adresse" = adresse
-- "zanqa" / "زنقة" / "zenqa" = rue
-- "derb" / "درب" = ruelle / impasse
-- "hay" / "حي" / "7ay" = quartier
-- "rqam" / "رقم" / "numero" = numéro
-- "3mara" / "عمارة" / "3imara" = immeuble
-- "taba9" / "طابق" / "etage" = étage
-- "bab" / "باب" / "porte" = porte
-- "9rib" / "قريب" / "grib" / "7da" = près de
-
-TÉLÉPHONE:
-- "telephone" / "تيليفون" / "tiliphone" = téléphone
-- "numero" / "رقم" / "rqam" = numéro
-- "portable" / "بورطابل" = mobile
-- "06" / "07" / "05" = préfixes téléphone marocain
-- "talifon dyalo" / "تليفون ديالو" = son téléphone
-
-N° EXPÉDITEUR:
-- "numero expediteur" / "رقم المرسل" = numéro expéditeur
-- "N EXP" / "numero client" = N° client
-- "code client" / "كود الكليان" = code client
-- "rqam dyal l3amilة" / "رقم ديال العميل" = numéro du client
-- "numero dyalo" = son numéro
-
-NATURE DU COLIS:
-- "fih" / "فيه" / "contenu" = il contient
-- "chnya" / "شنية" / "ch7al" = quoi / combien
-- "vetements" / "حوايج" / "7wayej" = vêtements
-- "parfum" / "عطر" / "3atr" = parfum
-- "chaussures" / "صباط" / "sabbat" = chaussures
-- "documents" / "وراق" / "wra9" / "papiers" = documents
-- "electronique" / "إلكترونيك" = électronique
-- "alimentaire" / "ماكلة" / "makla" = nourriture
-
-PORT DÛ:
-- "port du" / "بور ديو" = port dû
-- "destinataire ykhales" / "المرسل إليه يخلص" = destinataire paie
-- "li ywaslo ykhales" / "اللي يوصلو يخلص" = celui qui reçoit paie
-- "machi makhlouss" / "ماشي مخلوص" = pas payé
-- "ba9i makhalassh" / "باقي ماخلصش" = pas encore payé
-- "khalouh 3lih" / "خلوه عليه" = laissez-le lui (à payer)
-
-RETOUR DE FOND (COD):
-- "retour fond" / "ريتور فون" = retour de fond
-- "cod" / "كود" / "COD" = contre remboursement
-- "contre especes" / "كونتر إسبيس" / "konter espece" = contre espèces
-- "flous" / "فلوس" / "flouss" / "cash" = argent
-- "yjib" / "يجيب" / "yjib m3ah" = il ramène avec lui
-- "yred" / "يرد" / "yredd" = il rend / retourne
-- "3andou" / "عندو" / "يعطيه" = il donne
-- "montant" / "مونتان" / "mablagh" = montant
-- "l9ad" / "القاد" / "la9ad" = montant exact
-- "bzaf" / "بزاف" = beaucoup
-- "chwiya" / "شوية" = un peu
-
-NOMBRES & QUANTITÉS:
-- "wa7ed" / "واحد" / "wa7d" = un / 1
-- "jouj" / "جوج" / "zouj" = deux / 2
-- "tlata" / "تلاتة" = trois / 3
-- "reb3a" / "ربعة" = quatre / 4
-- "khamsa" / "خمسة" = cinq / 5
-- "setta" / "ستة" = six / 6
-- "seb3a" / "سبعة" = sept / 7
-- "tmanya" / "تمنية" = huit / 8
-- "tes3oud" / "تسعود" = neuf / 9
-- "3achra" / "عشرة" = dix / 10
-- "miya" / "مية" / "mya" = cent / 100
-- "alf" / "ألف" = mille / 1000
-
-URGENCE & IMPORTANCE:
-- "mzarreb" / "مزربة" / "mezrab" = urgent
-- "sari3" / "سريع" / "sari" = rapide / vite
-- "deghdegha" / "دغدغة" = immédiat / tout de suite
-- "daba" / "دابا" / "daba daba" = maintenant / tout de suite
-- "mohim" / "مهم" / "muhim" = important
-- "fragile" / "frajiل" / "khayef" = fragile
-- "khass" / "خاص" / "khassni" = il faut / je dois
-- "darouri" / "ضروري" = nécessaire
-- "3ajel" / "عاجل" = pressé / urgent
-
-TEMPS & DATES:
-- "lyoum" / "اليوم" / "l7al" = aujourd'hui
-- "ghedda" / "غدا" / "ghedwa" = demain
-- "lbar7" / "البارح" / "lbare7" = hier
-- "dak saa" / "داك الساعة" = à cette heure
-- "nhar" / "نهار" = jour
-- "sbah" / "صباح" = matin
-- "3chiya" / "عشية" = soir
-- "lil" / "الليل" = nuit
-- "had semana" / "هاد السيمانة" = cette semaine
-
-ACTIONS & VERBES:
-- "dir" / "دير" / "deer" = faire
-- "khed" / "خد" / "akhod" = prendre
-- "3ti" / "عطي" / "a3ti" = donner
-- "jib" / "جيب" / "ajib" = apporter / ramener
-- "sir" / "سير" / "msir" = aller / partir
-- "ja" / "جا" / "jay" = venir
-- "wsel" / "وصل" / "wasel" = arriver
-- "seft" / "صفط" / "seftet" = envoyer
-- "tsel" / "تصل" = recevoir / arriver
-- "shel" / "شحل" / "sha7el" = charger / porter
-
-ÉTAT & DESCRIPTION:
-- "mezyan" / "مزيان" / "mzyan" = bien / bon
-- "khayeb" / "خايب" / "khayb" = mauvais
-- "jdid" / "جديد" = nouveau / neuf
-- "9dim" / "قديم" / "gdim" = ancien / vieux
-- "kbir" / "كبير" / "kebir" = grand
-- "sghir" / "صغير" / "seghir" = petit
-- "tqil" / "ثقيل" / "te9il" = lourd
-- "khfif" / "خفيف" / "khfef" = léger
-- "skhoun" / "سخون" = chaud
-- "bared" / "بارد" / "bard" = froid
-
-═══ EXEMPLES COMPLETS EN DARIJA ═══
-
-EXEMPLE 1:
-"3andi colis mn Mohamed numero 4525672 dyal Casablanca telephone 0612345678 ghadi l Rabat l Fatima f hay nahda rue 12 telephone 0698765432 wazn 2 kilo port paye 50 dirham"
-
-→ Extraction:
-- Expéditeur: Mohamed, N°4525672, Casa, 0612345678
-- Destinataire: Fatima, Rabat, hay nahda rue 12, 0698765432
-- Poids: 2kg, port payé, 50 DH
-- Type: simple
-
-EXEMPLE 2:
-"عندي طرد من أحمد ديال طنجة 0623456789 غادي ل مراكش ل خديجة في حي المسيرة زنقة 25 رقم تيليفون 0687654321 وزن 3 كيلو كونتر اسبيس 200 درهم"
-
-→ Extraction:
-- Expéditeur: Ahmed, Tanger, 0623456789
-- Destinataire: Khadija, Marrakech, hay massira zanqa 25, 0687654321
-- Poids: 3kg, contre espèces 200 DH
-- Type: especes, codAmount: 200
-
-EXEMPLE 3:
-"3andi bon mn Youssef smitou numero client 8956234 men Fes telephone 0645678901 ghadi ila Agadir destinataire smitou Hassan f derb sultanي numero 15 telephone 0656789012 tqil 5 kilo contre cheque 500 dirham port du"
-
-→ Extraction:
-- Expéditeur: Youssef, N°8956234, Fès, 0645678901
-- Destinataire: Hassan, Agadir, derb sultan numero 15, 0656789012
-- Poids: 5kg, contre chèque 500 DH, port dû
-- Type: cheque, codAmount: 500
-
-EXEMPLE 4 (Avec nature et adresse complète):
-"3andi colis rqam dyal l3amila 7845123 mn Amina dyal Rabat talifon dyalha 0623456789 fih 7wayej ghadi l Meknes l Zineb sakin f hay riad 3mara 12 taba9 3 bab 5 numero dyalha 0687654321 wazn 4 kilo destinataire ykhales port 60 dirham yjib m3ah 300 dirham"
-
-→ Extraction:
-- Expéditeur: Amina, N°7845123, Rabat, 0623456789
-- Destinataire: Zineb, Meknès, hay riad immeuble 12 étage 3 porte 5, 0687654321
-- Nature: Vêtements
-- Poids: 4kg, port dû 60 DH, retour fond 300 DH
-- Type: especes, codAmount: 300
-
-EXEMPLE 5 (🔴 TOUT EN ARABE - MEMORISE CE FORMAT!):
-"عندي كوليت من سعيد رقم ديال العميل 9632587 من الدار البيضاء تليفون ديالو 0612349876 فيه صباط و عطر غادي ل طنجة ل نادية ساكن في حي المسيرة زنقة 8 قريب البنك رقم ديالها 0698761234 وزن 2 كيلو باقي ماخلصش يخلص 40 درهم و يجيب معاه 150 درهم فلوس"
-
-TRADUCTION MOT À MOT:
-عندي (j'ai) كوليت (colis) من (de) سعيد (Said) رقم ديال العميل (numero client) 9632587 من (de) الدار البيضاء (Casablanca) تليفون ديالو (son telephone) 0612349876 فيه (contient) صباط (chaussures) و (et) عطر (parfum) غادي (va) ل (à) طنجة (Tanger) ل (à) نادية (Nadia) ساكن (habite) في (dans) حي المسيرة (hay massira) زنقة (rue) 8 قريب (près) البنك (banque) رقم ديالها (son numero) 0698761234 وزن (poids) 2 كيلو (kilo) باقي ماخلصش (pas encore payé) يخلص (il paie) 40 درهم (dirham) و (et) يجيب معاه (ramène avec lui) 150 درهم فلوس (dirham argent)
-
-→ Extraction JSON:
-{
-  "confidence": 0.9,
-  "data": {
-    "senderName": "Saïd",
-    "senderNic": "9632587",
-    "senderCity": "Casablanca",
-    "senderTel": "0612349876",
-    "receiverName": "Nadia",
-    "receiverCity": "Tanger",
-    "receiverAddress": "hay massira zanqa 8 près de la banque",
-    "receiverTel": "0698761234",
-    "weight": 2,
-    "parcelContent": "Chaussures et parfum",
-    "portType": "port_du",
-    "portPrice": 40,
-    "serviceType": "especes",
-    "codAmount": 150
-  }
-}
-
-EXEMPLE 6 (🔴 ARABE SIMPLE):
-"عندي طرد من أحمد 0612345678 غادي ل فاطمة في الرباط 0698765432"
-
-TRADUCTION: J'ai colis de Ahmed 0612345678 va à Fatima dans Rabat 0698765432
-
-→ Extraction JSON:
-{
-  "confidence": 0.85,
-  "data": {
-    "senderName": "Ahmed",
-    "senderTel": "0612345678",
-    "receiverName": "Fatima",
-    "receiverCity": "Rabat",
-    "receiverTel": "0698765432"
-  }
-}
-
-═══ RÈGLES D'EXTRACTION ═══
-1. TÉLÉPHONES: 06, 07, 05 + 8 chiffres = téléphone marocain
-2. ORDRE: Premier nom mentionné = généralement expéditeur
-3. MOTS-CLÉS DESTINATAIRE: "ghadi l", "ila", "pour", "l" (suivi d'un nom)
-4. N° EXPÉDITEUR: "numero expediteur", "N EXP", "numero client", ou nombre 6-8 chiffres
-5. PORT PAYÉ: "port paye", "khalsatou", "makhlouss" → portType: "port_paye"
-6. PORT DÛ: "port du", "ykhales", "destinataire khales" → portType: "port_du"
-7. TYPE SERVICE:
-   - "contre especes" / "especes" / "cash" / "كاش" / "فلوس" → "especes"
-   - "contre cheque" / "cheque" / "شيك" → "cheque"
-   - "contre traite" / "traite" → "traite"
-   - "retour BL" / "bon livraison" → "retour_bl"
-   - Si COD > 0 mais pas de type → "especes"
-   - Sinon → "simple"
-8. RETOUR FOND (COD): "retour fond", "cash", "flous", "contre especes" + montant
-9. ADRESSE: Tout après "f" / "fi" / "hay" / "rue" / "zanqa" / "derb" jusqu'au prochain élément
-10. CONFIDENCE: >0.8 si clair, 0.5-0.7 si partiel, <0.5 si ambigu
-
-Retourne UNIQUEMENT un JSON valide avec cette structure exacte.`,
-      messages: [{
-        role: 'user',
-        content: `Extrait les données de cette phrase : "${transcript}"
-
-IMPORTANT: Retourne UNIQUEMENT le JSON, sans texte avant ou après, sans explication.
-
-Structure JSON attendue:
-{
-  "confidence": 0.85,
-  "data": {
-    "senderName": "...",
-    "senderNic": "12345678",
-    "senderTel": "06xxxxxxxx",
-    "senderCity": "...",
-    "senderAddress": "...",
-    "receiverName": "...",
-    "receiverTel": "07xxxxxxxx",
-    "receiverCity": "...",
-    "receiverAddress": "...",
-    "weight": 3,
-    "nbColis": 1,
-    "serviceType": "simple",
-    "portType": "port_paye",
-    "portPrice": 80,
-    "codAmount": 0
-  },
-  "needsConfirmation": []
-}
-
-ATTENTION:
-- senderNic: N° expéditeur (6-8 chiffres)
-- serviceType: "simple" | "especes" | "cheque" | "traite" | "retour_bl"
-- receiverAddress: TOUJOURS extraire l'adresse complète du destinataire (rue, quartier, etc.)
-- senderAddress: adresse de l'expéditeur si mentionnée`
-      }]
-    })
-
-    // Parser JSON de la réponse de manière robuste
-    const content = message.content[0].text || '{}'
-
-    // Nettoyer les balises markdown
-    let cleanContent = content.replace(/```json\n?/g, '').replace(/```\n?/g, '').trim()
-
-    // Extraire uniquement le JSON (du premier { au dernier })
-    const firstBrace = cleanContent.indexOf('{')
-    const lastBrace = cleanContent.lastIndexOf('}')
-
-    if (firstBrace === -1 || lastBrace === -1 || firstBrace > lastBrace) {
-      throw new Error('Pas de JSON valide dans la réponse')
-    }
-
-    const jsonOnly = cleanContent.substring(firstBrace, lastBrace + 1)
-    const result = JSON.parse(jsonOnly)
-
-    console.log('✅ Extraction réussie - tokens:', message.usage.input_tokens, '+', message.usage.output_tokens)
-
-    return {
-      success: true,
-      result: result,
-      usage: {
-        inputTokens: message.usage.input_tokens,
-        outputTokens: message.usage.output_tokens,
-      }
-    }
-
-  } catch (error) {
-    console.error('❌ Erreur Claude API:', error.message)
-
-    if (error.status === 401) {
-      throw new Error('🔑 Clé API invalide - Contactez admin')
-    }
-    if (error.status === 429) {
-      throw new Error('⏱️ Trop de requêtes - Réessayez')
-    }
-
-    throw new Error(`❌ Erreur IA: ${error.message}`)
-  }
-})
+// 🤖 IA de saisie (extractParcelData) : supprimée le 18/10/2026 à la demande de l'admin (le Contrôleur IA,
+// functions/controlReport.js, garde sa propre configuration).
 
 // ── Vider la base de données (sauf users) ─────────────────────────────────
 exports.clearDatabase = onCall({ maxInstances: 1 }, async (request) => {
@@ -1728,6 +1337,13 @@ exports.updateOperationalDay = onSchedule({
 
 // Fonction manuelle pour forcer la mise à jour immédiate (callable depuis l'app)
 exports.forceUpdateOperationalDay = onCall(async (request) => {
+  // 🔒 Admin connecté seulement (avant : appelable sans compte)
+  {
+    const { HttpsError } = require('firebase-functions/v2/https')
+    if (!request.auth) throw new HttpsError('unauthenticated', 'Authentification requise')
+    const u = await db.collection('users').doc(request.auth.uid).get()
+    if (!u.exists || u.data().role !== 'admin') throw new HttpsError('permission-denied', "Réservé à l'admin.")
+  }
   try {
     const dayString = getCurrentOperationalDayString()
 
@@ -1802,21 +1418,10 @@ exports.publicTrackParcel = onCall({ cors: true }, async (request) => {
   const snap = await db.collection('parcels').where('trackingId', '==', trackingId).limit(1).get()
   if (snap.empty) return { found: false }
   const d = snap.docs[0]
-  const p = d.data()
+  const { publicTrackingParcel } = require('./publicTracking')
   return {
     found: true,
-    parcel: {
-      id: d.id,
-      trackingId: p.trackingId || '',
-      status: p.status || '',
-      codAmount: p.codAmount || 0,
-      price: p.price || 0,
-      weight: p.weight || null,
-      signatureConfirmedAt: isoOf(p.signatureConfirmedAt),
-      sender: { name: p.sender?.name || '', city: p.sender?.city || p.originCity || '' },
-      receiver: { name: p.receiver?.name || '', city: p.receiver?.city || p.destinationCity || '' },
-      history: (Array.isArray(p.history) ? p.history : []).map(h => ({ status: h?.status || '', timestamp: isoOf(h?.timestamp) })),
-    },
+    parcel: publicTrackingParcel(d),
   }
 })
 

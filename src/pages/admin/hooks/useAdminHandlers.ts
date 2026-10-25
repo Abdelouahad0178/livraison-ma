@@ -1,6 +1,6 @@
 import React from 'react'
 import { createUserWithEmailAndPassword, signOut as fbSignOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider } from 'firebase/auth'
-import { collection, doc, getDocs, limit, query, setDoc, where } from 'firebase/firestore'
+import { collection, doc, getDoc, getDocs, limit, query, setDoc, where } from 'firebase/firestore'
 import { auth, authSecondary, db } from '../../../firebase/config'
 import {
   updateParcel, updateParcelStatus, markParcelAsReturned,
@@ -12,9 +12,10 @@ import {
   createReturnParcel,
   createCaisseRequest, completeRhSalaryCaisseRequest,
 } from '../../../firebase/firestore'
-import { createParcel } from '../../../firebase/parcels'
+import { portTypeChangeFields } from '../../../firebase/parcels'
+import { realignDeliveryAfterDestinationChange } from '../../../firebase/delivery'
 import { normalizeServiceType, codPaymentTypeForService, NON_COD_SERVICE_TYPES } from '../../../firebase/constants'
-import { buildCodWriteFields, validateCodChoice, isMixedCod, codDocPartOf, codCashPartOf, codEditResult } from '../../../utils/codParts'
+import { buildCodWriteFields, validateCodChoice, isMixedCod, codDocPartOf, codCashPartOf, codEditResult, mixedSplitLockReason } from '../../../utils/codParts'
 import { printParcelTicket } from '../../../utils/printParcelTicket'
 import {
   createAgentCodRequest, addAgentCodRequestReply,
@@ -162,6 +163,12 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
     if (codChoiceError) { setAdminEditModal((m: any) => ({ ...m, error: codChoiceError })); return }
     const codW = buildCodWriteFields({ serviceType: normalizeServiceType(form.serviceType) || 'simple', codAmount: form.codAmount, cashAmount: form.codCashAmount, mixed: form.codMixed === true })
     const codTotalStr = String(codW.codAmount)
+    // 🔒 Répartition chèque / espèces changée sur un COD déjà remis au chef d'agence, réglé ou versé : refusé (la part
+    // espèces n'entrerait pas en caisse après coup — caisse et Bilan ne concorderaient plus)
+    const splitLock = mixedSplitLockReason(parcel)
+    if (splitLock && (codW.codMixed !== (parcel.codMixed === true) || (codW.codMixed && codW.codCashAmount !== (parseFloat(parcel.codCashAmount) || 0)))) {
+      setAdminEditModal((m: any) => ({ ...m, error: `Répartition chèque / espèces non modifiable : ${splitLock}.` })); return
+    }
     setAdminEditModal((m: any) => ({ ...m, loading: true, error: '' }))
 
     try {
@@ -260,6 +267,17 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       track('Nature marchandise', parcel.natureOfGoods   || '',  form.natureOfGoods, 'natureOfGoods', form.natureOfGoods)
       track('Prix (DH)',          String(parcel.price    ?? ''), form.price,         'price',         parsePositiveNumber(form.price))
       track('Type de port',       parcel.portType        || '',  form.portType,      'portType',      form.portType)
+      // 🔁 Changement de type de port : mêmes conséquences que partout ailleurs (portTypeChangeFields) — un port payé
+      // devenu port dû n'est plus « collecté par » la personne qui l'a saisi ; un port dû devenu port payé l'est.
+      if (form.portType && form.portType !== (parcel.portType || '')) {
+        // Admin : correction permise même sur un port déjà encaissé (allowCollected)
+        const { portType: _pt, ...side } = portTypeChangeFields(parcel, form.portType, { uid: auth.currentUser?.uid || null, name: adminEmail }, { allowCollected: true })
+        void _pt
+        Object.assign(updates, side)
+        if ('portStatus' in side) {
+          changes.push({ field: 'Port — encaissement', oldValue: parcel.portStatus ? `collecté par ${parcel.portCollectedBy || '—'}` : 'à collecter', newValue: side.portStatus ? `collecté par ${side.portCollectedBy}` : 'à collecter', changedAt: now, changedBy: adminEmail })
+        }
+      }
       track('RETOUR FOND (DH)',   String(parcel.codAmount ?? ''), codTotalStr,        'codAmount',     parsePositiveNumber(codTotalStr))
       // 💵+📋 RF mixte (part espèces) — n'écrit rien pour un colis mono-type inchangé
       if (codW.codMixed !== (parcel.codMixed === true) || (codW.codMixed && codW.codCashAmount !== (parseFloat(parcel.codCashAmount) || 0))) {
@@ -281,6 +299,14 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
 
       // Pipeline RETOUR FOND
       track('Statut COD',           parcel.codStatus       || 'pending', form.codStatus,           'codStatus',           form.codStatus)
+      // 📅 COD passé « encaissé » (collecté / remis / réglé) SANS date de collecte : date et auteur complétés (le livreur
+      // assigné, sinon l'admin) — sinon les cartes « collectées par jour » ne le comptaient dans aucune journée alors que
+      // le Bilan le comptait (écart sur 1113370, 19/10/2026)
+      if (['collected', 'remis', 'regle'].includes(form.codStatus) && !parcel.codCollectedAt && (!parcel.codStatus || parcel.codStatus === 'pending')) {
+        updates.codCollectedAt = now
+        updates.codCollectedBy = parcel.deliveryDriverName || adminEmail
+        if (parcel.deliveryDriverId) updates.codCollectedById = parcel.deliveryDriverId
+      }
       track('COD envoyé source',    String(!!parcel.codSentToSource),     String(form.codSentToSource),     'codSentToSource',     form.codSentToSource)
       track('COD re?u source',      String(!!parcel.codReceivedBySource), String(form.codReceivedBySource), 'codReceivedBySource', form.codReceivedBySource)
       track('COD réglé expéditeur', String(!!parcel.codSenderPaid),       String(form.codSenderPaid),       'codSenderPaid',       form.codSenderPaid)
@@ -301,10 +327,14 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       // }
 
       // Statut → ajout historique si changé
-      if (updates.status) {
+      // ↩️ « Retourné » (expédition pas encore retournée) : VRAI retour (markParcelAsReturned : expéditeur / destinataire
+      // et villes inversés, ville de retour, livreur retiré) APRÈS les autres modifications — avant (diagnostic du
+      // 24/10/2026, point 2.3), seul le statut changeait et l'agence d'origine ne voyait jamais le retour.
+      const wantsReturn = updates.status === 'Retourné' && !parcel.wasReturned && !parcel.returnedAt
+      if (updates.status && !wantsReturn) {
         await updateParcelStatus(parcel.id, updates.status, { note: `Modifié par Admin (${adminEmail})`, updatedBy: adminEmail })
-        delete updates.status
       }
+      delete updates.status
 
       updates.adminChanges     = changes
       updates.lastAdminEditAt  = now
@@ -320,6 +350,14 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       })
 
       await updateParcel(parcel.id, cleanUpdates)
+      if (wantsReturn) {
+        const snap = await getDoc(doc(db, 'parcels', parcel.id))
+        await markParcelAsReturned({ id: parcel.id, ...snap.data() }, { byAdmin: true, note: form.returnReason || `Retour par l'admin (${adminEmail})` })
+      } else if (cleanUpdates.destinationCity !== undefined) {
+        // 🚚 Destination corrigée : livreur « En gare » / d'une autre ville réaligné (diagnostic 2.1)
+        const msg = await realignDeliveryAfterDestinationChange(parcel.id, adminEmail).catch((e: any) => `Livreur non réaligné : ${e?.message || e}`)
+        if (msg) alert(`🚚 ${msg}`)
+      }
       setAdminEditModal(null)
     } catch (err: any) {
       setAdminEditModal((m: any) => ({ ...m, loading: false, error: 'Erreur : ' + (err?.message || 'réessayez') }))
@@ -344,6 +382,11 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
         return
       }
 
+      // 🔒 Même blocage que la modification de l'expédition (répartition chèque / espèces d'un COD déjà remis / versé)
+      const splitLock = mixedSplitLockReason(parcel)
+      if (splitLock && (codRes.mixed !== (parcel.codMixed === true) || (codRes.mixed && codRes.cash !== (parseFloat(parcel.codCashAmount) || 0)))) {
+        setCodEditModal((m: any) => ({ ...m, loading: false, error: `Répartition chèque / espèces non modifiable : ${splitLock}.` })); return
+      }
       // 🔄 HISTORIQUE COD: Enregistrer le changement de montant
       const updates: any = { codAmount: amount }
       if (codEditModal.mixed || parcel.codMixed === true) {
@@ -388,51 +431,6 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       setNicEditModal(null)
     } catch {
       setNicEditModal((m: any) => ({ ...m, loading: false, error: 'Erreur lors de la mise à jour.' }))
-    }
-  }
-
-  const handleCreateParcel = async () => {
-    const { newParcelModal, setNewParcelModal } = s.current
-    const f = newParcelModal.form
-
-    // Validation
-    if (!String(f.senderNic || '').trim()) { setNewParcelModal((m: any) => ({ ...m, error: 'N° EXP (numéro de bon) requis.' })); return }
-    if (!f.senderName?.trim()) { setNewParcelModal((m: any) => ({ ...m, error: 'Nom expéditeur requis.' })); return }
-    if (!f.receiverName?.trim()) { setNewParcelModal((m: any) => ({ ...m, error: 'Nom destinataire requis.' })); return }
-    if (!f.receiverCity?.trim()) { setNewParcelModal((m: any) => ({ ...m, error: 'Ville destinataire requise.' })); return }
-    if (NON_COD_SERVICE_TYPES.includes(normalizeServiceType(f.serviceType || 'simple')) && (parseFloat(f.codAmount) || 0) > 0) {
-      setNewParcelModal((m: any) => ({ ...m, error: 'Type « Simple » : pas de RETOUR FOND. Choisissez C/Espèces, C/Chèque ou C/Traite pour saisir un montant.' }))
-      return
-    }
-    // 💵+📋 RF mixte : chaque type coché doit avoir son montant
-    const codChoiceError = validateCodChoice({ serviceType: f.serviceType, codAmount: f.codAmount, cashAmount: f.codCashAmount, mixed: f.codMixed === true })
-    if (codChoiceError) { setNewParcelModal((m: any) => ({ ...m, error: codChoiceError })); return }
-
-    setNewParcelModal((m: any) => ({ ...m, loading: true, error: '' }))
-    try {
-      const adminEmail = auth.currentUser?.email || 'Admin'
-      const created = await createParcel({
-        senderNic: f.senderNic || '',
-        sender: { name: f.senderName, tel: f.senderTel || '', city: f.senderCity || '', address: f.senderAddress || '' },
-        receiver: { name: f.receiverName, tel: f.receiverTel || '', city: f.receiverCity, address: f.receiverAddress || '' },
-        originCity: f.senderCity || '',
-        destinationCity: f.receiverCity,
-        weight: parseFloat(f.weight) || 0,
-        nbColis: parseInt(f.nbColis) || 1,
-        // RF : codAmount = TOTAL ; mixte → codMixed + codCashAmount (part espèces)
-        ...buildCodWriteFields({ serviceType: f.serviceType || 'simple', codAmount: f.codAmount, cashAmount: f.codCashAmount, mixed: f.codMixed === true }),
-        portType: f.portType || 'port_paye',
-        price: parseFloat(f.portPrice) || 0,
-        agentId: auth.currentUser?.uid || '',
-        agentName: adminEmail,
-        status: 'Initialisé',
-        createdBy: 'admin',
-        createdByEmail: adminEmail,
-      })
-      setNewParcelModal(null)
-      printParcelTicket(created)
-    } catch (err: any) {
-      setNewParcelModal((m: any) => ({ ...m, loading: false, error: err?.message || 'Erreur lors de la création.' }))
     }
   }
 
@@ -556,6 +554,7 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
         await markParcelAsReturned(parcel, {
           ...(note ? { note } : {}),
           ...(returnReason ? { reason: returnReason } : {}),
+          byAdmin: true,
         })
         await updateParcel(parcel.id, { returnReason, returnNote: note || '' })
         setStatusModal(null)
@@ -623,15 +622,17 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
     if (!returnModal?.parcel) return
     setReturnModal((m: any) => ({ ...m, loading: true, error: '' }))
     try {
-      await updateParcel(returnModal.parcel.id, {
-        returnReason: returnModal.reason,
-        returnNote: returnModal.note || '',
-        returnedAt: new Date().toISOString(),
-      })
-      await updateParcelStatus(returnModal.parcel.id, 'Retourné', {
-        reason: returnModal.reason,
-        note: returnModal.note || `Retour : ${returnModal.reason}`,
-      })
+      const p = returnModal.parcel
+      if (!p.wasReturned && !p.returnedAt) {
+        // ↩️ VRAI retour (inversion expéditeur / destinataire et villes, ville de retour, livreur retiré) — avant
+        // (diagnostic du 24/10/2026, point 2.3), seuls returnedAt et le statut étaient posés
+        const snap = await getDoc(doc(db, 'parcels', p.id))
+        await markParcelAsReturned({ id: p.id, ...snap.data() }, { byAdmin: true, note: returnModal.note || `Retour : ${returnModal.reason}` })
+        await updateParcel(p.id, { returnReason: returnModal.reason, returnNote: returnModal.note || '' })
+      } else {
+        // Déjà retournée : seul le motif est mis à jour
+        await updateParcel(p.id, { returnReason: returnModal.reason, returnNote: returnModal.note || '' })
+      }
       setReturnModal(null)
     } catch {
       setReturnModal((m: any) => ({ ...m, loading: false, error: "Erreur lors de l'enregistrement du retour." }))
@@ -1252,7 +1253,6 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
     handleAdminEditSave,
     handleSaveCodAmount,
     handleSaveNic,
-    handleCreateParcel,
     handleAddPortDuTx,
     handleDeletePortDuTx,
     handleSavePortDuEdit,

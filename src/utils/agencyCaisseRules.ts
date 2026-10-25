@@ -15,7 +15,7 @@
  *
  * 📅 Base de date : journée d'opération de CRÉATION (workDate, 08:00 → 06:00) — caisseParcelDate.
  */
-import { getCurrentOperationalDay, getOperationalDayRange, getOperationalDayString, formatOperationalDay } from '../config/operationalDay'
+import { getCurrentOperationalDay, getOperationalDayRange, getOperationalDayString, formatOperationalDay, previousWorkedOperationalDays } from '../config/operationalDay'
 import { codSplitAmount } from './codParts'
 import { isCodMoneyBeforeStart, isPortDuMoneyBeforeStart, isPortPayeMoneyBeforeStart } from './moneyFlow'
 
@@ -60,23 +60,30 @@ export type CaissePreset = 'all' | 'today' | 'week' | 'month' | 'day' | 'operati
 // ⚡ Défaut : la journée d'opération d'HIER (léger : une seule journée chargée au lieu de 45 jours).
 // « Tout » (45 jours) reste disponible d'un clic.
 export const CAISSE_DEFAULT_PRESET: CaissePreset = 'operational'
-/** Journée d'opération d'hier (défaut des pages Caisse Agence et Chef d'exploitation). */
+/** Veille travaillée (défaut des pages Caisse Agence et Chef d'exploitation) : la journée d'opération d'hier ;
+ *  le lundi (dimanche non travaillé), le SAMEDI — même règle que l'onglet Expéditions (23/10/2026). */
 export function caisseDefaultOperationalDay(): Date {
-  const d = getCurrentOperationalDay()
-  d.setDate(d.getDate() - 1)
-  return d
+  return previousWorkedOperationalDays().from
 }
 
-/** Filtre une liste par preset de date (« Période » = bornes CALENDAIRES sur la date de référence). */
-export const caisseFilterByDate = <T,>(
-  list: T[],
+/** 📅 Journée d'opération des pages de caisse : le SAMEDI couvre aussi le dimanche (non travaillé), jusqu'au lundi
+ *  6 h — le lundi, la veille travaillée affichée par défaut (le samedi) comprend les expéditions du dimanche
+ *  (demande du 23/10/2026). Les autres jours : 08:00 → 06:00 le lendemain, inchangé. */
+export const caisseOpDayRange = (operationalDay: Date): { start: Date; end: Date } => {
+  const range = getOperationalDayRange(operationalDay)
+  if (operationalDay.getDay() !== 6) return range
+  const sunday = new Date(operationalDay); sunday.setDate(sunday.getDate() + 1)
+  return { start: range.start, end: getOperationalDayRange(sunday).end }
+}
+
+/** ⚡ Bornes [start, end] d'un preset de date, calculées UNE fois (null = « Tout »). */
+export const caisseDateBounds = (
   preset: CaissePreset | string,
   from?: string | null,
   to?: string | null,
-  getDate: (item: T) => Date = caisseParcelDate as unknown as (item: T) => Date,
   operationalDay?: Date,
-): T[] => {
-  if (preset === 'all') return list
+): { start: Date | null; end: Date } | null => {
+  if (preset === 'all') return null
   const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
   let start: Date | null = null
   let end: Date = endOfToday
@@ -96,7 +103,7 @@ export const caisseFilterByDate = <T,>(
     start = getOperationalDayRange(firstOfMonth).start
     end = getOperationalDayRange(todayOp).end
   } else if (preset === 'operational' && operationalDay) {
-    const range = getOperationalDayRange(operationalDay)
+    const range = caisseOpDayRange(operationalDay)
     start = range.start
     end = range.end
   } else if (preset === 'day') {
@@ -106,6 +113,21 @@ export const caisseFilterByDate = <T,>(
     start = from ? new Date(from + 'T00:00:00') : null
     end = to ? new Date(to + 'T23:59:59') : endOfToday
   }
+  return { start, end }
+}
+
+/** Filtre une liste par preset de date (« Période » = bornes CALENDAIRES sur la date de référence). */
+export const caisseFilterByDate = <T,>(
+  list: T[],
+  preset: CaissePreset | string,
+  from?: string | null,
+  to?: string | null,
+  getDate: (item: T) => Date = caisseParcelDate as unknown as (item: T) => Date,
+  operationalDay?: Date,
+): T[] => {
+  const bounds = caisseDateBounds(preset, from, to, operationalDay)
+  if (!bounds) return list
+  const { start, end } = bounds
   return list.filter(item => {
     const d = getDate(item)
     if (start && d < start) return false
@@ -126,15 +148,22 @@ export const makePassesDateFilter = (
   dateTo?: string,
   operationalDay?: Date | null,
   _city?: string,
-) => (p: any): boolean => {
-  if (!datePreset || datePreset === 'all') return true
+) => {
+  if (!datePreset || datePreset === 'all') return (_p: any): boolean => true
   const isExplicitDateFilter = ['today', 'operational', 'day', 'custom'].includes(datePreset as string)
-  const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
-  const isNotCollected = !p.portStatus
-  if (isPortDu && isNotCollected && !isExplicitDateFilter) return true
-  const d = caisseParcelDate(p)
-  if (!d) return true
-  return caisseFilterByDate([d], datePreset, dateFrom, dateTo, (x) => x, operationalDay || undefined).length > 0
+  // ⚡ Bornes calculées une seule fois pour toute la liste (avant : recalculées pour CHAQUE expédition)
+  const bounds = caisseDateBounds(datePreset, dateFrom, dateTo, operationalDay || undefined)
+  return (p: any): boolean => {
+    const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
+    const isNotCollected = portNotCollected(p)
+    if (isPortDu && isNotCollected && !isExplicitDateFilter) return true
+    const d = caisseParcelDate(p)
+    if (!d) return true
+    if (!bounds) return true
+    if (bounds.start && d < bounds.start) return false
+    if (bounds.end && d > bounds.end) return false
+    return true
+  }
 }
 
 /** Jours chargés pour les filtres larges (durée maximale avant archivage automatique). */
@@ -164,7 +193,7 @@ export const firestoreBoundsFor = (
     return { from: new Date(dateFrom + 'T00:00:00'), to: opEnd(dateFrom) }
   }
   if (datePreset === 'operational' && operationalDay) {
-    const range = getOperationalDayRange(operationalDay)
+    const range = caisseOpDayRange(operationalDay)
     return { from: range.start, to: range.end }
   }
   if (datePreset === 'today') {
@@ -178,7 +207,11 @@ export const firestoreBoundsFor = (
 export const caissePeriodLabel = (
   datePreset: CaissePreset | string, dateFrom?: string, dateTo?: string, operationalDay?: Date | null,
 ): string => {
-  if (datePreset === 'operational' && operationalDay) return formatOperationalDay(operationalDay, true)
+  if (datePreset === 'operational' && operationalDay) {
+    return operationalDay.getDay() === 6
+      ? `${formatOperationalDay(operationalDay, false)} + dimanche (08:00 → lundi 06:00)`
+      : formatOperationalDay(operationalDay, true)
+  }
   if (datePreset === 'today') return "Aujourd'hui"
   if (datePreset === 'week') return '7 derniers jours'
   if (datePreset === 'month') return 'Ce mois'
@@ -217,13 +250,15 @@ export const ramasseGuichetEtat = (p: any): { label: string; tone: 'gare' | 'exp
     ? { label: `reçu chef d'agence${p.portReceivedBy ? ` · ${p.portReceivedBy}` : ''}`, tone: 'chef' }
     : p?.portPayeExpReceivedAt
       ? { label: `remis au chef d'exploitation${p.portPayeExpReceivedBy ? ` · ${p.portPayeExpReceivedBy}` : ''}`, tone: 'exp' }
-      : { label: 'chez « En gare » (à remettre)', tone: 'gare' }
+      : { label: p?.portGuichetHolderName ? `chez ${p.portGuichetHolderName} (à remettre)` : 'chez « En gare » (à remettre)', tone: 'gare' }
 
 // ── Statuts / montants ───────────────────────────────────────────────────────
 
 const RETURN_STATUSES = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
 const isReturnedForGroup = (p: any) => !!(p.returnedAt || p.wasReturned || p.status === 'Retourné')
 const isPortDuParcel = (p: any) => p.portType === 'port_du' && !p.portPayeMethod
+/** Port pas encore encaissé : aucun état, ou état « pending » (42 expéditions l'ont : elles étaient oubliées). */
+const portNotCollected = (p: any) => !p.portStatus || p.portStatus === 'pending'
 const isPortPayeParcel = (p: any) => p.portType === 'port_paye' && !p.portPayeMethod
 // 📅 Le vrai calcul commence au jour d'opération du 05/10/2026 (src/utils/moneyFlow.ts, MONEY_START) :
 // l'argent encaissé avant (essais) est exclu de tous les montants de caisse ; les expéditions restent.
@@ -259,9 +294,11 @@ export const isCaisseCodCollecte = (p: any, city: string): boolean =>
   !!p?.codStatus && p.codStatus !== 'pending' && !isCodMoneyBeforeStart(p)
   && safeParseAmount(p.codAmount) > 0 && !isReturnedForGroup(p) && p.destinationCity === city
 
-/** Journée d'opération ('YYYY-MM-DD') de la collecte du COD (codCollectedAt), ou null. */
+/** Journée d'opération ('YYYY-MM-DD') de la collecte du COD (codCollectedAt), ou null.
+ *  Collecte enregistrée sans date (ancienne modification admin) : date de réception par le chef d'exploitation —
+ *  MÊME repli que le Bilan (utils/bilanPeriode : codCollectedAt || codExpReceivedAt), mêmes montants partout. */
 export const codCollectDayKey = (p: any): string | null => {
-  const d = toDateSafe(p?.codCollectedAt)
+  const d = toDateSafe(p?.codCollectedAt) || toDateSafe(p?.codExpReceivedAt)
   return d ? getOperationalDayString(d) : null
 }
 
@@ -346,13 +383,20 @@ export const isRamasseGuichet = (p: any, city: string): boolean =>
   && p.status !== 'En cours de ramassage' && p.status !== 'Annulé'
   && safeParseAmount(p.price) > 0 && !isPortPayeMoneyBeforeStart(p)
 
-const portsPayesTotals = (parcels: any[], city: string, isGare = false) => {
+/**
+ * 🏬 Carte où se REÇOIT un port payé encaissé au guichet : la personne en gare de la ville qui détient l'argent
+ * (portGuichetHolderId, config/guichetHolders — 23/10/2026), sinon « En gare - <ville> ». null = pas un port du guichet.
+ */
+export const guichetGroupIdOf = (p: any, city: string): string | null =>
+  isRamasseGuichet(p, city) ? (p.portGuichetHolderId || GARE_GROUP_ID) : null
+
+const portsPayesTotals = (parcels: any[], city: string, groupId: string) => {
   const portsPayesParcels = parcels.filter(isPortPayeParcel)
-  // « Ramassés » à recevoir : livreur de ramassage, ou — carte « En gare » — guichet (pas encore reçu
-  // par le chef d'agence : chez la gare ou chez le chef d'exploitation)
+  // « Ramassés » à recevoir : livreur de ramassage, ou guichet — dans la carte de son détenteur (« En gare » sans
+  // détenteur) — pas encore reçu par le chef d'agence : chez la gare / le détenteur ou chez le chef d'exploitation
   const aRecevoir = portsPayesParcels.filter((p: any) => !isPortPayeMoneyBeforeStart(p) &&
-    p.originCity === city && (p.portStatus === 'collected' || !p.portStatus)
-    && (p.pickupDriverId || p.status === 'En cours de ramassage' || (isGare && isRamasseGuichet(p, city))))
+    p.originCity === city && (p.portStatus === 'collected' || portNotCollected(p))
+    && (p.pickupDriverId || p.status === 'En cours de ramassage' || guichetGroupIdOf(p, city) === groupId))
   const recus = portsPayesParcels.filter((p: any) => !isPortPayeMoneyBeforeStart(p) && p.originCity === city && p.portStatus === 'received')
   return {
     portsPayesParcels,
@@ -400,8 +444,20 @@ export const buildCaisseDrivers = (
     const isLocalPortPayeReceivedNoPickup = isPortPayeParcel(p) &&
       (p.createdByCity === city || p.originCity === city) && p.portStatus === 'received' && !p.pickupDriverId
     const hasNoDriver = !p.deliveryDriverId && !p.pickupDriverId
-    return ((hasNoDriver && (isInMyCity || isLocalPickup)) || isLocalPortPayeReceivedNoPickup || isRamasseGuichet(p, city))
+    // Port du guichet AVEC détenteur (rachida, ENGAREAGA6017…) : dans la carte du détenteur, plus dans « En gare »
+    const guichetHere = isRamasseGuichet(p, city) && !p.portGuichetHolderId
+    const receivedNoPickupHere = isLocalPortPayeReceivedNoPickup && !(isRamasseGuichet(p, city) && p.portGuichetHolderId)
+    return ((hasNoDriver && (isInMyCity || isLocalPickup)) || receivedNoPickupHere || guichetHere)
       && !isReturnedForGroup(p)
+  })
+
+  // 🏬 Ports payés du guichet tenus par la personne en gare de la ville : carte de cette personne (23/10/2026)
+  allParcels.forEach((p: any) => {
+    const holder = guichetGroupIdOf(p, city)
+    if (!holder || holder === GARE_GROUP_ID || isReturnedForGroup(p)) return
+    if (!driversMap.has(holder)) driversMap.set(holder, { id: holder, name: p.portGuichetHolderName || 'En gare', parcels: [] })
+    const g = driversMap.get(holder)!
+    if (!g.parcels.some((x: any) => x.id === p.id)) g.parcels.push(p)
   })
 
   const gareName = `En gare - ${city || ''}`
@@ -433,7 +489,7 @@ export const buildCaisseDrivers = (
       name: driver.name,
       parcels,
       portDuParcels,
-      ...portsPayesTotals(parcels, city, driver.id === GARE_GROUP_ID),
+      ...portsPayesTotals(parcels, city, driver.id),
       assignedTodayCount: assignedTodayOf(parcels, now).length,
       portsACollecterCount: portsACollecter.length,
       portsACollecterMontant: sumPrice(portsACollecter),
@@ -476,8 +532,8 @@ export const caisseStatusMatches = (p: any, statusFilter: string, driverId: stri
   if (isPortDu && p.status === 'En cours de livraison' && p.deliveryAssignedAt) isLate = toAssignDate(p.deliveryAssignedAt) < oneDayAgo
   switch (statusFilter) {
     case 'a_collecter':
-      if (driverId === GARE_GROUP_ID) return isPortDu && !p.portStatus && !isReturned
-      return isPortDu && !p.portStatus && isInDelivery && !isReturned
+      if (driverId === GARE_GROUP_ID) return isPortDu && portNotCollected(p) && !isReturned
+      return isPortDu && portNotCollected(p) && isInDelivery && !isReturned
     case 'collecte':
       return isPortDu && isCollected
     case 'en_compte':
@@ -529,7 +585,7 @@ export const filterCaisseDrivers = (
       portsCollectesMontant: sumPrice(portsCollectes),
       enRetardCount: enRetardOf(filteredPortDuParcels, now).length,
     }
-    if (extraFilter) Object.assign(out, portsPayesTotals(statusFilteredParcels, city, driver.id === GARE_GROUP_ID), { portDuParcels: filteredPortDuParcels })
+    if (extraFilter) Object.assign(out, portsPayesTotals(statusFilteredParcels, city, driver.id), { portDuParcels: filteredPortDuParcels })
     return out
   }).filter(d => d.parcels.length > 0)
   if (driverFilter !== 'all') result = result.filter(d => d.id === driverFilter)
@@ -603,7 +659,7 @@ export const caisseBilanJournee = (
       const livres = parcels.filter((p: any) => p.status === 'Livré')
       const enCours = parcels.filter((p: any) => p.status === 'En cours de livraison')
       // 🚨 Livrés non encaissés : port dû ET COD (RETOUR FOND) livrés mais pas encore collectés
-      const portsManquants = portDu.filter((p: any) => p.status === 'Livré' && !p.portStatus)
+      const portsManquants = portDu.filter((p: any) => p.status === 'Livré' && portNotCollected(p))
       const codTotal = caisseCodValueTotal
       const codsManquants = livres.filter(isCodLivreNonCollecte)
       const livresNonCollectes = [...new Map([...portsManquants, ...codsManquants].map((p: any) => [p.id, p])).values()]
@@ -654,7 +710,7 @@ export const caisseInstances = (
     const notReturned = !RETURN_STATUSES.includes(p.status)
     const enCours = p.status === 'En cours de livraison' || p.status === 'Arrivé en agence'
     const matchesDriver = driverFilter === 'all' || p.deliveryDriverId === driverFilter
-    return isPortDuParcel(p) && !p.portStatus && notReturned && enCours && p.destinationCity === city && matchesDriver &&
+    return isPortDuParcel(p) && portNotCollected(p) && notReturned && enCours && p.destinationCity === city && matchesDriver &&
       (!extraFilter || extraFilter(p))
   }).map((p: any) => {
     const ref = caisseParcelDate(p)
@@ -673,7 +729,16 @@ export interface CollecteJour {
   count: number; montant: number; parcels: any[]
   portDu: { count: number; montant: number }
   portPaye: { count: number; montant: number }
+  /** 💼 Versement à l'admin PAR JOUR DE COLLECTE : déjà versé / reste à verser (expéditions non encore versées) */
+  verse?: number
+  aVerser?: number
+  aVerserIds?: string[]
+  /** ⏳ Ports dus collectés ce jour-là mais PAS ENCORE REÇUS par le chef d'agence (chez le chef d'exploitation
+   *  ou les livreurs) — non versables tant qu'ils ne sont pas reçus (Caisse Agence seulement). */
+  nonRecu?: number
 }
+/** Expédition déjà comprise dans un versement à l'admin. */
+export const isAdminTransferred = (p: any): boolean => !!(p?.portAdminTransferred || p?.adminTransferred)
 
 /** Valeurs (COD) collectées sur une journée d'opération — montants par type (mixte : chaque part dans son type). */
 export interface CodCollecteJour { count: number; montant: number; especes: number; cheque: number; traite: number; parcels: any[] }
@@ -704,7 +769,17 @@ export interface CaisseViewInput {
   /** Filtres supplémentaires propres au Chef d'exploitation (origine / service / port / recherche). */
   extraFilter?: ((p: any) => boolean) | null
   now?: Date
+  /** 💼 Caisse Agence : comptes chef d'agence / agent pro de la ville. Fourni → « à verser » et solde ne comptent
+   *  que les ports dus RÉELLEMENT entre les mains du chef d'agence (reçus, ou encaissés par lui-même). Absent
+   *  (Chef d'exploitation) → tous les ports dus collectés, comme avant. */
+  agencyHolderIds?: Set<string> | null
 }
+
+/** 💼 Port dû entre les mains du chef d'agence : reçu (envoi validé / réception du livreur / ancien « received »)
+ *  ou encaissé directement par un compte chef d'agence / agent pro de la ville. Sans liste : toujours vrai. */
+export const isPortDuHeldByAgency = (p: any, agencyHolderIds?: Set<string> | null): boolean =>
+  !agencyHolderIds || !!p?.portChefReceivedAt || p?.portStatus === 'received' ||
+  (!!p?.portCollectedById && agencyHolderIds.has(p.portCollectedById))
 
 /** Source datée (onglet Livreurs) : période + « En gare » en attente + modifications locales. */
 export const caisseDataSource = (input: CaisseViewInput, passesDateFilter: (p: any) => boolean): any[] => {
@@ -732,15 +807,16 @@ export const computeCaisseView = (input: CaisseViewInput) => {
     city, allDisplayParcels, datePreset, dateFrom = '', dateTo = '', operationalDay = null,
     driverFilter = 'all', statusFilter = 'all', searchResults = null, modifiedParcels = {},
     extraCollectedParcels = {}, depotIds, deliveryDelays = [], extraFilter = null, now = new Date(),
-    recentCollected = [],
+    recentCollected = [], agencyHolderIds = null,
   } = input
+  const held = (p: any) => isPortDuHeldByAgency(p, agencyHolderIds)
   const searchMode = searchResults !== null
   const passesDateFilter = makePassesDateFilter(datePreset, dateFrom, dateTo, operationalDay)
   const dataSource = caisseDataSource(input, passesDateFilter)
   const extra = Object.values(extraCollectedParcels)
 
   // Stats globales de la source datée (plafond du versement)
-  const portsCollectesDs = dataSource.filter(p => isCollectedPortDuForCaisse(p, city))
+  const portsCollectesDs = dataSource.filter(p => isCollectedPortDuForCaisse(p, city) && held(p))
   const portsPayesRecusDs = dataSource.filter(p => isPortPayeCounted(p) && p.originCity === city && p.portStatus === 'received')
   const stats = {
     portsCollectesMontant: sumPrice(portsCollectesDs),
@@ -763,7 +839,7 @@ export const computeCaisseView = (input: CaisseViewInput) => {
   const isRamasseRemis = (p: any) => isRamasseGuichet(p, city) && !isReturnedForGroup(p) && p.portStatus === 'collected' && !!p.portPayeExpReceivedAt
   const ramassesAVerser = sumPrice(allWithExtra.filter(isRamasseRemis))
   const soldeCaisseGlobal = Math.max(0,
-    sumPrice(allWithExtra.filter(p => isCollectedPortDuForCaisse(p, city) && notTransferred(p))) +
+    sumPrice(allWithExtra.filter(p => isCollectedPortDuForCaisse(p, city) && notTransferred(p) && held(p))) +
     sumPrice(allWithExtra.filter(p => isPortPayeCounted(p) && p.originCity === city && p.portStatus === 'received')) +
     ramassesAVerser)
   // 🏬 Appartenance au livreur filtré. « En gare - <ville> » (GARE_GROUP_ID) n'est jamais un deliveryDriverId : le
@@ -775,10 +851,11 @@ export const computeCaisseView = (input: CaisseViewInput) => {
     ? (!p.deliveryDriverId || !!depotIds?.has(p.deliveryDriverId) || p.deliveryDriverName === gareName)
     : p.deliveryDriverId === driverFilter
   const soldeLivreur = driverFilter === 'all' ? 0 :
-    sumPrice(allWithExtra.filter(p => isCollectedPortDuForCaisse(p, city) && ofFilteredDriver(p) && notTransferred(p))) +
+    sumPrice(allWithExtra.filter(p => isCollectedPortDuForCaisse(p, city) && ofFilteredDriver(p) && notTransferred(p) && held(p))) +
     sumPrice(allWithExtra.filter(p => isPortPayeCounted(p) && p.originCity === city && p.portStatus === 'received' &&
       (p.pickupDriverId ? p.pickupDriverId === driverFilter : ofFilteredDriver(p)))) +
-    (driverFilter === GARE_GROUP_ID ? ramassesAVerser : 0)
+    // Ramassés au guichet remis : dans la carte de leur détenteur (« En gare » sans détenteur)
+    sumPrice(allWithExtra.filter(p => isRamasseRemis(p) && guichetGroupIdOf(p, city) === driverFilter))
 
   // Ports collectés à imprimer / à verser (source datée)
   const portsCollectesForPrint = withMods([...dataSource, ...extra], modifiedParcels)
@@ -787,9 +864,9 @@ export const computeCaisseView = (input: CaisseViewInput) => {
   const drivers = buildCaisseDrivers([...dataSource, ...extra], city, { depotIds, modifiedParcels, now })
   const filteredDrivers = filterCaisseDrivers(drivers, { city, passesDateFilter, statusFilter, driverFilter, searchMode, extraFilter, now })
   // 📬 Carte « Ramassés (En gare) » : ports payés ramassés au guichet, encaissés, sur la période / les filtres
-  const gareGroup = filteredDrivers.find(d => d.id === GARE_GROUP_ID)
-  const ramassesGare = (gareGroup?.parcels || []).filter((p: any) =>
-    isRamasseGuichet(p, city) && (p.portStatus === 'collected' || p.portStatus === 'received'))
+  // (« En gare » ET cartes des détenteurs du guichet — rachida, ENGAREAGA6017… : même total qu'avant le déplacement)
+  const ramassesGare = filteredDrivers.flatMap(d => d.parcels.filter((p: any) =>
+    guichetGroupIdOf(p, city) === d.id && (p.portStatus === 'collected' || p.portStatus === 'received')))
   const ramassesRemis = ramassesGare.filter((p: any) => p.portStatus === 'collected' && !!p.portPayeExpReceivedAt)
   const ramassesGareAVerser = sumPrice(ramassesRemis)
   const baseStats = caisseFilteredStats(filteredDrivers, driverFilter)
@@ -812,11 +889,18 @@ export const computeCaisseView = (input: CaisseViewInput) => {
   const addJour = (p: any, d: Date | null, kind: 'portDu' | 'portPaye') => {
     if (!d) return
     const key = getOperationalDayString(d)
-    const cur = parJour.get(key) || { count: 0, montant: 0, parcels: [] as any[], portDu: { count: 0, montant: 0 }, portPaye: { count: 0, montant: 0 } }
+    const cur = parJour.get(key) || { count: 0, montant: 0, parcels: [] as any[], portDu: { count: 0, montant: 0 }, portPaye: { count: 0, montant: 0 }, verse: 0, aVerser: 0, aVerserIds: [] as string[], nonRecu: 0 }
     const m = safeParseAmount(p.price)
     cur.parcels.push(p)
     cur.count++; cur.montant += m
     cur[kind].count++; cur[kind].montant += m
+    // 💼 Déjà versé à l'admin, encore à verser (versement par jour de collecte), ou pas encore reçu par le chef
+    // d'agence (port dû chez le chef d'exploitation / le livreur : non versable)
+    if (isAdminTransferred(p)) cur.verse = (cur.verse || 0) + m
+    else if (kind === 'portDu' && !held(p)) cur.nonRecu = (cur.nonRecu || 0) + m
+    // Caisse Agence : port payé ramassé pas encore REÇU par le chef d'agence (au guichet / chez le chef d'exploitation)
+    else if (kind === 'portPaye' && agencyHolderIds && p.portStatus !== 'received') cur.nonRecu = (cur.nonRecu || 0) + m
+    else { cur.aVerser = (cur.aVerser || 0) + m; cur.aVerserIds!.push(p.id) }
     parJour.set(key, cur)
   }
   collectSource.forEach((p: any) => {
@@ -826,15 +910,22 @@ export const computeCaisseView = (input: CaisseViewInput) => {
       addJour(p, toDateSafe(p.portCollectedAt) ?? toDateSafe(p.portReceivedAt), 'portDu')
     } else if (isRamasseGuichet(p, city) && !isReturnedForGroup(p)) {
       if (driverFilter !== 'all' && driverFilter !== GARE_GROUP_ID) return
-      // Seulement une fois REÇU de la gare (chef d'exploitation, ou chef d'agence en remplacement) : rangé au
-      // jour de cette réception, dans la même carte que les ports dus collectés ce jour-là. Pas encore reçu :
-      // absent de la carte (ce n'est pas encore une collecte).
-      const recu = toDateSafe(p.portPayeExpReceivedAt) ?? (p.portStatus === 'received' ? toDateSafe(p.portReceivedAt) : null)
-      if (!recu) return
-      addJour(p, recu, 'portPaye')
+      // 📅 Une somme = UNE journée : le jour d'ENCAISSEMENT au guichet (portCollectedAt), même si elle n'est remise au
+      // chef d'exploitation que plus tard (avant : jour de la remise — la même somme tombait sur une autre journée que
+      // dans le bilan). Anciennes données sans date d'encaissement : jour de la réception.
+      const when = toDateSafe(p.portCollectedAt) ?? toDateSafe(p.portPayeExpReceivedAt) ?? (p.portStatus === 'received' ? toDateSafe(p.portReceivedAt) : null)
+      if (!when) return
+      addJour(p, when, 'portPaye')
     }
   })
-  const collectesParJour = [...parJour.entries()].sort((a, b) => b[0].localeCompare(a[0])).slice(0, 14)
+  // 14 dernières journées + (Caisse Agence) toute journée plus ancienne qui a encore quelque chose à verser ou à
+  // recevoir : une journée non versée ne disparaît jamais de l'écran du chef d'agence.
+  const collectesParJour = [...parJour.entries()].sort((a, b) => b[0].localeCompare(a[0]))
+    .filter(([, d], i) => i < 14 || (!!agencyHolderIds && ((d.aVerser || 0) > 0 || (d.nonRecu || 0) > 0)))
+  // ⏳ Ports dus collectés, pas encore reçus par le chef d'agence (toutes journées chargées)
+  const nonRecuTotal = agencyHolderIds
+    ? sumPrice(collectSource.filter(p => isCollectedPortDuForCaisse(p, city) && notTransferred(p) && !held(p)))
+    : 0
 
   // Valeurs (COD) collectées par journée d'opération (14 dernières) — montants par type comme Caisse Agence
   // Bloc COD : rangé par JOUR DE COLLECTE comme « Collectes par jour » (complet sur 14 jours, quelle que soit la
@@ -845,7 +936,7 @@ export const computeCaisseView = (input: CaisseViewInput) => {
 
   return {
     passesDateFilter, dataSource, stats, soldeCaisseGlobal, soldeLivreur, portsCollectesForPrint,
-    drivers, filteredDrivers, filteredStats, bilanJournee, instances, collectesParJour, codCollectesParJour,
+    drivers, filteredDrivers, filteredStats, bilanJournee, instances, collectesParJour, codCollectesParJour, nonRecuTotal,
     /** Données chargées + collectées récemment hors période (envoi des valeurs du chef d'exploitation). */
     collectSource,
     periodLabel: caissePeriodLabel(datePreset, dateFrom, dateTo, operationalDay),

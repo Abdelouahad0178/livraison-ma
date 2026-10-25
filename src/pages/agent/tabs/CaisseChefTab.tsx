@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, useDeferredValue, startTransition } from 'react'
+import { docPartKeepingTotal } from '../../../utils/codParts'
 import PendingBadge from '../../../components/PendingBadge'
 import {
   Wallet, TrendingUp, AlertCircle, User, Package, Clock, Check, X,
@@ -20,28 +21,33 @@ import {
   subscribeDeliveryDelays
 } from '../../../firebase/delivery'
 import { collectPortDu, uncollectPortDu } from '../../../firebase/cod'
-import { updateParcel, searchParcels, subscribeAgencyReturnParcels, portTypeChangeFields } from '../../../firebase/parcels'
+import { updateParcel, searchParcels, subscribeAgencyReturnParcels, portTypeChangeFields, undoAutoDeliveryAfterUncollect } from '../../../firebase/parcels'
 import { useRecentCollected } from '../../../hooks/useRecentCollected'
 import { useAgencyParcelsFull } from '../../../hooks/useAgencyParcelsFull'
 import LoadProgress from '../../../components/LoadProgress'
-import { collection, query, where, onSnapshot, documentId, doc as fsDoc, getDoc } from 'firebase/firestore'
+import { collection, query, where, onSnapshot, documentId, doc as fsDoc, getDoc, arrayUnion, updateDoc, Timestamp } from 'firebase/firestore'
 import { db } from '../../../firebase/db'
 import { auth } from '../../../firebase/config'
 import { shouldTriggerSearch } from '../../../utils/searchUtils'
+import { deliveryCityBlock } from '../../../utils/deliveryCity'
 import { useDebounce } from '../../../components/DebouncedSearchInput'
-import { printPortsCollectes, printVersementParcels, printDriverExpeditionsTable, printBilanJournee, printInstancesRetards } from '../../../utils/agentPrintUtils'
+import { printVersementParcels, printDriverExpeditionsTable, printBilanJournee, printInstancesRetards } from '../../../utils/agentPrintUtils'
 import HScrollArrows from '../../../components/HScrollArrows'
 import DriverCaisseCard from '../../../components/caisse/DriverCaisseCard'
 import CollectesParJour, { CodCollectesParJour } from '../../../components/caisse/CollectesParJour'
-import CaisseSummaryCards from '../../../components/caisse/CaisseSummaryCards'
+import { CARD, SectionTitle } from '../../exploitation/ui'
 import { printFeuilleDeCharge } from '../../../utils/printFeuilleDeCharge'
 import { useGarePending } from '../../exploitation/useGarePending'
-import { useDepotIds } from '../../exploitation/useDepotIds'
+import { useDepotIds, useAgencyHolderIds } from '../../exploitation/useDepotIds'
 import {
-  firestoreBoundsFor, caisseFilterByDate, safeParseAmount, computeCaisseView,
+  firestoreBoundsFor, caisseFilterByDate, safeParseAmount, computeCaisseView, caisseDateBounds,
   caisseCodAmountOfType, caisseCodTotals, CAISSE_DEFAULT_PRESET, caisseDefaultOperationalDay, CAISSE_STATUS_OPTIONS,
-  isRamasseGuichet, GARE_GROUP_ID, ramasseGuichetEtat,
+  isRamasseGuichet, guichetGroupIdOf, GARE_GROUP_ID, ramasseGuichetEtat, toDateSafe, isPortDuHeldByAgency, isAdminTransferred,
 } from '../../../utils/agencyCaisseRules'
+import { getOperationalDayString } from '../../../config/operationalDay'
+import BilanPeriode from '../../../components/caisse/BilanPeriode'
+import { opDayKeyOf } from '../../../utils/versementPeriod'
+import { isPortDuMoneyBeforeStart } from '../../../utils/moneyFlow'
 import { isMixedCod, codPartsBreakdown, codCashPartOf, codDocPartOf, codEditResult } from '../../../utils/codParts'
 
 // Types
@@ -67,6 +73,8 @@ export default function CaisseChefTab() {
     profile,
     agentEntries,
     updateParcelOptimistic,
+    pendingVersements,
+    setTab,
   } = useAgentCtx()
 
   // État des onglets
@@ -122,8 +130,9 @@ export default function CaisseChefTab() {
     true, // journées passées en version allégée (parcelsLite), journée en cours complète
   )
   // 🧾 Collectées ces 14 derniers jours mais créées hors période → complètent les cartes « par jour »
-  const recentCollected = useRecentCollected(profile?.city,
-    caisseFromMs ? new Date(caisseFromMs) : null, caisseToMs ? new Date(caisseToMs) : null, isChefCaisse)
+  // ⚡ Gardées en mémoire / rattrapées (useRecentCollected) ; sur téléphone, lancées APRÈS la période affichée
+  const { docs: recentCollected, ready: recentReady } = useRecentCollected(profile?.city,
+    caisseFromMs ? new Date(caisseFromMs) : null, caisseToMs ? new Date(caisseToMs) : null, isChefCaisse, !caisseLoadingMore)
   const [caisseReturnParcels, setCaisseReturnParcels] = useState<any[]>([])
   useEffect(() => {
     if (!isChefCaisse || !profile?.city) return
@@ -142,14 +151,19 @@ export default function CaisseChefTab() {
   // 📬 Temps réel : ports payés ramassés au guichet encore « à verser » (portStatus collected) — une réception
   // ou une annulation faite par le chef d'exploitation se voit aussitôt, même sur une journée passée
   // (les journées passées sont sinon lues une seule fois à l'ouverture)
+  // ⚡ Bornée aux dates de la période affichée (mêmes bornes createdAt que le chargement) : seules les expéditions
+  // déjà présentes dans la page sont remplacées (allDisplayParcels) → résultat identique. Avant : toutes dates
+  // confondues, ≈ 540 expéditions complètes (1,3 Mo) lues à Agadir à chaque ouverture.
   const [liveRamasses, setLiveRamasses] = useState<Map<string, any>>(() => new Map())
   useEffect(() => {
     if (!isChefCaisse || !profile?.city) return
     const q = query(collection(db, 'parcels'),
-      where('originCity', '==', profile.city), where('portType', '==', 'port_paye'), where('portStatus', '==', 'collected'))
+      where('originCity', '==', profile.city), where('portType', '==', 'port_paye'), where('portStatus', '==', 'collected'),
+      ...(caisseFromMs ? [where('createdAt', '>=', Timestamp.fromMillis(caisseFromMs))] : []),
+      ...(caisseToMs ? [where('createdAt', '<=', Timestamp.fromMillis(caisseToMs))] : []))
     return onSnapshot(q, snap => startTransition(() => setLiveRamasses(new Map(snap.docs.map(d => [d.id, { id: d.id, ...d.data() }])))),
       err => console.error('CaisseChefTab ramassés temps réel:', err))
-  }, [isChefCaisse, profile?.city])
+  }, [isChefCaisse, profile?.city, caisseFromMs, caisseToMs])
 
   // 🔄 Temps réel : RÉCEPTIONS du chef d'exploitation des 2 derniers jours (ports dus, COD, ports payés ramassés) —
   // avant, une réception faite le soir sur une expédition d'une journée passée n'apparaissait dans Caisse Agence
@@ -165,10 +179,15 @@ export default function CaisseChefTab() {
     const put = (id: string, data: any) => startTransition(() => setLiveExpReceived(prev => new Map(prev).set(id, { id, ...data })))
     const watch = (cityField: string, dateField: string) => onSnapshot(
       query(collection(db, 'parcelsLite'), where(cityField, '==', city), where(dateField, '>=', sinceIso)),
-      snap => snap.docChanges().forEach(ch => {
-        if (ch.type === 'removed') getDoc(fsDoc(db, 'parcelsLite', ch.doc.id)).then(d => { if (d.exists()) put(d.id, d.data()) }).catch(() => {})
-        else put(ch.doc.id, ch.doc.data())
-      }),
+      snap => {
+        // ⚡ Une seule copie de la liste par signal (avant : une copie PAR expédition → coût quadratique à l'ouverture)
+        const ups: [string, any][] = []
+        snap.docChanges().forEach(ch => {
+          if (ch.type === 'removed') getDoc(fsDoc(db, 'parcelsLite', ch.doc.id)).then(d => { if (d.exists()) put(d.id, d.data()) }).catch(() => {})
+          else ups.push([ch.doc.id, ch.doc.data()])
+        })
+        if (ups.length) startTransition(() => setLiveExpReceived(prev => { const m = new Map(prev); ups.forEach(([id, d]) => m.set(id, { id, ...d })); return m }))
+      },
       err => console.error("CaisseChefTab réceptions chef d'exploitation temps réel:", err),
     )
     const unsubs = [
@@ -491,6 +510,7 @@ export default function CaisseChefTab() {
   // 🏬 Colis arrivés en attente en gare (hors fenêtre de dates) + comptes « Livreur en gare »
   const garePending = useGarePending(profile?.city)
   const depotIds = useDepotIds(profile?.city)
+  const agencyHolderIds = useAgencyHolderIds(profile?.city)
 
   // ⚖️ TOUS les calculs de l'écran (source datée, soldes, livreurs, totaux, bilan, instances,
   // collectes par jour) : computeCaisseView (src/utils/agencyCaisseRules.ts), la MÊME fonction que
@@ -507,13 +527,84 @@ export default function CaisseChefTab() {
     recentCollected,
     depotIds,
     deliveryDelays,
+    // 💼 « À verser » = seulement les ports dus réellement reçus par le chef d'agence
+    agencyHolderIds,
   }), [allDisplayParcels, garePending, datePreset, dateFrom, dateTo, operationalDay, driverFilter, statusFilter,
-    searchResults, modifiedParcels, extraCollectedParcels, recentCollected, depotIds, deliveryDelays, profile?.city])
+    searchResults, modifiedParcels, extraCollectedParcels, recentCollected, depotIds, deliveryDelays, agencyHolderIds, profile?.city])
   const {
     stats, soldeCaisseGlobal, soldeLivreur, portsCollectesForPrint, drivers, filteredDrivers,
-    bilanJournee, instances, collectesParJour, codCollectesParJour, periodLabel, statusFilterLabel,
+    bilanJournee, instances, collectesParJour, codCollectesParJour, periodLabel, statusFilterLabel, nonRecuTotal,
   } = caisseView
   const filteredStats = caisseView.filteredStats
+
+  // 💼 VERSEMENT À L'ADMIN PAR JOUR DE COLLECTE : la somme versée = ce qui a été collecté ce jour-là (même montant
+  // que la carte « Collectes par jour »), ports des expéditions du jour ET des expéditions antérieures.
+  const todayOpKey = getOperationalDayString(new Date())
+  const [versementDay, setVersementDay] = useState<string>('')
+  const dayKeys = useMemo(() => collectesParJour.map(([k]) => k), [collectesParJour])
+  // Par défaut : la plus ancienne journée qui reste à verser, sinon aujourd'hui
+  const defaultVersementDay = useMemo(() => {
+    const pending = collectesParJour.filter(([, d]) => (d.aVerser || 0) > 0).map(([k]) => k).sort()
+    return pending[0] || (dayKeys.includes(todayOpKey) ? todayOpKey : dayKeys[0] || todayOpKey)
+  }, [collectesParJour, dayKeys, todayOpKey])
+  const selectedVersementDay = versementDay && dayKeys.includes(versementDay) ? versementDay : defaultVersementDay
+  const verserDayData = useMemo(() => collectesParJour.find(([k]) => k === selectedVersementDay)?.[1] || null, [collectesParJour, selectedVersementDay])
+  const fmtKeyFr = (k: string) => k.split('-').reverse().join('/')
+  const verserJour = useMemo(() => {
+    const ids = new Set(verserDayData?.aVerserIds || [])
+    let duJour = 0
+    const anciens = new Map<string, number>()
+    ;(verserDayData?.parcels || []).forEach((p: any) => {
+      if (!ids.has(p.id)) return
+      const m = safeParseAmount(p.price)
+      const d = toDateSafe(p.createdAt)
+      const expDay = d ? getOperationalDayString(d) : ''
+      if (expDay === selectedVersementDay) duJour += m
+      else anciens.set(expDay || '?', (anciens.get(expDay || '?') || 0) + m)
+    })
+    return {
+      days: collectesParJour.map(([k, d]) => ({ key: k, label: fmtKeyFr(k), aVerser: d.aVerser || 0 })),
+      selected: selectedVersementDay,
+      onSelect: setVersementDay,
+      montant: verserDayData?.aVerser || 0,
+      duJour,
+      anciens: [...anciens.entries()].sort((a, b) => b[0].localeCompare(a[0])),
+      totalNonVerse: soldeCaisseGlobal,
+      nonRecu: verserDayData?.nonRecu || 0,
+      totalNonRecu: nonRecuTotal,
+    }
+  }, [verserDayData, selectedVersementDay, collectesParJour, soldeCaisseGlobal, nonRecuTotal])
+
+  // 💼 Versement EXCEPTIONNEL (une seule fois) fixé par l'admin : versementExceptions/{ville} = { dayKey, amount, used }
+  const [versementException, setVersementException] = useState<any>(null)
+  useEffect(() => {
+    if (!profile?.city) return
+    return onSnapshot(fsDoc(db, 'versementExceptions', profile.city),
+      s => setVersementException(s.exists() && !s.data()?.used ? { id: s.id, ...s.data() } : null),
+      () => setVersementException(null))
+  }, [profile?.city])
+  /** Exception active pour la journée choisie */
+  const activeException = versementException && versementException.dayKey === selectedVersementDay ? versementException : null
+
+  // 💼 Versement partiel = TOUJOURS des expéditions entières (les plus anciennes d'abord) : jamais d'écart non rattaché
+  const versementSplit = useMemo(() => {
+    const ids = new Set(verserDayData?.aVerserIds || [])
+    const list = (verserDayData?.parcels || []).filter((p: any) => ids.has(p.id))
+      .sort((a: any, b: any) => (toDateSafe(a.createdAt)?.getTime() || 0) - (toDateSafe(b.createdAt)?.getTime() || 0))
+    const total = Math.round(list.reduce((s: number, p: any) => s + safeParseAmount(p.price), 0) * 100) / 100
+    const typed = versementForm.amount === '' ? total : safeParseAmount(versementForm.amount)
+    let lower = 0
+    const lowerIds: string[] = []
+    let next: any = null
+    for (const p of list) {
+      const m = safeParseAmount(p.price)
+      if (lower + m > typed + 0.001) { next = p; break }
+      lower += m; lowerIds.push(p.id)
+    }
+    lower = Math.round(lower * 100) / 100
+    const upper = next ? Math.round((lower + safeParseAmount(next.price)) * 100) / 100 : lower
+    return { total, typed: Math.round(typed * 100) / 100, lower, lowerIds, upper, upperIds: next ? [...lowerIds, next.id] : lowerIds, exact: Math.abs(typed - lower) < 0.005 }
+  }, [verserDayData, versementForm.amount])
 
   // Toggle expansion d'un livreur
   const toggleDriver = (driverId: string) => {
@@ -621,7 +712,8 @@ export default function CaisseChefTab() {
     if (!confirm(question)) return
     setCollectingPortIds(prev => new Set(prev).add(parcel.id))
     try {
-      const fields = await fn()
+      const { linkedError, ...fields } = await fn()
+      if (linkedError) alert(`⚠️ ${nicOf(parcel)} : ${linkedError}`)
       setModifiedParcels(prev => ({ ...prev, [parcel.id]: { ...(prev[parcel.id] || {}), ...fields } }))
       updateParcelOptimistic(parcel.id, fields)
       if (searchResults) setSearchResults(prev => prev ? prev.map(p => p.id === parcel.id ? { ...p, ...fields } : p) : prev)
@@ -694,24 +786,62 @@ export default function CaisseChefTab() {
   }
   // Port dû : collecter (pas encore encaissé) ou recevoir (encaissé par le livreur / la gare), en remplacement
   // du chef d'exploitation — marqué à mon nom et écrit en caisse
+  // 🔗 Port dû espèces + COD 100 % espèces : collectés / reçus ENSEMBLE (même règle que le chef d'exploitation)
+  const linkedPair = (parcel: any) => parcel.portType === 'port_du' && !parcel.portPayeMethod
+    && (parseFloat(parcel.codAmount) || 0) > 0 && !parcel.codMixed
+    && !['cheque', 'traite', 'cod_cheque', 'cod_traite', 'bon_livraison', 'retour_bl'].includes(String(parcel.codPaymentType || parcel.serviceType || '').toLowerCase())
+  const linkedMsg = (parcel: any) => (linkedPair(parcel)
+    ? `\n\n🔗 Le port dû (${fmtAmt(parcel.price)} DH) et le RETOUR FOND espèces (${fmtAmt(parcel.codAmount)} DH) seront collectés ensemble.` : '')
+  const autoDeliverMsg = (parcel: any) => (parcel.status === 'En cours de livraison' || parcel.status === 'Arrivé en agence'
+    ? `\n\n📦 Encore « ${parcel.status} » : elle sera marquée « Livré » automatiquement.`
+    : parcel.status !== 'Livré' ? `\n\n⛔ Statut « ${parcel.status || '—'} » : une collecte sera refusée (l'expédition doit être livrée ou en cours de livraison).` : '')
   const handleCollectPort = (parcel: any) => runChefPort(parcel,
     `${parcel.portStatus === 'collected' ? 'Recevoir' : 'Collecter'} vous-même le port dû de ${fmtAmt(parcel.price)} DH (${nicOf(parcel)}), en l'absence du chef d'exploitation ?\n\nIl sera marqué reçu par vous (chef d'agence) et enregistré en caisse.`
-      + (parcel.status === 'En cours de livraison' ? '\n\n📦 Encore « En cours de livraison » : elle sera marquée « Livré » automatiquement.' : ''),
+      + autoDeliverMsg(parcel) + linkedMsg(parcel),
     () => chefReceivePortDu(parcel, chefActor))
   // 💰 COD (RETOUR FOND) : collecter (pas encore encaissé) ou recevoir (encaissé par le livreur / la gare), en
   // remplacement du chef d'exploitation — marqué à mon nom, part espèces écrite en caisse (chefReceiveCod)
   const handleCollectCod = (parcel: any) => runChefPort(parcel,
     `${parcel.codStatus === 'collected' ? 'Recevoir' : 'Collecter'} vous-même le RETOUR FOND de ${fmtAmt(parcel.codAmount)} DH (${nicOf(parcel)}), en l'absence du chef d'exploitation ?`
-      + (parcel.status === 'En cours de livraison' ? '\n\n📦 Encore « En cours de livraison » : elle sera marquée « Livré » automatiquement.'
-        : parcel.status !== 'Livré' ? `\n\n⚠️ Expédition pas encore livrée (statut : ${parcel.status || '—'}).` : '')
-      + '\n\nIl sera marqué reçu par vous (chef d\'agence) et la part espèces enregistrée en caisse.',
+      + autoDeliverMsg(parcel)
+      + '\n\nIl sera marqué reçu par vous (chef d\'agence) et la part espèces enregistrée en caisse.'
+      + linkedMsg(parcel),
     () => chefReceiveCod(parcel, chefActor))
+  // ✂️ Collecte « chèque + espèces » : part espèces saisie (total inchangé) → en caisse ; le reste = chèque / traite
+  const handleCollectCodSplit = (parcel: any) => {
+    const total = parseFloat(parcel.codAmount) || 0
+    const docLabel = String(parcel.serviceType) === 'traite' ? 'traite' : 'chèque'
+    const raw = window.prompt(`${nicOf(parcel)} — RETOUR FOND ${docLabel} de ${fmtAmt(total)} DH.
+
+Montant payé EN ESPÈCES par le destinataire (DH) ?
+Le reste sera le ${docLabel} (total inchangé).`)
+    if (raw === null) return
+    const cash = Number.parseFloat(String(raw).replace(',', '.'))
+    if (!Number.isFinite(cash) || cash <= 0 || cash >= total) { alert(`Montant espèces invalide : entre 0 et ${fmtAmt(total)} DH (exclus).`); return }
+    return runChefPort(parcel,
+      `Collecter vous-même ${nicOf(parcel)} :
+  💵 Espèces : ${fmtAmt(cash)} DH (en caisse)
+  📋 ${docLabel === 'traite' ? 'Traite' : 'Chèque'} : ${fmtAmt(Math.round((total - cash) * 100) / 100)} DH (encaisseur central)
+  = Total ${fmtAmt(total)} DH`
+        + autoDeliverMsg(parcel),
+      () => chefReceiveCod(parcel, chefActor, true, cash))
+  }
   const handleCancelCod = (parcel: any) => runChefPort(parcel,
-    `Annuler votre ${parcel.codCollectedById === uid ? 'collecte' : 'réception'} du RETOUR FOND de ${fmtAmt(parcel.codAmount)} DH (${nicOf(parcel)}) ?\n\nL'entrée de caisse sera supprimée.`,
+    `Annuler votre ${parcel.codCollectedById === uid ? 'collecte' : 'réception'} du RETOUR FOND de ${fmtAmt(parcel.codAmount)} DH (${nicOf(parcel)}) ?\n\nL'entrée de caisse sera supprimée.`
+      + (linkedPair(parcel) && parcel.portExpReceivedRole === 'chef_agence' && parcel.portChefReceivedById === uid ? `\n\n🔗 Le port dû lié (${fmtAmt(parcel.price)} DH) sera annulé aussi.` : ''),
     () => chefCancelCod(parcel, chefActor))
   /** Action COD sous le montant (tableau des livreurs) : Collecter / Recevoir / Reçu (+ Annuler si reçu par moi). */
+  // 🚚 Expédition livrée par MON agence (destination = ma ville ; une locale aussi) : seules celles-ci ont « Livrer »
+  // et la collecte du COD — une expédition partie vers une autre ville n'a ici que son port payé du guichet (23/10/2026)
+  const isDestinationHere = (p: any) => (p?.destinationCity || p?.receiver?.city) === profile?.city
+  // 🏬 Port payé encaissé AU GUICHET (pas par un livreur de ramassage) : « à recevoir », pas « à ramasser »
+  const isGuichetPP = (p: any) => !p?.pickupDriverId && isRamasseGuichet(p, profile?.city || '')
+  const ppLabel = (p: any) => (isGuichetPP(p) ? 'PP guichet' : 'PP à ramasser')
+
   const codActionCell = (parcel: any) => {
     if (!((parseFloat(parcel.codAmount) || 0) > 0) || parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné' || isCodMoneyBeforeStart(parcel)) return null
+    // 🚚 COD encaissé à la DESTINATION : rien à collecter / recevoir ici pour une expédition partie vers une autre ville
+    if (!isDestinationHere(parcel)) return null
     const busy = collectingPortIds.has(parcel.id)
     const st = parcel.codStatus
     if (st === 'remis' || st === 'regle') {
@@ -741,6 +871,13 @@ export default function CaisseChefTab() {
           className="text-[11px] px-2 py-0.5 rounded-lg font-medium transition disabled:opacity-50 bg-indigo-100 text-indigo-700 hover:bg-indigo-200">
           {busy ? '...' : st === 'collected' ? 'Recevoir' : 'Collecter'}
         </button>
+        {/* ✂️ Le destinataire a payé une partie en espèces : collecte « chèque + espèces » */}
+        {(!st || st === 'pending') && !isMixedCod(parcel) && ['cheque', 'traite'].includes(String(parcel.serviceType || '').toLowerCase()) && (
+          <button onClick={() => handleCollectCodSplit(parcel)} disabled={busy} title="Le destinataire a payé une partie en chèque / traite et le reste en espèces"
+            className="text-[11px] px-2 py-0.5 rounded-lg font-medium transition disabled:opacity-50 bg-amber-100 text-amber-800 hover:bg-amber-200">
+            ✂️ {String(parcel.serviceType) === 'traite' ? 'Traite' : 'Chèque'} + espèces
+          </button>
+        )}
       </div>
     )
   }
@@ -755,7 +892,8 @@ export default function CaisseChefTab() {
   const handleUncollectPort = async (parcel: any) => {
     // Reçu par moi en remplacement du chef d'exploitation : entrée de caisse supprimée
     if (parcel.portExpReceivedRole === 'chef_agence' && parcel.portChefReceivedById === uid) {
-      return runChefPort(parcel, `Annuler votre ${parcel.portCollectedById === uid ? 'collecte' : 'réception'} du port dû de ${fmtAmt(parcel.price)} DH (${nicOf(parcel)}) ?\n\nL'entrée de caisse sera supprimée.`,
+      return runChefPort(parcel, `Annuler votre ${parcel.portCollectedById === uid ? 'collecte' : 'réception'} du port dû de ${fmtAmt(parcel.price)} DH (${nicOf(parcel)}) ?\n\nL'entrée de caisse sera supprimée.`
+        + (linkedPair(parcel) && parcel.codStatus === 'remis' && parcel.codExpReceivedRole === 'chef_agence' && parcel.codChefReceivedById === uid ? `\n\n🔗 Le RETOUR FOND espèces lié (${fmtAmt(parcel.codAmount)} DH) sera annulé aussi.` : ''),
         () => chefCancelPortDu(parcel, chefActor))
     }
     if (parcel.portChefReceivedAt) { alert("Port dû reçu via un envoi du chef d'exploitation ou par un autre chef : annulation impossible ici."); return }
@@ -811,6 +949,12 @@ export default function CaisseChefTab() {
       console.log('🟢 [handleUncollectPort] Appel Firebase uncollectPortDu...')
       await uncollectPortDu(parcel.id, !!parcel.isArchived)
       console.log('✅ [handleUncollectPort] Firebase OK')
+      // ↩️ Livraison mise automatiquement par cette collecte : annulée aussi (statut + date de livraison)
+      const undone = !parcel.isArchived ? await undoAutoDeliveryAfterUncollect(parcel.id, profile?.name || '').catch(() => null) : null
+      if (undone) {
+        updateParcelOptimistic(parcel.id, undone)
+        if (searchResults) setSearchResults(prev => prev ? prev.map(p => p.id === parcel.id ? { ...p, ...undone } : p) : prev)
+      }
     } catch (err: any) {
       console.error('❌ [handleUncollectPort] ERREUR:', err)
       alert(`❌ Erreur: ${err.message}`)
@@ -847,6 +991,8 @@ export default function CaisseChefTab() {
 
   // Marquer une expédition comme livrée
   const handleMarkAsDelivered = async (parcel: any) => {
+    const blocked = deliveryCityBlock(profile?.role, profile?.city, parcel)
+    if (blocked) { alert(`❌ ${blocked}`); return }
     if (!confirm(`Confirmer la livraison de l'expédition ${parcel.senderNic || parcel.trackingId} ?`)) {
       return
     }
@@ -897,7 +1043,11 @@ export default function CaisseChefTab() {
       }
 
       console.log('🟢 [handleMarkAsDelivered] Appel Firebase updateParcel...')
-      await updateParcel(parcel.id, updatedData)
+      // Trace dans l'historique (qui a livré, quand) — hors mise à jour optimiste : le listener apporte la valeur finale
+      await updateParcel(parcel.id, {
+        ...updatedData,
+        history: arrayUnion({ status: 'Livré', timestamp: now, note: `Marqué livré par ${profile?.name || 'le chef d\'agence'} (caisse chef d'agence)` }),
+      })
       console.log('✅ [handleMarkAsDelivered] Firebase OK')
     } catch (err: any) {
       console.error('❌ [handleMarkAsDelivered] ERREUR:', err)
@@ -934,24 +1084,52 @@ export default function CaisseChefTab() {
 
   // Envoyer versement à l'admin
   const handleSendVersement = async () => {
-    const amount = safeParseAmount(versementForm.amount)
-
-    if (amount <= 0) {
-      alert('⚠️ Veuillez entrer un montant valide')
+    // 💼 Versement PAR JOUR DE COLLECTE : montant choisi par le chef d'agence (par défaut, le total de la journée),
+    // jamais plus que ce qui reste à verser pour cette journée
+    // ⭐ Exception autorisée par l'admin (une seule fois) : montant imposé, toutes les expéditions de la journée marquées
+    if (activeException) {
+      const exAmount = Math.round((Number(activeException.amount) || 0) * 100) / 100
+      const exIds = verserDayData?.aVerserIds || []
+      if (!(exAmount > 0)) return
+      if (!confirm(`Créer le versement EXCEPTIONNEL de ${fmtAmt(exAmount)} DH vers l'admin ?\n\nMontant autorisé une seule fois par l'admin pour les collectes du ${fmtKeyFr(selectedVersementDay)} (montant calculé : ${fmtAmt(verserDayData?.aVerser || 0)} DH).\n${exIds.length} expédition(s) seront marquées versées. Ensuite, le calcul redevient automatique.`)) return
+      setSendingVersement(true)
+      try {
+        const transferId = await createAdminTransferFromAgent({
+          fromId: uid, fromName: profile?.name || '', city: profile?.city, amount: exAmount,
+          note: `Collectes du ${fmtKeyFr(selectedVersementDay)} — versement exceptionnel autorisé par l'admin (calculé ${fmtAmt(verserDayData?.aVerser || 0)} DH)${versementForm.note ? ` — ${versementForm.note}` : ''}`,
+          codParcelIds: exIds,
+          kind: 'port', // ports collectés de la journée : seule la marque « port versé » (jamais « COD versé »)
+        })
+        await updateDoc(fsDoc(db, 'versementExceptions', profile?.city), { used: true, usedAt: new Date().toISOString(), usedBy: profile?.name || '', transferId })
+        setVersementForm({ amount: '', note: '' })
+        alert('✅ Versement exceptionnel créé ! En attente de validation admin.')
+      } catch (err: any) {
+        alert(`❌ Erreur: ${err.message}`)
+      } finally {
+        setSendingVersement(false)
+      }
       return
     }
 
-    if (amount > stats.soldeAVerser) {
-      alert(`⚠️ Le montant ne peut pas dépasser le solde disponible (${fmtAmt(stats.soldeAVerser)} DH)`)
+    const dayTotal = Math.round((verserDayData?.aVerser || 0) * 100) / 100
+    const typed = versementForm.amount === '' ? dayTotal : safeParseAmount(versementForm.amount)
+    const amount = Math.round(typed * 100) / 100
+    void portsCollectesForPrint
+    if (dayTotal <= 0) { alert(`⚠️ Rien à verser pour les collectes du ${fmtKeyFr(selectedVersementDay)}.`); return }
+    if (!(amount > 0)) { alert('⚠️ Veuillez entrer un montant valide.'); return }
+    if (amount > dayTotal + 0.001) { alert(`⚠️ Le montant ne peut pas dépasser ce qui reste à verser pour le ${fmtKeyFr(selectedVersementDay)} (${fmtAmt(dayTotal)} DH).`); return }
+
+    // Expéditions ENTIÈRES uniquement (les plus anciennes d'abord) : le montant doit tomber pile
+    if (!versementSplit.exact) {
+      alert(`⚠️ ${fmtAmt(amount)} DH ne correspond pas à des expéditions entières.\n\nChoisissez ${fmtAmt(versementSplit.lower)} DH ou ${fmtAmt(versementSplit.upper)} DH (boutons sous le montant).`)
       return
     }
+    const portsCollectesIds = versementSplit.lowerIds
+    const covered = versementSplit.lower
+    const partial = amount < dayTotal - 0.001
 
-    // 🆕 Récupérer les IDs des ports collectés non encore versés
-    const portsCollectesIds = portsCollectesForPrint
-      .filter((p: any) => !p.portAdminTransferred && !p.adminTransferred)
-      .map((p: any) => p.id)
-
-    if (!confirm(`Créer un versement de ${fmtAmt(amount)} DH vers l'admin ?\n\n${portsCollectesIds.length} port(s) collecté(s) seront marqués comme versés.`)) {
+    if (!confirm(`Créer un versement de ${fmtAmt(amount)} DH vers l'admin ?\n\nCollectes du ${fmtKeyFr(selectedVersementDay)} (total à verser : ${fmtAmt(dayTotal)} DH)`
+      + (partial ? `\n⚠️ Versement PARTIEL : ${portsCollectesIds.length} expédition(s) (${fmtAmt(covered)} DH) seront marquées versées ; il restera ${fmtAmt(dayTotal - covered)} DH à verser pour cette journée.` : `\n${portsCollectesIds.length} expédition(s) seront marquées versées.`))) {
       return
     }
 
@@ -962,8 +1140,9 @@ export default function CaisseChefTab() {
         fromName: profile?.name || '',
         city: profile?.city,
         amount,
-        note: versementForm.note || 'Versement caisse chef d\'agence',
+        note: `Collectes du ${fmtKeyFr(selectedVersementDay)}${partial ? ` (partiel ${fmtAmt(amount)} / ${fmtAmt(dayTotal)} DH)` : ''}${versementForm.note ? ` — ${versementForm.note}` : ''}`,
         codParcelIds: portsCollectesIds, // IDs des ports collectés à marquer comme versés
+        kind: 'port', // seule la marque « port versé » (avant : « COD versé » aussi, sur des COD non encaissés)
       })
 
       setVersementForm({ amount: '', note: '' })
@@ -1041,37 +1220,122 @@ export default function CaisseChefTab() {
     )
   }
 
+  // 📅 Journées d'opération du filtre (AAAA-MM-JJ) : « Personnalisé / Jour » = dates saisies, sinon bornes du préréglage
+  const filterKeys = (() => {
+    const bb = caisseDateBounds(datePreset, dateFrom, dateTo, operationalDay || undefined)
+    const fromKey = datePreset === 'all' ? null
+      : (datePreset === 'custom' || datePreset === 'day') ? (dateFrom || null)
+      : bb?.start ? getOperationalDayString(new Date(bb.start.getTime() + 2 * 3600e3)) : null
+    const toKey = datePreset === 'custom' ? (dateTo || todayOpKey) : datePreset === 'day' ? (dateFrom || null)
+      : bb ? getOperationalDayString(bb.end) : null
+    return { fromKey, toKey: fromKey ? toKey : null }
+  })()
+
+  // 💼 « À verser » à l'admin — même présentation que la Collecte du soir : argent DANS MA CAISSE (ports dus reçus ou
+  // encaissés par l'agence, ports payés ramassés reçus), pas encore versé à l'admin, encaissé / reçu pendant la
+  // période du filtre ; deux lignes : expéditions de la période / expéditions plus anciennes.
+  const city = profile?.city || ''
+  const inKeys = (k: string | null) => !filterKeys.fromKey || (!!k && k >= filterKeys.fromKey && k <= (filterKeys.toKey || filterKeys.fromKey))
+  const agenceAVerserDetail = (() => {
+    const seen = new Set<string>()
+    let pN = 0, pM = 0, oN = 0, oM = 0
+    for (const p of [...caisseView.collectSource, ...caisseView.dataSource]) {
+      if (!p?.id || seen.has(p.id)) continue
+      seen.add(p.id)
+      if (isAdminTransferred(p)) continue
+      const amount = safeParseAmount(p.price)
+      if (amount <= 0) continue
+      let dates: any[] = []
+      if (p.portType === 'port_du' && !p.portPayeMethod && p.destinationCity === city && (p.portStatus === 'collected' || p.portStatus === 'received')
+        && !isPortDuMoneyBeforeStart(p) && p.portDuReceivedMethod !== 'cheque' && isPortDuHeldByAgency(p, agencyHolderIds || new Set())) {
+        dates = [p.portCollectedAt || p.portExpReceivedAt || p.portChefReceivedAt]
+      } else if (isRamasseGuichet(p, city) && p.portStatus === 'received') {
+        dates = [p.portCollectedAt || p.portPayeExpReceivedAt || p.portReceivedAt]
+      } else continue
+      if (filterKeys.fromKey && !dates.some(d => inKeys(opDayKeyOf(d)))) continue
+      const expKey = opDayKeyOf(p.workDate ? `${p.workDate}T12:00:00` : p.createdAt)
+      if (!filterKeys.fromKey || inKeys(expKey)) { pN++; pM += amount } else { oN++; oM += amount }
+    }
+    const r = (n: number) => Math.round(n * 100) / 100
+    const one = filterKeys.fromKey && filterKeys.fromKey === filterKeys.toKey
+    return {
+      total: r(pM + oM),
+      note: filterKeys.fromKey
+        ? `Collectés ${one ? `le ${filterKeys.fromKey.split('-').reverse().join('/')}` : 'sur la période'} — ports dus + ports payés ramassés reçus, pas encore versés à l'admin`
+        : "Ports dus + ports payés ramassés reçus, pas encore versés à l'admin",
+      lines: [
+        { label: '📦 Expéditions de la période', n: pN, m: r(pM), hint: 'Expéditions de la période, dans votre caisse' },
+        { label: '💵 Expéditions plus anciennes', n: oN, m: r(oM), hint: 'Expéditions antérieures à la période, encaissées / reçues pendant la période' },
+      ],
+    }
+  })()
+
+  // 📅 Filtre de date de la caisse (même composant, mêmes réglages qu'avant dans l'onglet Livreurs) — affiché en haut
+  // et recopié au-dessus des cartes par jour (même état)
+  const dateFilterEl = (
+    <DateFilter value={datePresetUi} onChange={handleDatePresetChange} from={dateFromUi} onFromChange={setDateFrom}
+      to={dateToUi} onToChange={setDateTo} tone="blue" bare operationalMode
+      operationalDay={operationalDayUi} onOperationalDayChange={setOperationalDay} />
+  )
+
   return (
     <div className="space-y-4">
       <PendingBadge show={caisseFiltersPending} />
-      {/* En-tête : 3 cartes — composant commun avec la Collecte du soir (chef d'exploitation) */}
-      <CaisseSummaryCards stats={filteredStats}
-        aVerser={searchResults !== null ? filteredStats.soldeAVerser : (driverFilter === 'all' ? soldeCaisseGlobal : soldeLivreur)} />
-      {/* 📊 Collectes par jour (14 derniers jours) + détail imprimable — composant partagé avec la Collecte du soir */}
-      {/* + 💰 Valeurs (COD) collectées par jour — mêmes blocs, côte à côte, que la Collecte du soir */}
-      <div className="grid gap-4 lg:grid-cols-2 items-start">
-        <CollectesParJour collectesParJour={collectesParJour} profile={profile} />
-        <CodCollectesParJour codCollectesParJour={codCollectesParJour} profile={profile} />
+      {/* 🔁 MÊME DISPOSITION que la Collecte du soir du chef d'exploitation (demande de l'admin, 20/10/2026) :
+          filtre de date en haut · Bilan (résumé en bas) · section Caisse Agence avec la bande ② · cartes par jour
+          qui suivent le filtre. Propre au chef d'agence : versements à confirmer, « Pas encore reçu », onglets
+          Journée / Instances / Versements / Historique. */}
+      <div className={`${CARD} px-4 py-3`}>
+        <div className="mb-1.5 text-xs font-bold text-blue-800">📅 Période — Bilan, cartes par jour et livreurs</div>
+        {dateFilterEl}
       </div>
-
-      {/* Bouton d'impression des ports collectés */}
-      {portsCollectesForPrint.length > 0 && (
-        <div className="flex justify-end mb-3">
-          <button
-            onClick={() => printPortsCollectes(portsCollectesForPrint, profile)}
-            className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition font-semibold text-sm shadow-md"
-          >
-            <Printer className="w-4 h-4" />
-            Imprimer Ports Collectés{' '}
-            {datePreset === 'today' && 'Aujourd\'hui '}
-            {datePreset === 'week' && '(7 jours) '}
-            {datePreset === 'month' && 'Ce Mois '}
-            {datePreset === 'day' && dateFrom && `(${dateFrom}) `}
-            {datePreset === 'custom' && dateFrom && dateTo && `(${dateFrom} → ${dateTo}) `}
-            ({portsCollectesForPrint.length})
-          </button>
+      {/* 📅 Bilan de la date / période filtrée : théorique à encaisser, encaissé, à verser à l'admin (ports + COD) */}
+      <BilanPeriode periodParcels={caisseView.dataSource} moneyParcels={caisseView.collectSource} city={profile?.city || ''} role="agence"
+        fromKey={filterKeys.fromKey} toKey={filterKeys.toKey} label={periodLabel} agencyHolderIds={agencyHolderIds}
+        encaisseTargetId="bilan-encaisse-agence"
+        footer={(
+          <div className="w-full flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-2.5 text-left text-sm">
+            <span className="text-blue-800">💰 Ports dus <b className="tabular-nums">{fmtAmt(filteredStats.portsCollectesMontant + filteredStats.portsACollecterMontant)} DH</b> <span className="text-xs text-slate-500">(reste {fmtAmt(filteredStats.portsACollecterMontant)})</span></span>
+            <span className="text-indigo-800">📬 Ports payés <b className="tabular-nums">{fmtAmt(filteredStats.portsPayesRecusMontant + filteredStats.portsPayesARecevoirMontant)} DH</b></span>
+            <span className="text-purple-800">💼 À verser à l'admin <b className="tabular-nums">{fmtAmt(searchResults === null && driverFilter === 'all' ? agenceAVerserDetail.total : (searchResults !== null ? filteredStats.soldeAVerser : soldeLivreur))} DH</b></span>
+            {nonRecuTotal > 0 && <span className="text-orange-700" title="Encore chez le chef d'exploitation ou les livreurs">🚚 Pas encore reçu <b className="tabular-nums">{fmtAmt(nonRecuTotal)} DH</b></span>}
+            {filteredStats.enRetardCount > 0 && <span className="text-amber-700 font-semibold">⏰ {filteredStats.enRetardCount} en retard</span>}
+          </div>
+        )} />
+      {/* 📥 Versements du chef d'exploitation en attente de confirmation : l'argent n'entre en caisse qu'après « Reçu » */}
+      {pendingVersements?.n > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-xl border-2 border-violet-300 bg-violet-50 px-4 py-3">
+          <span className="text-2xl">📥</span>
+          <div className="flex-1 min-w-0 text-sm text-violet-900">
+            <b>{pendingVersements.n} versement{pendingVersements.n > 1 ? 's' : ''} du chef d'exploitation à confirmer</b>
+            {' '}— <b className="tabular-nums">{fmtAmt(pendingVersements.amount)} DH</b>
+            <div className="text-xs text-violet-700">Comptez l'argent reçu puis confirmez : il entrera alors dans votre caisse (et dans « À verser » à l'admin).</div>
+          </div>
+          <button type="button" onClick={() => setTab('valeurs')}
+            className="px-4 py-2 rounded-xl bg-violet-600 hover:bg-violet-700 text-white text-sm font-bold">Voir et confirmer</button>
         </div>
       )}
+      <section className={`${CARD} p-4 sm:p-5 space-y-4`}>
+        <SectionTitle emoji="🏛️" title="Caisse Agence"
+          subtitle={<>{periodLabel} — recevez les versements du chef d'exploitation, puis versez à l'admin 📤</>} />
+        {/* ② Encaissé à la date (bande du Bilan, déplacée ici — comme la Collecte du soir) */}
+        <div id="bilan-encaisse-agence" />
+      </section>
+
+      {/* 📅 Même filtre que le haut (changer l'un change l'autre) : la journée choisie est sélectionnée ci-dessous */}
+      <div className="rounded-xl border border-violet-200 bg-violet-50/50 px-4 py-3">
+        <div className="mb-1.5 text-xs font-bold text-violet-800">📅 Période — même filtre que le haut de la page</div>
+        {dateFilterEl}
+      </div>
+      {/* 📊 Collectes par jour + 💰 Valeurs (COD) collectées par jour — mêmes blocs, côte à côte, que la Collecte du soir */}
+      <div className="grid gap-4 lg:grid-cols-2 items-start">
+        {/* Versements cachés tant que les collectes des derniers jours ne sont pas toutes chargées (chiffres complets) */}
+        <CollectesParJour collectesParJour={collectesParJour} profile={profile} showVersement={driverFilter === 'all' && recentReady}
+          loadingRecent={!recentReady}
+          selectedRange={filterKeys.fromKey ? { fromKey: filterKeys.fromKey, toKey: filterKeys.toKey || filterKeys.fromKey } : null} />
+        <CodCollectesParJour codCollectesParJour={codCollectesParJour} profile={profile}
+          selectedRange={filterKeys.fromKey ? { fromKey: filterKeys.fromKey, toKey: filterKeys.toKey || filterKeys.fromKey } : null} />
+      </div>
 
       {/* ⏳ Chargement jusqu'à épuisement de la période sélectionnée */}
       {isChefCaisse && (
@@ -1142,20 +1406,7 @@ export default function CaisseChefTab() {
       {/* Contenu des onglets */}
       {activeTab === 'livreurs' && (
         <div className="space-y-4">
-          {/* Filtre date */}
-          <DateFilter
-            value={datePresetUi}
-            onChange={handleDatePresetChange}
-            from={dateFromUi}
-            onFromChange={setDateFrom}
-            to={dateToUi}
-            onToChange={setDateTo}
-            tone="blue"
-            operationalMode
-            operationalDay={operationalDayUi}
-            onOperationalDayChange={setOperationalDay}
-          />
-
+          {/* (Filtre de date déplacé en haut de la page — même filtre) */}
           {/* Filtres */}
           <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
             <div className="flex items-center gap-3 flex-wrap">
@@ -1347,7 +1598,7 @@ export default function CaisseChefTab() {
                                   </span>
                                 ) : isPortPayeRamasse || isPortPayeRecu ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-100 text-teal-700 text-xs font-medium">
-                                    PP à ramasser
+                                    {ppLabel(parcel)}
                                   </span>
                                 ) : (
                                   <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-xs font-medium">
@@ -1414,7 +1665,7 @@ export default function CaisseChefTab() {
                                             )}
                                           </button>
 
-                                          {parcel.status === 'En cours de livraison' && (
+                                          {parcel.status === 'En cours de livraison' && isDestinationHere(parcel) && (
                                             <button
                                               onClick={() => handleMarkAsDelivered(parcel)}
                                               disabled={deliveringParcelIds.has(parcel.id)}
@@ -1614,7 +1865,7 @@ export default function CaisseChefTab() {
                                       </span>
                                     ) : isPortPayeRamasse || isPortPayeRecu ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-100 text-teal-700 text-xs font-medium">
-                                        PP à ramasser
+                                        {ppLabel(parcel)}
                                       </span>
                                     ) : (
                                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-blue-100 text-blue-700 text-xs font-medium">
@@ -1643,7 +1894,7 @@ export default function CaisseChefTab() {
                                     ) : isPortPayeRamasse ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-indigo-100 text-indigo-700 text-xs font-semibold">
                                         <Banknote className="w-3 h-3" />
-                                        {parcel.portPayeExpReceivedAt ? "Reçu chef d'exploitation" : 'À ramasser'}
+                                        {parcel.portPayeExpReceivedAt ? "Reçu chef d'exploitation" : isGuichetPP(parcel) ? 'À recevoir' : 'À ramasser'}
                                       </span>
                                     ) : !isPortDu && (parcel.portType === 'port_en_compte_destinataire' || parcel.portType === 'port_en_compte_expediteur') ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-purple-100 text-purple-700 text-xs font-semibold">
@@ -1705,8 +1956,8 @@ export default function CaisseChefTab() {
                                         <>
                                           {/* 🏬 Port payé encaissé AU GUICHET : l'argent est chez « En gare » (reçu dans SA carte), pas chez ce livreur —
                                               même règle que la Collecte du soir ; l'expédition reste visible ici pour le suivi de sa livraison */}
-                                          {(driver.id !== GARE_GROUP_ID && isRamasseGuichet(parcel, profile?.city || '') && !parcel.pickupDriverId) ? (
-                                            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${ramasseGuichetEtat(parcel).tone === 'gare' ? 'bg-amber-100 text-amber-800' : ramasseGuichetEtat(parcel).tone === 'exp' ? 'bg-indigo-100 text-indigo-700' : 'bg-green-100 text-green-700'}`} title="Port payé encaissé au guichet : il se reçoit dans la carte « En gare »">Payé au guichet · {ramasseGuichetEtat(parcel).label}</span>
+                                          {(guichetGroupIdOf(parcel, profile?.city || '') && guichetGroupIdOf(parcel, profile?.city || '') !== driver.id) ? (
+                                            <span className={`text-[11px] font-semibold px-2 py-0.5 rounded-full ${ramasseGuichetEtat(parcel).tone === 'gare' ? 'bg-amber-100 text-amber-800' : ramasseGuichetEtat(parcel).tone === 'exp' ? 'bg-indigo-100 text-indigo-700' : 'bg-green-100 text-green-700'}`} title={`Port payé encaissé au guichet : il se reçoit dans la carte « ${parcel.portGuichetHolderName || 'En gare'} »`}>Payé au guichet · {ramasseGuichetEtat(parcel).label}</span>
                                           ) : isPortPayeRecu ? (
                                             <button
                                               onClick={() => handleUncollectPortPaye(parcel)}
@@ -1769,8 +2020,8 @@ export default function CaisseChefTab() {
                                               )}
                                             </>
                                           )}
-                                          {/* Bouton Livrer pour toutes les expéditions */}
-                                          {parcel.status !== 'Livré' && parcel.status !== 'Retourné' && (
+                                          {/* Bouton Livrer : seulement les expéditions livrées par MON agence (destination = ma ville, ou locale) */}
+                                          {parcel.status !== 'Livré' && parcel.status !== 'Retourné' && isDestinationHere(parcel) && (
                                             <button
                                               onClick={() => handleMarkAsDelivered(parcel)}
                                               disabled={deliveringParcelIds.has(parcel.id)}
@@ -2094,7 +2345,7 @@ export default function CaisseChefTab() {
                     </th>
                   </tr>
                   <tr>
-                    <th className="px-4 py-3 text-left font-semibold">Âge</th>
+                    <th className="px-4 py-3 text-left font-semibold">Depuis</th>
                     <th className="px-4 py-3 text-left font-semibold">N° EXP</th>
                     <th className="px-4 py-3 text-left font-semibold">Livreur</th>
                     <th className="px-4 py-3 text-right font-semibold">Montant</th>
@@ -2120,8 +2371,8 @@ export default function CaisseChefTab() {
                       return (
                         <tr key={parcel.id} className={idx % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                           <td className="px-4 py-3">
-                            <span className={`px-2 py-1 rounded text-xs font-bold ${badgeColor}`}>
-                              {ageJours}j
+                            <span title={`${ageJours} jour${ageJours > 1 ? 's' : ''}`} className={`px-2 py-1 rounded text-xs font-bold whitespace-nowrap ${badgeColor}`}>
+                              depuis le {new Date(Date.now() - ageJours * 86400000).toLocaleDateString('fr-FR')}
                             </span>
                           </td>
                           <td className="px-4 py-3 font-mono text-xs font-semibold text-blue-600">
@@ -2209,19 +2460,55 @@ export default function CaisseChefTab() {
             <div className="space-y-4">
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Montant (DH)
+                  Journée de collecte à verser
                 </label>
+                <select value={selectedVersementDay} onChange={e => { setVersementDay(e.target.value); setVersementForm(f => ({ ...f, amount: "" })) }}
+                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-blue-500 text-sm font-semibold">
+                  {verserJour.days.map(d => <option key={d.key} value={d.key}>Collectes du {d.label}{d.aVerser > 0 ? ` — ${fmtAmt(d.aVerser)} DH à verser` : ' — déjà versé ✅'}</option>)}
+                </select>
+                <div className="mt-3 rounded-lg bg-blue-50 border border-blue-100 p-3 text-sm">
+                  {activeException && (
+                    <div className="mb-2 rounded-md bg-amber-100 border border-amber-300 px-2 py-1.5 text-xs font-bold text-amber-900">
+                      ⭐ Versement exceptionnel autorisé par l'admin (une seule fois) : <span className="tabular-nums">{fmtAmt(Number(activeException.amount) || 0)} DH</span> au lieu de {fmtAmt(verserJour.montant)} DH
+                    </div>
+                  )}
+                  <div className="flex justify-between"><span className="text-gray-700">Montant à verser</span><b className="text-blue-800 text-lg tabular-nums">{fmtAmt(activeException ? (Number(activeException.amount) || 0) : verserJour.montant)} DH</b></div>
+                  <div className="flex justify-between text-xs text-gray-600 mt-1"><span>dont expéditions du jour</span><span className="tabular-nums">{fmtAmt(verserJour.duJour)} DH</span></div>
+                  <div className="flex justify-between text-xs text-gray-600"><span>dont expéditions antérieures</span><span className="tabular-nums">{fmtAmt(verserJour.montant - verserJour.duJour)} DH</span></div>
+                </div>
+                {!activeException && (<>
+                <label className="block text-sm font-medium text-gray-700 mt-3 mb-1">Montant versé (DH)</label>
                 <input
-                  type="number"
-                  step="0.01"
+                  type="number" step="0.01" min="0" max={verserJour.montant}
                   value={versementForm.amount}
                   onChange={(e) => setVersementForm({ ...versementForm, amount: e.target.value })}
-                  placeholder={`Max: ${fmtAmt(stats.soldeAVerser)} DH`}
+                  placeholder={`${fmtAmt(verserJour.montant)} (total de la journée)`}
                   className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-blue-500"
                 />
-                <p className="text-xs text-gray-500 mt-1">
-                  Solde disponible: <span className="font-semibold text-blue-600">{fmtAmt(stats.soldeAVerser)} DH</span>
+                {versementForm.amount !== '' && !versementSplit.exact && versementSplit.total > 0 && (
+                  <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2 text-xs text-amber-900">
+                    {fmtAmt(versementSplit.typed)} DH ne correspond pas à des expéditions entières. Choisissez :
+                    <div className="mt-1.5 flex flex-wrap gap-2">
+                      {versementSplit.lower > 0 && (
+                        <button type="button" onClick={() => setVersementForm(f => ({ ...f, amount: String(versementSplit.lower) }))}
+                          className="px-2.5 py-1 rounded-lg bg-white border border-amber-300 font-bold hover:bg-amber-100">
+                          {fmtAmt(versementSplit.lower)} DH ({versementSplit.lowerIds.length} exp.)
+                        </button>
+                      )}
+                      {versementSplit.upper > versementSplit.lower && (
+                        <button type="button" onClick={() => setVersementForm(f => ({ ...f, amount: String(versementSplit.upper) }))}
+                          className="px-2.5 py-1 rounded-lg bg-white border border-amber-300 font-bold hover:bg-amber-100">
+                          {fmtAmt(versementSplit.upper)} DH ({versementSplit.upperIds.length} exp.)
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+                <p className="text-[11px] text-gray-500 mt-1">
+                  Vide = le total de la journée ({fmtAmt(verserJour.montant)} DH). Un montant plus petit fait un versement <b>partiel</b>,
+                  toujours en <b>expéditions entières</b> (les plus anciennes d'abord) : les autres restent « à verser ».
                 </p>
+                </>)}
               </div>
 
               <div>
@@ -2239,7 +2526,7 @@ export default function CaisseChefTab() {
 
               <button
                 onClick={handleSendVersement}
-                disabled={sendingVersement || !versementForm.amount}
+                disabled={sendingVersement || !(verserJour.montant > 0)}
                 className="w-full bg-blue-600 text-white px-4 py-3 rounded-lg font-semibold hover:bg-blue-700 transition disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {sendingVersement ? (
@@ -2558,7 +2845,7 @@ export default function CaisseChefTab() {
                   <input
                     type="number"
                     value={quickEditModal.codCashAmount || ''}
-                    onChange={e => setQuickEditModal(m => ({ ...m, codCashAmount: e.target.value, error: '' }))}
+                    onChange={e => { const v = e.target.value; setQuickEditModal(m => ({ ...m, codCashAmount: v, codAmount: docPartKeepingTotal(m.codAmount, m.codCashAmount, v), error: '' })) }}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-green-500"
                   />
                 </div>
@@ -2605,7 +2892,9 @@ export default function CaisseChefTab() {
                     }
 
                     if (quickEditModal.portType && quickEditModal.portType !== quickEditModal.parcel.portType) {
-                      Object.assign(updates, portTypeChangeFields(quickEditModal.parcel, quickEditModal.portType, { uid: auth.currentUser?.uid || null, name: profile?.name || "Chef d'agence" }))
+                      // 🔒 État RELU (pas celui de l'écran) : un port encaissé entre-temps refuse le changement de type
+                      const fresh = (await getDoc(fsDoc(db, 'parcels', quickEditModal.parcel.id))).data() || {}
+                      Object.assign(updates, portTypeChangeFields({ ...quickEditModal.parcel, ...fresh }, quickEditModal.portType, { uid: auth.currentUser?.uid || null, name: profile?.name || "Chef d'agence" }))
                     }
 
                     if (quickEditModal.codMixed) {

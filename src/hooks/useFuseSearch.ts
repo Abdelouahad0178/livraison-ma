@@ -66,7 +66,7 @@ export interface FuseSearchResult<T> {
   /** Recherche après debounce */
   debouncedSearch: string
   /** Lance immédiatement la recherche du terme actuel (ignore shouldSearch) */
-  forceSearch?: () => void
+  forceSearch?: (value?: string) => void
 
   /** Résultats filtrés et scorés */
   results: T[]
@@ -226,7 +226,8 @@ export function useFuseSearch<T>({
     search,
     setSearch,
     debouncedSearch,
-    forceSearch: () => setDebouncedSearch(search),
+    // ⏎ Recherche forcée (N° de moins de 7 chiffres) : texte passé par l'appelant, sinon le texte courant
+    forceSearch: (value?: string) => setDebouncedSearch(typeof value === 'string' ? value : search),
     results,
     detailedResults,
     isSearching,

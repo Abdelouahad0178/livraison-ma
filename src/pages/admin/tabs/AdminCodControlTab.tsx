@@ -410,6 +410,12 @@ ${rows.map(r => `<tr>${cols.map(c => `<td${c.includes('DH') ? ' class="r"' : ''}
                       <td className="px-3 py-2 whitespace-nowrap">
                         <span className="font-bold text-orange-600">{fmt(codTotalOf(p))} DH</span>
                         {isMixedCod(p) && <span className="block text-[11px] font-semibold text-orange-500">{codPartsBreakdown(p)}</span>}
+                        {p.codDocMismatch === true && (
+                          <span className="block mt-0.5 rounded bg-amber-100 border border-amber-300 px-1 text-[10px] font-bold text-amber-800"
+                            title={`Signalé par ${p.codDocMismatchBy || '—'}${p.codDocMismatchNote ? ` : ${p.codDocMismatchNote}` : ''} — à corriger : « Modifier l'expédition » → + Espèces`}>
+                            ⚠️ Chèque reçu {Number(p.codDocMismatchReceived || 0).toLocaleString('fr-MA')} DH · reste {Number(p.codDocMismatchCash || 0).toLocaleString('fr-MA')} DH en espèces{isMixedCod(p) ? ' (✓ corrigé en mixte)' : ''}
+                          </span>
+                        )}
                       </td>
                       <td className="px-3 py-2"><span title={meta.help} className={`inline-block text-xs font-semibold px-2 py-0.5 rounded-full border whitespace-nowrap ${meta.badge}`}>{meta.n ? `${meta.n}. ` : ''}{meta.label}</span></td>
                       <td className="px-3 py-2 text-xs text-gray-600">

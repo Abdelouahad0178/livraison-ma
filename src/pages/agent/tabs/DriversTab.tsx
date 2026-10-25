@@ -1,4 +1,5 @@
 import DateInput from '../../../components/DateInput'
+import { ParcelParties } from '../../../components/ParcelParties'
 import { Banknote, Trash2, CheckSquare, Square, X, CheckCircle } from 'lucide-react'
 import { useState } from 'react'
 import { useAgentCtx } from '../AgentCtx'
@@ -310,7 +311,7 @@ export default function DriversTab() {
                     <p className="text-sm font-bold text-gray-800 font-mono">{p.trackingId}</p>
                     <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-semibold">Port dû</span>
                   </div>
-                  <p className="text-xs text-gray-500 mt-0.5">{p.sender?.name} → {p.receiver?.name}</p>
+                  <ParcelParties parcel={p} className="mt-0.5" />
                   <p className="text-xs text-indigo-500 mt-0.5">🚴 {p.portCollectedBy || '—'} · {fmtD(p.portCollectedAt)}</p>
                 </div>
                 <div className="text-right shrink-0">
@@ -351,7 +352,7 @@ export default function DriversTab() {
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-bold text-gray-700 font-mono">{p.trackingId}</p>
                   </div>
-                  <p className="text-xs text-gray-500 mt-0.5">{p.sender?.name} → {p.receiver?.name}</p>
+                  <ParcelParties parcel={p} className="mt-0.5" />
                   <p className="text-xs text-gray-400 mt-0.5">Réceptionné le {fmtD(p.portChefReceivedAt)} · par {p.portChefReceivedBy}</p>
                 </div>
                 <p className="text-sm font-black text-green-700 shrink-0">{fmtAmt(p.price || 0)} DH</p>
@@ -383,7 +384,7 @@ export default function DriversTab() {
                 <div key={p.id} className="flex items-center justify-between px-4 py-3 gap-3">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-bold text-gray-800 font-mono">{p.trackingId}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">{p.sender?.name} → {p.receiver?.name}</p>
+                    <ParcelParties parcel={p} className="mt-0.5" />
                     <p className="text-xs text-indigo-500 mt-0.5">🚴 {p.deliveryDriverName || p.portCollectedBy || '—'}</p>
                   </div>
                   <div className="text-right shrink-0">

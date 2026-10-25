@@ -161,7 +161,7 @@ export function codAnomaliesOf(p: any, days: number, now: number = Date.now()): 
 
 // ── Filtres ──────────────────────────────────────────────────────────────────
 
-export type CodTypeFilter = 'all' | 'especes' | 'cheque' | 'traite' | 'bon_livraison' | 'mixte'
+export type CodTypeFilter = 'all' | 'especes' | 'cheque' | 'traite' | 'bon_livraison' | 'mixte' | 'signale'
 export const COD_TYPE_FILTERS: { key: CodTypeFilter; label: string }[] = [
   { key: 'all', label: 'Tous' },
   { key: 'especes', label: '💵 Espèces' },
@@ -169,12 +169,15 @@ export const COD_TYPE_FILTERS: { key: CodTypeFilter; label: string }[] = [
   { key: 'traite', label: '📝 Traite' },
   { key: 'bon_livraison', label: '🧾 Retour BL' },
   { key: 'mixte', label: '💵+📋 Mixte' },
+  { key: 'signale', label: '⚠️ Chèque + espèces signalé' },
 ]
 
 /** Type de COD (même règle que les pages COD : un mixte apparaît sous Espèces ET sous son document). */
 export const codTypeMatches = (p: any, t: CodTypeFilter | string): boolean => {
   if (t === 'all') return true
   if (t === 'mixte') return isMixedCod(p)
+  // ⚠️ Signalé par l'encaisseur central / l'analyseur chèque : chèque reçu < attendu, le reste payé en espèces
+  if (t === 'signale') return p?.codDocMismatch === true
   return codPaymentTypeOf(p) === t || codHasType(p, t)
 }
 

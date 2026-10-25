@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth'
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth'
 import { auth } from '../firebase/auth'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { Lock, Mail, User, ChevronDown, MapPin, Phone } from 'lucide-react'
@@ -159,8 +159,12 @@ export default function LoginPage() {
       else if (r === 'distributeur_especes') navigate('/drfe')
       else if (r === 'distributeur_cheques') navigate('/drfc')
       else if (r === 'facturier')            navigate('/facturier')
-      else if (r === 'chauffeur')            navigate('/driver')
-      else if (r === 'livreur')              navigate('/driver')
+      else if (r === 'chauffeur' || r === 'livreur') {
+        // 🚫 Page Livreur / Chauffeur retirée du site (23/10/2026) : pas d'espace en ligne pour ces comptes
+        await signOut(auth)
+        setError("L'espace Livreur n'est plus disponible sur le site. Adressez-vous à votre chef d'agence.")
+        return
+      }
       else if (r === 'livreur-gare')         navigate('/gare-driver')
       else if (r === 'directeur')            navigate('/director')
       else if (r === 'caissier')             navigate('/caissier')

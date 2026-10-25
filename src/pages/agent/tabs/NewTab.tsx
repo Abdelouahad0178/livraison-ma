@@ -1,3 +1,4 @@
+import { useParcelEntryFocus } from '../hooks/useParcelEntryFocus'
 import DateInput from '../../../components/DateInput'
 import { lazy, Suspense, useState, useEffect, useMemo, useRef, startTransition, type RefObject } from 'react'
 import { Calendar, Search, X, Plus, MapPin, ChevronDown, Check, MessageCircle, Printer } from 'lucide-react'
@@ -8,7 +9,6 @@ import type { Client } from '../../../firebase/clients'
 // Autocomplétion et reconnaissance vocale désactivées pour optimiser performances
 // import ClientAutocomplete from '../../../components/ClientAutocomplete'
 // import { searchExpediteurs, searchDestinataires } from '../../../firebase/clients'
-// import VoiceInputAI from '../../../components/VoiceInputAI'
 import { collection, query, where, getDocs, limit } from 'firebase/firestore'
 import { db, auth } from '../../../firebase/config'
 import { getWorkingDateStr } from '../../../utils/workingDate'
@@ -21,6 +21,7 @@ import { analyzeNbColisShortcut, nbColisDigitsOnly, NB_COLIS_SHORTCUT_HINT, NB_C
 import { buildCityInitialsMap, matchCityInitials, CITY_INITIALS_DELAY_MS } from '../../../utils/cityInitials'
 import { getEmptyParcelForm, isParcelFormEmpty } from '../emptyParcelForm'
 import NbColisShortcutHelp from '../components/NbColisShortcutHelp'
+import { CitySelect } from '../../../components/CitySelect'
 
 const Barcode = lazy(() => import('react-barcode'))
 const QRCodeSVG = lazy(() => import('../../../components/QRCodeSvg'))
@@ -107,7 +108,7 @@ function NicInput({ inputRef, value, onCommit, onBlur, onKeyDown, className }: {
 
 export default function NewTab() {
   const {
-    profile, ticketRef,
+    profile, ticketRef, adminSaisie, setAdminCity,
     form, setForm, f, loading, error, handleSubmit,
     clients, clientSearch, setClientSearch,
     ensureCityClients, lookupClients,
@@ -149,29 +150,7 @@ export default function NewTab() {
   // ↩️ Une tentative de création a été refusée (champ oublié : contrôle du navigateur OU contrôle
   // de l'application) → Entrée renvoie directement au bouton « Créer l'Expédition ».
   const [retryAfterRefusal, setRetryAfterRefusal] = useState(false)
-  // 🎯 « + Saisie colis » : curseur directement dans le champ N° EXP (NIC), à l'ouverture de
-  // l'onglet comme à chaque nouveau clic sur le bouton.
-  useEffect(() => {
-    // Le formulaire se construit en plusieurs temps au premier affichage (chargement de l'onglet,
-    // clients, en-têtes…) : on recentre le champ N° EXP plusieurs fois pendant ~1,5 s, tant que
-    // l'utilisateur n'a pas commencé à saisir ailleurs.
-    const focusNexp = () => {
-      const show = () => {
-        const el = nexpInputRef.current
-        if (!el) return
-        const active = document.activeElement as HTMLElement | null
-        if (active && active !== el && active !== document.body && active.closest('form') && active.tagName !== 'BUTTON') return // saisie déjà commencée
-        el.style.scrollMarginTop = '140px' // ne pas finir sous l'en-tête fixe
-        el.scrollIntoView({ block: 'center', behavior: 'auto' })
-        el.focus({ preventScroll: true })
-      }
-      ;[60, 250, 600, 1100, 1600].forEach(ms => setTimeout(show, ms))
-      setTimeout(() => nexpInputRef.current?.select?.(), 70)
-    }
-    focusNexp()
-    window.addEventListener('focus-nexp', focusNexp)
-    return () => window.removeEventListener('focus-nexp', focusNexp)
-  }, [])
+  useParcelEntryFocus(nexpInputRef)
   useEffect(() => { if (createdParcel) setRetryAfterRefusal(false) }, [createdParcel])
   useEffect(() => { if (error) setRetryAfterRefusal(true) }, [error])
   // ⚡ Précharge le livreur-gare de la ville destinataire (mis en cache) : la création n'attend plus cette requête
@@ -838,6 +817,12 @@ export default function NewTab() {
         try {
           await updateParcel(original.id, patch)
           showToast('Corrections enregistrées.', 'success', 3000)
+          // 🚚 Destination corrigée : livreur « En gare » / d'une autre ville réaligné (diagnostic 2.1, jamais bloquant)
+          if (patch.destinationCity !== undefined) {
+            const { realignDeliveryAfterDestinationChange } = await import('../../../firebase/delivery')
+            const msg = await realignDeliveryAfterDestinationChange(original.id, profile?.name || 'Agent').catch(() => null)
+            if (msg) showToast(`🚚 ${msg}`, 'success', 5000)
+          }
         } catch (err: any) {
           console.error('handleConfirmPrint updateParcel:', err)
           const msg = describeParcelSaveError(err, original)
@@ -859,8 +844,14 @@ export default function NewTab() {
     }
   }
 
-  // Annuler et revenir au formulaire
+  // ↩️ Retour au formulaire : l'expédition EST DÉJÀ ENREGISTRÉE → formulaire vidé, pour qu'on ne puisse pas
+  // renvoyer la même saisie (doublon 1212579 du 19/10/2026 : « Annuler », type de port changé, réenregistré)
   const handleCancelConfirm = () => {
+    const tid = pendingParcel?.trackingId || editableParcel?.trackingId
+    setForm({ ...getEmptyForm(), senderCity: profile?.city || '' })
+    setRetryAfterRefusal(false)
+    showToast(`L'expédition ${tid || ''} reste enregistrée. Pour la corriger, faites une demande de modification.`, 'success', 6000)
+    setTimeout(() => { nexpInputRef.current?.focus() }, 100)
     setShowConfirmModal(false)
     setPendingParcel(null)
     setEditableParcel(null)
@@ -943,14 +934,13 @@ export default function NewTab() {
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Ville</label>
-                  <input
-                    type="text"
+                  <CitySelect
                     value={editableParcel.sender.city || ''}
-                    onChange={(e) => setEditableParcel({
+                    onChange={(v) => setEditableParcel({
                       ...editableParcel,
-                      sender: { ...editableParcel.sender, city: e.target.value }
+                      sender: { ...editableParcel.sender, city: v }
                     })}
-                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none"
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none appearance-none bg-white"
                   />
                 </div>
                 <div className="md:col-span-2">
@@ -1000,14 +990,14 @@ export default function NewTab() {
                 </div>
                 <div>
                   <label className="block text-sm font-semibold text-gray-700 mb-1">Ville</label>
-                  <input
-                    type="text"
+                  {/* Liste des villes du site (plus de texte libre) : la ville du destinataire = la ville de destination */}
+                  <CitySelect
                     value={editableParcel.receiver.city || ''}
-                    onChange={(e) => setEditableParcel({
+                    onChange={(v) => setEditableParcel({
                       ...editableParcel,
-                      receiver: { ...editableParcel.receiver, city: e.target.value }
+                      receiver: { ...editableParcel.receiver, city: v }
                     })}
-                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none"
+                    className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-green-500 focus:outline-none appearance-none bg-white"
                   />
                 </div>
                 <div>
@@ -1151,7 +1141,7 @@ export default function NewTab() {
               onClick={handleCancelConfirm}
               className="flex-1 py-3 px-6 border-2 border-gray-300 rounded-xl text-gray-700 font-bold hover:bg-gray-100 transition flex items-center justify-center gap-2"
             >
-              <X className="w-5 h-5" /> Annuler
+              <X className="w-5 h-5" /> Retour (l'expédition reste enregistrée)
             </button>
             <button
               ref={validateButtonRef}
@@ -1402,8 +1392,6 @@ export default function NewTab() {
               F9 : Aucune expédition précédente
             </span>
           )}
-          {/* VoiceInputAI désactivé temporairement pour optimiser les performances */}
-          {/* <VoiceInputAI onResult={handleVoiceResult} onBulkFill={handleBulkFill} onClientFound={handleClientFound} /> */}
         </div>
 
         {error && <div className="bg-red-50 border border-red-200 text-red-600 p-2 rounded-lg text-xs">⚠️ {error}</div>}
@@ -1454,21 +1442,23 @@ export default function NewTab() {
                   onKeyDown={handleKeyNav}
                   className={inputCls}
                 />
-                {profile?.role === 'agentpro' ? (
+                {/* 🔒 Agent pro : ville d'expédition = sa ville (plus de saisie pour une autre ville).
+                    Saisie ADMIN : choix de la ville d'expédition (toutes les villes). */}
+                {adminSaisie ? (
                   <select
                     id="senderCity"
-                    value={form.senderCity}
-                    onChange={e => setForm((p: any) => ({ ...p, senderCity: e.target.value }))}
+                    value={profile?.city || ''}
+                    onChange={e => setAdminCity(e.target.value)}
                     onKeyDown={handleKeyNav}
                     className={selectCls}
+                    title="Ville d'expédition"
                   >
-                    <option value="">Ville d'expédition</option>
                     {CITIES.map(c => <option key={c}>{c}</option>)}
                   </select>
                 ) : (
                   <div className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-gray-200 bg-gray-100 text-xs font-semibold text-gray-700">
                     <MapPin className="w-3 h-3 text-gray-400 shrink-0" />
-                    <span className="truncate">{form.senderCity || '—'}</span>
+                    <span className="truncate">{(profile?.role === 'agentpro' ? profile?.city : form.senderCity) || '—'}</span>
                   </div>
                 )}
               </div>

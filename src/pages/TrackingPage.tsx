@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { STATUS_COLORS } from '../firebase/constants'
 import { Package, Search, MessageCircle, MapPin, Clock, PenLine } from 'lucide-react'
 import CompanyContact from '../components/CompanyContact'
+import { formatTrackingDate } from '../utils/trackingDate'
 
 const STATUS_ICONS = {
   'Initialisé':            '📋',
@@ -172,6 +173,7 @@ export default function TrackingPage() {
               <h3 className="font-semibold text-gray-800 mb-4 flex items-center gap-2">
                 <Clock className="w-4 h-4 text-gray-400" /> Historique de suivi
               </h3>
+              <p className="text-xs text-gray-400 mb-4">Heure du Maroc</p>
               <div className="relative">
                 {sortedHistory.map((entry, i) => {
                   const c = STATUS_COLORS[entry.status] || STATUS_COLORS['Initialisé']
@@ -191,10 +193,8 @@ export default function TrackingPage() {
                           {(STATUS_ICONS as any)[entry.status]} {entry.status}
                         </p>
                         <p className="text-xs text-gray-400 mt-0.5">
-                          {new Date(entry.timestamp).toLocaleString('fr-MA', {
-                            day: '2-digit', month: 'short', year: 'numeric',
-                            hour: '2-digit', minute: '2-digit'
-                          })}
+                          {formatTrackingDate(entry.timestamp, entry.timeKnown !== false)}
+                          {entry.timeKnown === false && ' · Heure non disponible'}
                         </p>
                         {entry.note && <p className="text-xs text-gray-500 mt-0.5 italic">{entry.note}</p>}
                         {entry.location && (
@@ -242,9 +242,7 @@ export default function TrackingPage() {
                   <div className="flex justify-between text-xs text-gray-500">
                     <span>Confirmé le</span>
                     <span className="font-semibold text-gray-700">
-                      {sig.signedAt
-                        ? new Date(sig.signedAt).toLocaleString('fr-MA', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' })
-                        : '—'}
+                      {sig.signedAt ? formatTrackingDate(sig.signedAt) : '—'}
                     </span>
                   </div>
                   <div className="flex items-center justify-center gap-2 bg-green-100 rounded-xl px-4 py-2.5">

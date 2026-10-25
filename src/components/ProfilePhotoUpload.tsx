@@ -1,8 +1,7 @@
 import { useState, useRef, useEffect } from 'react'
 import { Camera, Upload, X } from 'lucide-react'
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage'
 import { doc, updateDoc } from 'firebase/firestore'
-import { storage, db } from '../firebase/config'
+import { db } from '../firebase/config'
 
 interface ProfilePhotoUploadProps {
   userId: string
@@ -58,7 +57,8 @@ export default function ProfilePhotoUpload({
     try {
       console.log('🔵 Début upload photo pour userId:', userId)
 
-      // Upload vers Firebase Storage
+      // Upload vers Firebase Storage (module chargé à la demande : pas au démarrage de la page)
+      const [{ ref, uploadBytes, getDownloadURL }, { storage }] = await Promise.all([import('firebase/storage'), import('../firebase/storage')])
       const storageRef = ref(storage, `profile-photos/${userId}/${Date.now()}_${file.name}`)
       console.log('🔵 Uploading to Storage:', storageRef.fullPath)
 

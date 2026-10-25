@@ -8,6 +8,7 @@ import {
   subscribeClientParcels, subscribeClientPayments, subscribeDestinataireDeliveries,
 } from '../firebase/clients'
 import { createClientPortalParcel } from '../firebase/firestore'
+import { ParcelParties } from '../components/ParcelParties'
 import { Home, PackagePlus, Truck, Wallet, FileText, PenLine, ClipboardList, LogOut, Lock, KeyRound } from 'lucide-react'
 
 /**
@@ -257,10 +258,9 @@ export default function ClientPortalPageNew() {
                     <div className="flex items-center justify-between">
                       <div>
                         <div className="font-bold text-blue-600">{parcel.trackingId}</div>
-                        <div className="text-sm text-gray-600 mt-1">
-                          {isDestinataire && !isExpediteur
-                            ? `De: ${parcel.senderName} → ${parcel.receiverName}`
-                            : `${parcel.senderCity} → ${parcel.destinationCity}`}
+                        <ParcelParties parcel={parcel} className="mt-1" />
+                        <div className="text-xs text-gray-500 mt-0.5">
+                          📍 {parcel.senderCity || parcel.sender?.city || '—'} → {parcel.destinationCity || parcel.receiver?.city || '—'}
                         </div>
                       </div>
                       <div className={`px-3 py-1 rounded-full text-xs font-bold ${

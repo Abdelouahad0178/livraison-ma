@@ -18,9 +18,18 @@ export async function createCentralCodDeposit({ parcelIds = [], parcels = [] as 
   if (total <= 0) throw new Error('Montant de versement invalide.')
 
   const now = new Date().toISOString()
+  if (ids.length > 450) throw new Error('Trop d\'expéditions dans un seul versement (450 au plus) : faites-en plusieurs.')
   return runTransaction(db, async tx => {
     const cashRef = doc(db, 'agencyCashes', city)
     const cashSnap = await tx.get(cashRef)
+    // 🔒 Chaque expédition RELUE dans la même opération : refus si déjà versée au compte société (double clic,
+    // deux appareils) ou introuvable — plus de versement en double.
+    const pSnaps = await Promise.all((ids as string[]).map(id => tx.get(doc(db, 'parcels', id))))
+    const nic = (s: any) => s.data()?.senderNic || s.data()?.trackingId || s.id
+    const deja = pSnaps.filter(s => s.exists() && s.data()?.centralDeposited)
+    if (deja.length) throw new Error(`Déjà versé au compte société : ${deja.slice(0, 5).map(nic).join(', ')}${deja.length > 5 ? ` (+${deja.length - 5})` : ''}. Actualisez la page.`)
+    const absents = pSnaps.filter(s => !s.exists())
+    if (absents.length) throw new Error(`Expédition(s) introuvable(s) : ${absents.slice(0, 5).map(s => s.id).join(', ')}. Actualisez la page.`)
     const cash = cashSnap.exists()
       ? cashSnap.data()
       : { solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 }
@@ -592,6 +601,41 @@ export async function unmarkParcelsDeliveryControlled(parcelIds: string[]) {
  * Écriture SÉPARÉE du pointage (markParcelsControlled) : la règle « chaque pointage n'appartient
  * qu'à son auteur » reste ainsi vérifiée sur la seule mise à jour des champs de contrôle.
  */
+const COD_TYPE_LABEL: Record<string, string> = { especes: 'Espèces', cheque: 'Chèque', traite: 'Traite' }
+/**
+ * 🔁 Changement du TYPE de la valeur (espèces / chèque / traite) par l'encaisseur central / l'analyseur chèques,
+ * tant que la valeur n'est PAS pointée. serviceType et codPaymentType changent ensemble (sinon le type ne serait
+ * pas pris en compte), les données de chèque / traite déjà saisies sont retirées, trace dans l'historique.
+ * RF mixte (espèces + document) : refusé (se modifie depuis la fiche de l'expédition).
+ */
+export async function changeCodValueType(parcelId: string, newType: 'especes' | 'cheque' | 'traite', by: string, byId: string) {
+  const ref = doc(db, 'parcels', parcelId)
+  return runTransaction(db, async tx => {
+    const snap = await tx.get(ref)
+    if (!snap.exists()) throw new Error('Expédition introuvable.')
+    const p: any = snap.data()
+    if (p.controlled) throw new Error('Valeur déjà pointée : annulez d\'abord le pointage pour changer son type.')
+    if (p.codMixed === true) throw new Error('Retour de fonds mixte (espèces + document) : modifiez-le depuis la fiche de l\'expédition.')
+    if (!((parseFloat(p.codAmount) || 0) > 0)) throw new Error('Cette expédition n\'a pas de retour de fonds.')
+    if ((p.codDocuments || []).some((d: any) => (d?.groupIds || []).length > 1)) throw new Error('Cette valeur fait partie d\'un chèque groupé : retirez-la d\'abord du groupe.')
+    const from = String(p.codPaymentType || p.serviceType || '').replace('cod_', '')
+    if (from === newType) return { changed: false }
+    const now = new Date().toISOString()
+    const patch: Record<string, any> = {
+      serviceType: newType,
+      codPaymentType: newType,
+      codTypeChangedAt: now,
+      codTypeChangedBy: by || 'Encaisseur central',
+      codTypeChangedById: byId || '',
+      codTypeChangedFrom: from || null,
+      history: arrayUnion({ status: p.status || '', timestamp: now, note: `Type de la valeur changé : ${COD_TYPE_LABEL[from] || from || '—'} → ${COD_TYPE_LABEL[newType]} par ${by || 'Encaisseur central'}` }),
+    }
+    if (Array.isArray(p.codDocuments) && p.codDocuments.length) patch.codDocuments = deleteField()
+    tx.update(ref, patch)
+    return { changed: true }
+  })
+}
+
 export interface CodDocument {
   type: 'cheque' | 'traite'
   numero: string

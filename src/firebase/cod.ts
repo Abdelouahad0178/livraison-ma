@@ -4,6 +4,7 @@ import {
   serverTimestamp, arrayUnion, increment, writeBatch, setDoc, Timestamp, runTransaction, deleteField
 } from 'firebase/firestore'
 import { db } from './db'
+import { assertCanCollectHere } from './parcels'
 import { bumpPresence } from '../services/presenceCounters'
 import { COD_STATUS, COD_PAYMENT_TYPES, STATUSES, sanitizeParcelCodWrite } from './constants'
 import { findOrCreateClientForReceiver } from './clients'
@@ -32,6 +33,8 @@ export async function collectCod(
     if (data.codStatus === 'collected' || data.codStatus === 'remis') {
       throw new Error('Ce COD a déjà été encaissé.')
     }
+    // 🔒 La valeur se paie à l'arrivée : seule l'agence de destination l'encaisse
+    await assertCanCollectHere(data, 'valeur (COD)')
     tx.update(ref, {
       codStatus:      'collected',
       codPaymentType: coherentCodPaymentType(data, paymentType),
@@ -340,11 +343,19 @@ export async function collectPortDu(parcelId: string, agentName: string, agentId
       if (!snap.exists()) {
         throw new Error(`Colis ${parcelId} introuvable dans ${coll}`)
       }
+      // 🔒 Le port dû se paie à l'arrivée : seule l'agence de destination l'encaisse
+      await assertCanCollectHere(snap.data() as any, 'port dû')
       // 🔒 Déjà encaissé (par quelqu'un d'autre, sur un écran pas encore à jour) : rien n'est réécrit — l'encaissement
       // existant (méthode, auteur, date) est conservé et le même port n'est jamais encaissé deux fois. Pas d'erreur :
       // l'écran du livreur, qui collecte puis marque « Livré », n'est jamais bloqué.
       const st = (snap.data() as any).portStatus
       if (st === 'collected' || st === 'received') return
+      // 🔒 Seul un PORT DÛ s'encaisse ici (comme collectPortDuCheque) : avant, un port déjà passé « en compte » ou
+      // payé au départ pouvait être « encaissé » depuis un écran pas à jour (diagnostic du 24/10/2026, point 1.3)
+      const cur = snap.data() as any
+      if (cur.portType !== 'port_du' || cur.portPayeMethod) {
+        throw new Error(`${cur.senderNic || cur.trackingId || parcelId} : ce n'est plus un port dû (type actuel : ${cur.portType || '—'}) — rien à encaisser.`)
+      }
 
       transaction.update(ref, updates)
     })
@@ -429,6 +440,7 @@ export async function collectPortDuCheque(
   if (parcel.portType !== 'port_du') {
     throw new Error('Ce colis n\'est pas un port dû')
   }
+  await assertCanCollectHere(parcel as any, 'port dû')
   // 🔒 Déjà encaissé (espèces ou chèque) par quelqu'un d'autre : ne pas l'écraser
   if (parcel.portStatus === 'collected' || parcel.portStatus === 'received') {
     throw new Error('Ce port dû est déjà encaissé.')
@@ -701,6 +713,23 @@ export function subscribeCodParcels(city: string, callback: (rows: FirestoreRow[
   const unsubRecent = onSnapshot(qRecent, snap => { recent = snap.docs.map(rowFromDoc); emit() }, onError)
   const unsubOlder = onSnapshot(qOlder, snap => { older = snap.docs.map(rowFromDoc); emit() }, onError)
   return () => { unsubRecent(); unsubOlder() }
+}
+
+/**
+ * ⚡ Pointeur : seulement les expéditions de la ville dont le RETOUR FOND est en chèque / traite (filtre fait par
+ * Firestore). Avant : toutes les expéditions arrivées sur 90 jours (≈ 31 000 à Agadir, ~75 Mo) pour n'en garder
+ * que les chèques / traites. Même règle d'argent (moneyFromStart), même tri.
+ */
+export function subscribeCodChequeTraiteParcels(city: string, callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
+  const q = query(
+    collection(db, 'parcels'),
+    where('destinationCity', '==', city),
+    where('codPaymentType', 'in', ['cheque', 'traite', 'cod_cheque', 'cod_traite']),
+  )
+  const ms = (p: FirestoreRow) => (p.createdAt?.toMillis ? p.createdAt.toMillis() : 0)
+  return onSnapshot(q, snap => {
+    callback(moneyFromStart(snap.docs.map(rowFromDoc)).sort((a, b) => ms(b) - ms(a)))
+  }, onError)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

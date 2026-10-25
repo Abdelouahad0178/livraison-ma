@@ -1,0 +1,1337 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function role() {
+      return signedIn() ? userDoc().role : null;
+    }
+
+    function isStaff() {
+      return role() == 'admin' || role() == 'directeur' || role() == 'agent'
+          || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation') || role() == 'caissier'
+          || role() == 'aide_agent' || role() == 'pointeur_encaisseur'
+          || role() == 'encaisseur_central' || role() == 'distributeur_especes'
+          || role() == 'distributeur_cheques' || role() == 'facturier'
+          || role() == 'analyseur_cheque' || role() == 'analyseur_espece';
+    }
+
+    function isFacturier() {
+      return role() == 'facturier';
+    }
+
+    function isPointeurEncaisseur() {
+      return role() == 'pointeur_encaisseur';
+    }
+
+    function isCentralCollector() {
+      return role() == 'encaisseur_central';
+    }
+
+    function isDistributeurEspeces() {
+      return role() == 'distributeur_especes';
+    }
+
+    function isDistributeurCheques() {
+      return role() == 'distributeur_cheques';
+    }
+
+    function isAdmin() {
+      return role() == 'admin';
+    }
+
+    function isAdminOrDirecteur() {
+      return role() == 'admin' || role() == 'directeur';
+    }
+
+    function isAgentOrChef() {
+      return role() == 'agent' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+    }
+
+    function isChefAgence() {
+      return role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+    }
+
+    function isAideAgent() {
+      return role() == 'aide_agent';
+    }
+
+    function isDeliveryWorker() {
+      // Canonical roles only â€” normalize at write time in app code
+      return role() == 'chauffeur' || role() == 'livreur';
+    }
+
+    function isNotBlocked() {
+      // ⚠️ .get() : la plupart des fiches utilisateur n'ont PAS de champ 'blocked' ;
+      // userDoc().blocked levait alors une erreur d'évaluation et REFUSAIT toute règle
+      // utilisant isNotBlocked() (ex. correction du bon par agent / chef d'agence).
+      return userDoc().get('blocked', false) != true;
+    }
+
+    function userCity() {
+      return signedIn() && userDoc().city is string ? userDoc().city : '';
+    }
+
+    function isAdminOrSameCity(city) {
+      return isAdmin() || userCity() == city;
+    }
+
+    function isParcelCreator() {
+      return signedIn() && resource.data.agentId == request.auth.uid;
+    }
+
+    function isChefOfAideAgentParcelAgency() {
+      return (role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation'))
+        && (resource.data.agentRole == 'aide_agent' || resource.data.agentRole == 'client_portal')
+        && (
+          resource.data.originCity == userDoc().city
+          || (resource.data.sender != null && resource.data.sender.city == userDoc().city)
+          || (
+            resource.data.agentId is string
+            && exists(/databases/$(database)/documents/users/$(resource.data.agentId))
+            && get(/databases/$(database)/documents/users/$(resource.data.agentId)).data.role == 'aide_agent'
+            && get(/databases/$(database)/documents/users/$(resource.data.agentId)).data.city == userDoc().city
+          )
+        );
+    }
+
+    function protectedParcelBonFields() {
+      return [
+        'trackingId',
+        'sender',
+        'receiver',
+        'weight',
+        'nbColis',
+        'natureOfGoods',
+        'serviceType',
+        'customerMode',
+        'price',
+        'codAmount',
+        'codMixed',
+        'codCashAmount',
+        'agentId',
+        'agentName',
+        'originCity',
+        'destinationCity',
+        'clientId',
+        'clientName',
+        'createdAt'
+      ];
+    }
+
+    function parcelCorrectionFields() {
+      return [
+        'sender',
+        'receiver',
+        'originCity',
+        'destinationCity',
+        'weight',
+        'nbColis',
+        'natureOfGoods',
+        'serviceType',
+        'customerMode',
+        'price'
+      ];
+    }
+
+    function parcelSearchFields() {
+      // Champs dénormalisés de recherche (recalculés quand expéditeur / destinataire change)
+      return ['senderNic', 'senderTel', 'receiverTel', 'senderNameLower', 'receiverNameLower'];
+    }
+
+    function parcelBonEditFields() {
+      // Champs modifiables par le modal "Modifier l'expédition" / confirmation après saisie
+      return parcelCorrectionFields().concat(parcelSearchFields()).concat([
+        'codAmount', 'codAmountHistory', 'codStatus', 'codPaymentType',
+        // RF mixte (Espèces + chèque/traite) : mêmes droits que codAmount
+        'codMixed', 'codCashAmount',
+        'portType', 'fragile', 'notes',
+        'lastModifiedBy', 'lastModifiedByName', 'lastModifiedAt'
+      ]);
+    }
+
+    function deliveryAssignmentFields() {
+      return [
+        'deliveryDriverId',
+        'deliveryDriverName',
+        'deliverySectorId',
+        'deliverySectorCode',
+        'deliverySectorName',
+        'deliveryVehicleId',
+        'deliveryVehicleLabel',
+        'deliveryAssignedAt',
+        'deliveryAssignedBy'
+      ];
+    }
+
+    function aideAgentValidationFields() {
+      return [
+        'agentId',
+        'agentName',
+        'agentRole',
+        'aideAgentId',
+        'aideAgentName',
+        'validatedByChef',
+        'validatedAt',
+        'validatedById',
+        'validatedByName',
+        'aideEditUnlocked',
+        'aideEditLockChangedAt',
+        'aideEditLockChangedBy',
+        'aideEditLockChangedByName',
+        'destinationAgentId',
+        'destinationAgentName',
+        'deliveryAssignedBy',
+        'receiverClientId'
+      ];
+    }
+
+    function isDestinationAgencyChief() {
+      return (role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation'))
+        && userDoc().city == resource.data.destinationCity;
+    }
+
+    function isAssignedDeliveryWorker() {
+      return signedIn()
+        && resource.data.deliveryDriverId == request.auth.uid;
+    }
+
+    function keepsDeliveredStatus() {
+      // Autoriser la transition "Livré" → "Retourné" (retour de colis)
+      let isReturnTransition = request.resource.data.status == 'Retourné';
+      
+      // Bloquer autres changements de statut depuis "Livré"
+      let blocksOtherChanges = (resource.data.status == 'Livré' || resource.data.status == 'LivrÃ©')
+        && request.resource.data.status != resource.data.status
+        && request.resource.data.status != 'Retourné';
+
+      return isReturnTransition || !blocksOtherChanges;
+    }
+
+    function ownsClient(clientId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/clients/$(clientId))
+        && (
+          get(/databases/$(database)/documents/clients/$(clientId)).data.portalUid == request.auth.uid
+          || userDoc().clientId == clientId
+        );
+    }
+
+
+    function isParcelLocked() {
+      // 🔒 Un colis est verrouillé s'il a été chargé dans un camion
+      return 'shipmentLoadedAt' in resource.data && resource.data.shipmentLoadedAt != null;
+    }
+
+    function keepsEnComptePortType() {
+      // 💼 Si le colis était "en compte", le portType ne peut JAMAIS être modifié
+      // (sauf par admin) pour éviter les problèmes de comptabilité client
+      return resource.data.portType != 'port_en_compte'
+        || request.resource.data.portType == 'port_en_compte'
+        || isAdmin();
+    }
+
+    // 🔒 Pointage Encaisseur Central (Contrôle + Confirmation d'arrivée) : chaque pointage
+    // n'appartient qu'à son auteur. Poser un pointage (passer à true) est libre pour tout
+    // Encaisseur Central UNIQUEMENT si le colis n'est pas déjà pointé (premier arrivé) ;
+    // une fois posé, seul son auteur peut le reposer, le modifier ou le retirer — sinon un
+    // second utilisateur pouvait écraser silencieusement le pointage du premier en cliquant
+    // à nouveau sur "Pointer"/"Confirmer arrivée" après coup.
+    function controlOnlyKeys() {
+      return ['controlled', 'controlledBy', 'controlledById', 'controlledAt'];
+    }
+    function deliveryControlOnlyKeys() {
+      return ['deliveryControlled', 'deliveryControlledBy', 'deliveryControlledById', 'deliveryControlledAt'];
+    }
+    // ⚡ Chemin rapide Chef d'agence / Agent Pro / Chef d'exploitation : mêmes conditions que la
+    // branche « agent / chef » du grand bloc staff (plus bas), mais évaluée EN PREMIER et avec les
+    // champs modifiés calculés une seule fois (limite Firestore de 1000 expressions par requête).
+    function chefFastPathUpdate() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      // Ordre « du moins cher au plus cher » : un refus est décidé tôt, sans épuiser le budget
+      // d'expressions nécessaire aux autres règles (correction du bon, etc.).
+      return !changed.hasAny(['codAmount', 'codMixed', 'codCashAmount'])
+        && (
+          !changed.hasAny(protectedParcelBonFields())
+          || resource.data.agentId == request.auth.uid
+        )
+        && !changed.hasAny(aideAgentValidationFields())
+        && isChefAgence()
+        && (!changed.hasAny(deliveryAssignmentFields()) || resource.data.agentId == request.auth.uid || isDestinationAgencyChief())
+        && keepsDeliveredStatus()
+        && (!touchesOnlyControlFields() || isOwnControlChange());
+    }
+
+    function isOwnControlChange() {
+      // ⚠️ resource.data.controlled LÈVE UNE ERREUR (pas juste null) si le champ n'existe pas
+      // encore sur le colis — cas du tout premier pointage. .get(clé, défaut) évite ce piège.
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return (
+        changed.hasOnly(controlOnlyKeys()) && (
+          (request.resource.data.controlled == true && resource.data.get('controlled', false) != true)
+          || resource.data.get('controlledById', null) == request.auth.uid
+        )
+      ) || (
+        changed.hasOnly(deliveryControlOnlyKeys()) && (
+          (request.resource.data.deliveryControlled == true && resource.data.get('deliveryControlled', false) != true)
+          || resource.data.get('deliveryControlledById', null) == request.auth.uid
+        )
+      );
+    }
+    function touchesOnlyControlFields() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return changed.hasOnly(controlOnlyKeys()) || changed.hasOnly(deliveryControlOnlyKeys());
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Colis : lecture publique (tracking)
+    // codAmount modifiable uniquement par Admin (protection double : rÃ¨gle + code)
+    match /parcels/{parcelId} {
+      allow get:    if true;
+      allow list:   if isStaff() || isFacturier()
+        || ownsClient(resource.data.clientId)
+        || isDeliveryWorker()
+        || (request.query.limit != null && request.query.limit <= 1);
+      // ✅ Autoriser les requêtes d'agrégation (count, sum) pour le staff et facturier
+      allow read:   if isStaff() || isFacturier();
+      allow create: if (signedIn() && request.resource.data.agentId == request.auth.uid)
+        || (isStaff() && isNotBlocked())
+        || isCentralCollector();  // 📦 Permettre restauration archives
+      allow delete: if ((resource.data.status != 'LivrÃ©' && resource.data.status != 'Livr\u00c3\u00a9') || isAdmin()) && (
+        isAdmin()
+        || isChefOfAideAgentParcelAgency()
+        || (isAgentOrChef() && isParcelCreator())
+        || (isAideAgent() && isParcelCreator() && resource.data.validatedByChef != true)
+        || (isStaff() && !isAgentOrChef() && !isAideAgent())
+      );
+
+      // 🔒 RÈGLE GLOBALE : Admin peut TOUJOURS modifier (même après chargement camion)
+      allow update: if isAdmin();
+
+      // ⚡ Chef d'agence / Agent Pro / Chef d'exploitation : statut, remarques, etc. (voir chefFastPathUpdate)
+      // ⚡ (déplacée en tête, peu coûteuse) Validation arrivée / colis déjà arrivés — comportement inchangé
+      allow update: if signedIn()
+        && 'destinationArrivedAt' in request.resource.data
+        && 'history' in request.resource.data
+        && !touchesOnlyControlFields();
+      allow update: if chefFastPathUpdate();
+      // ↩️ Annulation d'un retour (chefs) : seulement depuis un colis marqué retourné, vers un état
+      // non retourné, avec les seuls champs du retour.
+      allow update: if resource.data.get('wasReturned', false) == true
+        && request.resource.data.get('wasReturned', true) == false
+        && isChefAgence()
+        && !(request.resource.data.status in ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé', 'Livré'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'history', 'sender', 'receiver', 'senderNameNorm', 'receiverNameNorm',
+          'originCity', 'destinationCity', 'returnToCity', 'codAmount', 'codMixed', 'codCashAmount',
+          'arrivedNbColis', 'wasReturned', 'preReturn', 'returnedAt', 'returnReason',
+          'returnedByDriverId', 'returnedByDriverName', 'returnCancelledAt', 'returnCancelledBy',
+          'deliveryDriverId', 'deliveryDriverName', 'deliverySectorId', 'deliverySectorCode',
+          'deliverySectorName', 'deliveryVehicleId', 'deliveryVehicleLabel', 'deliveryAssignedAt',
+          'deliveryAssignedBy'
+        ]);
+      // ⚡ Chef de l'agence d'un colis saisi par un aide agent / portail client (même règle que le grand
+      // bloc staff), évaluée tôt : test du agentRole d'abord (le moins coûteux).
+      allow update: if (resource.data.get('agentRole', '') == 'aide_agent' || resource.data.get('agentRole', '') == 'client_portal')
+        && isChefOfAideAgentParcelAgency()
+        && keepsDeliveredStatus()
+        && (!touchesOnlyControlFields() || isOwnControlChange());
+
+      // ⚡ Placée EN TÊTE (limite de 1000 expressions) : encaissement / statut par le livreur assigné.
+      // Livreur local assignÃ© : statut, encaissement, refus et signature uniquement sur ses colis
+      allow update: if isAssignedDeliveryWorker()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'history',
+          'deliveredAt',
+          'signatureMethod',
+          'portDuReceivedMethod',
+          'lastLocation',
+          'codStatus',
+          'codPaymentType',
+          'codCollectedAt',
+          'codCollectedBy',
+          'codCaisseEntryId',
+          'portStatus',
+          'portCollectedBy',
+          'portCollectedById',
+          'portCollectedAt',
+          'signatureToken',
+          'signatureTokenCreatedAt',
+          'signatureConfirmedAt',
+          'returnSignatureToken',
+          'returnSignatureTokenCreatedAt',
+          'returnSignatureConfirmedAt',
+          'deliveryDriverId',
+          'deliveryDriverName',
+          'deliverySectorId',
+          'deliverySectorCode',
+          'deliverySectorName',
+          'deliveryVehicleId',
+          'deliveryVehicleLabel',
+          'deliveryAssignedAt',
+          'deliveryAssignedBy',
+          'deliveryRejectedAt',
+          'deliveryRejectedById',
+          'deliveryRejectedBy'
+        ]);
+
+      // ⚡ Placée EN TÊTE : Firestore arrête l'évaluation après 1000 expressions ; plus bas, cette règle
+      // n'était jamais atteinte sur certains colis (« Missing or insufficient permissions » à l'assignation).
+      // Assignation livraison locale : seuls les champs livraison sont modifiÃ©s
+      allow update: if signedIn()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'deliveryDriverId', 'deliveryDriverName',
+          'deliverySectorId', 'deliverySectorCode', 'deliverySectorName',
+          'deliveryVehicleId', 'deliveryVehicleLabel',
+          'deliveryAssignedAt', 'deliveryAssignedBy'
+        ]);
+
+      // 🧾 RÈGLE : Facturier peut marquer un colis comme facturé et corriger le prix / type de port
+      allow update: if isFacturier()
+        && isNotBlocked()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['invoiced', 'invoiceId', 'invoicedAt', 'price', 'portType']);
+
+      // 💼 RÈGLE PRIORITAIRE : Encaisseur Central peut modifier les champs de gestion centrale
+      // Sans vérifier le statut de livraison ni le verrouillage.
+      // ⚠️ EXCEPTION : si la mise à jour ne touche QUE les champs de pointage (contrôle /
+      // confirmation d'arrivée), elle doit en plus respecter isOwnControlChange() — sinon
+      // n'importe quel Encaisseur Central pourrait annuler le pointage d'un collègue.
+      allow update: if isCentralCollector()
+        && (!touchesOnlyControlFields() || isOwnControlChange());
+
+      // 📅 RÈGLE : Chef d'agence peut corriger la date d'expédition (expeditionDate) et le jour d'opération (workDate)
+      allow update: if isChefAgence()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['expeditionDate', 'workDate', 'createdAt', 'createdAtOriginal']);
+
+      // 🖐️ RÈGLE : Chef d'agence peut modifier price, portType, codAmount (édition rapide)
+      allow update: if isChefAgence()
+        && keepsDeliveredStatus()
+        && !isParcelLocked()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['price', 'portType', 'codAmount', 'codMixed', 'codCashAmount']);
+
+      // 💰 RÈGLE : Chef d'agence peut collecter/décollecterports (Port dû et Port payé)
+      allow update: if isChefAgence()
+        && keepsDeliveredStatus()
+        && !isParcelLocked()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'portStatus', 'portCollectedBy', 'portCollectedById', 'portCollectedAt', 'portDuReceivedMethod',
+          'portReceivedBy', 'portReceivedById', 'portReceivedAt'
+        ]);
+
+      // ✅ RÈGLE : Aide-agent peut modifier ses propres colis non validés et non verrouillés
+      allow update: if isAideAgent()
+        && isParcelCreator()
+        && resource.data.validatedByChef != true
+        && !isParcelLocked()
+        && keepsDeliveredStatus();
+
+      // 🔒 VERROUILLAGE PERMANENT : Si colis a été chargé dans un camion (shipmentLoadedAt existe),
+      // SEUL l'admin peut modifier, et ce pour TOUT le reste du parcours
+      // (En transit → Arrivé en agence → En livraison → Livré → etc.)
+
+      // Correction du bon: poids/details uniquement, jamais COD/statut.
+      // Autorisation volontairement limitee aux champs du bon pour eviter les rejets de role/token.
+      // ⭐ RÈGLE PRIORITAIRE : Retour de colis (depuis N'IMPORTE QUEL statut → Retourné)
+      // 🔒 VERROUILLAGE : Refusé si colis a été chargé dans un camion (sauf admin via règle globale ci-dessus)
+      // Autorise TOUTES les modifications nécessaires pour markParcelAsReturned()
+      // ⚠️ Sans la garde ci-dessous, un colis déjà "Retourné" (status inchangé par cette
+      // règle) laissait n'importe quel utilisateur signé écraser le pointage Encaisseur
+      // Central d'un autre (aucune restriction de champs sur cette règle).
+      allow update: if signedIn()
+        && request.resource.data.status == 'Retourné'
+        && !isParcelLocked()
+        && (!touchesOnlyControlFields() || isOwnControlChange());
+      // ⭐ RÈGLE : Réessayer livraison (Retourné → En livraison)
+      // Permet de remettre un colis retourné en circulation
+      // 🔒 Note: déjà protégé car on ne peut pas avoir "Retourné" ET "En transit" simultanément
+      allow update: if signedIn()
+        && resource.data.status == 'Retourné'
+        && request.resource.data.status == 'En livraison';
+      allow update: if signedIn()
+        && keepsDeliveredStatus()
+        && resource.data.status != 'LivrÃ©'
+        && resource.data.status != 'Livr\u00c3\u00a9'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(parcelCorrectionFields())
+        && !isParcelLocked();
+      // ✏️ Correction complète du bon (modal "Modifier l'expédition" + confirmation après saisie)
+      // - Agent : uniquement SES bons ; Chef d'agence / Agent PRO / Chef exploitation : tous.
+      // - Jamais après chargement camion (sauf admin, règle globale) ; statut inchangé (hors liste).
+      // - COD modifiable seulement tant qu'il n'est pas encaissé.
+      // - Type de port réservé aux chefs, jamais pour sortir d'un "port_en_compte".
+      // - Colis Livré / Retourné : réservé aux chefs.
+      allow update: if isAgentOrChef()
+        && isNotBlocked()
+        && !isParcelLocked()
+        && (isChefAgence() || isParcelCreator())
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(parcelBonEditFields())
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['codAmount', 'codAmountHistory', 'codStatus', 'codPaymentType', 'codMixed', 'codCashAmount'])
+          || (resource.data.get('codCollectedAt', null) == null
+              && (resource.data.get('codStatus', null) == null || resource.data.get('codStatus', null) == 'pending'))
+        )
+        && (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['portType'])
+          || (isChefAgence()
+              && (resource.data.get('portType', '') != 'port_en_compte'
+                  || request.resource.data.get('portType', '') == 'port_en_compte'))
+        )
+        && (isChefAgence() || (resource.data.status != 'Livré' && resource.data.status != 'Retourné'));
+      allow update: if signedIn()
+        && keepsDeliveredStatus()
+        && request.auth.uid != resource.data.agentId
+        && request.resource.data.validatedByChef == true
+        && request.resource.data.validatedById == request.auth.uid
+        && request.resource.data.agentId == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(aideAgentValidationFields());
+      // Chargement camion : seuls les champs transport sont modifiÃ©s
+      allow update: if signedIn()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'chauffeurName', 'chauffeurPhone', 'status',
+          'shipmentLoadedAt', 'visibleInDestinationAgency', 'history'
+        ]);
+      // ⭐ POINTAGE ARRIVAGE : autoriser sans vérifier keepsDeliveredStatus
+      // (car le pointage peut se faire même si le colis a un statut particulier)
+      allow update: if signedIn()
+        && isStaff()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'visibleInDestinationAgency', 'destinationArrivedAt',
+          'destinationAgentId', 'destinationAgentName', 'arrivedNbColis',
+          'chefPointedAt', 'chefPointedBy', 'chefPointedById', 'chefPointedSource',
+          'history'
+        ]);
+      // ⭐ VALIDATION ARRIVÉE RETOUR : validation arrivée colis retourné
+      // Autorise mise à jour avec destinationArrivedAt (=validation retour)
+      // ⚠️ 'destinationArrivedAt' et 'history' existent déjà sur quasi tout colis déjà arrivé —
+      // cette règle ne vérifiant PAS quels champs sont modifiés, elle laissait n'importe quel
+      // utilisateur signé écraser le pointage d'un autre sur ces colis. Exclu explicitement.
+      // (règle « validation arrivée retour » déplacée en tête du bloc, voir plus haut)
+      // RÃ©ception agence : prise en charge et arrivage de colis en transit
+      allow update: if signedIn()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'visibleInDestinationAgency', 'destinationArrivedAt',
+          'destinationAgentId', 'destinationAgentName', 'arrivedNbColis',
+          'chefPointedAt', 'chefPointedBy', 'chefPointedById', 'chefPointedSource',
+          'history'
+        ]);
+      // ⭐ Staff : générer token de signature (agents, chauffeurs, etc.)
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'signatureToken',
+          'signatureTokenCreatedAt'
+        ]);
+      // ⭐ Staff : générer token de signature de retour
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'returnSignatureToken',
+          'returnSignatureTokenCreatedAt'
+        ]);
+      // ⭐ Staff : confirmer signature normale (Livré)
+      allow update: if signedIn()
+        && request.resource.data.status == 'Livré'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'signatureToken',
+          'signatureConfirmedAt',
+          'signatureMethod',
+          'history'
+        ]);
+      // ⭐ Staff : confirmer signature de retour (Retour finalisé)
+      allow update: if signedIn()
+        && request.resource.data.status == 'Retour finalisé'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'returnSignatureToken',
+          'returnSignatureConfirmedAt',
+          'signatureMethod',
+          'history'
+        ]);
+      // Pointeur-Encaisseur : rÃ©ception port dÃ» versÃ© par un livreur
+      allow update: if isPointeurEncaisseur()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'portPointeurId', 'portPointeurName', 'portPointeurAt'
+        ]);
+      // Pointeur-Encaisseur : remise COD aprÃ¨s pointage (rÃ¨glement crÃ©Ã©)
+      allow update: if isPointeurEncaisseur()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'codStatus', 'codRemisAt', 'codRemisBy'
+        ]);
+      // Pointeur-Encaisseur : remboursement RETOUR FOND sur colis retournÃ©
+      allow update: if isPointeurEncaisseur()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'codRefunded', 'codRefundedAt', 'codRefundedBy', 'codRefundedById'
+        ]);
+      // Pointeur-Encaisseur : envoi COD au chef d'agence
+      allow update: if isPointeurEncaisseur()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'codSentToChef', 'codSentToChefAt', 'codSentToChefBy', 'codSentToChefById'
+        ]);
+      // Chef d'agence : validation du rapport COD du pointeur
+      allow update: if isChefAgence()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'codValidatedByChef', 'codValidatedByChefAt', 'codValidatedByChefBy', 'codValidatedByChefById'
+        ]);
+      // Chef d'agence : envoi COD Ã  l'agence source (avec/sans validation)
+      allow update: if isChefAgence()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'codSentToSource', 'codSentToSourceAt', 'codSentToSourceBy', 'codSentToSourceById', 'codSentWithValidation'
+        ]);
+      // Agent/Chef d'agence : suivi COD (rÃ©ception, envoi, confirmation, rÃ¨glement)
+      // Permet de mettre Ã  jour les champs de traÃ§age COD sans toucher aux donnÃ©es sensibles du bon.
+      allow update: if isAgentOrChef()
+        && keepsDeliveredStatus()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['codAmount', 'codMixed', 'codCashAmount'])
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(protectedParcelBonFields())
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(deliveryAssignmentFields())
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(aideAgentValidationFields());
+      // Approbation demande modification client par chef_agence ou agent
+      allow update: if isAgentOrChef()
+        && keepsDeliveredStatus()
+        && request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly([
+             'receiver', 'serviceType', 'codPaymentType', 'codAmount', 'codMixed', 'codCashAmount', 'status',
+             'modificationHistory', 'lastModificationRequestId',
+             'lastModificationAt', 'lastModificationBy', 'lastModificationByRole'
+           ]);
+      // Retour camion : l'agence qui a physiquement le colis retournÃ© peut l'expÃ©dier
+      // vers l'agence d'origine, sans toucher aux donnÃ©es sensibles du bon.
+      allow update: if signedIn()
+        && keepsDeliveredStatus()
+        && request.resource.data.status == 'Retour en transit'
+        && (resource.data.status == 'RetournÃ©' || resource.data.status == 'RetournÃ©')
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'returnShippedAt',
+          'history',
+          'sender',
+          'receiver',
+          'originCity',
+          'destinationCity',
+          'returnToCity',
+          'arrivedNbColis'
+        ]);
+      // Retour direct depuis l'agence destination ou le livreur assignÃ©.
+      // Le bon est inversÃ© pour repartir vers l'expÃ©diteur, sans modifier les champs sensibles hors retour.
+      allow update: if signedIn()
+        && keepsDeliveredStatus()
+        && request.resource.data.status == 'RetournÃ©'
+        && resource.data.status != 'RetournÃ©'
+        && (
+          resource.data.destinationAgentId == request.auth.uid
+          || resource.data.deliveryDriverId == request.auth.uid
+          || (
+            userDoc().city is string
+            && (
+              userDoc().city == resource.data.destinationCity
+              || (resource.data.receiver != null && userDoc().city == resource.data.receiver.city)
+            )
+          )
+        )
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'sender',
+          'receiver',
+          'originCity',
+          'destinationCity',
+          'returnToCity',
+          'createdByCity',
+          'codAmount',
+          'returnedAt',
+          'returnReason',
+          'arrivedNbColis',
+          'history',
+          'wasReturned',
+          'returnedByDriverId',
+          'returnedByDriverName',
+          'deliveryDriverId',
+          'deliveryDriverName',
+          'deliverySectorId',
+          'deliverySectorCode',
+          'deliverySectorName',
+          'deliveryVehicleId',
+          'deliveryVehicleLabel',
+          'deliveryAssignedAt',
+          'deliveryAssignedBy'
+        ]);
+      // ⚠️ Ce bloc est volontairement très large (retours, corrections diverses par le staff).
+      // Comme il ne restreint pas explicitement les champs 'controlled'/'deliveryControlled',
+      // il laissait n'importe quel membre du staff écraser le pointage Encaisseur Central d'un
+      // autre. Garde ajoutée : ne s'applique pas quand SEULS les champs de pointage changent
+      // (ce cas passe exclusivement par la règle Encaisseur Central plus haut, avec ownership).
+      allow update: if isStaff() && keepsDeliveredStatus()
+        && (!touchesOnlyControlFields() || isOwnControlChange())
+        && (
+        isAdmin()
+        || isChefOfAideAgentParcelAgency()
+        || (
+          // Retour : tout le staff peut inverser expÃ©diteur/destinataire
+          request.resource.data.status == 'RetournÃ©'
+          && resource.data.status != 'RetournÃ©'
+          && !isAideAgent()
+        )
+        || (
+          // Chargement retour sur camion inter-villes
+          request.resource.data.status == 'Retour en transit'
+          && resource.data.status == 'RetournÃ©'
+          && !isAideAgent()
+        )
+        || (
+          // Aide agent : modification de ses propres saisies non validÃ©es
+          isAideAgent()
+          && isParcelCreator()
+          && (resource.data.validatedByChef != true || resource.data.aideEditUnlocked == true)
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(aideAgentValidationFields())
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'codAmount', 'codMixed', 'codCashAmount'])
+        )
+        || (
+          !request.resource.data.diff(resource.data).affectedKeys().hasAny(['codAmount', 'codMixed', 'codCashAmount'])
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(aideAgentValidationFields())
+          && !isAideAgent()
+          && (
+            !isAgentOrChef()
+            || isParcelCreator()
+            || (
+              !request.resource.data.diff(resource.data).affectedKeys().hasAny(protectedParcelBonFields())
+              && (
+                !request.resource.data.diff(resource.data).affectedKeys().hasAny(deliveryAssignmentFields())
+                || isDestinationAgencyChief()
+              )
+            )
+          )
+        )
+      );
+      // REGLE RETOUR COLIS
+      allow update: if signedIn() && request.resource.data.status == "Retourné"
+        && !touchesOnlyControlFields();
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Villes
+    match /cities/{cityId} {
+      allow read:  if true;
+      allow write: if isStaff();
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ ParamÃ¨tres globaux
+    match /settings/{settingId} {
+      // adminSetup, workingDate, editPermissions, operationalDay lisibles publiquement
+      allow read:  if settingId == 'adminSetup' || settingId == 'workingDate' || settingId == 'editPermissions' || settingId == 'operationalDay' ? true : signedIn();
+      allow write: if settingId == 'tariffs' ? isAdmin() : isStaff();
+      // CrÃ©ation du document adminSetup lors de la premiÃ¨re inscription admin
+      allow create: if settingId == 'adminSetup'
+        && !exists(/databases/$(database)/documents/settings/adminSetup);
+    }
+
+    // Dates de travail (par ville)
+    match /workingDates/{cityId} {
+      // Tous les utilisateurs peuvent lire la date de travail de leur ville
+      allow read: if signedIn();
+      // Seul l'Admin ou Chef d'agence de la ville peut modifier
+      allow write: if isAdmin()
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation')) && userCity() == cityId);
+      // Permettre la création si le document n'existe pas encore
+      allow create: if signedIn();
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Utilisateurs
+    match /users/{userId} {
+      allow read:   if isStaff() || (signedIn() && request.auth.uid == userId);
+      // PremiÃ¨re inscription admin : uniquement l'email hassan@gmail.com,
+      // vÃ©rifiÃ© Ã  la fois dans le token Firebase Auth ET dans le document,
+      // et seulement si adminSetup n'existe pas encore.
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == 'admin'
+        && request.auth.token.email == 'hassan@gmail.com'
+        && request.resource.data.email == 'hassan@gmail.com'
+        && !exists(/databases/$(database)/documents/settings/adminSetup);
+      // Admin crÃ©e les autres comptes (sauf un autre admin)
+      allow create: if isAdmin() && request.resource.data.role != 'admin';
+      // Chef d'agence crÃ©e des livreurs locaux, aides agents et pointeurs-encaisseurs dans sa propre ville
+      allow create: if (role() == 'chef_agence' || role() == 'agentpro')
+        && request.resource.data.role in ['livreur', 'aide_agent', 'pointeur_encaisseur']
+        && request.resource.data.city == userDoc().city;
+      // Création de comptes portail clients (expéditeurs/destinataires)
+      // Par l'utilisateur lui-même OU par le staff
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role in ['client-expediteur', 'client-destinataire'];
+      // Staff peut créer des comptes portail pour les clients
+      allow create: if isStaff()
+        && request.resource.data.role in ['client-expediteur', 'client-destinataire'];
+      allow update: if isStaff();
+      // Suppression : admin ou chef pour aide_agent/livreur/pointeur de sa ville
+      allow delete: if isAdmin()
+        || ((role() == 'chef_agence' || role() == 'agentpro')
+          && resource.data.role in ['aide_agent', 'livreur', 'pointeur_encaisseur']
+          && resource.data.city == userDoc().city);
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Clients
+    match /clients/{clientId} {
+      // Lecture : Staff, Facturier, portail client, ou livreurs (pour chercher clients destinataires)
+      allow read:  if isStaff() || isFacturier() || isDeliveryWorker() || (signedIn() && resource.data.portalUid == request.auth.uid);
+      // Staff peut tout faire
+      allow write: if isStaff();
+      // Livreurs peuvent créer des clients destinataires uniquement
+      allow create: if isDeliveryWorker() && request.resource.data.isDestinataire == true;
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Portails clients
+    match /clientPortals/{token} {
+      allow read, write: if isStaff();
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Paiements
+    match /payments/{paymentId} {
+      allow read:  if isStaff() || ownsClient(resource.data.clientId);
+      allow write: if isStaff();
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Messages clients
+    match /clientMessages/{messageId} {
+      allow read: if isStaff() || ownsClient(resource.data.clientId);
+      allow create: if ownsClient(request.resource.data.clientId)
+        && request.resource.data.clientUid == request.auth.uid;
+      // Marquer lu par le client
+      allow update: if ownsClient(resource.data.clientId)
+        && request.resource.data.clientId == resource.data.clientId
+        && request.resource.data.clientUid == resource.data.clientUid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readByClientAt','readByClientUid'])
+        && request.resource.data.readByClientUid == request.auth.uid;
+      // RÃ©ponse client dans le fil de conversation
+      allow update: if ownsClient(resource.data.clientId)
+        && request.resource.data.clientId == resource.data.clientId
+        && request.resource.data.clientUid == resource.data.clientUid
+        && request.resource.data.status == 'open'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['replies','lastReplyAt','status','readByStaffAt','readByStaffBy']);
+      // Suppression d'un reply par le client (remplacement du tableau replies)
+      allow update: if ownsClient(resource.data.clientId)
+        && request.resource.data.clientId == resource.data.clientId
+        && request.resource.data.clientUid == resource.data.clientUid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['replies']);
+      allow update: if isStaff();
+      allow delete: if isStaff() || ownsClient(resource.data.clientId);
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Demandes de modification colis (client â†’ chef_agence)
+    match /modificationRequests/{reqId} {
+      allow read: if isStaff() || ownsClient(resource.data.clientId);
+      allow create: if ownsClient(request.resource.data.clientId)
+        && request.resource.data.clientUid == request.auth.uid;
+      allow update: if isStaff();
+      allow delete: if isStaff() || ownsClient(resource.data.clientId);
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Caisse
+    // 📤 Envois de valeurs / espèces : chef d'exploitation → validation par le chef d'agence
+    match /valeursEnvois/{envoiId} {
+      allow read: if isAdminOrDirecteur()
+        || ((role() == 'chef_agence' || role() == 'agentpro' || role() == 'chef_exploitation')
+            && resource.data.city == userCity());
+      allow create: if role() == 'chef_exploitation'
+        && request.resource.data.city == userCity()
+        && request.resource.data.status == 'envoye'
+        && request.resource.data.createdById == request.auth.uid;
+      // Annulation par son auteur, tant que l'envoi n'est pas traité
+      allow update: if role() == 'chef_exploitation'
+        && resource.data.createdById == request.auth.uid
+        && resource.data.status == 'envoye'
+        && request.resource.data.status == 'annule'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status']);
+      // Validation / rejet : chef d'agence de la ville (ou Admin) — jamais l'auteur de l'envoi
+      allow update: if (role() == 'chef_agence' || isAdmin())
+        && (isAdmin() || resource.data.city == userCity())
+        && resource.data.status == 'envoye'
+        && request.resource.data.status in ['valide', 'rejete', 'envoye']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'validatedById', 'validatedByName', 'validatedAt', 'rejectReason', 'caisseEntryIds', 'validationErrors'
+        ]);
+    }
+
+    match /caisseEntries/{entryId} {
+      allow read: if isAdmin()
+        || (isStaff() && isNotBlocked() && (
+          resource.data.city == userCity()
+          || resource.data.agentId == request.auth.uid
+          || resource.data.cashierId == request.auth.uid
+          || resource.data.sourceAgentId == request.auth.uid
+        ));
+      allow create, update: if isStaff();
+      // Protection: les versements livreurs ne peuvent Ãªtre supprimÃ©s que par leur crÃ©ateur ou un admin
+      allow delete: if isAdmin()
+        || isAdminOrDirecteur()
+        // Chef d'agence peut supprimer les entrÃ©es de sa ville
+        || (isChefAgence() && resource.data.city == userCity())
+        || (isStaff() && (
+          // Si createdById existe, vÃ©rifier que c'est le crÃ©ateur
+          (resource.data.createdById is string && resource.data.createdById == request.auth.uid)
+          // Sinon utiliser cashierId ou agentId pour anciennes entrÃ©es
+          || (!('createdById' in resource.data) && (
+            resource.data.cashierId == request.auth.uid
+            || resource.data.agentId == request.auth.uid
+          ))
+        ));
+    }
+
+    match /agencyCashes/{cashId} {
+      allow read:  if isStaff();
+      allow write: if isStaff();
+    }
+
+    match /caisseClotures/{id} {
+      allow read, write: if isStaff();
+    }
+
+    match /caissierTransactions/{id} {
+      allow read, write: if isStaff();
+    }
+
+    match /caissierRequests/{id} {
+      allow read: if isAdmin()
+        || (isStaff() && isNotBlocked() && (
+          resource.data.city == userCity()
+          || resource.data.caisserId == request.auth.uid
+          || resource.data.requestedById == request.auth.uid
+        ));
+      allow write: if isStaff();
+    }
+
+    match /agentRemises/{id} {
+      allow read, write: if isStaff();
+    }
+
+    match /agentCashRecoveryRequests/{id} {
+      allow read: if isAdmin()
+        || (isStaff() && isNotBlocked() && (
+          resource.data.city == userCity()
+          || resource.data.agentId == request.auth.uid
+          || resource.data.cashierId == request.auth.uid
+        ));
+      allow write: if isStaff();
+    }
+
+    match /agentCodRequests/{id} {
+      allow read, write: if isStaff();
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Port dÃ» chauffeurs (legacy Ã¢â‚¬â€ no longer used by UI)
+    match /driverPortDuTransactions/{id} {
+      allow read: if isStaff() || (signedIn() && request.auth.uid != null && resource.data.driverId == request.auth.uid);
+      allow create:        if role() == 'admin' || role() == 'agent'
+        || (signedIn()
+          && request.resource.data.driverId == request.auth.uid
+          && request.resource.data.type == 'versement'
+          && request.resource.data.status == 'pending');
+      allow update, delete: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+    }
+
+    // -- Versements Livreur -> Chef d'agence (Port Du / COD, workflow de validation)
+    match /driverVersements/{id} {
+      // Le livreur voit ses propres versements ; le staff voit ceux de sa ville
+      allow read: if isAdmin()
+        || (isStaff() && isNotBlocked() && resource.data.city == userCity())
+        || (signedIn() && resource.data.driverId == request.auth.uid);
+      // Creation par le livreur uniquement, pour lui-meme, en statut 'pending'
+      allow create: if signedIn()
+        && request.resource.data.driverId == request.auth.uid
+        && request.resource.data.status == 'pending'
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0;
+      // Modification par le créateur (livreur) si status == 'pending'
+      allow update: if (signedIn()
+          && resource.data.driverId == request.auth.uid
+          && resource.data.status == 'pending'
+          && request.resource.data.status == 'pending')
+        // OU validation / rejet par chef d'agence, agent (de la meme ville), directeur ou admin
+        || role() == 'admin' || role() == 'directeur'
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation') || role() == 'agent') && resource.data.city == userCity());
+      // Suppression par le créateur (livreur) si status == 'pending' OU par admin
+      allow delete: if isAdmin()
+        || (signedIn()
+          && resource.data.driverId == request.auth.uid
+          && resource.data.status == 'pending');
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ VÃ©hicules, logs directeur
+    match /vehicles/{id} {
+      allow read: if isStaff();
+      allow write: if isAdminOrDirecteur();
+    }
+
+    // 💾 Journal des imports de sauvegarde (page Admin)
+    match /backupImports/{id} {
+      allow read, create: if isAdmin();
+    }
+
+    match /directorLogs/{id} {
+      allow read:   if isAdminOrDirecteur();
+      allow create: if isStaff();
+      allow update, delete: if isAdminOrDirecteur();
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Secteurs
+    match /sectors/{sectorId} {
+      allow read:  if isStaff();
+      allow write: if role() == 'admin' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Bons de ramassage (lots prÃ©-imprimÃ©s)
+    match /bonRamasageBatches/{batchId} {
+      allow read:  if isStaff();
+      allow write: if role() == 'admin' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Arrivages
+    match /arrivages/{arrivageId} {
+      allow read:   if signedIn();
+      allow create: if isStaff() || isDeliveryWorker();
+      // Autoriser la modification par tout le staff pour le pointage
+      allow update: if signedIn() && (isStaff() || isDeliveryWorker());
+      // TEMPORAIRE: Permettre au staff de supprimer (pour nettoyage)
+      // TODO: Remettre "allow delete: if isAdmin();" après nettoyage
+      allow delete: if isStaff();
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Transferts vers l'Admin
+    match /adminTransfers/{id} {
+      allow read:   if isStaff();
+      allow create: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation') || role() == 'caissier';
+      // Modification par le créateur si status == 'pending'
+      allow update: if (signedIn()
+          && resource.data.fromId == request.auth.uid
+          && resource.data.status == 'pending'
+          && request.resource.data.status == 'pending')
+        // OU par admin
+        || isAdmin();
+      // Suppression par le créateur si status == 'pending' OU par admin
+      allow delete: if isAdmin()
+        || (signedIn()
+          && resource.data.fromId == request.auth.uid
+          && resource.data.status == 'pending');
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Signatures de livraison (accÃ¨s public pour le destinataire)
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Signatures de livraison (accÃ¨s public pour le destinataire)
+    // Supporte signatures normales ({parcelId}) ET signatures de retour ({parcelId}_return)
+    match /deliverySignatures/{signatureId} {
+      // Lecture publique : le chauffeur et l'agent voient la signature en temps rÃ©el
+      allow get: if true;
+      allow list: if isStaff();
+      // CrÃ©ation publique : uniquement si le token correspond Ã  celui stockÃ© dans le colis
+      // Le signatureId peut être {parcelId} OU {parcelId}_return
+      allow create, update: if request.resource.data.token != null
+        && request.resource.data.parcelId != null
+        && exists(/databases/$(database)/documents/parcels/$(request.resource.data.parcelId))
+        && (
+          get(/databases/$(database)/documents/parcels/$(request.resource.data.parcelId)).data.signatureToken == request.resource.data.token
+          || get(/databases/$(database)/documents/parcels/$(request.resource.data.parcelId)).data.returnSignatureToken == request.resource.data.token
+        );
+      allow delete: if isStaff();
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Remarques caissier
+    match /caissierRemarks/{id} {
+      allow read, write: if isStaff();
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ RÃ¨glements (Pointeur-Encaisseur)
+    match /reglements/{reglementId} {
+      allow read: if isAdmin()
+        || (isStaff() && isNotBlocked() && (
+          resource.data.agencyCity == userCity()
+          || resource.data.villeExpedition == userCity()
+          || resource.data.pointeurId == request.auth.uid
+        ));
+      allow create: if isAdmin()
+        || (isPointeurEncaisseur()
+          && request.resource.data.pointeurId == request.auth.uid
+          && request.resource.data.agencyCity == userDoc().city);
+      allow update: if isAdmin()
+        || (isPointeurEncaisseur()
+          && resource.data.agencyCity == userDoc().city
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'docVerified', 'docVerifiedAt', 'docVerifiedBy', 'docVerifiedById',
+            'docControlStatus', 'docControlChecks', 'docControlNotes', 'updatedAt'
+          ]))
+        || (isPointeurEncaisseur()
+          && resource.data.pointeurId == request.auth.uid
+          && resource.data.agencyCity == userDoc().city
+          && (resource.data.status == 'en_attente' || resource.data.status == 'encaisse'))
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation')) && resource.data.agencyCity == userDoc().city)
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation'))
+          && resource.data.villeExpedition == userDoc().city
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'sourceReceived', 'sourceReceivedAt', 'sourceReceivedBy', 'sourceReceivedById',
+            'sourceReceivedMode', 'sourceReceivedMontant', 'sourceReceivedBanque',
+            'sourceReceivedNumeroPiece', 'sourceReceivedDateEcheance',
+            'sourceDataMatches', 'sourceReceivedNote', 'updatedAt'
+          ]));
+      allow delete: if isAdmin()
+        || (isPointeurEncaisseur()
+          && resource.data.pointeurId == request.auth.uid
+          && (resource.data.status == 'en_attente' || resource.data.status == 'encaisse'))
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation')) && resource.data.agencyCity == userDoc().city);
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Rapports RÃ¨glements
+    match /reglementsRapports/{rapportId} {
+      allow read: if isAdmin()
+        || (isStaff() && isNotBlocked() && (
+          resource.data.agencyCity == userCity()
+          || resource.data.pointeurId == request.auth.uid
+        ));
+      allow create: if isAdmin()
+        || (isPointeurEncaisseur()
+          && request.resource.data.pointeurId == request.auth.uid
+          && request.resource.data.agencyCity == userDoc().city);
+      allow update: if isAdmin()
+        || (isPointeurEncaisseur()
+          && resource.data.pointeurId == request.auth.uid
+          && resource.data.status == 'brouillon')
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation')) && resource.data.agencyCity == userDoc().city);
+      allow delete: if isAdmin()
+        || (isPointeurEncaisseur()
+          && resource.data.pointeurId == request.auth.uid
+          && resource.data.status == 'brouillon');
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Retour Documents (bordereaux de retour chÃ¨ques/traites)
+    match /retourDocuments/{id} {
+      allow read: if isStaff();
+      allow create: if isAdmin()
+        || (isPointeurEncaisseur()
+          && request.resource.data.pointeurId == request.auth.uid
+          && request.resource.data.agencyCity == userDoc().city);
+      allow update: if isAdmin()
+        || (isPointeurEncaisseur() && resource.data.agencyCity == userDoc().city)
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation')) && resource.data.agencyCity == userDoc().city);
+      allow delete: if isAdmin()
+        || (isPointeurEncaisseur()
+          && resource.data.pointeurId == request.auth.uid
+          && resource.data.status == 'brouillon');
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Versements bancaires (RETOUR FOND)
+    match /bankDeposits/{depositId} {
+      allow read:          if isStaff();
+      allow create:        if isStaff();
+      allow update, delete: if isAdmin();
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Notes agents
+    match /agentNotes/{noteId} {
+      allow read: if isStaff();
+      allow write: if isStaff();
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Stats agrÃ©gÃ©es (Ã©crites par Cloud Functions, lues par admin)
+    match /stats/{statId} {
+      allow read: if isAdmin();
+      allow write: if false; // Cloud Functions only (service account bypasses rules)
+    }
+    match /stats/{statId}/{sub=**} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
+
+    // Ã¢â€â‚¬Ã¢â€â‚¬ Catch-all : lecture staff, Ã©criture admin uniquement
+    // (protÃ¨ge les collections non listÃ©es explicitement)
+    // Encaisseur central : versements societe et paiements fournisseurs
+    match /centralCodDeposits/{depositId} {
+      allow read: if isAdmin() || isCentralCollector() || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+      allow create: if isAdmin() || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+      allow update: if isAdmin() || isCentralCollector();
+      allow delete: if isAdmin();
+    }
+
+    match /centralSupplierPayments/{paymentId} {
+      allow read, create, update: if isAdmin() || isCentralCollector();
+      allow delete: if isAdmin();
+    }
+
+    // Comptes portail (particuliers et clients)
+    match /portalAccounts/{accountId} {
+      allow read: if isStaff() || (signedIn() && request.auth.uid == accountId);
+      // Création : staff OU utilisateur créant son propre compte (accountId = uid)
+      allow create: if isStaff()
+        || (signedIn() && request.auth.uid == accountId && request.resource.data.uid == request.auth.uid);
+      allow update: if isStaff() || (signedIn() && request.auth.uid == accountId);
+      allow delete: if isStaff();
+    }
+
+    // Déclarations de colis perdus
+    match /lostParcels/{lostParcelId} {
+      allow read: if isStaff() || isDeliveryWorker();
+      // Création : tout le staff ET les chauffeurs/livreurs peuvent déclarer un colis perdu
+      allow create: if (isStaff() || isDeliveryWorker()) && signedIn();
+      // Mise à jour : réponses des agences, changements de statut
+      allow update: if isStaff();
+      // Suppression : admin, chef d'agence, ou déclarateur original
+      allow delete: if isAdmin()
+        || role() == 'chef_agence' || role() == 'agentpro'
+        || (signedIn() && resource.data.declaredBy.uid == request.auth.uid);
+    }
+
+    // Transactions de ports dûs en compte clients
+    match /clientPortDuTransactions/{transactionId} {
+      // Lecture : Staff et livreurs
+      allow read: if isStaff() || isDeliveryWorker();
+      // Création : Staff et livreurs
+      allow create: if signedIn() && (isStaff() || isDeliveryWorker());
+      // Mise à jour : Admin, chef d'agence et agentpro de la même ville
+      allow update: if isAdmin()
+        || (isChefAgence() && resource.data.agencyCity == userCity());
+      // Suppression : Admin uniquement
+      allow delete: if isAdmin();
+    }
+
+    // Bons de livraison (Delivery Sheets)
+    match /deliverySheets/{sheetId} {
+      // Lecture : Staff de la même ville ou admin
+      allow read: if isStaff() && (isAdmin() || resource.data.agencyCity == userCity());
+      // Création : Chef d'agence et agentpro uniquement
+      allow create: if signedIn() && isChefAgence()
+        && request.resource.data.agencyCity == userCity()
+        && request.resource.data.createdById == request.auth.uid;
+      // Mise à jour : Admin ou chef d'agence de la même ville
+      allow update: if isAdmin()
+        || (isChefAgence() && resource.data.agencyCity == userCity());
+      // Suppression : Admin uniquement
+      allow delete: if isAdmin();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DISTRIBUTION RETOUR DE FOND ESPECES (DRFE)
+    // ═══════════════════════════════════════════════════════════════════════════
+    match /return_funds_especes/{docId} {
+      // Lecture : Distributeur espèces ou Admin
+      allow read: if isDistributeurEspeces() || isAdmin();
+      // Création : Distributeur espèces ou Admin
+      allow create: if isDistributeurEspeces() || isAdmin();
+      // Mise à jour : Distributeur espèces ou Admin
+      allow update: if isDistributeurEspeces() || isAdmin();
+      // Suppression : Admin uniquement
+      allow delete: if isAdmin();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // DISTRIBUTION RETOUR DE FOND CHEQUES/TRAITES (DRFC)
+    // ═══════════════════════════════════════════════════════════════════════════
+    match /return_funds_cheques/{docId} {
+      // Lecture : Distributeur chèques ou Admin
+      allow read: if isDistributeurCheques() || isAdmin();
+      // Création : Distributeur chèques ou Admin
+      allow create: if isDistributeurCheques() || isAdmin();
+      // Mise à jour : Distributeur chèques ou Admin
+      allow update: if isDistributeurCheques() || isAdmin();
+      // Suppression : Admin uniquement
+      allow delete: if isAdmin();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // VERSION ALLÉGÉE DES EXPÉDITIONS (parcelsLite) — miroir de parcels sans les champs lourds
+    // ═══════════════════════════════════════════════════════════════════════════
+    // Écrit UNIQUEMENT par la Cloud Function syncParcelLite (Admin SDK) : aucune écriture client.
+    // Lecture : staff (dont facturier) — jamais plus large que parcels (pas de get public).
+    // ⚠️ Bloc séparé : le bloc parcels est proche de la limite de 1000 expressions.
+    match /parcelsLite/{parcelId} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // ARCHIVES COLIS (parcels_archive)
+    // ═══════════════════════════════════════════════════════════════════════════
+    match /parcels_archive/{parcelId} {
+      // Lecture : tout le staff + encaisseur central
+      allow read: if isStaff() || isCentralCollector();
+      // Création : admin uniquement (archivage automatique)
+      allow create: if isAdmin();
+      // Mise à jour : admin ou encaisseur central (pour restauration)
+      allow update: if isAdmin() || isCentralCollector();
+      // Suppression : admin ou encaisseur central (pour restauration)
+      allow delete: if isAdmin() || isCentralCollector();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // FACTURATION (invoices)
+    // ═══════════════════════════════════════════════════════════════════════════
+    match /invoices/{invoiceId} {
+      // Lecture : Admin, Facturier, ou Chef d'agence de la même ville
+      allow read: if isAdmin() || isFacturier()
+        || (isChefAgence() && resource.data.agencyCity == userCity());
+      // Création : Admin, Facturier, ou Chef d'agence
+      allow create: if isAdmin() || isFacturier() || isChefAgence();
+      // Mise à jour : Admin, Facturier, ou Chef d'agence de la même ville
+      allow update: if isAdmin() || isFacturier()
+        || (isChefAgence() && resource.data.agencyCity == userCity());
+      // Suppression : Admin ou Facturier uniquement
+      allow delete: if isAdmin() || isFacturier();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // RETARDS DE LIVRAISON (deliveryDelays)
+    // ═══════════════════════════════════════════════════════════════════════════
+    match /deliveryDelays/{delayId} {
+      // Lecture : Admin, Chef d'agence, AgentPro, ou créateur du retard
+      allow read: if isAdmin()
+        || isChefAgence()
+        || (signedIn() && request.auth.uid == resource.data.createdById);
+      // Création : Chef d'agence ou AgentPro uniquement
+      allow create: if signedIn() && isChefAgence()
+        && request.resource.data.createdById == request.auth.uid
+        && request.resource.data.city == userCity();
+      // Mise à jour : Admin, Chef d'agence, AgentPro de la même ville, ou créateur
+      allow update: if isAdmin()
+        || (isChefAgence() && resource.data.city == userCity())
+        || (signedIn() && request.auth.uid == resource.data.createdById);
+      // Suppression : Admin ou Chef d'agence de la même ville
+      allow delete: if isAdmin()
+        || (isChefAgence() && resource.data.city == userCity());
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // 👁️ PRÉSENCE TEMPS RÉEL (presence/{uid}) — « L'œil qui ne dort pas » (Admin)
+    // Chaque utilisateur n'écrit QUE sa propre fiche (heartbeat). Lecture : Admin/Directeur
+    // (+ l'utilisateur lui-même pour la remise à zéro quotidienne des compteurs).
+    // Bloc séparé (hors /parcels) : pas d'impact sur la limite d'expressions des colis.
+    // ═══════════════════════════════════════════════════════════════════════════
+    match /presence/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isAdminOrDirecteur());
+      allow create, update: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.uid == uid
+        && request.resource.data.keys().hasOnly([
+          'uid', 'name', 'role', 'city', 'currentPage', 'pageLabel', 'tab',
+          'online', 'visible', 'lastSeen', 'idleSec', 'lastActivityAt', 'sessionStart',
+          'device', 'day', 'firstSeenToday', 'activity15', 'activityMinute',
+          'actionsToday', 'parcelsCreatedToday', 'parcelsUpdatedToday', 'codCollectedToday'
+        ]);
+      allow delete: if isAdmin();
+    }
+
+    // Règle par défaut — la collection presence est exclue (lecture réservée Admin/Directeur ci-dessus)
+    match /{coll}/{document=**} {
+      allow read:  if coll != 'presence' && isStaff();
+      // parcelsLite : écrit uniquement par la Cloud Function syncParcelLite (Admin SDK)
+      allow write: if coll != 'presence' && coll != 'parcelsLite' && isAdmin();
+    }
+  }
+}

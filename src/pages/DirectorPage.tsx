@@ -41,6 +41,8 @@ import DirectorVersementsTab from './director/tabs/DirectorVersementsTab'
 import DirectorCaisseSimple from './director/DirectorCaisseSimple'
 import { fmt } from '../utils/formatNumber'
 import { normIncludes } from '../utils/normText'
+import { shouldTriggerSearch } from '../utils/searchUtils'
+import { searchParcels } from '../firebase/parcels'
 import { codMoneyOnly } from '../utils/moneyFlow'
 
 const parcelDate = (p: any) => {
@@ -202,12 +204,26 @@ export default function DirectorPage() {
 
   useEffect(() => {
     setLoading(true)
-    // Recherche active : 10000 colis pour trouver anciens colis
-    // Par défaut : 500 colis pour chargement rapide
-    const loadLimit = isSearchActive ? 10000 : 500
-    const unsubParcels = subscribeAllParcels((data: any) => { setParcels(data); setLoading(false) }, console.error, 0, loadLimit)
+    // ⚡ Toujours les 500 expéditions les plus récentes en temps réel. La recherche ne recharge plus 10 000
+    // expéditions : elle interroge directement la base (N° EXP, suivi, téléphone, nom) — voir searchResults.
+    const unsubParcels = subscribeAllParcels((data: any) => { setParcels(data); setLoading(false) }, console.error, 0, 500)
     return () => { unsubParcels() }
-  }, [isSearchActive])
+  }, [])
+
+  // 🔎 Recherche CIBLÉE (même fonction que l'Admin et l'agent) : quelques lectures au lieu de 10 000
+  const [searchResults, setSearchResults] = useState<any[]>([])
+  const [searching, setSearching] = useState(false)
+  useEffect(() => {
+    const q = debouncedSearch.trim()
+    if (!isSearchActive || !shouldTriggerSearch(q)) { setSearchResults([]); return }
+    let cancelled = false
+    setSearching(true)
+    searchParcels(q, { limit: 300, includeArchived: true })
+      .then(r => { if (!cancelled) setSearchResults(r || []) })
+      .catch(() => { if (!cancelled) setSearchResults([]) })
+      .finally(() => { if (!cancelled) setSearching(false) })
+    return () => { cancelled = true }
+  }, [debouncedSearch, isSearchActive])
 
   useEffect(() => {
     const unsubUsers   = subscribeAllUsers(setUsers)
@@ -376,15 +392,20 @@ export default function DirectorPage() {
 
   // ---- Computed — Expéditions
   const filtered = useMemo(() => {
-    const byDate = filterByDate(parcels, datePreset, dateFrom, dateTo)
+    // Recherche : expéditions récentes + résultats de la recherche ciblée en base (anciennes comprises), sans doublon
+    const source = searchResults.length
+      ? [...new Map([...parcels, ...searchResults].map((p: any) => [p.id, p])).values()]
+      : parcels
+    // Une recherche porte sur toute la base : le filtre de date ne s'applique pas à ses résultats
+    const byDate = searchResults.length ? source : filterByDate(source, datePreset, dateFrom, dateTo)
     return byDate.filter((p: any) => {
       const cityOk   = cityFilter   === 'Toutes' || p.receiver?.city === cityFilter || p.sender?.city === cityFilter
       const statusOk = statusFilter === 'Tous'   || p.status === statusFilter
-      const searchOk = !search || [p.trackingId, p.sender?.name, p.receiver?.name, p.receiver?.tel]
+      const searchOk = !search || [p.trackingId, p.senderNic, p.sender?.nic, p.sender?.name, p.receiver?.name, p.receiver?.tel, p.sender?.tel]
         .some(v => normIncludes(v, search.toLowerCase()))
       return cityOk && statusOk && searchOk
     })
-  }, [parcels, cityFilter, statusFilter, search, datePreset, dateFrom, dateTo])
+  }, [parcels, searchResults, cityFilter, statusFilter, search, datePreset, dateFrom, dateTo])
 
   // ---- Computed — RETOUR FOND
   // 📅 COD encaissés avant le 05/10/2026 (essais) : hors des soldes COD
@@ -935,9 +956,11 @@ export default function DirectorPage() {
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 mb-4 space-y-3">
               <div className="flex flex-wrap gap-3 items-center">
                 <Filter className="w-4 h-4 text-gray-400 shrink-0" />
-                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher..."
+                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher (N° EXP 7 chiffres, téléphone, nom…)"
                   className="border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:border-purple-500 focus:outline-none flex-1 min-w-36"
                 />
+                {searching && <span className="text-xs text-purple-600 font-semibold whitespace-nowrap">Recherche dans toute la base…</span>}
+                {!searching && searchResults.length > 0 && <span className="text-xs text-gray-500 whitespace-nowrap">{searchResults.length} trouvée(s) dans toute la base</span>}
                 <select value={cityFilter} onChange={e => setCityFilter(e.target.value)} className={selectCls}>
                   <option value="Toutes">Toutes les villes</option>
                   {CITIES.map(c => <option key={c}>{c}</option>)}

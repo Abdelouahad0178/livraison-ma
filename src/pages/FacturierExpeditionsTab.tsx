@@ -2,11 +2,12 @@ import DateInput from '../components/DateInput'
 import { useState, useEffect, useMemo, useRef, useDeferredValue, startTransition } from 'react'
 import PendingBadge from '../components/PendingBadge'
 import { makeFacturierSearchMatcher } from '../utils/parcelSearch'
-import { subscribeAllParcels, getParcelsPage, getParcelsByCreatedAtRange } from '../firebase/parcels'
+import { subscribeAllParcels, getParcelsPage, getParcelsByCreatedAtRange, searchParcels } from '../firebase/parcels'
+import { shouldTriggerSearch } from '../utils/searchUtils'
 import { Search, Printer, FileSpreadsheet, Edit2, Check, X, FileText, Database, Download, MapPin, User, Receipt, RefreshCw } from 'lucide-react'
 import { CITIES, STATUSES } from '../firebase/constants'
 import { loadExcel } from '../utils/loadExcel'
-import { doc, updateDoc, Timestamp } from 'firebase/firestore'
+import { doc, getDoc, updateDoc, Timestamp } from 'firebase/firestore'
 import { auth, db } from '../firebase/config'
 import { printParcelTicket } from '../utils/printParcelTicket'
 import { printClientInvoice } from '../utils/printClientInvoice'
@@ -26,8 +27,18 @@ import { normName, billingAgencyOf, isBilledByAgency, isCompteExpediteurType, is
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-type PortFilter = 'all' | 'port_paye' | 'port_du' | 'port_du_cheque' | 'port_en_compte_all'
-  | 'port_en_compte' | 'port_en_compte_expediteur' | 'port_en_compte_destinataire'
+// Types de port cochés (plusieurs à la fois) — liste vide = tous les ports
+type PortKey = 'port_paye' | 'port_du' | 'port_du_cheque' | 'compte_exp' | 'compte_dest'
+const PORT_CHIPS: { key: PortKey; label: string; on: string }[] = [
+  { key: 'port_paye', label: '✅ Port payé', on: 'bg-green-600 border-green-600 text-white' },
+  { key: 'port_du', label: '💰 Port dû', on: 'bg-orange-500 border-orange-500 text-white' },
+  { key: 'port_du_cheque', label: '🧾 Port dû (chèque)', on: 'bg-amber-600 border-amber-600 text-white' },
+  { key: 'compte_exp', label: '📤 En compte expéditeur', on: 'bg-indigo-600 border-indigo-600 text-white' },
+  { key: 'compte_dest', label: '📥 En compte destinataire', on: 'bg-purple-600 border-purple-600 text-white' },
+]
+// Ancien type générique 'port_en_compte' = compte expéditeur (même convention que la page Chef d'agence)
+const matchesPortKey = (t: string | undefined, k: PortKey): boolean =>
+  k === 'compte_exp' ? isCompteExpediteurType(t) : k === 'compte_dest' ? t === 'port_en_compte_destinataire' : t === k
 type ClientRole = 'all' | 'expediteur' | 'destinataire'
 type BillingFilter = 'all' | 'non_facturees' | 'facturees'
 
@@ -71,6 +82,24 @@ const clientNamesOf = (p: any, role: ClientRole): string[] => {
   const list = role === 'expediteur' ? exp : role === 'destinataire' ? dest : [...exp, ...dest]
   return list.filter(Boolean).map(String)
 }
+
+// 🖨️ Bon d'expédition : la liste ne contient que les champs du Facturier → l'expédition COMPLÈTE est relue au clic
+// (parcels, sinon parcels_archive). La fenêtre est ouverte tout de suite (sinon bloquée après l'attente).
+async function printFullTicket(parcel: any) {
+  const w = window.open('', '_blank')
+  if (!w) { alert('Impossible d\'ouvrir la fenêtre d\'impression. Veuillez autoriser les popups.'); return }
+  w.document.write('<p style="font-family:Arial;padding:20px">Chargement du bon…</p>')
+  try {
+    let snap = await getDoc(doc(db, 'parcels', parcel.id))
+    if (!snap.exists()) snap = await getDoc(doc(db, 'parcels_archive', parcel.id))
+    printParcelTicket(snap.exists() ? { id: snap.id, ...snap.data() } : parcel, w)
+  } catch {
+    printParcelTicket(parcel, w)
+  }
+}
+
+// ⚡ Comparateur de noms créé une fois (même règle que String.localeCompare, beaucoup plus rapide)
+const nameCollator = new Intl.Collator()
 
 // Période (en journées d'opération) correspondant au filtre de date
 function computePeriod(preset: DateFilterPreset, from: string, to: string, opDay: Date | null): { from: string; to: string } | null {
@@ -126,8 +155,8 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
   const [clientQuery, setClientQuery] = useState('')
   const [clientRole, setClientRole] = useState<ClientRole>('all')
   const [cityFilter, setCityFilter] = useState('Toutes')
-  const [portTypeFilter, setPortTypeFilter] = useState<PortFilter>('all')
-  const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [portTypeFilter, setPortTypeFilter] = useState<PortKey[]>([]) // vide = tous
+  const [statusFilter, setStatusFilter] = useState<string[]>([]) // vide = tous
   const [billingFilter, setBillingFilter] = useState<BillingFilter>('all')
   const [datePreset, setDatePreset] = useState<DateFilterPreset>('week') // démarre sur 7 jours
   const [dateFrom, setDateFrom] = useState('')
@@ -156,7 +185,16 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
     return [...map.values()]
   }, [liveParcels, moreParcels])
 
+  // ⚡ L'écoute temps réel des 300 dernières expéditions ne sert qu'à « Toutes les dates » : en mode période
+  // (cas par défaut) la liste vient du chargement de la période → écoute fermée (elle relançait tout le calcul).
+  const allDatesMode = computePeriod(datePreset, dateFrom, dateTo, operationalDay) === null
   useEffect(() => {
+    if (!allDatesMode) return
+    // Nouvelle écoute → pagination « Charger plus » repartie de zéro (ni saut ni doublon)
+    lastPageDocRef.current = null
+    setMoreParcels([])
+    setHasMore(true)
+    setLoading(true)
     const unsubscribe = subscribeAllParcels(
       (docs: any[], lastSnap: any) => {
         startTransition(() => setLiveParcels(docs))
@@ -174,15 +212,28 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
       PAGE_SIZE
     )
     return unsubscribe
-  }, [])
+  }, [allDatesMode])
 
   useEffect(() => {
     let unsubInv: (() => void) | undefined
-    let unsubCli: (() => void) | undefined
     try { unsubInv = subscribeAllInvoices(setInvoices) } catch (e) { console.warn('Facturier - factures:', e) }
-    try { unsubCli = subscribeClients(setClients, (e) => console.warn('Facturier - clients:', e)) } catch (e) { console.warn(e) }
-    return () => { unsubInv?.(); unsubCli?.() }
+    return () => { unsubInv?.() }
   }, [])
+
+  // ⚡ Fiches clients (~14 000, ~10 Mo) : chargées APRÈS la liste des expéditions (ou au bout de 6 s au plus),
+  // pour ne pas ralentir le démarrage. Elles ne servent qu'aux suggestions du filtre client.
+  const [clientsWanted, setClientsWanted] = useState(false)
+  useEffect(() => {
+    if (!clientsWanted) return
+    let unsubCli: (() => void) | undefined
+    try { unsubCli = subscribeClients(setClients, (e) => console.warn('Facturier - clients:', e)) } catch (e) { console.warn(e) }
+    return () => { unsubCli?.() }
+  }, [clientsWanted])
+  useEffect(() => {
+    if (clientsWanted) return
+    const t = setTimeout(() => setClientsWanted(true), 6000)
+    return () => clearTimeout(t)
+  }, [clientsWanted])
 
   const loadMoreParcels = async () => {
     if (!hasMore || loadingMore || loadingAll || !lastPageDocRef.current) return
@@ -298,7 +349,9 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
           while (nextIdx < slices.length) {
             const s = slices[nextIdx++]
             if (reqId !== rangeReqRef.current) return
-            const docs = await getParcelsByCreatedAtRange(s.start, s.end, 1000, undefined, !s.endInclusive)
+            // 🧾 Copie « facturier » (≈ 0,5 Ko / expédition au lieu de ≈ 2 Ko) : contrôlée identique à parcels le
+            // 19/10/2026 sur 12 semaines (nombre, prix, CRBT, chaque champ). Le bon imprimé relit l'expédition complète.
+            const docs = await getParcelsByCreatedAtRange(s.start, s.end, 1000, undefined, !s.endInclusive, 'facturier')
             if (reqId !== rangeReqRef.current) return
             loaded += docs.length
             doneDays += 1
@@ -359,6 +412,29 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
   // 1) Période + filtres généraux (sans le client) → sert aussi aux suggestions de clients
   // ⚡ La saisie reste fluide : les filtres suivent la frappe en priorité basse (même résultat final).
   const deferredSearch = useDeferredValue(search)
+  // 🗄️ « Inclure archives » : la recherche interroge aussi les expéditions archivées de la base (300 au plus)
+  const [includeArchives, setIncludeArchives] = useState(false)
+  const [archiveResults, setArchiveResults] = useState<any[]>([])
+  const [archiveSearching, setArchiveSearching] = useState(false)
+  // ⚡ Recherche serveur lancée après une pause de frappe (0,5 s) ou à la touche Entrée — plus à chaque lettre
+  const [archiveQuery, setArchiveQuery] = useState('')
+  useEffect(() => {
+    if (!includeArchives) { setArchiveQuery(''); return }
+    const t = setTimeout(() => setArchiveQuery(search.trim()), 500)
+    return () => clearTimeout(t)
+  }, [includeArchives, search])
+  useEffect(() => {
+    const q = archiveQuery
+    if (!includeArchives || !q || !shouldTriggerSearch(q)) { setArchiveResults([]); return }
+    let cancelled = false
+    setArchiveSearching(true)
+    // 🪶 Partie non archivée lue en version allégée (seuls les résultats archivés sont gardés ici)
+    searchParcels(q, { includeArchived: true, limit: 300, lite: true })
+      .then(r => { if (!cancelled) setArchiveResults((r || []).filter((p: any) => p.isArchived)) })
+      .catch(() => { if (!cancelled) setArchiveResults([]) })
+      .finally(() => { if (!cancelled) setArchiveSearching(false) })
+    return () => { cancelled = true }
+  }, [includeArchives, archiveQuery])
   const deferredClientQuery = useDeferredValue(clientQuery)
   // ⚡ RÉACTIVITÉ DES BOUTONS : les filtres (période, ville, type de port, statut, facturation, rôle
   // client) restent URGENTS — le bouton cliqué s'allume tout de suite et le chargement de la
@@ -376,21 +452,19 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
     const term = norm(deferredSearch)
     // Champs normalisés mis en cache par expédition (utils/parcelSearch) — même règle qu'avant
     const searchMatch = term ? makeFacturierSearchMatcher(deferredSearch) : null
-    return byDate.filter((p: any) => {
+    // 🗄️ Archives trouvées par la recherche : ajoutées SANS le filtre de période (anciennes par nature), mêmes autres filtres
+    const known = new Set(byDate.map((p: any) => p.id))
+    const archived = includeArchives && term ? archiveResults.filter((p: any) => !known.has(p.id)) : []
+    return [...byDate, ...archived].filter((p: any) => {
       // Agence qui facture : l'agence de DESTINATION pour un port en compte destinataire (le client
       // destinataire paie là où il reçoit, comme sur la page Chef d'agence), sinon l'agence d'origine.
       // Règle partagée avec la page Chef d'agence : utils/billingAgency
       if (profileCity && !isBilledByAgency(p, profileCity)) return false
       if (cityFilter !== 'Toutes' && !isBilledByAgency(p, cityFilter)) return false
 
-      if (portTypeFilter === 'port_en_compte_all') {
-        if (!isPortEnCompte(p.portType)) return false
-      } else if (portTypeFilter === 'port_en_compte_expediteur') {
-        // Ancien type générique 'port_en_compte' = compte expéditeur (même convention que la page Chef d'agence)
-        if (!isCompteExpediteurType(p.portType)) return false
-      } else if (portTypeFilter !== 'all' && p.portType !== portTypeFilter) return false
-
-      if (statusFilter !== 'all' && p.status !== statusFilter) return false
+      // Plusieurs types de port / statuts cochés : l'expédition doit correspondre à L'UN d'eux
+      if (portTypeFilter.length && !portTypeFilter.some(k => matchesPortKey(p.portType, k))) return false
+      if (statusFilter.length && !statusFilter.includes(p.status)) return false
 
       if (billingFilter !== 'all') {
         const inv = !!invoiceOf(p)
@@ -401,9 +475,19 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
       if (searchMatch && !searchMatch(p)) return false
       return true
     })
-  }, [deferredFilters, rangeParcels, parcels, deferredSearch, profileCity, invoicedMap]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [deferredFilters, rangeParcels, parcels, deferredSearch, profileCity, invoicedMap, includeArchives, archiveResults]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // 2) Suggestions de clients (noms trouvés sur la période + fiche clients)
+  // ⚡ Fiches clients mises en forme et triées UNE FOIS (à leur arrivée), plus à chaque frappe.
+  // Même ordre qu'avant : nombre d'expéditions décroissant, puis nom (Intl.Collator = règle de localeCompare).
+  const sortedClientEntries = useMemo(() => {
+    const seen = new Map<string, { k: string; name: string }>()
+    clients.forEach((c: any) => {
+      const k = norm(c.name)
+      if (k && !seen.has(k)) seen.set(k, { k, name: String(c.name).trim() })
+    })
+    return [...seen.values()].sort((a, b) => nameCollator.compare(a.name, b.name))
+  }, [clients])
   const clientOptions = useMemo(() => {
     const { clientRole } = deferredFilters
     const counts = new Map<string, { name: string; count: number }>()
@@ -416,12 +500,11 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
         else counts.set(k, { name, count: 1 })
       })
     })
-    clients.forEach((c: any) => {
-      const k = norm(c.name)
-      if (k && !counts.has(k)) counts.set(k, { name: String(c.name).trim(), count: 0 })
-    })
-    return [...counts.values()].sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
-  }, [baseFiltered, clients, deferredFilters])
+    // Noms de la période (count ≥ 1) triés, puis fiches clients absentes de la période (count 0), déjà triées
+    const inPeriod = [...counts.values()].sort((a, b) => b.count - a.count || nameCollator.compare(a.name, b.name))
+    for (const e of sortedClientEntries) if (!counts.has(e.k)) inPeriod.push({ name: e.name, count: 0 })
+    return inPeriod
+  }, [baseFiltered, sortedClientEntries, deferredFilters])
   const clientOptionKeys = useMemo(() => new Set(clientOptions.map(o => norm(o.name))), [clientOptions])
 
   // 3) Filtre client : correspondance exacte si le nom vient de la liste, sinon « contient »
@@ -453,7 +536,7 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
   // Réinitialisations quand les filtres changent
   useEffect(() => {
     setDisplayLimit(500)
-    setToggled(new Set())
+    setToggled(prev => (prev.size ? new Set() : prev))
   }, [search, clientQuery, clientRole, cityFilter, portTypeFilter, statusFilter, billingFilter, datePreset, dateFrom, dateTo, operationalDay])
 
   // ── Sélection pour la facture ──────────────────────────────────────────────
@@ -575,16 +658,116 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
     setClientQuery('')
     setClientRole('all')
     setCityFilter('Toutes')
-    setPortTypeFilter('all')
-    setStatusFilter('all')
+    setPortTypeFilter([])
+    setStatusFilter([])
     setBillingFilter('all')
-    setDatePreset('month')
+    setDatePreset('week') // même période qu'au démarrage (7 jours)
     setDateFrom('')
     setDateTo('')
     setOperationalDay(getCurrentOperationalDay())
   }
 
   const isLoadingList = rangeMode ? rangeLoading : loading
+  // Liste des expéditions reçue → on peut charger les fiches clients
+  const listShown = rangeMode ? (!rangeLoading && rangeDayProgress === null && rangeParcels.length > 0) : !loading
+  useEffect(() => { if (listShown) setClientsWanted(true) }, [listShown])
+  // ⚡ Lignes du tableau (jusqu'à 500) et suggestions clients MÉMORISÉES : une lettre tapée ne les redessine plus ;
+  // elles ne sont refaites que si leur contenu change (liste, coches, factures, prix en cours de modification).
+  const tableRows = useMemo(() => (
+                tableParcels.slice(0, displayLimit).map((parcel: any) => {
+                  const inv = invoiceOf(parcel)
+                  const included = isIncluded(parcel)
+                  return (
+                    <tr key={parcel.id} className={included ? 'hover:bg-gray-50' : 'bg-gray-50/60 text-gray-400'}>
+                      <td className="px-3 py-3 text-center">
+                        <input type="checkbox" checked={included} onChange={() => toggleOne(parcel.id)} />
+                      </td>
+                      <td className="px-3 py-3 text-sm font-semibold text-indigo-600">{parcel.sender?.nic || parcel.trackingId || '-'}</td>
+                      <td className="px-3 py-3 text-sm text-gray-700">{parcel.clientName || '-'}</td>
+                      <td className="px-3 py-3 text-sm text-gray-700">{parcel.sender?.name || '-'}</td>
+                      <td className="px-3 py-3 text-sm text-gray-700">{parcel.receiver?.name || '-'}</td>
+                      <td className="px-3 py-3 text-sm text-gray-600">{parcel.sender?.city || parcel.originCity || '-'}</td>
+                      <td className="px-3 py-3 text-sm text-gray-600">{parcel.receiver?.city || parcel.recipientCity || '-'}</td>
+                      <td className="px-3 py-3 text-center">
+                        <span className="inline-block px-2 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-bold">{nbColisOf(parcel)}</span>
+                      </td>
+                      <td className="px-3 py-3">
+                        <span className={`inline-block px-2 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${portBadgeCls(parcel.portType)}`}>
+                          {portLabel(parcel.portType)}
+                        </span>
+                      </td>
+                      <td className="px-3 py-3 text-sm font-semibold text-gray-800">
+                        {editingPriceId === parcel.id ? (
+                          <div className="flex items-center gap-2">
+                            <input
+                              type="number"
+                              value={editingPrice}
+                              onChange={e => setEditingPrice(e.target.value)}
+                              className="w-24 px-2 py-1.5 border-2 border-cyan-500 rounded-lg text-sm font-semibold focus:outline-none"
+                              autoFocus
+                              disabled={savingPrice}
+                              onKeyDown={e => {
+                                if (e.key === 'Enter') {
+                                  const v = parseFloat(editingPrice)
+                                  if (!isNaN(v) && v >= 0) handleSavePrice(parcel.id, v)
+                                } else if (e.key === 'Escape') {
+                                  setEditingPriceId(null); setEditingPrice('')
+                                }
+                              }}
+                            />
+                            <button
+                              onClick={() => { const v = parseFloat(editingPrice); if (!isNaN(v) && v >= 0) handleSavePrice(parcel.id, v) }}
+                              disabled={savingPrice}
+                              className="p-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg disabled:opacity-50"
+                              title="Valider"
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => { setEditingPriceId(null); setEditingPrice('') }}
+                              disabled={savingPrice}
+                              className="p-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg disabled:opacity-50"
+                              title="Annuler"
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ) : (
+                          <div className="flex items-center gap-2 group whitespace-nowrap">
+                            <span>{priceOf(parcel).toLocaleString()} DH</span>
+                            <button
+                              onClick={() => { setEditingPriceId(parcel.id); setEditingPrice(String(parcel.price || 0)) }}
+                              className="opacity-0 group-hover:opacity-100 flex items-center gap-1 px-2 py-1 text-xs bg-cyan-50 text-cyan-700 hover:bg-cyan-100 rounded-lg transition font-medium"
+                            >
+                              <Edit2 className="w-3 h-3" /> Modifier
+                            </button>
+                          </div>
+                        )}
+                      </td>
+                      <td className="px-3 py-3 text-sm text-right text-gray-600 whitespace-nowrap">{codOf(parcel) ? `${codOf(parcel).toLocaleString()} DH` : '-'}{isMixedCod(parcel) && <div className="text-[10px] text-gray-500">{codPartsBreakdown(parcel)}</div>}</td>
+                      <td className="px-3 py-3 text-sm text-gray-600 whitespace-nowrap">{fr(opDateStr(parcel)) || '-'}</td>
+                      <td className="px-3 py-3 text-sm text-gray-600">{parcel.status}</td>
+                      <td className="px-3 py-3 text-xs">
+                        {inv
+                          ? <span className="inline-block px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 font-semibold whitespace-nowrap">{inv}</span>
+                          : <span className="text-gray-400">—</span>}
+                      </td>
+                      <td className="px-3 py-3 text-center">
+                        <button
+                          onClick={() => printFullTicket(parcel)}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-xs font-semibold transition"
+                          title="Afficher le bon d'expédition"
+                        >
+                          <FileText className="w-3.5 h-3.5" /> Bon
+                        </button>
+                      </td>
+                    </tr>
+                  )
+                })
+  ), [tableParcels, displayLimit, invoicedMap, toggled, editingPriceId, editingPrice, savingPrice]) // eslint-disable-line react-hooks/exhaustive-deps
+  const clientDatalist = useMemo(() => clientOptions.slice(0, 400).map(o => (
+    <option key={norm(o.name)} value={o.name}>{o.count > 0 ? `${o.count} exp. sur la période` : 'fiche client'}</option>
+  )), [clientOptions])
   const selectCls = 'px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-cyan-500 bg-white'
 
   return (
@@ -643,9 +826,7 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
               </button>
             )}
             <datalist id="facturier-clients">
-              {clientOptions.slice(0, 400).map(o => (
-                <option key={norm(o.name)} value={o.name}>{o.count > 0 ? `${o.count} exp. sur la période` : 'fiche client'}</option>
-              ))}
+              {clientDatalist}
             </datalist>
           </div>
           <select value={clientRole} onChange={e => setClientRole(e.target.value as ClientRole)} className={selectCls}>
@@ -660,41 +841,49 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
           </div>
         )}
 
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-3">
-          <div className="relative col-span-2">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-            <input
-              type="text"
-              placeholder="N° EXP, NIC, téléphone..."
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-cyan-500"
-            />
+        {/* ── Bande de filtres : recherche / agence / facturation, puis types de port et statuts (plusieurs choix) ── */}
+        <div className="rounded-xl border border-gray-200 bg-gray-50/70 p-3 space-y-3">
+          <div className="flex flex-wrap items-start gap-3">
+            <div className="relative flex-1 min-w-[240px]">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="N° EXP, NIC, téléphone..."
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter' && includeArchives) setArchiveQuery(search.trim()) }}
+                className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:border-cyan-500"
+              />
+              <label className="mt-1.5 inline-flex items-center gap-2 text-xs font-semibold text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1 cursor-pointer select-none"
+                title="La recherche (N° EXP 7 chiffres, téléphone, nom…) cherche aussi dans les expéditions archivées">
+                <input type="checkbox" checked={includeArchives} onChange={e => setIncludeArchives(e.target.checked)} className="w-4 h-4 accent-amber-600" />
+                🗄️ Inclure archives
+                {includeArchives && archiveSearching && <span className="text-amber-700 font-normal">recherche…</span>}
+                {includeArchives && !archiveSearching && archiveResults.length > 0 && <span className="text-amber-700 font-normal">{archiveResults.length} archivée(s) trouvée(s)</span>}
+              </label>
+            </div>
+            {!profileCity && (
+              <select value={cityFilter} onChange={e => setCityFilter(e.target.value)} className={selectCls + ' min-w-[180px]'}>
+                <option value="Toutes">🏢 Toutes les agences</option>
+                {CITIES.map(city => <option key={city} value={city}>🏢 {city}</option>)}
+              </select>
+            )}
+            <div className="inline-flex rounded-lg border border-gray-300 bg-white overflow-hidden text-sm" role="group" aria-label="Facturation">
+              {([['all', 'Toutes'], ['non_facturees', 'Non facturées'], ['facturees', 'Déjà facturées']] as [BillingFilter, string][]).map(([k, label]) => (
+                <button key={k} type="button" onClick={() => setBillingFilter(k)}
+                  className={`px-3 py-2 font-semibold transition border-r last:border-r-0 border-gray-200 ${billingFilter === k ? 'bg-cyan-600 text-white' : 'text-gray-600 hover:bg-gray-50'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
-          {!profileCity && (
-            <select value={cityFilter} onChange={e => setCityFilter(e.target.value)} className={selectCls}>
-              <option value="Toutes">Toutes les agences</option>
-              {CITIES.map(city => <option key={city} value={city}>🏢 {city}</option>)}
-            </select>
-          )}
-          <select value={portTypeFilter} onChange={e => setPortTypeFilter(e.target.value as PortFilter)} className={selectCls}>
-            <option value="all">Tous les ports</option>
-            <option value="port_paye">✅ Port payé</option>
-            <option value="port_du">💰 Port dû</option>
-            <option value="port_du_cheque">💰 Port dû (chèque)</option>
-            <option value="port_en_compte_all">📒 Port en compte (tous)</option>
-            <option value="port_en_compte_expediteur">📤 Port en compte (expéditeur)</option>
-            <option value="port_en_compte_destinataire">📥 Port en compte (destinataire)</option>
-          </select>
-          <select value={statusFilter} onChange={e => setStatusFilter(e.target.value)} className={selectCls}>
-            <option value="all">Tous les statuts</option>
-            {STATUSES.map(s => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <select value={billingFilter} onChange={e => setBillingFilter(e.target.value as BillingFilter)} className={selectCls}>
-            <option value="all">Facturées et non facturées</option>
-            <option value="non_facturees">Non facturées</option>
-            <option value="facturees">Déjà facturées</option>
-          </select>
+
+          <ChipRow label="Type de port" allLabel="Tous les ports" selected={portTypeFilter} onClear={() => setPortTypeFilter([])}
+            chips={PORT_CHIPS.map(c => ({ key: c.key, label: c.label, on: c.on }))}
+            onToggle={k => setPortTypeFilter(prev => (prev.includes(k as PortKey) ? prev.filter(x => x !== k) : [...prev, k as PortKey]))} />
+          <ChipRow label="Statut" allLabel="Tous les statuts" selected={statusFilter} onClear={() => setStatusFilter([])}
+            chips={STATUSES.map(st => ({ key: st, label: st, on: 'bg-slate-700 border-slate-700 text-white' }))}
+            onToggle={k => setStatusFilter(prev => (prev.includes(k) ? prev.filter(x => x !== k) : [...prev, k]))} />
         </div>
 
         <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -926,96 +1115,7 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
               ) : filteredParcels.length === 0 ? (
                 <tr><td colSpan={15} className="px-4 py-8 text-center text-gray-500">Aucune expédition trouvée</td></tr>
               ) : (
-                tableParcels.slice(0, displayLimit).map((parcel: any) => {
-                  const inv = invoiceOf(parcel)
-                  const included = isIncluded(parcel)
-                  return (
-                    <tr key={parcel.id} className={included ? 'hover:bg-gray-50' : 'bg-gray-50/60 text-gray-400'}>
-                      <td className="px-3 py-3 text-center">
-                        <input type="checkbox" checked={included} onChange={() => toggleOne(parcel.id)} />
-                      </td>
-                      <td className="px-3 py-3 text-sm font-semibold text-indigo-600">{parcel.sender?.nic || parcel.trackingId || '-'}</td>
-                      <td className="px-3 py-3 text-sm text-gray-700">{parcel.clientName || '-'}</td>
-                      <td className="px-3 py-3 text-sm text-gray-700">{parcel.sender?.name || '-'}</td>
-                      <td className="px-3 py-3 text-sm text-gray-700">{parcel.receiver?.name || '-'}</td>
-                      <td className="px-3 py-3 text-sm text-gray-600">{parcel.sender?.city || parcel.originCity || '-'}</td>
-                      <td className="px-3 py-3 text-sm text-gray-600">{parcel.receiver?.city || parcel.recipientCity || '-'}</td>
-                      <td className="px-3 py-3 text-center">
-                        <span className="inline-block px-2 py-1 rounded-full bg-gray-100 text-gray-700 text-xs font-bold">{nbColisOf(parcel)}</span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className={`inline-block px-2 py-1 rounded-full text-xs font-semibold whitespace-nowrap ${portBadgeCls(parcel.portType)}`}>
-                          {portLabel(parcel.portType)}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 text-sm font-semibold text-gray-800">
-                        {editingPriceId === parcel.id ? (
-                          <div className="flex items-center gap-2">
-                            <input
-                              type="number"
-                              value={editingPrice}
-                              onChange={e => setEditingPrice(e.target.value)}
-                              className="w-24 px-2 py-1.5 border-2 border-cyan-500 rounded-lg text-sm font-semibold focus:outline-none"
-                              autoFocus
-                              disabled={savingPrice}
-                              onKeyDown={e => {
-                                if (e.key === 'Enter') {
-                                  const v = parseFloat(editingPrice)
-                                  if (!isNaN(v) && v >= 0) handleSavePrice(parcel.id, v)
-                                } else if (e.key === 'Escape') {
-                                  setEditingPriceId(null); setEditingPrice('')
-                                }
-                              }}
-                            />
-                            <button
-                              onClick={() => { const v = parseFloat(editingPrice); if (!isNaN(v) && v >= 0) handleSavePrice(parcel.id, v) }}
-                              disabled={savingPrice}
-                              className="p-1.5 bg-green-600 hover:bg-green-700 text-white rounded-lg disabled:opacity-50"
-                              title="Valider"
-                            >
-                              <Check className="w-3.5 h-3.5" />
-                            </button>
-                            <button
-                              onClick={() => { setEditingPriceId(null); setEditingPrice('') }}
-                              disabled={savingPrice}
-                              className="p-1.5 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded-lg disabled:opacity-50"
-                              title="Annuler"
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                          </div>
-                        ) : (
-                          <div className="flex items-center gap-2 group whitespace-nowrap">
-                            <span>{priceOf(parcel).toLocaleString()} DH</span>
-                            <button
-                              onClick={() => { setEditingPriceId(parcel.id); setEditingPrice(String(parcel.price || 0)) }}
-                              className="opacity-0 group-hover:opacity-100 flex items-center gap-1 px-2 py-1 text-xs bg-cyan-50 text-cyan-700 hover:bg-cyan-100 rounded-lg transition font-medium"
-                            >
-                              <Edit2 className="w-3 h-3" /> Modifier
-                            </button>
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-3 py-3 text-sm text-right text-gray-600 whitespace-nowrap">{codOf(parcel) ? `${codOf(parcel).toLocaleString()} DH` : '-'}{isMixedCod(parcel) && <div className="text-[10px] text-gray-500">{codPartsBreakdown(parcel)}</div>}</td>
-                      <td className="px-3 py-3 text-sm text-gray-600 whitespace-nowrap">{fr(opDateStr(parcel)) || '-'}</td>
-                      <td className="px-3 py-3 text-sm text-gray-600">{parcel.status}</td>
-                      <td className="px-3 py-3 text-xs">
-                        {inv
-                          ? <span className="inline-block px-2 py-1 rounded-full bg-emerald-100 text-emerald-700 font-semibold whitespace-nowrap">{inv}</span>
-                          : <span className="text-gray-400">—</span>}
-                      </td>
-                      <td className="px-3 py-3 text-center">
-                        <button
-                          onClick={() => printParcelTicket(parcel)}
-                          className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-700 text-white rounded-lg text-xs font-semibold transition"
-                          title="Afficher le bon d'expédition"
-                        >
-                          <FileText className="w-3.5 h-3.5" /> Bon
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })
+                tableRows
               )}
             </tbody>
           </table>
@@ -1308,6 +1408,32 @@ function CreateClientInvoiceModal({
   )
 }
 
+// ── Rangée de puces à choix multiples (aucune cochée = tout) ──────────────────
+function ChipRow({ label, allLabel, chips, selected, onToggle, onClear }: Readonly<{
+  label: string; allLabel: string; chips: { key: string; label: string; on: string }[]
+  selected: string[]; onToggle: (k: string) => void; onClear: () => void
+}>) {
+  const none = selected.length === 0
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="w-full sm:w-28 shrink-0 text-xs font-bold uppercase tracking-wide text-gray-500">{label}</span>
+      <button type="button" onClick={onClear}
+        className={`px-3 py-1 rounded-full border text-xs font-semibold transition ${none ? 'bg-cyan-600 border-cyan-600 text-white' : 'bg-white border-gray-300 text-gray-600 hover:bg-gray-100'}`}>
+        {allLabel}
+      </button>
+      {chips.map(c => {
+        const on = selected.includes(c.key)
+        return (
+          <button key={c.key} type="button" onClick={() => onToggle(c.key)} aria-pressed={on}
+            className={`px-3 py-1 rounded-full border text-xs font-semibold transition ${on ? c.on : 'bg-white border-gray-300 text-gray-700 hover:bg-gray-100'}`}>
+            {on && '✓ '}{c.label}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
 // ── Impression de la liste (rapport, A4 portrait) ────────────────────────────
 
 function printFacturation(parcels: any[], stats: any, filters: any) {
@@ -1317,11 +1443,10 @@ function printFacturation(parcels: any[], stats: any, filters: any) {
   const activeFilters: string[] = [`Période : ${filters.periodLabel}`]
   if (filters.clientQuery?.trim()) activeFilters.push(`Client : ${filters.clientQuery.trim()}`)
   if (filters.cityFilter !== 'Toutes') activeFilters.push(`Agence : ${filters.cityFilter}`)
-  if (filters.portTypeFilter === 'port_en_compte_all') activeFilters.push('Type : Port en compte')
-  else if (filters.portTypeFilter !== 'all') activeFilters.push(`Type : ${portLabel(filters.portTypeFilter)}`)
+  if (filters.portTypeFilter?.length) activeFilters.push(`Type : ${filters.portTypeFilter.map((k: PortKey) => PORT_CHIPS.find(c => c.key === k)?.label.replace(/^\S+\s/, '') || k).join(', ')}`)
   if (filters.clientRole === 'expediteur') activeFilters.push('Client : expéditeur')
   if (filters.clientRole === 'destinataire') activeFilters.push('Client : destinataire')
-  if (filters.statusFilter !== 'all') activeFilters.push(`Statut : ${filters.statusFilter}`)
+  if (filters.statusFilter?.length) activeFilters.push(`Statut : ${filters.statusFilter.join(', ')}`)
   if (filters.search) activeFilters.push(`Recherche : "${filters.search}"`)
 
   const byAgencyTable = stats.byAgency && Object.keys(stats.byAgency).length > 1

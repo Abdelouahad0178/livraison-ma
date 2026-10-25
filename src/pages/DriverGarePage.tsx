@@ -9,12 +9,15 @@ import { generateSignatureToken, confirmDeliveryAfterSignature, submitDeliverySi
 import { useBarcodeScanner } from '../hooks/useBarcodeScanner'
 import LiveClock from '../components/LiveClock'
 import CompanyContact from '../components/CompanyContact'
+import { ParcelParties } from '../components/ParcelParties'
 import { normIncludes, digitAwareIncludes } from '../utils/normText'
 import { isMixedCod, codPartsBreakdown, codPartsDetailLabel } from '../utils/codParts'
 
-// ⚡ Les colis déjà remis (Livré) ne sont chargés que sur cette fenêtre (en jours).
-// Les colis à traiter (Arrivé en agence / En livraison) restent chargés sans limite de date.
-const LIVRE_WINDOW_DAYS = 30
+// ⚡ Les colis déjà remis (Livré) ne sont chargés que sur cette fenêtre (en jours) : 7 par défaut,
+// 30 sur demande (bouton « Afficher 30 jours »). Les colis à traiter (Arrivé en agence / En livraison)
+// restent chargés sans limite de date, hors expéditions ARCHIVÉES (anciennes, ≈ 85 % du volume à Agadir).
+const LIVRE_WINDOW_DAYS = 7
+const LIVRE_WINDOW_DAYS_LONG = 30
 
 // Couleurs de statut
 const STATUS_COLORS: any = {
@@ -73,6 +76,7 @@ export default function DriverGarePage() {
   const navigate = useNavigate()
   const [profile, setProfile] = useState<any>(null)
   const [parcels, setParcels] = useState<any[]>([])
+  const [livreDays, setLivreDays] = useState(LIVRE_WINDOW_DAYS)
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
   const [msg, setMsg] = useState<{ type: string; text: string } | null>(null)
@@ -149,7 +153,7 @@ export default function DriverGarePage() {
         where('deliveryMethod', '==', 'gare'),
         where('destinationCity', '==', String(profile.city)),
       ]
-      const livreSince = Timestamp.fromDate(new Date(Date.now() - LIVRE_WINDOW_DAYS * 24 * 60 * 60 * 1000))
+      const livreSince = Timestamp.fromDate(new Date(Date.now() - livreDays * 24 * 60 * 60 * 1000))
       const mapSnap = (snap: any) => snap.docs.map((d: any) => {
               const data = d.data()
               // Inclure tous les champs nécessaires pour COD, port dû, et historique
@@ -198,6 +202,7 @@ export default function DriverGarePage() {
           collection(db, 'parcels'),
           ...baseConstraints,
           where('status', 'in', ['En livraison', 'Arrivé en agence']),
+          where('isArchived', '==', false),
           orderBy('createdAt', 'desc')
         ),
         { next: (snap) => { activeDocs = mapSnap(snap); emit() }, error: onErr }
@@ -219,7 +224,7 @@ export default function DriverGarePage() {
       setParcels([])
       setLoading(false)
     }
-  }, [profile])
+  }, [profile, livreDays])
 
   const handleOpenSignature = async (parcel: any) => {
     // Bloquer l'ouverture si colis déjà livré
@@ -587,9 +592,7 @@ export default function DriverGarePage() {
                           </div>
                         </div>
                         <div className="space-y-1">
-                          <p className="text-sm">
-                            <span className="font-semibold text-white">{p.receiver?.name}</span>
-                          </p>
+                          <ParcelParties parcel={p} dark />
                           <p className="text-xs text-gray-400">{p.receiver?.tel}</p>
                           <p className="text-xs text-gray-500">{p.sender?.city} → {p.receiver?.city}</p>
                         </div>
@@ -630,7 +633,13 @@ export default function DriverGarePage() {
               <div>
                 <h3 className="text-sm font-bold text-gray-400 uppercase mb-3 flex items-center gap-2">
                   <CheckCircle2 className="w-4 h-4 text-green-400" />
-                  Remis ({filteredDone.length}) · {LIVRE_WINDOW_DAYS} derniers jours
+                  Remis ({filteredDone.length}) · {livreDays} derniers jours
+                  {livreDays < LIVRE_WINDOW_DAYS_LONG && (
+                    <button type="button" onClick={() => setLivreDays(LIVRE_WINDOW_DAYS_LONG)}
+                      className="ml-auto normal-case text-xs font-semibold text-blue-600 hover:underline">
+                      Afficher {LIVRE_WINDOW_DAYS_LONG} jours
+                    </button>
+                  )}
                 </h3>
                 <div className="space-y-3">
                   {filteredDone.map((p: any) => {
@@ -657,9 +666,7 @@ export default function DriverGarePage() {
                           </div>
                         </div>
                         <div className="space-y-1">
-                          <p className="text-sm">
-                            <span className="font-semibold text-white">{p.receiver?.name}</span>
-                          </p>
+                          <ParcelParties parcel={p} dark />
                           <p className="text-xs text-gray-400">{p.receiver?.tel}</p>
                           <p className="text-xs text-gray-500">{p.sender?.city} → {p.receiver?.city}</p>
                         </div>

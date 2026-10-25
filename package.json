@@ -4,6 +4,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
+    "firebase:check": "node scripts/firebase-check.mjs",
+    "test:agent-pro-rules": "firebase emulators:exec --only firestore --project demo-livraison-permissions --config firebase.permissions-test.json \"node scripts/test-agent-pro-rules.mjs\"",
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
@@ -22,6 +24,8 @@
     "firebase": "^10.12.0",
     "fuse.js": "^7.4.2",
     "html5-qrcode": "^2.3.8",
+    "jspdf": "^2.5.2",
+    "jspdf-autotable": "^3.8.4",
     "lucide-react": "^0.383.0",
     "qrcode.react": "^3.1.0",
     "react": "^18.3.1",

@@ -212,7 +212,10 @@ export function sanitizeParcelCodWrite<T extends Record<string, any>>(data: T, c
   if (d.codMixed === true) {
     const cash = parseFloat(String(d.codCashAmount ?? '')) || 0
     const total = 'codAmount' in d ? (parseFloat(String(d.codAmount ?? '')) || 0) : null
-    if (!['cheque', 'traite'].includes(expected) || cash <= 0 || (total !== null && total <= cash)) {
+    // Type de service inconnu (absent du patch et non transmis) : on ne juge PAS le type — sinon un mixte enregistré
+    // sans changer le type (cas normal d'une modification) était effacé sans rien dire (bug « mixte ne fonctionne pas »)
+    const typeKnown = 'serviceType' in d || currentServiceType !== undefined
+    if ((typeKnown && !['cheque', 'traite'].includes(expected)) || cash <= 0 || (total !== null && total <= cash)) {
       console.warn(`[codMixed] RF mixte invalide (service "${st}", espèces ${cash}, total ${total}) → annulé`)
       d.codMixed = false
       d.codCashAmount = 0

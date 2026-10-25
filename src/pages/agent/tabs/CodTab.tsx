@@ -616,14 +616,14 @@ export default function CodTab() {
 
   const handlePrintRetards = () => {
     const rows = retardsFiltered.map(r => `<tr>
-      <td><b>${ageLabel(r.hours)}</b></td><td>${nic(r.p)}</td><td>${r.label}</td><td>${r.driver}</td>
+      <td><b>${r.hours === null ? '—' : `depuis le ${new Date(Date.now() - r.hours * 3600000).toLocaleDateString('fr-FR')}`}</b></td><td>${nic(r.p)}</td><td>${r.label}</td><td>${r.driver}</td>
       <td>${r.p.sender?.name || '—'} → ${r.p.receiver?.name || '—'}</td>
       <td>${typeLabelOf(r.p)}</td>
       <td>${r.delay ? (DELAY_REASON_LABELS[r.delay.reason] || r.delay.reason) + (r.delay.reasonDetail ? ' — ' + r.delay.reasonDetail : '') : '—'}</td>
       <td class="r">${fmtAmt(r.p.codAmount)} DH</td></tr>`).join('')
     const retardParcels = retardsFiltered.map(r => r.p)
     openPrintWindow('RETOUR FOND en retard', `Agence ${profile?.city || ''} · ${printedAt()} · ${retardsFiltered.length} colis`,
-      `<table><thead><tr><th>Âge</th><th>N° EXP</th><th>Type de retard</th><th>Livreur</th><th>Client → Destinataire</th><th>Valeur</th><th>Raison signalée</th><th class="r">Montant</th></tr></thead>
+      `<table><thead><tr><th>Depuis</th><th>N° EXP</th><th>Type de retard</th><th>Livreur</th><th>Client → Destinataire</th><th>Valeur</th><th>Raison signalée</th><th class="r">Montant</th></tr></thead>
       <tbody>${rows}</tbody><tfoot><tr><td colspan="7">TOTAL</td><td class="r">${fmtAmt(totRetards)} DH</td></tr></tfoot></table>
       <table style="margin-top:14px;width:auto;min-width:340px">
         <thead><tr><th>Récapitulatif par type de valeur</th><th class="r">Nombre</th><th class="r">Montant</th></tr></thead>

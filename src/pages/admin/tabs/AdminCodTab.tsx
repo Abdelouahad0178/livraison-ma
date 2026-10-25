@@ -3,7 +3,7 @@ import * as React from 'react'
 import { Calendar, Search, MessageCircle, CheckCircle, Banknote, Filter, Printer } from 'lucide-react'
 import { COD_STATUS, COD_PAYMENT_TYPES } from '../../../firebase/constants'
 import { fmt } from '../../../utils/formatNumber'
-import { codHasType, isMixedCod, codPartsBreakdown, codPartsLabel } from '../../../utils/codParts'
+import { codHasType, isMixedCod, codPartsBreakdown, codPartsLabel, codAmountOfType } from '../../../utils/codParts'
 
 // Banknote is available for use in extended payment type display
 void Banknote
@@ -230,9 +230,11 @@ export default function AdminCodTab({
         </h3>
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {COD_PAYMENT_TYPES.map(pt => {
-            const filtered = cityAndPaymentFiltered.filter((p: any) => normalizePaymentType(p) === pt.key)
-            const total = filtered.reduce((s: any, p: any) => s + (parseFloat(p.codAmount) || 0), 0)
+            // 💵+📋 COD MIXTE : sa part de CE type (part espèces sous Espèces, part chèque / traite sous son type)
+            const filtered = cityAndPaymentFiltered.filter((p: any) => (isMixedCod(p) ? codAmountOfType(p, pt.key) > 0 : normalizePaymentType(p) === pt.key))
+            const total = filtered.reduce((s: any, p: any) => s + (isMixedCod(p) ? codAmountOfType(p, pt.key) : (parseFloat(p.codAmount) || 0)), 0)
             const count = filtered.length
+            const mixedCount = filtered.filter((p: any) => isMixedCod(p)).length
 
             return (
               <div key={pt.key} className={`${pt.bg} border-2 ${pt.text} border-current/30 rounded-xl p-5 hover:shadow-lg transition`}>
@@ -244,7 +246,7 @@ export default function AdminCodTab({
                 <p className="text-sm font-semibold text-gray-500">DH</p>
                 <div className="mt-3 pt-3 border-t border-current/20">
                   <p className={`text-xs font-semibold ${pt.text} opacity-80`}>
-                    📦 {count} colis
+                    📦 {count} colis{mixedCount > 0 ? ` (dont ${mixedCount} mixte${mixedCount > 1 ? 's' : ''} : sa part ${pt.label.toLowerCase()})` : ''}
                   </p>
                 </div>
               </div>

@@ -44,8 +44,9 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
   /** Recherche d'une expédition par N° EXP dans toute la base (renvoie un message si elle ne peut pas être groupée) */
   findByNic?: (nic: string) => Promise<{ parcel?: any; error?: string }>
   onClose: () => void
-  /** point = true : enregistrer PUIS pointer ; group = expéditions couvertes par le même chèque (celle-ci comprise) */
-  onSave: (docs: CodDocument[], point: boolean, group?: any[]) => Promise<void>
+  /** point = true : enregistrer PUIS pointer ; group = expéditions couvertes par le même chèque (celle-ci comprise) ;
+   *  cashRest = le destinataire a payé le reste EN ESPÈCES (chèque reçu < attendu) → signalement à l'admin */
+  onSave: (docs: CodDocument[], point: boolean, group?: any[], cashRest?: { cash: number; expected: number; received: number; note: string }) => Promise<void>
 }) {
   const expected = docAmountOf(parcel)
   const defType = (codDocTypeOf(parcel) === 'traite' ? 'traite' : 'cheque') as Row['type']
@@ -94,11 +95,13 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
     const known = options.find(x => String(nicOf(x)) === v)
     if (known) {
       if (known._blocked) { setQMsg(`${v} : ${known._blocked} — ne peut pas être groupée ici.`); return }
+      if (!picked.has(known.id) && !confirmOther(known)) return
       setPicked(s => new Set(s).add(known.id)); setQMsg(`✓ ${v} cochée.`); return
     }
     const r: { parcel?: any; error?: string } = await findByNic(v).catch(e => ({ error: String(e?.message || e) }))
     if (r.error || !r.parcel) { setQMsg(r.error || `N° EXP ${v} introuvable.`); return }
     if (r.parcel.id === parcel.id) { setQMsg(`✓ ${v} est l'expédition en cours : elle est déjà incluse (en tête de liste).`); return }
+    if (!confirmOther(r.parcel)) return
     setCandidates(cs => (cs.some(c => c.id === r.parcel.id) ? cs : [r.parcel, ...cs]))
     setPicked(s => new Set(s).add(r.parcel.id))
     setQMsg(`✓ ${v} ajoutée au chèque.`)
@@ -107,8 +110,20 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
   const expectedTotal = members.reduce((s, m) => s + docAmountOf(m), 0)
   const total = rows.reduce((s, r) => s + (parseFloat(String(r.montant).replace(',', '.')) || 0), 0)
   const diff = Math.round((total - expectedTotal) * 100) / 100
+  // ⚠️ Chèque reçu INFÉRIEUR au montant attendu (une seule expédition, COD pas déjà mixte) : le reste a pu être payé en espèces
+  const canSignalCash = !grouped && diff <= -0.01 && total > 0 && parcel?.codMixed !== true
+  const [cashRest, setCashRest] = useState(false)
+  const [cashNote, setCashNote] = useState('')
   const set = (i: number, patch: Partial<Row>) => setRows(rs => rs.map((r, k) => (k === i ? { ...r, ...patch } : r)))
-  const togglePick = (id: string) => setPicked(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  // 🔗 Expéditeur écrit autrement / différent : confirmation avant de l'ajouter au chèque (plus de refus — 24/10/2026)
+  const confirmOther = (c: any) => !c?._otherSender || confirm(
+    `${nicOf(c)} : l'expéditeur est « ${c._otherSender} » (et non « ${senderNameOf(parcel) || '—'} »).\n\n` +
+    `Même client mal saisi, ou chèque unique du destinataire pour plusieurs expéditeurs ?\nAjouter cette expédition au chèque ?`)
+  const togglePick = (id: string) => {
+    const c = options.find(x => x.id === id)
+    if (!picked.has(id) && !confirmOther(c)) return
+    setPicked(s => { const n = new Set(s); n.has(id) ? n.delete(id) : n.add(id); return n })
+  }
 
   const submit = async (point: boolean) => {
     setError('')
@@ -123,14 +138,16 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
       if (!r.banque.trim()) return setError(`Ligne ${n} : saisissez la banque.`)
       if (!(parseFloat(String(r.montant).replace(',', '.')) > 0)) return setError(`Ligne ${n} : montant invalide.`)
     }
-    if (expectedTotal > 0 && Math.abs(diff) >= 0.01
+    const signal = canSignalCash && cashRest
+    if (expectedTotal > 0 && Math.abs(diff) >= 0.01 && !signal
       && !confirm(`Le total saisi (${money(total)} DH) est différent du montant attendu (${money(expectedTotal)} DH${grouped ? ` pour ${members.length} expéditions` : ''}).\n\nEnregistrer quand même ?`)) return
     setSaving(true)
     try {
       await onSave(rows.map(r => ({
         type: r.type, numero: r.numero.trim(), banque: r.banque.trim().toUpperCase(),
         montant: parseFloat(String(r.montant).replace(',', '.')) || 0, echeance: r.echeance,
-      })), point, grouped ? members : undefined)
+      })), point, grouped ? members : undefined,
+      signal ? { cash: Math.round(-diff * 100) / 100, expected: expectedTotal, received: total, note: cashNote.trim() } : undefined)
     } catch (e: any) {
       setError(e?.message || 'Erreur lors de l\'enregistrement.')
     } finally {
@@ -158,12 +175,12 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
             <label className="flex items-center gap-2 text-sm font-black text-indigo-800 cursor-pointer">
               <input type="checkbox" className="w-4 h-4 accent-indigo-600" checked={grouped}
                 onChange={e => { setGrouped(e.target.checked); if (e.target.checked) setRows(rs => [rs[0]]) }} />
-              🔗 Ce chèque couvre plusieurs expéditions de {senderNameOf(parcel) || 'cet expéditeur'}
+              🔗 Ce chèque couvre plusieurs expéditions (même expéditeur ou même destinataire, toutes dates)
             </label>
             {grouped && (
               searching ? <p className="text-xs text-slate-500 mt-2">Recherche des expéditions de cet expéditeur (toutes dates)…</p>
               : options.length === 0 && !findByNic
-                ? <p className="text-xs text-slate-500 mt-2">Aucune autre expédition chèque / traite de cet expéditeur sans données de chèque (toutes dates).</p>
+                ? <p className="text-xs text-slate-500 mt-2">Aucune autre expédition chèque / traite (même expéditeur ou même destinataire) sans données de chèque (toutes dates).</p>
                 : (
                   <>
                   <div className="mt-2 flex gap-2">
@@ -188,7 +205,9 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
                         <input type="checkbox" className="w-4 h-4 accent-indigo-600" disabled={!!c._blocked} checked={picked.has(c.id)} onChange={() => togglePick(c.id)} />
                         <span className="font-mono font-bold">{nicOf(c)}</span>
                         <span className="text-slate-400">{fmtD(c.createdAt)}</span>
-                        <span className="flex-1 truncate">→ {c?.receiver?.name || '—'}{c._blocked && <span className="ml-1 text-amber-700 font-bold">· {c._blocked}</span>}</span>
+                        <span className="flex-1 truncate">→ {c?.receiver?.name || '—'}
+                          {c._otherSender && <span className="ml-1 px-1 rounded bg-amber-100 text-amber-800 text-[10px] font-bold" title="Expéditeur saisi autrement : confirmation demandée">autre expéditeur : {c._otherSender}</span>}
+                          {c._blocked && <span className="ml-1 text-amber-700 font-bold">· {c._blocked}</span>}</span>
                         <b className="text-emerald-700">{money(docAmountOf(c))} DH</b>
                       </label>
                     ))}
@@ -244,6 +263,20 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
           <div className={`rounded-xl px-3 py-2 text-sm font-bold ${Math.abs(diff) < 0.01 ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
             Total saisi : {money(total)} DH {Math.abs(diff) < 0.01 ? '✓ conforme' : `— écart ${diff > 0 ? '+' : ''}${money(diff)} DH avec le montant attendu`}
           </div>
+          {/* ⚠️ Chèque reçu inférieur au montant attendu : le destinataire a payé le reste en espèces → signalement à l'admin */}
+          {canSignalCash && (
+            <div className="rounded-xl border-2 border-amber-300 bg-amber-50 px-3 py-2.5 space-y-2">
+              <label className="flex items-start gap-2 text-sm font-bold text-amber-900 cursor-pointer">
+                <input type="checkbox" className="mt-0.5 w-4 h-4 accent-amber-600" checked={cashRest} onChange={e => setCashRest(e.target.checked)} />
+                <span>💵 Le reste ({money(-diff)} DH) a été payé <u>en espèces</u> par le destinataire — signaler à l'admin
+                  <span className="block text-[11px] font-semibold text-amber-700">Le chèque est enregistré pour {money(total)} DH ; l'admin corrigera le COD en « chèque + espèces ».</span>
+                </span>
+              </label>
+              {cashRest && (
+                <input className={inp} value={cashNote} onChange={e => setCashNote(e.target.value)} placeholder="Remarque (facultatif) : qui a reçu les espèces, etc." />
+              )}
+            </div>
+          )}
           {error && <p className="text-sm font-bold text-red-700 bg-red-50 border border-red-200 rounded-xl px-3 py-2">⚠️ {error}</p>}
         </div>
 

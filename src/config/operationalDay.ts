@@ -65,11 +65,31 @@ export const OPERATIONAL_DAY_CONFIG = {
  * getOperationalDay(new Date('2026-07-24T10:00:00'))
  * // → 2026-07-24T08:00:00 (appartient à la journée du 24)
  */
+// ⚡ Convertisseur d'heure de Casablanca créé UNE fois (avant : toLocaleString recréait un convertisseur à chaque
+// appel, ~0,13 ms × chaque expédition → plusieurs secondes de calcul sur les pages de caisse). Même résultat :
+// une Date locale portant l'heure murale de Casablanca, à la seconde près (comme l'ancien aller-retour en texte).
+let casaFormatter: Intl.DateTimeFormat | null = null
+function toCasablancaWallClock(sourceDate: Date): Date {
+  if (Number.isNaN(sourceDate.getTime())) return new Date(Number.NaN)
+  casaFormatter ??= new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Africa/Casablanca', hourCycle: 'h23',
+    year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric',
+  })
+  const v: Record<string, number> = {}
+  for (const part of casaFormatter.formatToParts(sourceDate)) if (part.type !== 'literal') v[part.type] = Number(part.value)
+  return new Date(v.year, v.month - 1, v.day, v.hour === 24 ? 0 : v.hour, v.minute, v.second)
+}
+
+/** Ancienne conversion (référence des tests d'équivalence uniquement). */
+export function _legacyCasablancaWallClock(sourceDate: Date): Date {
+  return new Date(sourceDate.toLocaleString('en-US', { timeZone: 'Africa/Casablanca' }))
+}
+
 export function getOperationalDay(date: Date | number): Date {
   const sourceDate = typeof date === 'number' ? new Date(date) : new Date(date)
 
   // ⏰ Convertir en heure de Casablanca
-  const casablancaTime = new Date(sourceDate.toLocaleString('en-US', { timeZone: 'Africa/Casablanca' }))
+  const casablancaTime = toCasablancaWallClock(sourceDate)
 
   const hour = casablancaTime.getHours()
   const minute = casablancaTime.getMinutes()
@@ -162,6 +182,21 @@ export function getCurrentOperationalDay(): Date {
   // ⚠️ Toujours créer une nouvelle Date() pour avoir l'heure système actuelle
   // Ne jamais utiliser une date en cache ou pré-calculée
   return getOperationalDay(new Date())
+}
+
+/**
+ * 📅 VEILLE TRAVAILLÉE (onglet Expéditions au démarrage, demande du 23/10/2026) : la journée d'opération qui
+ * précède la journée en cours — les expéditions du 21/10 s'affichent le 22/10 (après 8 h). Le dimanche n'est pas
+ * travaillé : le lundi (et jusqu'au mardi 6 h) affiche le SAMEDI, avec le dimanche (rares expéditions éventuelles).
+ * @returns from / to : journées d'opération (08:00), identiques sauf le lundi (samedi → dimanche)
+ */
+export function previousWorkedOperationalDays(now: Date = new Date()): { from: Date; to: Date } {
+  const prev = getOperationalDay(now)
+  prev.setDate(prev.getDate() - 1)
+  if (prev.getDay() !== 0) return { from: prev, to: new Date(prev) }
+  const saturday = new Date(prev)
+  saturday.setDate(saturday.getDate() - 1)
+  return { from: saturday, to: prev }
 }
 
 /**

@@ -60,11 +60,11 @@ describe('AgentHeader', () => {
     expect(screen.getByText(/A001/)).toBeInTheDocument()
   })
 
-  it('calls openScanModal on scanner button click', () => {
-    const openScanModal = vi.fn()
-    render(<AgentHeader {...makeProps({ openScanModal })} />)
-    fireEvent.click(screen.getByTitle(/Scanner/i))
-    expect(openScanModal).toHaveBeenCalled()
+  // Boutons « Scanner » et « Archives » retirés de l'en-tête (demande du 22/10/2026)
+  it('has no Scanner nor Archives button in the header', () => {
+    render(<AgentHeader {...makeProps({ openScanModal: vi.fn() })} />)
+    expect(screen.queryByTitle(/Scanner/i)).toBeNull()
+    expect(screen.queryByText('Archives')).toBeNull()
   })
 
   it('shows mobile menu on hamburger click', () => {

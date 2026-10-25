@@ -9,10 +9,15 @@ import { getLiteDaySliceCached, PARCELS_LITE_COLLECTION } from '../../../firebas
 import { ALL_CITIES } from '../../../utils/liteDayCache'
 import { getOperationalDayRange, getCurrentOperationalDay } from '../../../config/operationalDay'
 import { useOperationalDay } from '../../../hooks/useOperationalDay'
+import { useStartOnPreviousWorkedDay } from '../../../hooks/useStartOnPreviousWorkedDay'
 import { buildDaySlices, opDayOf } from '../../../utils/daySlices'
 import { parcelDate } from '../../../utils/dateFilter'
-import { agencyPortAmounts, isInAgencyScope, isSentFromAgency, isReceivedInAgency, type AgencyDirection } from '../../../utils/billingAgency'
+import { isInAgencyScope, type AgencyDirection } from '../../../utils/billingAgency'
+import { computeAgencyPortStats, resteAEncaisserLines } from '../../../utils/agencyFollowUp'
 import AdminCaisseView from '../components/AdminCaisseView'
+import AgencyFollowUpBlock from '../components/AgencyFollowUpBlock'
+import ResteParAgence, { type ResteRow } from '../components/ResteParAgence'
+import { printPortCaisseReceipt } from '../../../utils/printPortCaisseReceipt'
 import HScrollArrows from '../../../components/HScrollArrows'
 import LoadProgress from '../../../components/LoadProgress'
 
@@ -113,12 +118,16 @@ export default function AdminPortAgenciesTab({
   operationalDay,
   setOperationalDay
 }: Props) {
+  // 📅 Démarrage sur la veille travaillée (comme chef d'agence / chef d'exploitation) — le chargement attend `startReady`
+  const startReady = useStartOnPreviousWorkedDay('admin-port-agencies', { setDatePreset, setOperationalDay, setDateFrom, setDateTo })
   // États pour filtres
   const [selectedCity, setSelectedCity] = useState<string>('all') // all ou nom de ville
   const [portTypeFilter, setPortTypeFilter] = useState('all') // all, port_paye, port_du, port_en_compte_expediteur
   const [directionFilter, setDirectionFilter] = useState<string>('all') // all, sent (envoyées), received (reçues)
   const [originCityFilter, setOriginCityFilter] = useState<string>('all') // Filtre ville d'origine (pour mode "Reçues")
   const [showFilters, setShowFilters] = useState(true)
+  // ⏳ 3e vue « Reste à encaisser » (même organisation dans Port par agence et COD par agence)
+  const [showReste, setShowReste] = useState(false)
   const [viewMode, setViewMode] = useState<'theoretical' | 'physical'>('theoretical') // theoretical = tous les ports, physical = argent physique en caisse
 
   // État pour la modale Caisse Agence
@@ -127,8 +136,17 @@ export default function AdminPortAgenciesTab({
   // 📅 Période active (recalculée aussi au changement de journée d'opération)
   const { dayString: currentOpDay } = useOperationalDay()
   const operationalDayMs = operationalDay ? operationalDay.getTime() : null
+  // 📅 « Période » personnalisée appliquée seulement quand les DEUX dates sont choisies : en attendant, la
+  // période déjà chargée est gardée (pas de rechargement après le seul choix de la date de début).
+  const lastPeriodRef = useRef<ReturnType<typeof computePeriod> | null>(null)
+  const customIncomplete = datePreset === 'custom' && !(dateFrom && dateTo)
   const period = useMemo(
-    () => computePeriod(datePreset, dateFrom, dateTo, operationalDay),
+    () => {
+      if (customIncomplete && lastPeriodRef.current) return lastPeriodRef.current
+      const p = computePeriod(datePreset, dateFrom, dateTo, operationalDay)
+      if (!customIncomplete) lastPeriodRef.current = p
+      return p
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [datePreset, dateFrom, dateTo, operationalDayMs, currentOpDay]
   )
@@ -175,6 +193,7 @@ export default function AdminPortAgenciesTab({
   // À CHAQUE changement de période : écoutes coupées, données vidées, progression affichée, aucune
   // donnée de l'ancienne période ne peut revenir (génération).
   useEffect(() => {
+    if (!startReady) return
     const gen = ++loadGenRef.current
     const start = new Date(periodStartMs)
     const end = new Date(periodEndMs)
@@ -335,16 +354,9 @@ export default function AdminPortAgenciesTab({
       if (refreshTimer) clearInterval(refreshTimer)
       unsubs.forEach((u) => u())
     }
-  }, [periodStartMs, periodEndMs])
+  }, [periodStartMs, periodEndMs, startReady])
   // Note: ville, type de port, direction et mode sont appliqués côté frontend (useMemo) : pas de
   // rechargement Firestore pour ces filtres.
-
-  // 🔒 Fonction sécurisée pour parser les nombres
-  const safeParseFloat = (value: any): number => {
-    if (value === null || value === undefined || value === '') return 0
-    const num = parseFloat(String(value).replace(',', '.'))
-    return (!isNaN(num) && isFinite(num) && num >= 0) ? num : 0
-  }
 
   // ✅ Filtrer les colis par période - parcelDate (workDate = jour d'opération, repli createdAt),
   // mêmes bornes EXACTES que la requête et que la page Chef d'agence.
@@ -376,118 +388,10 @@ export default function AdminPortAgenciesTab({
   // ✅ Calculer les statistiques par agence
   // Mode theoretical = tous les ports (actuel)
   // Mode physical = argent réellement collecté en caisse
+  // Règles PARTAGÉES avec le « Suivi de l'agence » (utils/agencyFollowUp → computeAgencyPortStats)
   const portStats = useMemo(() => {
     const { directionFilter, originCityFilter, viewMode } = deferredFilters
-    if (!Array.isArray(filteredByDate)) return []
-
-    const stats: Record<string, {
-      city: string
-      portPaye: number              // ✅ Port Payé (expéditeur) OU Ports payés reçus (mode physical)
-      portDu: number                 // 💰 Port Dû (destinataire) OU Ports dû collectés (mode physical)
-      portDuCheque: number           // 📋 Port Dû Chèque
-      enCompteExp: number            // 📤 En Compte Expéditeur
-      enCompteDest: number           // 📥 En Compte Destinataire
-      totalPort: number
-      nbExpeditions: number          // Seulement les expéditions (pas colis) — locales comptées 2 fois en « Toutes »
-      nbUnique: number               // Expéditions distinctes (= nombre affiché sur la page Chef d'agence)
-    }> = {}
-
-    // Initialiser toutes les villes
-    CITIES.forEach(city => {
-      stats[city] = {
-        city,
-        portPaye: 0,
-        portDu: 0,
-        portDuCheque: 0,
-        enCompteExp: 0,
-        enCompteDest: 0,
-        totalPort: 0,
-        nbExpeditions: 0,
-        nbUnique: 0,
-      }
-    })
-
-    // Parcourir tous les colis filtrés par date
-    filteredByDate.forEach((p: any) => {
-      // ✅ Utiliser SEULEMENT originCity et destinationCity (comme dans AgentPage)
-      const originCity = p.originCity
-      const destCity = p.destinationCity
-
-      // 🔗 Agences concernées : ville d'expédition / de destination (et villes expéditeur /
-      // destinataire des anciens colis). Le périmètre et la répartition des ports suivent la règle
-      // PARTAGÉE avec la page Chef d'agence (utils/billingAgency) → mêmes expéditions, mêmes montants.
-      const agencyDir: AgencyDirection = directionFilter === 'sent' ? 'sent' : directionFilter === 'received' ? 'received' : 'all'
-      const matchesOriginFilter = directionFilter !== 'received' || originCityFilter === 'all' || originCity === originCityFilter
-      const involvedCities = [...new Set([originCity, p.sender?.city, destCity, p.receiver?.city])]
-        .filter((c: any) => c && stats[c]) as string[]
-
-      if (viewMode === 'theoretical') {
-        // 📊 MODE THÉORIQUE : ports de chaque expédition du périmètre de l'agence
-        // Port payé / En compte exp. → ORIGINE ; Port dû (espèces, chèque) / En compte dest. → DESTINATION
-        if (matchesOriginFilter) {
-          for (const c of involvedCities) {
-            if (!isInAgencyScope(p, c, agencyDir)) continue
-            const a = agencyPortAmounts(p, c)
-            stats[c].portPaye += a.portPaye
-            stats[c].portDu += a.portDu
-            stats[c].portDuCheque += a.portDuCheque
-            stats[c].enCompteExp += a.enCompteExp
-            stats[c].enCompteDest += a.enCompteDest
-          }
-        }
-      } else {
-        // 💵 MODE SITUATION CAISSE : ARGENT PHYSIQUE COLLECTÉ
-        const price = safeParseFloat(p.price)
-        const portType = p.portType
-        const portStatus = p.portStatus
-
-        // 1️⃣ PORTS DÛ COLLECTÉS : portType = 'port_du', portStatus = 'collected' ou 'received'
-        if (portType === 'port_du' && (portStatus === 'collected' || portStatus === 'received') && price > 0 && destCity && stats[destCity]) {
-          stats[destCity].portDu += price
-        }
-
-        // 1️⃣ bis PORTS DÛ CHÈQUE COLLECTÉS : portType = 'port_du_cheque', portStatus = 'collected' ou 'received'
-        if (portType === 'port_du_cheque' && (portStatus === 'collected' || portStatus === 'received') && price > 0 && destCity && stats[destCity]) {
-          stats[destCity].portDuCheque += price
-        }
-
-        // 2️⃣ PORTS PAYÉS ENCAISSÉS : portType = 'port_paye', ville d'origine, portStatus = 'collected' (encaissé au guichet
-        // « En gare » ou par le livreur de ramassage, puis remis au chef d'exploitation) ou 'received' (reçu par le chef
-        // d'agence) — même règle que les ports dus collectés ci-dessus. Avant : 'received' seulement → presque toujours 0.
-        if (portType === 'port_paye' && !p.portPayeMethod && (portStatus === 'collected' || portStatus === 'received') && price > 0 && originCity && stats[originCity]) {
-          stats[originCity].portPaye += price
-        }
-      }
-
-      // ✅ EXPÉDITIONS : même périmètre que la page Chef d'agence (envoyées depuis la ville,
-      // reçues = arrivées dans la ville ET visibles à destination ; les retours sont suivis dans
-      // l'onglet Retours). En « Toutes », une expédition LOCALE (même ville) compte 2 fois pour son
-      // agence (1 envoyée + 1 reçue) ; nbUnique la compte une seule fois (= total Chef d'agence).
-      if (matchesOriginFilter) {
-        for (const c of involvedCities) {
-          const sent = agencyDir !== 'received' && isSentFromAgency(p, c)
-          const received = agencyDir !== 'sent' && isReceivedInAgency(p, c)
-          stats[c].nbExpeditions += (sent ? 1 : 0) + (received ? 1 : 0)
-          if (sent || received) stats[c].nbUnique += 1
-        }
-      }
-    })
-
-    // Calculer les totaux et arrondir - afficher toutes les agences
-    return Object.values(stats).map(stat => {
-      // 💰 Total Port = Somme de tous les ports (sans déduire les versements)
-      const totalPort = stat.portPaye + stat.portDu + stat.portDuCheque + stat.enCompteExp + stat.enCompteDest
-
-      return {
-        ...stat,
-        portPaye: Math.round(stat.portPaye * 100) / 100,
-        portDu: Math.round(stat.portDu * 100) / 100,
-        portDuCheque: Math.round(stat.portDuCheque * 100) / 100,
-        enCompteExp: Math.round(stat.enCompteExp * 100) / 100,
-        enCompteDest: Math.round(stat.enCompteDest * 100) / 100,
-        totalPort: Math.round(totalPort * 100) / 100,
-      }
-    })
+    return computeAgencyPortStats(filteredByDate, { viewMode, directionFilter, originCityFilter })
   }, [filteredByDate, deferredFilters])
 
   // Appliquer les filtres de ville et type de port
@@ -552,10 +456,38 @@ export default function AdminPortAgenciesTab({
     }
   }, [filteredStats])
 
+  // ⏳ Reste à encaisser par agence (attendu − encaissé, hors en compte) — même calcul que le Suivi de l'agence
+  const restePeriodText = datePreset === 'operational' && operationalDay
+    ? `jour d'opération du ${operationalDay.toLocaleDateString('fr-FR')}`
+    : `${/^p[ée]riode$/i.test(String(period.label || '').trim()) ? '' : `${period.label} — `}du ${periodRangeText}`
+  const resteRows = useMemo<ResteRow[]>(() => {
+    if (!showReste) return []
+    const { selectedCity } = deferredFilters
+    return CITIES.filter(c => selectedCity === 'all' || c === selectedCity).map(c => {
+      const t = computeAgencyPortStats(filteredByDate, { viewMode: 'theoretical', cities: [c] })[0]
+      const ph = computeAgencyPortStats(filteredByDate, { viewMode: 'physical', cities: [c] })[0]
+      const attendu = Math.round((t.portPaye + t.portDu + t.portDuCheque) * 100) / 100
+      const encaisse = Math.round((ph.portPaye + ph.portDu + ph.portDuCheque) * 100) / 100
+      return { city: c, attendu, encaisse, reste: Math.round((attendu - encaisse) * 100) / 100, lines: resteAEncaisserLines(filteredByDate, c) }
+    }).filter(r => r.attendu || r.encaisse)
+  }, [showReste, filteredByDate, deferredFilters])
+
   const hasActiveFilter = selectedCity !== 'all' || portTypeFilter !== 'all' || datePreset !== 'all' || directionFilter !== 'all'
 
   // 🖨️ Fonction d'impression
   const handlePrint = () => {
+    // 💵 Mode Caisse : « Résumé de caisse » en 2 exemplaires sur une page, avec accusé de réception pour l'agence
+    if (viewMode === 'physical') {
+      printPortCaisseReceipt({
+        rows: filteredStats.map(st => ({ city: st.city, nbExpeditions: st.nbExpeditions, nbUnique: st.nbUnique, portPaye: st.portPaye, portDu: st.portDu, portDuCheque: st.portDuCheque })),
+        cityLabel: selectedCity !== 'all' ? selectedCity : 'Toutes les agences',
+        periodText: datePreset === 'operational' && operationalDay
+          ? `jour d'opération du ${operationalDay.toLocaleDateString('fr-FR')}`
+          : `${/^p[ée]riode$/i.test(String(period.label || '').trim()) ? '' : `${period.label} — `}du ${periodRangeText}`,
+        expeditionsCount: uniqueExpeditionsCount,
+      })
+      return
+    }
     window.print()
   }
 
@@ -716,9 +648,9 @@ export default function AdminPortAgenciesTab({
                 {/* Toggle Vue Théorique / Situation Caisse */}
                 <div className="flex items-center gap-1 sm:gap-2 bg-white/20 backdrop-blur-sm rounded-xl p-1 w-full sm:w-auto">
                   <button
-                    onClick={() => setViewMode('theoretical')}
+                    onClick={() => { setViewMode('theoretical'); setShowReste(false) }}
                     className={`flex-1 sm:flex-none px-2 sm:px-4 py-2 rounded-lg transition-all font-bold text-xs sm:text-sm whitespace-nowrap ${
-                      viewMode === 'theoretical'
+                      viewMode === 'theoretical' && !showReste
                         ? 'bg-white text-purple-600 shadow-lg'
                         : 'text-white hover:bg-white/10'
                     }`}
@@ -727,15 +659,26 @@ export default function AdminPortAgenciesTab({
                     <span className="xs:hidden">📊 Théorique</span>
                   </button>
                   <button
-                    onClick={() => setViewMode('physical')}
+                    onClick={() => { setViewMode('physical'); setShowReste(false) }}
                     className={`flex-1 sm:flex-none px-2 sm:px-4 py-2 rounded-lg transition-all font-bold text-xs sm:text-sm whitespace-nowrap ${
-                      viewMode === 'physical'
+                      viewMode === 'physical' && !showReste
                         ? 'bg-white text-purple-600 shadow-lg'
                         : 'text-white hover:bg-white/10'
                     }`}
                   >
                     <span className="hidden xs:inline">💵 Situation Caisse</span>
                     <span className="xs:hidden">💵 Caisse</span>
+                  </button>
+                  {/* ⏳ 3e vue : reste à encaisser (attendu − encaissé), par agence + liste des expéditions */}
+                  <button
+                    onClick={() => setShowReste(true)}
+                    className={`flex-1 sm:flex-none px-2 sm:px-4 py-2 rounded-lg transition-all font-bold text-xs sm:text-sm whitespace-nowrap ${
+                      showReste
+                        ? 'bg-white text-purple-600 shadow-lg'
+                        : 'text-white hover:bg-white/10'
+                    }`}
+                  >
+                    ⏳ Reste à encaisser
                   </button>
                 </div>
                 {/* Bouton pour ouvrir la fenêtre Caisse Agence */}
@@ -1102,7 +1045,20 @@ export default function AdminPortAgenciesTab({
         </div>
       )}
 
-      {!loading && (
+      {!loading && showReste && (
+        <ResteParAgence rows={resteRows} subject={"Ports"} periodText={restePeriodText} kindLabels={undefined} help={"ports dus et ports payés attendus moins encaissés (en compte exclus)"}>
+          {/* 🧭 Suivi de l'agence (déplacé ici depuis le bas du résumé) */}
+          <AgencyFollowUpBlock
+            city={deferredFilters.selectedCity}
+            parcels={filteredByDate}
+            periodStartMs={deferredFilters.periodStartMs}
+            periodEndMs={deferredFilters.periodEndMs}
+            periodText={restePeriodText}
+          />
+        </ResteParAgence>
+      )}
+
+      {!loading && !showReste && (
       <>
       {/* Carte résumé (filtré) */}
       <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-orange-200 rounded-xl p-6 shadow-lg print:bg-gray-50 print:rounded-none print:mb-6">
@@ -1373,6 +1329,7 @@ export default function AdminPortAgenciesTab({
           )}
         </div>
       )}
+
       </>
       )}
         </div>

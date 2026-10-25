@@ -23,6 +23,7 @@ import {
 import CompanyContact from '../components/CompanyContact'
 import SignatureViewerModal from '../components/SignatureViewerModal'
 import ParcelDetailsModal from '../components/ParcelDetailsModal'
+import { ParcelParties } from '../components/ParcelParties'
 import {
   EditParcelModal, CancelParcelModal, EditModRequestModal,
   ConfirmDeliveryModal, ReportIssueModal
@@ -800,8 +801,8 @@ export default function ClientPortalPage() {
                           <div className="flex items-start justify-between gap-2">
                             <div className="flex-1 min-w-0">
                               <span className="font-mono text-sm font-black text-blue-600 block">{p.trackingId}</span>
-                              <p className="text-sm font-bold text-gray-800 mt-0.5 truncate">{p.sender?.name || '-'}</p>
-                              <p className="text-[11px] text-gray-400 truncate">{p.sender?.city || ''}</p>
+                              <ParcelParties parcel={p} className="mt-1" />
+                              <p className="text-[11px] text-gray-400 truncate mt-0.5">📍 {p.sender?.city || p.originCity || '—'} → {p.receiver?.city || p.destinationCity || '—'}</p>
                             </div>
                             <div className="text-right shrink-0">
                               <p className="text-base font-black text-gray-800">{fmt(p.price)} DH</p>

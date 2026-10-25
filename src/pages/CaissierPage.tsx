@@ -24,6 +24,7 @@ import {
 } from '../firebase/firestore'
 import CompanyContact from '../components/CompanyContact'
 import LiveClock from '../components/LiveClock'
+import { ParcelParties } from '../components/ParcelParties'
 import {
   LogOut, Plus, X, Check, Search, Calendar, Trash2, Menu,
   TrendingUp, TrendingDown, Wallet, MapPin, ChevronDown,
@@ -1906,12 +1907,10 @@ export default function CaissierPage() {
                                 </span>
                               )}
                             </div>
-                            <p className="text-xs text-gray-600 truncate mt-0.5">
-                              {p.receiver?.name}
-                              {(p.codCollectedBy || p.deliveryDriverName) && (
-                                <span className="text-gray-400"> - par {p.codCollectedBy || p.deliveryDriverName}</span>
-                              )}
-                            </p>
+                            <ParcelParties parcel={p} className="mt-0.5" />
+                            {(p.codCollectedBy || p.deliveryDriverName) && (
+                              <p className="text-xs text-gray-400 truncate">par {p.codCollectedBy || p.deliveryDriverName}</p>
+                            )}
                           </div>
                           <div className="text-right shrink-0 flex items-center gap-2">
                             <span className="font-black text-amber-700 text-sm">{fmt(p.codAmount)} DH</span>

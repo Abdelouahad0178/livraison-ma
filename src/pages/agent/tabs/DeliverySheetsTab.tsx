@@ -1,4 +1,5 @@
 import { useState, useEffect, useMemo } from 'react'
+import { ParcelParties } from '../../../components/ParcelParties'
 import { FileText, Printer, Eye, X, Calendar, User, Package, CheckCircle2, Truck, XCircle, Plus, Trash2, Search } from 'lucide-react'
 import { subscribeDeliverySheets, markDeliverySheetReprinted, completeDeliverySheet, cancelDeliverySheet, addParcelsToDeliverySheet, removeParcelsFromDeliverySheet } from '../../../firebase/delivery'
 import { useAgentCtx } from '../AgentCtx'
@@ -407,9 +408,9 @@ export default function DeliverySheetsTab() {
                           key={parcel.id}
                           className="flex items-center justify-between p-2 bg-gray-50 rounded-lg text-xs"
                         >
-                          <div className="flex-1">
+                          <div className="flex-1 min-w-0">
                             <p className="font-mono font-bold text-blue-600">{parcel.sender?.nic || parcel.trackingId}</p>
-                            <p className="text-gray-600 text-[10px]">{parcel.receiver?.name || '-'}</p>
+                            <ParcelParties parcel={parcel} />
                           </div>
                           <div className="flex items-center gap-2">
                             <div className="text-right">
@@ -529,10 +530,9 @@ export default function DeliverySheetsTab() {
                           />
                           <div className="flex-1 min-w-0">
                             <p className="font-mono font-bold text-blue-600 text-sm">{parcel.sender?.nic || 'N/A'}</p>
-                            <div className="flex items-center gap-2 text-xs text-gray-600 mt-0.5">
-                              <span className="truncate">{parcel.receiver?.name || '-'}</span>
-                              <span>•</span>
-                              <span>{parcel.receiver?.city || '-'}</span>
+                            <ParcelParties parcel={parcel} className="mt-0.5" />
+                            <div className="text-xs text-gray-600 mt-0.5">
+                              📍 {parcel.receiver?.city || '-'}
                             </div>
                           </div>
                           <div className="text-right text-xs">

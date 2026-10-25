@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { auth, db } from '../firebase/config'
 import { doc, onSnapshot, query, where, collection } from 'firebase/firestore'
 import { isAwaitingArrival } from '../utils/awaitingArrival'
+import { updateParcelStatus } from '../firebase/parcels'
 import { createArrivage, subscribeArrivages, subscribeAllArrivages, subscribeAllArrivedParcels, saveArrivagePointage, searchParcelByTrackingId, subscribeArrivedParcelsByCity, subscribeDrivers, assignDeliveryDriver, createAutoArrivageForCity } from '../firebase/firestore'
 import {
   Truck, Package, CheckSquare, Square, ChevronDown, ChevronRight,
@@ -253,6 +254,8 @@ export default function ArrivagePage() {
         agentId:   auth.currentUser!.uid,
         agentName: profile.name || profile.email || 'Agent',
       })
+      // 🔒 Expéditions déjà en livraison / livrées / en retour : statut conservé (pas remises « Arrivé en agence »)
+      if (result.skippedParcelIds?.length) alert(`${result.skippedParcelIds.length} expédition(s) de cet arrivage étaient déjà en livraison, livrées ou en retour : leur statut a été conservé.`)
       setSuccess({
         arrivageRef:       result.arrivageRef,
         arrivedCount:      arrivedParcels.length,
@@ -451,6 +454,14 @@ export default function ArrivagePage() {
       await assignDeliveryDriver(assignModal.parcelId, driver.id, driver.name || driver.email, {
         deliveryAssignedBy: profile?.name || profile?.email || 'Agent',
       })
+      // 🚚 Vers un VRAI livreur, une expédition « Arrivé en agence » part en livraison (comme les autres écrans
+      // d'assignation). Vers un compte « en gare » : statut inchangé.
+      const toGare = driver.role === 'livreur-gare' || /^en gare/i.test(String(driver.name || ''))
+      if (!toGare && assignModal.status === 'Arrivé en agence') {
+        await updateParcelStatus(assignModal.parcelId, 'En cours de livraison', {
+          note: `Assigné au livreur ${driver.name || driver.email} par ${profile?.name || profile?.email || 'Agent'}`,
+        })
+      }
       setAssignModal(null)
       setSelectedDriver('')
     } catch (e: any) {
@@ -667,11 +678,11 @@ export default function ArrivagePage() {
                                     <span className="inline-flex items-center gap-1.5 bg-green-900/40 border border-green-700/50 text-green-300 text-xs px-2.5 py-1 rounded-lg">
                                       <UserCheck className="w-3 h-3" /> {realParcel.deliveryDriverName || 'Livreur assigné'}
                                     </span>
-                                    <button onClick={() => { setAssignModal({ parcelId: d.parcelId, name: d.receiverName || '' }); setSelectedDriver(realParcel.deliveryDriverId) }}
+                                    <button onClick={() => { setAssignModal({ parcelId: d.parcelId, name: d.receiverName || '', status: realParcel?.status }); setSelectedDriver(realParcel.deliveryDriverId) }}
                                       className="text-xs text-gray-400 hover:text-blue-300 transition">Changer</button>
                                   </div>
                                 ) : (
-                                  <button onClick={() => { setAssignModal({ parcelId: d.parcelId, name: d.receiverName || '' }); setSelectedDriver('') }}
+                                  <button onClick={() => { setAssignModal({ parcelId: d.parcelId, name: d.receiverName || '', status: realParcel?.status }); setSelectedDriver('') }}
                                     className="inline-flex items-center gap-1.5 bg-blue-900/40 border border-blue-700/50 text-blue-300 hover:text-blue-200 hover:bg-blue-900/60 text-xs px-2.5 py-1 rounded-lg transition">
                                     <User className="w-3 h-3" /> Assigner livreur
                                   </button>

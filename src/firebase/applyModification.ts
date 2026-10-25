@@ -27,6 +27,10 @@ export async function applyModificationToParcel(requestId: string) {
   if (!parcelSnap.exists()) {
     throw new Error('Colis introuvable')
   }
+  // 🔒 La demande doit venir du client de cette expédition (même contrôle dans firestore.rules)
+  if ((parcelSnap.data()?.clientId || '') !== (request.clientId || '')) {
+    throw new Error("Demande refusée : cette expédition n'appartient pas au client qui a fait la demande.")
+  }
 
   // Préparer les mises à jour selon le type de modification
   const updates: any = {}

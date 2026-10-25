@@ -355,3 +355,24 @@ export function codSplitAmount(p: any, type: string, legacyType: string): number
   if (isMixedCod(p)) return codAmountOfType(p, type)
   return legacyType === type ? (parseFloat(p?.codAmount) || 0) : 0
 }
+
+/**
+ * ✏️ Modification d'un COD existant en MIXTE : le client paie le MÊME total, une partie en espèces. Saisir la part espèces
+ * la RETIRE de la part chèque / traite (total inchangé) au lieu de l'ajouter. Renvoie la nouvelle part document (texte).
+ */
+export function docPartKeepingTotal(docStr: any, oldCashStr: any, newCashStr: any): string {
+  const total = num(docStr) + num(oldCashStr)
+  const doc = Math.max(0, round2(total - num(newCashStr)))
+  return String(doc)
+}
+
+/** 🔒 Raison pour laquelle la répartition chèque / espèces d'un COD ne peut plus changer ('' = modifiable) :
+ *  l'argent est déjà chez le chef d'agence (remis), réglé, versé au compte société ou envoyé à l'agence source. */
+export function mixedSplitLockReason(p: any): string {
+  if (!p) return ''
+  if (p.codSenderPaid) return "déjà réglé à l'expéditeur"
+  if (p.centralDeposited) return 'déjà versé au compte société'
+  if (p.codSentToSource) return "déjà envoyé à l'agence source"
+  if (p.codStatus === 'remis' || p.codStatus === 'regle') return "déjà remis au chef d'agence (en caisse)"
+  return ''
+}

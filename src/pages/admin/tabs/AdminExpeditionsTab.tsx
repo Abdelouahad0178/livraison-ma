@@ -4,6 +4,7 @@ import {
   Banknote,
   Calendar,
   CheckCircle,
+  ChevronDown,
   Clock,
   Edit2,
   ExternalLink,
@@ -15,7 +16,8 @@ import {
   Search,
   X,
 } from 'lucide-react'
-import { useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { isMixedCod, codPartsBreakdown, codEditInitial, codPartsLabel } from '../../../utils/codParts'
 import { doc, setDoc, deleteDoc } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
@@ -67,6 +69,7 @@ export default function AdminExpeditionsTab({
   dateTo,
   setDateTo,
   filtered,
+  allFiltered,
   totalFiltered,
   localFilteredCount,
   displayLimit,
@@ -75,7 +78,6 @@ export default function AdminExpeditionsTab({
   loading,
   setCodEditModal,
   setNicEditModal,
-  setNewParcelModal,
   setStatusModal,
   openAdminEdit,
   allParcels,
@@ -88,16 +90,77 @@ export default function AdminExpeditionsTab({
   deleteConfirm,
   deleting,
 }: any) {
+  const navigate = useNavigate()
+  // 🎛️ Panneau des filtres : plié au démarrage ; résumé des filtres actifs toujours visible (avec ✕ par filtre)
+  const [filtersOpen, setFiltersOpen] = useState(false)
+  const SERVICE_LABELS: Record<string, string> = { simple: 'Simple', especes: 'C/Espèces', cheque: 'C/Chèque', traite: 'C/Traite', retour_bl: 'Retour BL' }
+  const PORT_LABELS: Record<string, string> = { port_paye: 'Port payé', port_du: 'Port dû', port_du_cheque: 'Port dû chèque', port_en_compte: 'En compte', port_en_compte_expediteur: 'En compte Exp.', port_en_compte_destinataire: 'En compte Dest.' }
+  const driverName = (id: string) => users?.find((u: any) => u.id === id)?.name || 'Livreur'
+  const activeChips: { key: string; label: string; clear: () => void }[] = [
+    ...(cityFilter !== 'Toutes' ? [{ key: 'city', label: `📍 ${cityFilter}`, clear: () => setCityFilter('Toutes') }] : []),
+    ...(driverFilter !== 'Tous' ? [{ key: 'driver', label: `🚚 ${driverName(driverFilter)}`, clear: () => setDriverFilter('Tous') }] : []),
+    ...statusFilter.map((s: string) => ({ key: `s-${s}`, label: s, clear: () => setStatusFilter(statusFilter.filter((x: string) => x !== s)) })),
+    ...serviceTypeFilter.map((s: string) => ({ key: `t-${s}`, label: SERVICE_LABELS[s] || s, clear: () => setServiceTypeFilter(serviceTypeFilter.filter((x: string) => x !== s)) })),
+    ...portTypeFilter.map((s: string) => ({ key: `p-${s}`, label: PORT_LABELS[s] || s, clear: () => setPortTypeFilter(portTypeFilter.filter((x: string) => x !== s)) })),
+  ]
+  const clearAllFilters = () => { setCityFilter('Toutes'); setDriverFilter('Tous'); setStatusFilter([]); setServiceTypeFilter([]); setPortTypeFilter([]) }
+  const frDate = (d: string) => (d ? d.split('-').reverse().join('/') : '…')
+  const periodLabelOf = (preset: string, from: string, to: string) =>
+    preset === 'today' ? "Aujourd'hui" : preset === 'week' ? '7 derniers jours' : preset === 'month' ? 'Ce mois'
+      : preset === 'custom' ? `Du ${frDate(from)} au ${frDate(to)}` : preset === 'operational' ? 'Journée d\'opération' : 'Tout'
+  // 📊 Cartes du haut = la liste FILTRÉE (période + filtres). Avant : `kpis` de la page lisait d'autres noms
+  // (inTransit / delivered) → « En cours » et « Livrés » vides, et ignorait les filtres.
+  void kpis
+  const fullList: any[] = Array.isArray(allFiltered) ? allFiltered : (Array.isArray(filtered) ? filtered : [])
+  const kpi = useMemo(() => {
+    const list = fullList
+    const DONE = ['Livré', 'Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé', 'Annulé']
+    return {
+      total: list.length,
+      livres: list.filter(p => p.status === 'Livré').length,
+      enCours: list.filter(p => !DONE.includes(p.status)).length,
+      cod: list.filter(p => parseFloat(p.codAmount) > 0 && (!p.codStatus || p.codStatus === 'pending')).reduce((s, p) => s + (parseFloat(p.codAmount) || 0), 0),
+    }
+  }, [fullList])
+  const cardCls = 'bg-white rounded-xl border border-gray-200 p-3 shadow-sm'
+  const cardTitleCls = 'text-xs font-bold text-gray-700'
+  // ⌨️ Saisie fluide : le texte tapé reste DANS la zone de recherche et n'est transmis à la page qu'après une courte
+  // pause (avant : chaque lettre redessinait toute la page Admin et la liste → la frappe ramait). La recherche
+  // elle-même ne part toujours qu'au 7e chiffre (N° EXP) ou à 3 lettres (nom), ou sur ⏎.
+  const [searchInput, setSearchInput] = useState<string>(search || '')
+  const lastSentSearch = useRef<string>(search || '')
+  useEffect(() => {
+    // Effacement / changement venu de la page (bouton ✕, Ctrl+K…) : on l'affiche
+    if ((search || '') !== lastSentSearch.current) { lastSentSearch.current = search || ''; setSearchInput(search || '') }
+  }, [search])
+  useEffect(() => {
+    if (searchInput === lastSentSearch.current) return
+    const t = setTimeout(() => { lastSentSearch.current = searchInput; setSearch(searchInput) }, 200)
+    return () => clearTimeout(t)
+  }, [searchInput, setSearch])
   const [showPrintModal, setShowPrintModal] = useState(false)
   const [printGroupBy, setPrintGroupBy] = useState<'agency' | 'status' | 'none'>('none')
   const [restoringParcel, setRestoringParcel] = useState<string | null>(null)
 
+  // 🖨️ Bon de ramassage (imprimé du chef d'agence) : document COMPLET relu en base (archives séparées : ligne telle quelle)
+  const printTicketOf = async (p: any) => {
+    try {
+      const { getDoc } = await import('firebase/firestore')
+      const snap = await getDoc(doc(db, 'parcels', p.id))
+      const { printAgentTicket } = await import('../../../utils/printAgentTicket')
+      await printAgentTicket(snap.exists() ? { id: snap.id, ...snap.data() } : p)
+    } catch (e: any) {
+      alert('Impression impossible : ' + (e?.message || e))
+    }
+  }
+
   const handlePrint = () => {
-    if (filtered.length === 0) {
+    // Toute la liste filtrée (avant : seulement les lignes affichées, 50 par défaut)
+    if (fullList.length === 0) {
       alert('Aucune expédition à imprimer')
       return
     }
-    printAdminExpeditions(filtered, printGroupBy, 'Liste des Expéditions')
+    printAdminExpeditions(fullList, printGroupBy, 'Liste des Expéditions')
     setShowPrintModal(false)
   }
 
@@ -119,93 +182,14 @@ export default function AdminExpeditionsTab({
     }
   }
 
-  // Fonction pour réparer les dates cassées
-  const [repairingDates, setRepairingDates] = useState(false)
-  const handleRepairDates = async () => {
-    if (!confirm(
-      '⚠️ Cette fonction va réparer les expéditions dont createdAt a été modifié par erreur.\n\n' +
-      'Elle va:\n' +
-      '1. Restaurer createdAt depuis l\'historique (history[0].timestamp)\n' +
-      '2. Définir expeditionDate à la date voulue\n\n' +
-      'Continuer?'
-    )) return
-
-    setRepairingDates(true)
-    let repaired = 0
-    let errors = 0
-
-    try {
-      const { updateDoc, Timestamp } = await import('firebase/firestore')
-
-      for (const parcel of allParcels) {
-        try {
-          // Vérifier si l'historique existe
-          if (!parcel.history || parcel.history.length === 0) continue
-
-          // Récupérer la date originale depuis le premier événement
-          const originalTimestamp = parcel.history[0].timestamp
-          if (!originalTimestamp) continue
-
-          const originalDate = new Date(originalTimestamp)
-          const currentDate = parcel.createdAt?.toDate ? parcel.createdAt.toDate() : null
-
-          if (!currentDate) continue
-
-          // Si les dates sont différentes de plus d'un jour, c'est probablement une erreur
-          const diffDays = Math.abs(originalDate.getTime() - currentDate.getTime()) / (1000 * 60 * 60 * 24)
-
-          if (diffDays > 0.1 && diffDays < 365) { // Plus d'un jour de différence mais moins d'un an
-            console.log(`🔧 Réparation ${parcel.trackingId}: ${currentDate.toLocaleDateString()} → ${originalDate.toLocaleDateString()}`)
-
-            // Restaurer createdAt
-            const restoredCreatedAt = Timestamp.fromDate(originalDate)
-
-            // Définir expeditionDate à la date que l'utilisateur voulait
-            const yyyy = currentDate.getFullYear()
-            const mm = String(currentDate.getMonth() + 1).padStart(2, '0')
-            const dd = String(currentDate.getDate()).padStart(2, '0')
-            const expeditionDate = `${yyyy}-${mm}-${dd}`
-
-            await updateDoc(doc(db, 'parcels', parcel.id), {
-              createdAt: restoredCreatedAt,
-              expeditionDate: expeditionDate
-            })
-
-            repaired++
-          }
-        } catch (err) {
-          console.error(`Erreur sur ${parcel.trackingId}:`, err)
-          errors++
-        }
-      }
-
-      alert(
-        `✅ Réparation terminée!\n\n` +
-        `📊 Résultats:\n` +
-        `- ${repaired} expédition(s) réparée(s)\n` +
-        `- ${errors} erreur(s)\n\n` +
-        `🔄 Rechargez la page pour voir les changements.`
-      )
-
-      if (repaired > 0) {
-        setTimeout(() => window.location.reload(), 2000)
-      }
-
-    } catch (error: any) {
-      alert('❌ Erreur: ' + error.message)
-    } finally {
-      setRepairingDates(false)
-    }
-  }
-
   return (
     <>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6 mt-2">
         {[
-          { label: 'Total colis', value: kpis.total, icon: Package, light: 'bg-blue-50 text-blue-600' },
-          { label: 'En cours', value: kpis.enCours, icon: Clock, light: 'bg-orange-50 text-orange-600' },
-          { label: 'Livres', value: kpis.livres, icon: CheckCircle, light: 'bg-green-50 text-green-600' },
-          { label: 'RETOUR FOND en attente', value: `${fmt(kpis.cod)} DH`, icon: Banknote, light: 'bg-purple-50 text-purple-600' },
+          { label: 'Total expéditions', value: kpi.total, icon: Package, light: 'bg-blue-50 text-blue-600' },
+          { label: 'En cours', value: kpi.enCours, icon: Clock, light: 'bg-orange-50 text-orange-600' },
+          { label: 'Livrées', value: kpi.livres, icon: CheckCircle, light: 'bg-green-50 text-green-600' },
+          { label: 'RETOUR FOND en attente', value: `${fmt(kpi.cod)} DH`, icon: Banknote, light: 'bg-purple-50 text-purple-600' },
         ].map(({ label, value, icon: Icon, light }) => (
           <div key={label} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 flex items-center gap-3">
             <div className={`w-10 h-10 rounded-xl ${light} flex items-center justify-center shrink-0`}>
@@ -241,18 +225,9 @@ export default function AdminExpeditionsTab({
 
       <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 mb-4 space-y-3">
         <div className="flex flex-wrap gap-3 items-center">
+          {/* ➕ Saisie de l'agent pro (toutes villes) — remplace l'ancien formulaire admin (22/10/2026) */}
           <button
-            onClick={() => setNewParcelModal({
-              form: {
-                senderNic: '', senderName: '', senderTel: '', senderAddress: '', senderCity: '',
-                receiverName: '', receiverTel: '', receiverAddress: '', receiverCity: '',
-                weight: '', nbColis: '1', serviceType: 'simple',
-                portType: 'port_paye', portPrice: '',
-                codAmount: '0',
-              },
-              loading: false,
-              error: ''
-            })}
+            onClick={() => navigate('/admin/saisie')}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-sm transition shadow-sm"
             title="Créer une nouvelle expédition"
           >
@@ -261,9 +236,15 @@ export default function AdminExpeditionsTab({
           <div className="relative flex-1 min-w-64">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
             <input
-              value={search}
-              onChange={e => setSearch(e.target.value)}
-              onKeyDown={e => { if (e.key === 'Enter') window.dispatchEvent(new CustomEvent('force-search', { detail: search })) }}
+              value={searchInput}
+              onChange={e => setSearchInput(e.target.value)}
+              onKeyDown={e => {
+                if (e.key !== 'Enter') return
+                // ⏎ : envoi immédiat du texte, puis recherche forcée (N° court)
+                lastSentSearch.current = searchInput
+                setSearch(searchInput)
+                window.dispatchEvent(new CustomEvent('force-search', { detail: searchInput }))
+              }}
               placeholder="🔍 Recherche rapide: N° EXP, Tracking ID, nom, téléphone... (⏎ pour un N° court)"
               className="w-full border-2 border-gray-300 rounded-xl pl-10 pr-16 py-2.5 text-sm bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none transition"
             />
@@ -316,24 +297,100 @@ export default function AdminExpeditionsTab({
             </label>
           )}
 
-          <Filter className="w-4 h-4 text-gray-400 shrink-0" />
-          <select value={cityFilter} onChange={e => setCityFilter(e.target.value)} className={selectCls}>
-            <option value="Toutes">Toutes les villes</option>
-            {CITIES.map(c => <option key={c}>{c}</option>)}
-          </select>
-          <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)} className={selectCls}>
-            <option value="Tous">Tous les livreurs</option>
-            {users?.filter((u: any) => u.role === 'livreur' || u.role === 'chauffeur').map((u: any) => (
-              <option key={u.id} value={u.id}>
-                {u.role === 'livreur' ? '🚚' : '🚗'} {u.name} - {u.city}
-              </option>
-            ))}
-          </select>
+          {/* 🎛️ Filtres pliés (22/10/2026) : un bouton, le nombre de filtres actifs, et leur résumé ci-dessous */}
+          <button
+            onClick={() => setFiltersOpen(o => !o)}
+            aria-expanded={filtersOpen}
+            className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-semibold border transition ${filtersOpen ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-700 border-gray-300 hover:border-blue-400'}`}
+          >
+            <Filter className="w-4 h-4" /> Filtres
+            {activeChips.length > 0 && <span className={`rounded-full px-2 py-0.5 text-xs font-bold ${filtersOpen ? 'bg-white text-blue-700' : 'bg-blue-600 text-white'}`}>{activeChips.length}</span>}
+            <ChevronDown className={`w-4 h-4 transition-transform ${filtersOpen ? 'rotate-180' : ''}`} />
+          </button>
         </div>
 
-        <div className="border-t border-gray-100 pt-3">
+        {/* Résumé des filtres actifs (toujours visible) */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="inline-flex items-center gap-1 rounded-full bg-blue-50 border border-blue-200 px-2.5 py-1 text-xs font-semibold text-blue-800">
+            <Calendar className="w-3.5 h-3.5" /> {periodLabelOf(datePreset, dateFrom, dateTo)}
+          </span>
+          {activeChips.map(c => (
+            <span key={c.key} className="inline-flex items-center gap-1 rounded-full bg-gray-100 border border-gray-200 pl-2.5 pr-1 py-0.5 text-xs font-medium text-gray-700">
+              {c.label}
+              <button onClick={c.clear} className="rounded-full p-0.5 hover:bg-gray-300" title="Retirer ce filtre"><X className="w-3 h-3" /></button>
+            </span>
+          ))}
+          {activeChips.length > 0 && (
+            <button onClick={clearAllFilters} className="text-xs font-semibold text-red-600 hover:underline ml-1">Tout effacer</button>
+          )}
+          {datePreset === 'all' && activeChips.length > 0 && (
+            <span className="w-full text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1">
+              ⚠️ Période « Tout » : les filtres portent seulement sur les {allParcels?.length ?? 0} expéditions les plus récentes chargées. Pour un résultat complet, choisissez une période (Aujourd'hui, 7 jours, Ce mois, Personnalisé).
+            </span>
+          )}
+        </div>
+
+        {filtersOpen && (
+        <div className="grid gap-3 lg:grid-cols-2 rounded-2xl border border-blue-100 bg-blue-50/40 p-3">
+        <div className={cardCls}>
+          <div className={`${cardTitleCls} mb-2`}>📍 Ville et livreur</div>
+          <div className="flex flex-wrap gap-2">
+            <select value={cityFilter} onChange={e => setCityFilter(e.target.value)} className={selectCls}>
+              <option value="Toutes">Toutes les villes</option>
+              {CITIES.map(c => <option key={c}>{c}</option>)}
+            </select>
+            <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)} className={selectCls}>
+              <option value="Tous">Tous les livreurs</option>
+              {users?.filter((u: any) => u.role === 'livreur' || u.role === 'chauffeur').map((u: any) => (
+                <option key={u.id} value={u.id}>
+                  {u.role === 'livreur' ? '🚚' : '🚗'} {u.name} - {u.city}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+
+        <div className={cardCls}>
+          <div className={`${cardTitleCls} mb-2`}>📅 Période</div>
+          <div className="flex flex-wrap gap-2 items-center">
+            {[
+              { key: 'all', label: 'Tout' },
+              { key: 'today', label: "Aujourd'hui" },
+              { key: 'week', label: '7 derniers jours' },
+              { key: 'month', label: 'Ce mois' },
+              { key: 'custom', label: 'Personnalisé' },
+            ].map(({ key, label }) => (
+              <button
+                key={key}
+                onClick={() => setDatePreset(key)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
+                  datePreset === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+            {datePreset === 'custom' && (
+              <div className="flex items-center gap-2">
+                <DateInput
+                  value={dateFrom}
+                  onChange={e => setDateFrom(e.target.value)}
+                  className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
+                />
+                <span className="text-gray-400 text-xs">→</span>
+                <DateInput
+                  value={dateTo}
+                  onChange={e => setDateTo(e.target.value)}
+                  className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
+                />
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className={`${cardCls} lg:col-span-2`}>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] text-gray-400 font-bold uppercase">Statut (multi-select) :</span>
+            <span className={cardTitleCls}>🚦 Statut (plusieurs choix)</span>
             <div className="flex gap-2">
               <button
                 onClick={() => setStatusFilter([])}
@@ -378,9 +435,9 @@ export default function AdminExpeditionsTab({
           </div>
         </div>
 
-        <div className="border-t border-gray-100 pt-3">
+        <div className={cardCls}>
           <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] text-gray-400 font-bold uppercase">Type de service (multi-select) :</span>
+            <span className={cardTitleCls}>📦 Type de service (plusieurs choix)</span>
             <div className="flex gap-2">
               <button
                 onClick={() => setServiceTypeFilter([])}
@@ -431,12 +488,9 @@ export default function AdminExpeditionsTab({
         </div>
 
         {/* Type de port */}
-        <div className="border-t border-gray-100 pt-3 space-y-2">
+        <div className={`${cardCls} space-y-2`}>
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Package className="w-4 h-4 text-gray-400" />
-              <span className="text-xs font-semibold text-gray-600">Type de port</span>
-            </div>
+            <span className={cardTitleCls}>💰 Type de port (plusieurs choix)</span>
             <div className="flex gap-2">
               <button
                 onClick={() => setPortTypeFilter([])}
@@ -445,7 +499,7 @@ export default function AdminExpeditionsTab({
                 Effacer
               </button>
               <button
-                onClick={() => setPortTypeFilter(['port_paye', 'port_du', 'port_en_compte', 'port_en_compte_expediteur', 'port_en_compte_destinataire'])}
+                onClick={() => setPortTypeFilter(['port_paye', 'port_du', 'port_du_cheque', 'port_en_compte', 'port_en_compte_expediteur', 'port_en_compte_destinataire'])}
                 className="text-[10px] text-blue-600 hover:text-blue-700 underline"
               >
                 Tout sélectionner
@@ -456,6 +510,7 @@ export default function AdminExpeditionsTab({
             {[
               { key: 'port_paye', label: 'Port payé', emoji: '✅', bg: 'bg-blue-100', text: 'text-blue-700' },
               { key: 'port_du', label: 'Port dû', emoji: '📮', bg: 'bg-orange-100', text: 'text-orange-700' },
+              { key: 'port_du_cheque', label: 'Port dû chèque', emoji: '📋', bg: 'bg-orange-100', text: 'text-orange-700' },
               { key: 'port_en_compte', label: 'En compte', emoji: '💼', bg: 'bg-purple-100', text: 'text-purple-700' },
               { key: 'port_en_compte_expediteur', label: 'En compte Exp.', emoji: '📤', bg: 'bg-purple-100', text: 'text-purple-700' },
               { key: 'port_en_compte_destinataire', label: 'En compte Dest.', emoji: '📥', bg: 'bg-purple-100', text: 'text-purple-700' },
@@ -486,41 +541,11 @@ export default function AdminExpeditionsTab({
           </div>
         </div>
 
+        </div>
+        )}
+
         <div className="flex flex-wrap gap-2 items-center border-t border-gray-100 pt-3">
-          <Calendar className="w-4 h-4 text-gray-400 shrink-0" />
-          {[
-            { key: 'all', label: 'Tout' },
-            { key: 'today', label: "Aujourd'hui" },
-            { key: 'week', label: '7 derniers jours' },
-            { key: 'month', label: 'Ce mois' },
-            { key: 'custom', label: 'Personnalise' },
-          ].map(({ key, label }) => (
-            <button
-              key={key}
-              onClick={() => setDatePreset(key)}
-              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                datePreset === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              {label}
-            </button>
-          ))}
-          {datePreset === 'custom' && (
-            <div className="flex items-center gap-2 ml-1">
-              <DateInput
-                value={dateFrom}
-                onChange={e => setDateFrom(e.target.value)}
-                className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
-              />
-              <span className="text-gray-400 text-xs">-</span>
-              <DateInput
-                value={dateTo}
-                onChange={e => setDateTo(e.target.value)}
-                className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
-              />
-            </div>
-          )}
-          <div className="ml-auto flex items-center gap-2">
+          <div className="mr-auto flex flex-wrap items-center gap-2">
             <span className="text-xs text-gray-400 bg-gray-100 rounded-lg px-2 py-1 font-semibold">
               {totalFiltered} resultat(s)
               {typeof localFilteredCount === 'number' && (
@@ -564,15 +589,6 @@ export default function AdminExpeditionsTab({
           >
             <Archive className="w-4 h-4" /> Archiver
           </button>
-          <button
-            onClick={handleRepairDates}
-            disabled={repairingDates}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-xl text-xs font-bold bg-orange-600 text-white hover:bg-orange-700 transition shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
-            title="Réparer les expéditions dont createdAt a été modifié par erreur"
-          >
-            <RotateCcw className={`w-4 h-4 ${repairingDates ? 'animate-spin' : ''}`} />
-            {repairingDates ? 'Réparation...' : 'Réparer dates'}
-          </button>
         </div>
       </div>
 
@@ -586,7 +602,7 @@ export default function AdminExpeditionsTab({
             <table className="w-full text-sm min-w-215">
               <thead>
                 <tr className="bg-gray-50 border-b border-gray-100">
-                  {['N EXP', 'Date', 'Expediteur', 'Destinataire', 'Ville Dest.', 'Poids', 'Port Payé', 'Port Dû', 'En Compte', 'RETOUR FOND', 'Statut RETOUR FOND', 'Statut', 'Modifier', 'Suivi'].map(h => (
+                  {['N EXP', 'Date', 'Expediteur', 'Destinataire', 'Ville Dest.', 'Nb colis', 'Port Payé', 'Port Dû', 'En Compte', 'RETOUR FOND', 'Statut RETOUR FOND', 'Statut', 'Modifier', 'Suivi'].map(h => (
                     <th key={h} className="text-left px-4 py-3 text-xs font-semibold text-gray-500 uppercase tracking-wider whitespace-nowrap">
                       {h}
                     </th>
@@ -674,7 +690,7 @@ export default function AdminExpeditionsTab({
                         <p className="text-xs text-gray-400">{p.receiver?.tel}</p>
                       </td>
                       <td className="px-4 py-3 font-semibold text-gray-700 whitespace-nowrap">{p.receiver?.city}</td>
-                      <td className="px-4 py-3 text-gray-600">{p.weight} kg</td>
+                      <td className="px-4 py-3 font-semibold text-gray-700 text-center">{Number(p.nbColis) || 1}</td>
                       <td className="px-4 py-3">
                         {p.portType === 'port_paye'
                           ? <span className="text-blue-600 font-bold">{p.price || 0} DH</span>
@@ -755,9 +771,16 @@ export default function AdminExpeditionsTab({
                         </div>
                       </td>
                       <td className="px-4 py-3">
-                        <a href={`/track?id=${p.trackingId}`} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700 transition">
-                          <ExternalLink className="w-4 h-4" />
-                        </a>
+                        <div className="flex items-center gap-2">
+                          <a href={`/track?id=${p.trackingId}`} target="_blank" rel="noreferrer" className="text-blue-500 hover:text-blue-700 transition" title="Suivi (envoi par WhatsApp)">
+                            <ExternalLink className="w-4 h-4" />
+                          </a>
+                          {/* 🖨️ Bon de ramassage — même imprimé que le chef d'agence (document complet relu en base) */}
+                          <button onClick={() => printTicketOf(p)} title="Imprimer le bon de ramassage"
+                            className="text-gray-500 hover:text-blue-700 transition">
+                            <Printer className="w-4 h-4" />
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   )

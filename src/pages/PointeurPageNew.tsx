@@ -6,8 +6,9 @@ import { doc, onSnapshot } from 'firebase/firestore'
 import { useNavigate } from 'react-router-dom'
 import {
   createReglement, updateReglement, deleteReglement,
-  subscribeReglements, subscribeCodParcels,
+  subscribeReglements,
 } from '../firebase/firestore'
+import { subscribeCodChequeTraiteParcels } from '../firebase/cod'
 import { CITIES } from '../firebase/constants'
 import {
   LogOut, Plus, X, Search, Banknote, Clock,
@@ -127,7 +128,7 @@ export default function PointeurPageNew() {
     })
 
     // 2. Charger colis avec RETOUR FOND en chèque/traite
-    const unsubColis = subscribeCodParcels(profile.city, (codData: any) => {
+    const unsubColis = subscribeCodChequeTraiteParcels(profile.city, (codData: any) => {
       if (!codData || !Array.isArray(codData)) {
         console.log('⚠️ Aucune donnée COD reçue')
         colisList = []

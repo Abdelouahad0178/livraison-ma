@@ -185,6 +185,19 @@ export function subscribeClients(callback: (rows: FirestoreRow[]) => void, onErr
 }
 
 /**
+ * 👥 Clients AJOUTÉS MANUELLEMENT d'une ville (onglet « Clients » du chef d'agence) : lus directement dans la base
+ * (≈ 100 fiches) au lieu des ≈ 17 000 fiches de toutes les agences filtrées ensuite — même liste (contrôlé le
+ * 21/10/2026, ville par ville), même ordre (création la plus récente d'abord).
+ */
+export function subscribeManualClientsOfCity(city: string, callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
+  const q = query(collection(db, 'clients'), where('city', '==', city), where('manuallyAdded', '==', true))
+  const ms = (v: any) => (v?.toMillis ? v.toMillis() : v ? new Date(v).getTime() || 0 : 0)
+  return onSnapshot(q, snap => {
+    callback(snap.docs.map(rowFromDoc).sort((a: any, b: any) => ms(b.createdAt) - ms(a.createdAt)))
+  }, onError)
+}
+
+/**
  * 🏙️ Clients d'UNE ville (temps réel) — onglet « Nouvelle expédition » : clients de l'agence, puis ceux d'une
  * ville de destination choisie (au lieu des ≈ 14 000 clients de toutes les agences, ~10 Mo, 15 s et plus).
  * fromCache : premier résultat servi par le cache local (peut être incomplet) — la ville n'est considérée
