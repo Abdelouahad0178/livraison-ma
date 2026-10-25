@@ -1,46 +1,61 @@
 import { Link } from 'react-router-dom'
 import {
-  Package, MapPin, Truck, ArrowRight,
-  CheckCircle, BarChart3, Shield, Users, Zap
+  Package, MapPin, Truck, ArrowRight, CheckCircle, Shield, Users, Zap, Search,
+  Phone, Smartphone, Mail, Building2, Radio,
 } from 'lucide-react'
-import { CITIES } from '../firebase/constants'
+
+// 🏢 Coordonnées de la société (mêmes que la bande CompanyContact des pages internes)
+const INFO = {
+  siege: 'N°19, Rue 5, Hay Tissir2 - Casablanca',
+  tel1: '0522 62 92 89',
+  tel2: '0661 97 86 12',
+  email: 'bgexpress2019@gmail.com',
+}
+
+// 📍 Agences ACTIVES du réseau (du nord au sud — ordre du trajet animé)
+const ACTIVE_CITIES = [
+  { name: 'Casablanca',  role: 'Siège · agence',  desc: 'Siège social et agence de départ / arrivée.' },
+  { name: 'Marrakech',   role: 'Agence',          desc: 'Enlèvement, arrivage et livraison à domicile.' },
+  { name: 'Agadir',      role: 'Agence',          desc: 'Enlèvement, arrivage, livraison et retrait en gare.' },
+  { name: 'Ait Melloul', role: 'Agence',          desc: 'Livraison locale, rattachée au réseau Agadir.' },
+]
 
 const STEPS = [
   {
     icon: Package,
     color: 'blue',
     num: '01',
-    title: 'Enregistrement',
-    desc: "L'agent enregistre le colis et assigne un chauffeur de transport inter-ville.",
+    title: 'Dépôt en agence',
+    desc: "L'expédition est enregistrée avec son N° EXP : expéditeur, destinataire, port payé ou port dû, RETOUR FOND.",
   },
   {
     icon: Truck,
     color: 'indigo',
     num: '02',
     title: 'Transport inter-ville',
-    desc: 'Le chauffeur transporte le colis jusqu\'à l\'agence de destination en toute sécurité.',
+    desc: "Le colis voyage entre Casablanca, Marrakech, Agadir et Ait Melloul, suivi à chaque étape.",
   },
   {
     icon: MapPin,
     color: 'purple',
     num: '03',
-    title: 'Arrivée en agence',
-    desc: "L'agent de destination prend en charge le colis et organise la livraison finale.",
+    title: 'Arrivée et assignation',
+    desc: "À l'arrivée, le chef d'exploitation assigne chaque colis à un livreur de la ville, ou le garde en gare pour retrait.",
   },
   {
     icon: CheckCircle,
     color: 'emerald',
     num: '04',
-    title: 'Livraison au client',
-    desc: 'Un chauffeur local livre le colis, ou le client vient le récupérer en agence.',
+    title: 'Livraison et encaissement',
+    desc: "Le livreur remet le colis et encaisse le port dû et le RETOUR FOND, remis le soir même à l'agence.",
   },
 ]
 
 const FEATURES = [
   {
-    icon: BarChart3,
+    icon: Radio,
     title: 'Suivi en temps réel',
-    desc: 'Chaque colis est tracé à chaque étape du voyage. Le client suit son colis avec un numéro unique.',
+    desc: "Chaque expédition est tracée de l'enregistrement à la livraison. Le client suit son colis avec son numéro.",
     grad: 'from-blue-600/20 to-blue-900/20',
     border: 'border-blue-500/20',
     iconBg: 'bg-blue-600/20',
@@ -48,8 +63,8 @@ const FEATURES = [
   },
   {
     icon: Shield,
-    title: 'Paiement RETOUR FOND',
-    desc: 'Gestion intégrée du contre-remboursement. Le chauffeur collecte le paiement à la livraison.',
+    title: 'RETOUR FOND sécurisé',
+    desc: "Contre-remboursement en espèces, chèque ou traite (ou mixte). Chaque valeur suit un circuit contrôlé : livreur → chef d'exploitation → chef d'agence.",
     grad: 'from-emerald-600/20 to-emerald-900/20',
     border: 'border-emerald-500/20',
     iconBg: 'bg-emerald-600/20',
@@ -57,8 +72,8 @@ const FEATURES = [
   },
   {
     icon: Users,
-    title: 'Multi-agences',
-    desc: '15 villes couvertes. Chaque agence gère ses expéditions sortantes et ses arrivées de manière indépendante.',
+    title: '4 agences connectées',
+    desc: "Casablanca, Marrakech, Agadir et Ait Melloul partagent la même plateforme : expéditions, arrivages, caisse et COD par agence.",
     grad: 'from-purple-600/20 to-purple-900/20',
     border: 'border-purple-500/20',
     iconBg: 'bg-purple-600/20',
@@ -66,7 +81,36 @@ const FEATURES = [
   },
 ]
 
-const ROUTE_CITIES = ['Casablanca', 'Rabat', 'Fès', 'Meknès', 'Tanger']
+const ROLES = [
+  {
+    emoji: '🏢',
+    role: "Chef d'agence",
+    color: 'from-blue-950/50 border-blue-500/20',
+    badge: 'bg-blue-900/50 text-blue-300',
+    points: ['Saisie et suivi des expéditions', 'Caisse agence et RETOUR FOND', 'Validation des valeurs reçues'],
+  },
+  {
+    emoji: '🧭',
+    role: "Chef d'exploitation",
+    color: 'from-violet-950/50 border-violet-500/20',
+    badge: 'bg-violet-900/50 text-violet-300',
+    points: ['Assignation du matin', 'Collecte du soir des livreurs', 'Envoi des valeurs au chef d\'agence'],
+  },
+  {
+    emoji: '🛵',
+    role: 'Livreur',
+    color: 'from-orange-950/50 border-orange-500/20',
+    badge: 'bg-orange-900/50 text-orange-300',
+    points: ['Tournée du jour', 'Livraison et encaissement', 'Ports payés à ramasser'],
+  },
+  {
+    emoji: '📊',
+    role: 'Direction',
+    color: 'from-teal-950/50 border-teal-500/20',
+    badge: 'bg-teal-900/50 text-teal-300',
+    points: ['Vue de toutes les agences', 'Suivi des caisses et du COD', 'Facturation des clients'],
+  },
+]
 
 const STEP_COLORS = {
   blue:    { bg: 'bg-blue-600',    ring: 'ring-blue-500/30',    border: 'border-blue-500/20',    num: 'text-blue-600'    },
@@ -110,10 +154,15 @@ export default function HomePage() {
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="bg-white rounded-xl px-3 py-1.5 shadow-lg">
-              <img src="/LOGO.jpg" alt="BG Express" className="h-8 object-contain" />
+              <img src="/LOGO.jpg" alt="BG Express" width={770} height={244} className="h-8 w-auto object-contain" />
             </div>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            <Link to="/track"
+              className="text-sm text-gray-300 hover:text-white px-3 py-2 rounded-xl font-semibold transition inline-flex items-center gap-1.5"
+            >
+              <Search className="w-4 h-4" /> <span className="hidden sm:inline">Suivre un colis</span>
+            </Link>
             <Link to="/login"
               className="text-sm bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-xl font-semibold transition shadow-lg shadow-blue-600/20"
             >
@@ -137,19 +186,19 @@ export default function HomePage() {
           {/* Pill badge */}
           <div className="inline-flex items-center gap-2 bg-blue-950/70 border border-blue-500/30 rounded-full px-4 py-1.5 mb-7 text-sm text-blue-300 animate-fade-up">
             <span className="w-1.5 h-1.5 bg-blue-400 rounded-full animate-pulse" />
-            Gestion de livraison inter-ville au Maroc 🇲🇦
+            Messagerie et livraison inter-ville au Maroc 🇲🇦
           </div>
 
           {/* Title */}
           <h1 className="text-5xl sm:text-7xl md:text-8xl font-black leading-none mb-5 animate-fade-up delay-1">
-            Livraison<span className="text-blue-500">MA</span>
+            BG <span className="text-blue-500">Express</span>
           </h1>
           <p className="text-xl sm:text-2xl text-gray-300 max-w-2xl mx-auto mb-3 leading-relaxed animate-fade-up delay-2">
-            La plateforme qui connecte vos agences à travers tout le Maroc
+            Vos colis entre Casablanca, Marrakech, Agadir et Ait Melloul
           </p>
           <p className="text-gray-500 max-w-lg mx-auto mb-10 text-sm animate-fade-up delay-3">
-            Enregistrez, transportez, tracez et livrez chaque colis en toute simplicité.
-            De Casablanca à Dakhla, en temps réel.
+            Enregistrement en agence, transport, livraison à domicile ou retrait en gare,
+            RETOUR FOND encaissé et reversé — suivi en temps réel.
           </p>
 
           {/* CTAs */}
@@ -160,12 +209,17 @@ export default function HomePage() {
               <Package className="w-5 h-5" /> Accéder à la plateforme
               <ArrowRight className="w-4 h-4" />
             </Link>
+            <Link to="/track"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 bg-white/[0.06] hover:bg-white/[0.12] border border-white/15 text-white px-8 py-4 rounded-2xl font-bold text-base transition active:scale-95"
+            >
+              <Search className="w-5 h-5" /> Suivre un colis
+            </Link>
           </div>
 
           {/* ── Route Animation ── */}
           <div className="relative bg-white/[0.04] border border-white/10 rounded-2xl p-6 max-w-3xl mx-auto overflow-hidden animate-fade-up">
             <p className="text-[11px] font-semibold uppercase tracking-widest text-gray-500 mb-5">
-              Réseau de transport — itinéraires en cours
+              Notre réseau — 4 agences actives
             </p>
             <div className="relative h-16">
               {/* Road */}
@@ -173,16 +227,16 @@ export default function HomePage() {
               <div className="absolute top-1/2 left-4 right-4 border-t border-dashed border-blue-500/25" />
 
               {/* City dots */}
-              {ROUTE_CITIES.map((city, i) => {
-                const pct = (i / (ROUTE_CITIES.length - 1)) * 100
+              {ACTIVE_CITIES.map(({ name }, i) => {
+                const pct = 6 + (i / (ACTIVE_CITIES.length - 1)) * 88
                 return (
-                  <div key={city} className="absolute flex flex-col items-center"
+                  <div key={name} className="absolute flex flex-col items-center"
                     style={{ left: `${pct}%`, top: '50%', transform: 'translate(-50%, -50%)' }}
                   >
                     <div className="w-3 h-3 bg-blue-500 rounded-full city-pulse border-2 border-blue-300/80"
                       style={{ animationDelay: `${i * 0.5}s` }}
                     />
-                    <span className="absolute top-5 text-[10px] text-blue-300/80 whitespace-nowrap font-medium">{city}</span>
+                    <span className="absolute top-5 text-[10px] sm:text-xs text-blue-300/80 whitespace-nowrap font-medium">{name}</span>
                   </div>
                 )
               })}
@@ -191,7 +245,7 @@ export default function HomePage() {
               <div className="animate-drive">
                 <div className="bg-blue-600 rounded-lg px-2.5 py-1.5 flex items-center gap-1.5 shadow-xl shadow-blue-600/50 border border-blue-400/30">
                   <Truck className="w-4 h-4 text-white" />
-                  <span className="text-xs text-white font-bold hidden sm:inline">LMA-Express</span>
+                  <span className="text-xs text-white font-bold hidden sm:inline">BG Express</span>
                 </div>
               </div>
             </div>
@@ -202,7 +256,7 @@ export default function HomePage() {
               <div className="animate-drive" style={{ animationDelay: '-4.5s', animationDuration: '11s' }}>
                 <div className="bg-indigo-700/80 rounded-lg px-2.5 py-1.5 flex items-center gap-1.5 shadow-lg border border-indigo-400/20">
                   <Truck className="w-4 h-4 text-white" />
-                  <span className="text-xs text-indigo-200 font-bold hidden sm:inline">LMA-Cargo</span>
+                  <span className="text-xs text-indigo-200 font-bold hidden sm:inline">BG Cargo</span>
                 </div>
               </div>
             </div>
@@ -214,10 +268,10 @@ export default function HomePage() {
       <section className="border-y border-blue-500/15 bg-blue-950/30 py-8">
         <div className="max-w-4xl mx-auto px-4 grid grid-cols-2 sm:grid-cols-4 gap-8 text-center">
           {[
-            { val: '15',    unit: 'villes',      icon: '📍', label: 'à travers le Maroc' },
-            { val: '100%',  unit: 'tracé',        icon: '📡', label: 'en temps réel' },
-            { val: 'RETOUR FOND',   unit: 'intégré',      icon: '💵', label: 'contre-remboursement' },
-            { val: '4',     unit: 'interfaces',   icon: '🖥️', label: 'Admin · Agent · Chauffeur · Caissier' },
+            { val: '4',            unit: 'agences',    icon: '📍', label: 'Casablanca · Marrakech · Agadir · Ait Melloul' },
+            { val: '100%',         unit: 'tracé',      icon: '📡', label: 'en temps réel' },
+            { val: 'RETOUR FOND',  unit: 'intégré',    icon: '💵', label: 'espèces · chèque · traite' },
+            { val: 'Domicile',     unit: '& gare',     icon: '🏠', label: 'livraison ou retrait en agence' },
           ].map(({ val, unit, icon, label }) => (
             <div key={label} className="flex flex-col items-center gap-1">
               <span className="text-3xl mb-1">{icon}</span>
@@ -273,22 +327,32 @@ export default function HomePage() {
       <section className="py-20 bg-gradient-to-b from-transparent via-blue-950/20 to-transparent">
         <div className="max-w-6xl mx-auto px-4">
           <div className="text-center mb-12">
-            <span className="text-xs font-bold uppercase tracking-widest text-blue-500 mb-3 block">Réseau national</span>
+            <span className="text-xs font-bold uppercase tracking-widest text-blue-500 mb-3 block">Notre réseau</span>
             <h2 className="text-3xl sm:text-4xl font-black text-white mb-3">
-              15 villes, un seul réseau
+              4 agences, un seul réseau
             </h2>
             <p className="text-gray-400 text-sm max-w-md mx-auto">
-              Du Nord au Sud, de l'Atlantique au Sahara — vos colis voyagent partout au Maroc.
+              De Casablanca au Souss : vos colis voyagent entre nos agences et sont livrés dans chaque ville.
             </p>
           </div>
 
-          <div className="grid grid-cols-3 sm:grid-cols-5 gap-2.5">
-            {CITIES.map((city) => (
-              <div key={city}
-                className="group flex items-center gap-2 bg-white/[0.04] hover:bg-blue-600/15 border border-white/8 hover:border-blue-500/40 rounded-xl px-3 py-3 transition cursor-default"
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            {ACTIVE_CITIES.map(({ name, role, desc }) => (
+              <div key={name}
+                className="group bg-white/[0.04] hover:bg-blue-600/15 border border-white/10 hover:border-blue-500/40 rounded-2xl p-5 transition"
               >
-                <MapPin className="w-3.5 h-3.5 text-blue-500/70 group-hover:text-blue-400 shrink-0 transition" />
-                <span className="text-sm text-gray-400 group-hover:text-white font-medium truncate transition">{city}</span>
+                <div className="flex items-center gap-2.5 mb-2">
+                  <div className="w-9 h-9 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center shrink-0">
+                    <MapPin className="w-4 h-4 text-blue-400" />
+                  </div>
+                  <div className="min-w-0">
+                    <div className="font-bold text-white truncate">{name}</div>
+                    <div className="text-[11px] font-semibold text-emerald-400 inline-flex items-center gap-1">
+                      <span className="w-1.5 h-1.5 bg-emerald-400 rounded-full" /> {role}
+                    </div>
+                  </div>
+                </div>
+                <p className="text-sm text-gray-400 leading-relaxed">{desc}</p>
               </div>
             ))}
           </div>
@@ -303,7 +367,7 @@ export default function HomePage() {
             Une plateforme complète
           </h2>
           <p className="text-gray-400 max-w-lg mx-auto">
-            Tout ce dont vos agences ont besoin pour gérer vos expéditions inter-villes.
+            Tout ce dont nos agences ont besoin pour gérer les expéditions, la caisse et le RETOUR FOND.
           </p>
         </div>
 
@@ -325,43 +389,14 @@ export default function HomePage() {
         </div>
       </section>
 
-      {/* ─── INTERFACES ─── */}
+      {/* ─── ROLES ─── */}
       <section className="py-16 bg-white/[0.02] border-y border-white/5">
-        <div className="max-w-4xl mx-auto px-4">
+        <div className="max-w-5xl mx-auto px-4">
           <p className="text-center text-xs font-bold uppercase tracking-widest text-gray-500 mb-8">
-            Quatre interfaces adaptées à chaque rôle
+            Un espace adapté à chaque métier
           </p>
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            {[
-              {
-                emoji: '🖥️',
-                role: 'Administrateur',
-                color: 'from-red-950/50 border-red-500/20',
-                badge: 'bg-red-900/50 text-red-300',
-                points: ['Vue globale de tous les colis', 'Gestion des statuts', 'Filtres avancés par ville'],
-              },
-              {
-                emoji: '🧑‍💼',
-                role: 'Agent',
-                color: 'from-blue-950/50 border-blue-500/20',
-                badge: 'bg-blue-900/50 text-blue-300',
-                points: ['Enregistrement des colis', 'Boîte de réception agence', 'Assignation livraison'],
-              },
-              {
-                emoji: '🚚',
-                role: 'Chauffeur',
-                color: 'from-orange-950/50 border-orange-500/20',
-                badge: 'bg-orange-900/50 text-orange-300',
-                points: ['Trajets inter-villes', 'Livraisons locales', 'Scanner QR + mise à jour'],
-              },
-              {
-                emoji: '🏦',
-                role: 'Caissier',
-                color: 'from-teal-950/50 border-teal-500/20',
-                badge: 'bg-teal-900/50 text-teal-300',
-                points: ['Entrées et sorties caisse', 'RETOUR FOND remis par agence', 'Suivi des mouvements'],
-              },
-            ].map(({ emoji, role, color, badge, points }) => (
+            {ROLES.map(({ emoji, role, color, badge, points }) => (
               <div key={role} className={`bg-gradient-to-br ${color} border rounded-2xl p-5`}>
                 <div className="flex items-center gap-3 mb-4">
                   <span className="text-2xl">{emoji}</span>
@@ -381,21 +416,55 @@ export default function HomePage() {
         </div>
       </section>
 
+      {/* ─── CONTACT ─── */}
+      <section className="py-20 max-w-5xl mx-auto px-4">
+        <div className="text-center mb-10">
+          <span className="text-xs font-bold uppercase tracking-widest text-blue-500 mb-3 block">Contact</span>
+          <h2 className="text-3xl sm:text-4xl font-black text-white">Nous joindre</h2>
+        </div>
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {[
+            { icon: Building2,  label: 'Siège',     val: INFO.siege, href: undefined },
+            { icon: Phone,      label: 'Téléphone', val: INFO.tel1,  href: `tel:${INFO.tel1.replace(/\s/g, '')}` },
+            { icon: Smartphone, label: 'Mobile',    val: INFO.tel2,  href: `tel:${INFO.tel2.replace(/\s/g, '')}` },
+            { icon: Mail,       label: 'E-mail',    val: INFO.email, href: `mailto:${INFO.email}` },
+          ].map(({ icon: Icon, label, val, href }) => {
+            const body = (
+              <>
+                <div className="w-10 h-10 rounded-xl bg-blue-600/20 border border-blue-500/30 flex items-center justify-center mb-3">
+                  <Icon className="w-5 h-5 text-blue-400" />
+                </div>
+                <div className="text-xs font-semibold uppercase tracking-wide text-gray-500 mb-1">{label}</div>
+                <div className="text-sm font-semibold text-white break-words">{val}</div>
+              </>
+            )
+            return href
+              ? <a key={label} href={href} className="block bg-white/[0.04] hover:bg-white/[0.08] border border-white/10 rounded-2xl p-5 transition">{body}</a>
+              : <div key={label} className="bg-white/[0.04] border border-white/10 rounded-2xl p-5">{body}</div>
+          })}
+        </div>
+      </section>
+
       {/* ─── CTA ─── */}
       <section className="py-28 bg-gradient-to-br from-blue-950/60 via-gray-950 to-gray-950">
         <div className="max-w-2xl mx-auto px-4 text-center">
           <div className="text-6xl mb-6 animate-float-y inline-block">📦</div>
           <h2 className="text-3xl sm:text-5xl font-black text-white mb-4">
-            Prêt à commencer ?
+            Votre espace BG Express
           </h2>
           <p className="text-gray-400 mb-10 max-w-md mx-auto">
-            Connectez-vous à votre espace et gérez vos expéditions en quelques clics.
+            Connectez-vous pour gérer vos expéditions, ou suivez un colis avec son numéro.
           </p>
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link to="/login"
               className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 bg-blue-600 hover:bg-blue-500 text-white px-10 py-4 rounded-2xl font-bold text-lg transition shadow-2xl shadow-blue-600/30 active:scale-95"
             >
               <Package className="w-5 h-5" /> Se connecter
+            </Link>
+            <Link to="/track"
+              className="w-full sm:w-auto inline-flex items-center justify-center gap-2.5 bg-white/[0.06] hover:bg-white/[0.12] border border-white/15 text-white px-10 py-4 rounded-2xl font-bold text-lg transition active:scale-95"
+            >
+              <Search className="w-5 h-5" /> Suivre un colis
             </Link>
           </div>
         </div>
@@ -406,14 +475,14 @@ export default function HomePage() {
         <div className="max-w-6xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <div className="w-6 h-6 bg-blue-600 rounded-md flex items-center justify-center">
-              <Package className="w-3.5 h-3.5 text-white" />
+              <Truck className="w-3.5 h-3.5 text-white" />
             </div>
             <span className="text-sm font-bold text-gray-400">
-              Livraison<span className="text-blue-500">MA</span>
+              BG <span className="text-blue-500">Express</span>
             </span>
           </div>
-          <p className="text-xs text-gray-600">
-            © {new Date().getFullYear()} LivraisonMA · Gestion de livraison au Maroc 🇲🇦
+          <p className="text-xs text-gray-600 text-center">
+            © {new Date().getFullYear()} BG Express · Casablanca · Marrakech · Agadir · Ait Melloul 🇲🇦
           </p>
           <div className="flex items-center gap-4 text-xs text-gray-600">
             <Link to="/login" className="hover:text-gray-400 transition">Connexion</Link>

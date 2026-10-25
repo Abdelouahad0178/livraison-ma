@@ -1,8 +1,10 @@
+import DateInput from '../../../components/DateInput'
 import { useState, useEffect, useMemo } from 'react'
 import { Building2, TrendingUp, Package, Users, Calendar, CheckCircle, Clock } from 'lucide-react'
 import { CITIES } from '../../../firebase/constants'
 import { collection, query, where, orderBy, onSnapshot, limit } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
+import { entriesFromStart, moneyFromStart } from '../../../utils/moneyFlow'
 
 interface Props {
   onClose: () => void
@@ -67,7 +69,7 @@ export default function AdminCaisseView({ onClose }: Props) {
     })
 
     const updateParcels = () => {
-      setParcels(Array.from(parcelsMap.values()))
+      setParcels(moneyFromStart(Array.from(parcelsMap.values()))) // 📅 argent compté depuis le 05/10/2026
       setLoading(false)
     }
 
@@ -89,7 +91,7 @@ export default function AdminCaisseView({ onClose }: Props) {
     )
 
     const unsub = onSnapshot(q, (snap) => {
-      setAdminTransfers(snap.docs.map(d => ({ id: d.id, ...d.data() })))
+      setAdminTransfers(entriesFromStart(snap.docs.map(d => ({ id: d.id, ...d.data() })))) // 📅 depuis le 05/10/2026
     })
 
     return () => unsub()
@@ -268,15 +270,13 @@ export default function AdminCaisseView({ onClose }: Props) {
 
           {datePreset === 'custom' && (
             <div className="flex flex-col sm:flex-row gap-2 items-start sm:items-center w-full sm:w-auto">
-              <input
-                type="date"
+              <DateInput
                 value={dateFrom}
                 onChange={(e) => setDateFrom(e.target.value)}
                 className="w-full sm:w-auto px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"
               />
               <span className="text-gray-500 hidden sm:inline">à</span>
-              <input
-                type="date"
+              <DateInput
                 value={dateTo}
                 onChange={(e) => setDateTo(e.target.value)}
                 className="w-full sm:w-auto px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-purple-500"

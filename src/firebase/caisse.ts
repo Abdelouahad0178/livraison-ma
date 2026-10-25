@@ -8,6 +8,7 @@ import { db } from './db'
 import type { CaisseEntry } from '../types'
 import { CAISSE_CATEGORIES, REGLEMENT_MODES, CITIES } from './constants'
 import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
+import { MONEY_START, entriesFromStart, isEntryBeforeStart } from '../utils/moneyFlow'
 
 // 🔒 Fonction sécurisée pour parser les montants
 const safeParseAmount = (value: any): number => {
@@ -16,16 +17,16 @@ const safeParseAmount = (value: any): number => {
   return (!isNaN(num) && isFinite(num) && num >= 0) ? num : 0
 }
 
-export async function createCaisseEntry(data: Record<string, unknown>): Promise<string> {
+/**
+ * 🧾 Contenu d'une entrée de caisse (mêmes champs que createCaisseEntry), pour l'écrire DANS une transaction /
+ * un lot avec l'expédition concernée (écriture indivisible : jamais d'argent en caisse sans réception, ni l'inverse).
+ */
+export function caisseEntryDoc(data: Record<string, unknown>): Record<string, unknown> {
   const amount = safeParseAmount(data.amount)
-
-  // 🛡️ VALIDATION: Port dû ne peut JAMAIS être une sortie
   if (data.type === 'sortie' && data.category === 'port_du') {
-    console.error('❌ ERREUR CRITIQUE: Tentative de créer une SORTIE avec category port_du!', data)
     throw new Error('Un encaissement de port dû ne peut pas être une sortie. Type forcé à "entree".')
   }
-
-  const ref = await addDoc(collection(db, 'caisseEntries'), {
+  return {
     type:        data.type,
     category:    data.category,
     amount,
@@ -44,11 +45,17 @@ export async function createCaisseEntry(data: Record<string, unknown>): Promise<
     cashierId:   data.cashierId    || null,
     cashierName: data.cashierName  || '',
     note:        data.note         || '',
-    createdById:   data.createdById   || null,  // ⭐ NOUVEAU : ID du créateur
-    createdByRole: data.createdByRole || null,  // ⭐ NOUVEAU : Rôle du créateur
-    cashAdjusted:  false,  // ✅ FIX C5: Tag pour tracer si agencyCashes a été ajusté
+    createdById:   data.createdById   || null,
+    createdByRole: data.createdByRole || null,
+    cashAdjusted:  false,
     createdAt:   serverTimestamp(),
-  })
+  }
+}
+/** Référence d'une NOUVELLE entrée de caisse (identifiant généré localement, à écrire avec caisseEntryDoc). */
+export const newCaisseEntryRef = () => doc(collection(db, 'caisseEntries'))
+
+export async function createCaisseEntry(data: Record<string, unknown>): Promise<string> {
+  const ref = await addDoc(collection(db, 'caisseEntries'), caisseEntryDoc(data))
   return ref.id
 }
 export async function deleteCaisseEntry(id: string): Promise<void> {
@@ -134,15 +141,22 @@ export function subscribeAgentRemises(agentId: any, callback: any, onError: (err
   )
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
+// 📅 Lignes de caisse : jamais avant le début du vrai calcul (05/10/2026 08:00, src/utils/moneyFlow.ts)
+const sinceMoneyStart = (since: Timestamp): Timestamp =>
+  since.toMillis() < MONEY_START.getTime() ? Timestamp.fromDate(MONEY_START) : since
+/** Solde stocké (agencyCashes) non mis à jour depuis le début du vrai calcul : affiché à 0. */
+const cashFromStart = (c: any) => (c && isEntryBeforeStart({ createdAt: c.lastUpdatedAt ?? null }) || (c && !c.lastUpdatedAt))
+  ? { ...c, solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 } : c
+
 export function subscribeCaisseByCity(city: any, callback: any, onError: (err?: any) => void = () => {}) {
   // ⚡ OPTIMISATION : 30 jours, 500 docs pour équilibre performance/complétude
-  const since = daysAgoTimestamp(30)
+  const since = sinceMoneyStart(daysAgoTimestamp(30))
   const q = query(collection(db, 'caisseEntries'), where('city', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(500))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
 export function subscribeAllCaisse(callback: any, onError: (err?: any) => void = () => {}) {
   // 180 jours pour plus de données sans crasher Firestore
-  const since = daysAgoTimestamp(180)
+  const since = sinceMoneyStart(daysAgoTimestamp(180))
   const q = query(collection(db, 'caisseEntries'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(300))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
 }
@@ -897,7 +911,7 @@ export async function approveRecoveryAtomic(requestId: any, data: any) {
 export function subscribeAgencyCash(city: any, callback: any, onError: (err?: any) => void = () => {}) {
   return onSnapshot(doc(db, 'agencyCashes', city), snap => {
     if (snap.exists()) {
-      callback({ id: snap.id, ...snap.data() })
+      callback(cashFromStart({ id: snap.id, ...snap.data() }))
     } else {
       callback({ id: city, city, solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 })
     }
@@ -905,7 +919,7 @@ export function subscribeAgencyCash(city: any, callback: any, onError: (err?: an
 }
 export function subscribeAllAgencyCashes(callback: any, onError: (err?: any) => void = () => {}) {
   return onSnapshot(collection(db, 'agencyCashes'), snap => {
-    const data = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    const data = snap.docs.map(d => cashFromStart({ id: d.id, ...d.data() }))
     callback(data.length > 0 ? data : CITIES.map(city => ({ id: city, city, solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 })))
   }, onError)
 }
@@ -1261,46 +1275,89 @@ export async function createAdminTransferFromAgent(data: any) {
   const codParcelIds = (data.codParcelIds || []).filter(Boolean)
   if (!data.city || amount <= 0) throw new Error('Donnees invalides.')
 
+  // 🔒 Nature du versement OBLIGATOIRE : 'cod' (valeurs) ou 'port' (ports collectés par jour). Avant (diagnostic du
+  // 24/10/2026, point 1.1), les DEUX marques étaient posées sur chaque expédition : un versement de PORTS marquait
+  // aussi « COD versé à l'admin » sur des COD pas encore encaissés (234 expéditions de Marrakech, 1 166 252 DH) —
+  // ensuite exclus du versement COD, comptés « versés » par le Bilan.
+  const kind: 'cod' | 'port' = data.kind
+  if (kind !== 'cod' && kind !== 'port') throw new Error('Nature du versement inconnue (COD ou port).')
   const now = new Date().toISOString()
-  const entryRef = await addDoc(collection(db, 'caisseEntries'), {
-    type: 'sortie', category: 'remise_admin', amount,
-    description: data.note || "Transfert a l'Admin",
-    reference: '', city: data.city,
-    agentId: data.fromId || null, agentName: data.fromName || null,
-    cashierId: null, cashierName: '',
-    sourceAgentId: null, sourceAgentName: '', staffId: null, staffName: null,
-    note: data.note || '', createdAt: serverTimestamp(),
-  })
-  const transferRef = await addDoc(collection(db, 'adminTransfers'), {
-    fromRole: 'agent', fromId: data.fromId, fromName: data.fromName,
-    city: data.city, amount, note: data.note || '',
-    caisseEntryId: entryRef.id,
-    codParcelIds: codParcelIds,
-    codParcelCount: codParcelIds.length,
-    status: 'pending', confirmedBy: null, confirmedById: null, confirmedAt: null,
-    createdAt: serverTimestamp(),
-  })
-
-  // Marquer les parcels (COD + Ports dûs collectés) inclus dans ce transfert
-  if (codParcelIds.length > 0) {
-    const batch = writeBatch(db)
-    codParcelIds.forEach((id: string) => {
-      batch.update(doc(db, 'parcels', id), {
-        // Pour COD: adminTransferred (ancien système)
+  const entryRef = doc(collection(db, 'caisseEntries'))
+  const transferRef = doc(collection(db, 'adminTransfers'))
+  const markFields = kind === 'cod'
+    ? {
+        // COD : adminTransferred
         adminTransferred: true,
         adminTransferId: transferRef.id,
         adminTransferAt: now,
         adminTransferBy: data.fromName || '',
         adminTransferById: data.fromId || null,
-        // Pour Ports dûs collectés: portAdminTransferred (nouveau système)
+      }
+    : {
+        // Ports collectés : portAdminTransferred
         portAdminTransferred: true,
         portAdminTransferId: transferRef.id,
         portAdminTransferAt: now,
         portAdminTransferBy: data.fromName || '',
         portAdminTransferById: data.fromId || null,
+      }
+  const transferredFlag = kind === 'cod' ? 'adminTransferred' : 'portAdminTransferred'
+  const transferIdField = kind === 'cod' ? 'adminTransferId' : 'portAdminTransferId'
+  // 🔒 Une seule opération (transaction) : chaque expédition est RELUE et refusée si elle est déjà versée — deux
+  // clics, deux appareils ou un échec en cours de route ne peuvent plus créer un double versement. Au-delà de
+  // MAX_FIRST expéditions (limite de 500 écritures), le reste est marqué par lots, chaque lot revérifié.
+  const MAX_FIRST = 450
+  const first = codParcelIds.slice(0, MAX_FIRST)
+  const nicOf = (id: string, p: any) => p?.senderNic || p?.trackingId || id
+  const missing: string[] = []
+  await runTransaction(db, async tx => {
+    const snaps = await Promise.all(first.map((id: string) => tx.get(doc(db, 'parcels', id))))
+    // Déjà versé pour CETTE nature (une expédition peut avoir son port versé et son COD versé séparément)
+    const already = snaps.filter(s => s.exists() && s.data()?.[transferredFlag])
+    if (already.length) {
+      throw new Error(`Déjà versé à l'admin : ${already.slice(0, 5).map(s => nicOf(s.id, s.data())).join(', ')}${already.length > 5 ? ` (+${already.length - 5})` : ''}. Actualisez la page puis recommencez.`)
+    }
+    snaps.forEach(s => { if (!s.exists()) missing.push(s.id) })
+    tx.set(entryRef, {
+      type: 'sortie', category: 'remise_admin', amount,
+      description: data.note || "Transfert a l'Admin",
+      reference: '', city: data.city,
+      agentId: data.fromId || null, agentName: data.fromName || null,
+      cashierId: null, cashierName: '',
+      sourceAgentId: null, sourceAgentName: '', staffId: null, staffName: null,
+      note: data.note || '', createdAt: serverTimestamp(),
+    })
+    tx.set(transferRef, {
+      fromRole: 'agent', fromId: data.fromId, fromName: data.fromName,
+      city: data.city, amount, note: data.note || '',
+      caisseEntryId: entryRef.id,
+      kind,
+      codParcelIds: codParcelIds,
+      codParcelCount: codParcelIds.length,
+      ...(missing.length ? { missingParcelIds: missing } : {}),
+      status: 'pending', confirmedBy: null, confirmedById: null, confirmedAt: null,
+      createdAt: serverTimestamp(),
+    })
+    snaps.forEach(s => { if (s.exists()) tx.update(s.ref, markFields) })
+  })
+
+  // Lots suivants (versements de plus de MAX_FIRST expéditions) : chacun relu et revérifié
+  const rest = codParcelIds.slice(MAX_FIRST)
+  const skipped: string[] = []
+  for (let i = 0; i < rest.length; i += MAX_FIRST) {
+    const chunk = rest.slice(i, i + MAX_FIRST)
+    await runTransaction(db, async tx => {
+      const snaps = await Promise.all(chunk.map((id: string) => tx.get(doc(db, 'parcels', id))))
+      snaps.forEach(s => {
+        if (!s.exists()) { missing.push(s.id); return }
+        const d = s.data()
+        if (d?.[transferredFlag] && d?.[transferIdField] !== transferRef.id) { skipped.push(s.id); return }
+        tx.update(s.ref, markFields)
       })
     })
-    await batch.commit()
+  }
+  if (skipped.length || (rest.length && missing.length)) {
+    await updateDoc(transferRef, { ...(skipped.length ? { alreadyTransferredIds: skipped } : {}), ...(missing.length ? { missingParcelIds: missing } : {}) })
   }
 
   return transferRef.id
@@ -1637,7 +1694,7 @@ export async function createAdminTransferDirect(data: any, creatorId: string, cr
 
 export function subscribeAdminTransfers(callback: any, onError: (err?: any) => void = () => {}) {
   const q = query(collection(db, 'adminTransfers'), orderBy('createdAt', 'desc'))
-  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
+  return onSnapshot(q, snap => callback(entriesFromStart(snap.docs.map(d => ({ id: d.id, ...d.data() })))), onError)
 }
 export function subscribeMyAdminTransfers(fromId: any, callback: any, onError: (err?: any) => void = () => {}) {
   const q = query(
@@ -1645,7 +1702,7 @@ export function subscribeMyAdminTransfers(fromId: any, callback: any, onError: (
     where('fromId', '==', fromId),
     orderBy('createdAt', 'desc')
   )
-  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
+  return onSnapshot(q, snap => callback(entriesFromStart(snap.docs.map(d => ({ id: d.id, ...d.data() })))), onError)
 }
 export function subscribeAdminTransfersByCity(city: any, callback: any, onError: (err?: any) => void = () => {}) {
   const q = query(
@@ -1653,7 +1710,7 @@ export function subscribeAdminTransfersByCity(city: any, callback: any, onError:
     where('city', '==', city),
     orderBy('createdAt', 'desc')
   )
-  return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() }))), onError)
+  return onSnapshot(q, snap => callback(entriesFromStart(snap.docs.map(d => ({ id: d.id, ...d.data() })))), onError)
 }
 
 // -- Secteurs ------------------------------------------------------------------

@@ -6,6 +6,7 @@ import {
 } from 'firebase/firestore'
 import { db } from './db'
 import { daysAgoTimestamp } from './firestoreUtils'
+import { MONEY_START } from '../utils/moneyFlow'
 import { buildCaisseEntryPayload } from './caisse'
 import { centralCodParcelPatch } from './finance'
 
@@ -17,9 +18,18 @@ export async function createCentralCodDeposit({ parcelIds = [], parcels = [] as 
   if (total <= 0) throw new Error('Montant de versement invalide.')
 
   const now = new Date().toISOString()
+  if (ids.length > 450) throw new Error('Trop d\'expéditions dans un seul versement (450 au plus) : faites-en plusieurs.')
   return runTransaction(db, async tx => {
     const cashRef = doc(db, 'agencyCashes', city)
     const cashSnap = await tx.get(cashRef)
+    // 🔒 Chaque expédition RELUE dans la même opération : refus si déjà versée au compte société (double clic,
+    // deux appareils) ou introuvable — plus de versement en double.
+    const pSnaps = await Promise.all((ids as string[]).map(id => tx.get(doc(db, 'parcels', id))))
+    const nic = (s: any) => s.data()?.senderNic || s.data()?.trackingId || s.id
+    const deja = pSnaps.filter(s => s.exists() && s.data()?.centralDeposited)
+    if (deja.length) throw new Error(`Déjà versé au compte société : ${deja.slice(0, 5).map(nic).join(', ')}${deja.length > 5 ? ` (+${deja.length - 5})` : ''}. Actualisez la page.`)
+    const absents = pSnaps.filter(s => !s.exists())
+    if (absents.length) throw new Error(`Expédition(s) introuvable(s) : ${absents.slice(0, 5).map(s => s.id).join(', ')}. Actualisez la page.`)
     const cash = cashSnap.exists()
       ? cashSnap.data()
       : { solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 }
@@ -89,7 +99,7 @@ export async function createCentralCodDeposit({ parcelIds = [], parcels = [] as 
 }
 export function subscribeAllCentralCodDeposits(callback: any, onError: (err?: any) => void = () => {}) {
   // 180 jours pour éviter surcharge Firestore
-  const since = daysAgoTimestamp(180)
+  const since = Timestamp.fromMillis(Math.max(daysAgoTimestamp(180).toMillis(), MONEY_START.getTime())) // 📅 jamais avant le vrai calcul
   const q = query(collection(db, 'centralCodDeposits'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
   // Filtrer les versements supprimés (status: 'deleted')
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((dep: any) => dep.status !== 'deleted')), onError)
@@ -492,7 +502,7 @@ export async function deleteAllCentralSupplierPayments(deletedBy: string, delete
 
 export function subscribeAllCentralSupplierPayments(callback: any, onError: (err?: any) => void = () => {}) {
   // 180 jours pour éviter surcharge Firestore
-  const since = daysAgoTimestamp(180)
+  const since = Timestamp.fromMillis(Math.max(daysAgoTimestamp(180).toMillis(), MONEY_START.getTime())) // 📅 jamais avant le vrai calcul
   const q = query(collection(db, 'centralSupplierPayments'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(200))
   return onSnapshot(q, snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() })).filter((p: any) => p.status !== 'deleted')), onError)
 }
@@ -583,4 +593,109 @@ export async function unmarkParcelsDeliveryControlled(parcelIds: string[]) {
     await batch.commit()
   }
   return { updated: ids.length }
+}
+
+/**
+ * 🧾 Données des chèques / traites d'un retour de fonds, saisies par l'Encaisseur Central au
+ * moment du pointage (fiche de réception à faire signer par le client expéditeur).
+ * Écriture SÉPARÉE du pointage (markParcelsControlled) : la règle « chaque pointage n'appartient
+ * qu'à son auteur » reste ainsi vérifiée sur la seule mise à jour des champs de contrôle.
+ */
+const COD_TYPE_LABEL: Record<string, string> = { especes: 'Espèces', cheque: 'Chèque', traite: 'Traite' }
+/**
+ * 🔁 Changement du TYPE de la valeur (espèces / chèque / traite) par l'encaisseur central / l'analyseur chèques,
+ * tant que la valeur n'est PAS pointée. serviceType et codPaymentType changent ensemble (sinon le type ne serait
+ * pas pris en compte), les données de chèque / traite déjà saisies sont retirées, trace dans l'historique.
+ * RF mixte (espèces + document) : refusé (se modifie depuis la fiche de l'expédition).
+ */
+export async function changeCodValueType(parcelId: string, newType: 'especes' | 'cheque' | 'traite', by: string, byId: string) {
+  const ref = doc(db, 'parcels', parcelId)
+  return runTransaction(db, async tx => {
+    const snap = await tx.get(ref)
+    if (!snap.exists()) throw new Error('Expédition introuvable.')
+    const p: any = snap.data()
+    if (p.controlled) throw new Error('Valeur déjà pointée : annulez d\'abord le pointage pour changer son type.')
+    if (p.codMixed === true) throw new Error('Retour de fonds mixte (espèces + document) : modifiez-le depuis la fiche de l\'expédition.')
+    if (!((parseFloat(p.codAmount) || 0) > 0)) throw new Error('Cette expédition n\'a pas de retour de fonds.')
+    if ((p.codDocuments || []).some((d: any) => (d?.groupIds || []).length > 1)) throw new Error('Cette valeur fait partie d\'un chèque groupé : retirez-la d\'abord du groupe.')
+    const from = String(p.codPaymentType || p.serviceType || '').replace('cod_', '')
+    if (from === newType) return { changed: false }
+    const now = new Date().toISOString()
+    const patch: Record<string, any> = {
+      serviceType: newType,
+      codPaymentType: newType,
+      codTypeChangedAt: now,
+      codTypeChangedBy: by || 'Encaisseur central',
+      codTypeChangedById: byId || '',
+      codTypeChangedFrom: from || null,
+      history: arrayUnion({ status: p.status || '', timestamp: now, note: `Type de la valeur changé : ${COD_TYPE_LABEL[from] || from || '—'} → ${COD_TYPE_LABEL[newType]} par ${by || 'Encaisseur central'}` }),
+    }
+    if (Array.isArray(p.codDocuments) && p.codDocuments.length) patch.codDocuments = deleteField()
+    tx.update(ref, patch)
+    return { changed: true }
+  })
+}
+
+export interface CodDocument {
+  type: 'cheque' | 'traite'
+  numero: string
+  banque: string
+  montant: number
+  echeance: string // AAAA-MM-JJ (facultatif pour un chèque)
+  /** 🔗 Chèque GROUPÉ : un seul chèque pour plusieurs expéditions du même expéditeur. montant = part de CETTE
+   *  expédition ; groupTotal = montant du chèque ; groupIds / groupNics = toutes les expéditions couvertes. */
+  groupId?: string
+  groupIds?: string[]
+  groupNics?: string[]
+  groupTotal?: number
+}
+export async function saveParcelCodDocuments(parcelId: string, documents: CodDocument[], by: string, byId: string) {
+  const clean = cleanCodDocuments(documents)
+  await updateDoc(doc(db, 'parcels', parcelId), {
+    codDocuments: clean,
+    codDocumentsSavedBy: by || 'Encaisseur central',
+    codDocumentsSavedById: byId || '',
+    codDocumentsSavedAt: new Date().toISOString(),
+  })
+  return clean
+}
+
+/**
+ * 🔗 Même écriture que saveParcelCodDocuments, sur PLUSIEURS expéditions en un seul writeBatch (chèque groupé,
+ * annulation d'un pointage) : tout est écrit, ou rien — jamais un groupe à moitié enregistré.
+ * Au-delà de 450 expéditions (annulation en masse), découpé en plusieurs lots.
+ */
+export async function saveParcelsCodDocuments(entries: Record<string, CodDocument[]>, by: string, byId: string) {
+  const ids = Object.keys(entries || {}).filter(Boolean)
+  const out: Record<string, CodDocument[]> = {}
+  if (ids.length === 0) return out
+  const now = new Date().toISOString()
+  for (let i = 0; i < ids.length; i += CONTROL_BATCH_SIZE) {
+    const batch = writeBatch(db)
+    ids.slice(i, i + CONTROL_BATCH_SIZE).forEach(id => {
+      out[id] = cleanCodDocuments(entries[id])
+      batch.update(doc(db, 'parcels', id), {
+        codDocuments: out[id],
+        codDocumentsSavedBy: by || 'Encaisseur central',
+        codDocumentsSavedById: byId || '',
+        codDocumentsSavedAt: now,
+      })
+    })
+    await batch.commit()
+  }
+  return out
+}
+
+function cleanCodDocuments(documents: CodDocument[]): CodDocument[] {
+  return (documents || []).map(d => ({
+    type: d.type === 'traite' ? 'traite' : 'cheque',
+    numero: String(d.numero || '').trim(),
+    banque: String(d.banque || '').trim(),
+    montant: Math.round((Number(d.montant) || 0) * 100) / 100,
+    echeance: String(d.echeance || '').trim(),
+    ...(d.groupId && (d.groupIds || []).length > 1 ? {
+      groupId: String(d.groupId), groupIds: (d.groupIds || []).map(String), groupNics: (d.groupNics || []).map(String),
+      groupTotal: Math.round((Number(d.groupTotal) || 0) * 100) / 100,
+    } : {}),
+  }) as CodDocument)
 }

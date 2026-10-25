@@ -46,6 +46,25 @@ export function codDocTypeOf(p: any): string {
   return COD_DOC_TYPES.includes(t) ? t : ''
 }
 
+/**
+ * 🔎 Valeurs stockées qui désignent un COD chèque / traite — filtres SERVEUR (where 'in') de l'analyseur
+ * chèques, au lieu de charger toutes les expéditions puis de garder les chèques en mémoire. Le filtre
+ * exact (isDocParcel) reste appliqué ensuite : ces listes doivent seulement ne rien oublier.
+ * - serviceType : type choisi à la création (mixte compris : serviceType = le document), y compris
+ *   les variantes de casse / alias / anciennes listes multi-sélection dont le 1er type est un document ;
+ * - codPaymentType : expéditions dont le serviceType n'est pas un type COD (ex. 'oc', vide) mais
+ *   encaissées en chèque / traite (codDocTypeOf retombe alors sur codPaymentType).
+ */
+export const COD_DOC_SERVICE_TYPE_VALUES = [
+  'cheque', 'traite', 'cod_cheque', 'cod_traite',
+  'Cheque', 'Traite', 'CHEQUE', 'TRAITE', 'COD_CHEQUE', 'COD_TRAITE',
+  'cheque,traite', 'traite,cheque', 'cheque,especes', 'traite,especes',
+  'cheque, traite', 'traite, cheque', 'cheque, especes', 'traite, especes',
+]
+export const COD_DOC_PAYMENT_TYPE_VALUES = [
+  'cheque', 'traite', 'cod_cheque', 'cod_traite', 'Cheque', 'Traite', 'CHEQUE', 'TRAITE', 'COD_CHEQUE', 'COD_TRAITE',
+]
+
 /** Colis à retour de fonds mixte (Espèces + un chèque OU une traite). */
 export function isMixedCod(p: any): boolean {
   return !!p && p.codMixed === true && num(p.codCashAmount) > 0 && !!codDocTypeOf(p) && num(p.codAmount) > 0
@@ -335,4 +354,25 @@ export function codEditResult(modal: { value: any; cashValue?: any; mixed?: bool
 export function codSplitAmount(p: any, type: string, legacyType: string): number {
   if (isMixedCod(p)) return codAmountOfType(p, type)
   return legacyType === type ? (parseFloat(p?.codAmount) || 0) : 0
+}
+
+/**
+ * ✏️ Modification d'un COD existant en MIXTE : le client paie le MÊME total, une partie en espèces. Saisir la part espèces
+ * la RETIRE de la part chèque / traite (total inchangé) au lieu de l'ajouter. Renvoie la nouvelle part document (texte).
+ */
+export function docPartKeepingTotal(docStr: any, oldCashStr: any, newCashStr: any): string {
+  const total = num(docStr) + num(oldCashStr)
+  const doc = Math.max(0, round2(total - num(newCashStr)))
+  return String(doc)
+}
+
+/** 🔒 Raison pour laquelle la répartition chèque / espèces d'un COD ne peut plus changer ('' = modifiable) :
+ *  l'argent est déjà chez le chef d'agence (remis), réglé, versé au compte société ou envoyé à l'agence source. */
+export function mixedSplitLockReason(p: any): string {
+  if (!p) return ''
+  if (p.codSenderPaid) return "déjà réglé à l'expéditeur"
+  if (p.centralDeposited) return 'déjà versé au compte société'
+  if (p.codSentToSource) return "déjà envoyé à l'agence source"
+  if (p.codStatus === 'remis' || p.codStatus === 'regle') return "déjà remis au chef d'agence (en caisse)"
+  return ''
 }

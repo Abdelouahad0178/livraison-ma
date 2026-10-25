@@ -3,6 +3,7 @@ import { Banknote, X, AlertTriangle, Search, Edit2, Trash2 } from 'lucide-react'
 import { createDriverVersement, updateDriverVersement, deleteDriverVersement } from '../../../firebase/firestore'
 import { fmt } from '../../../utils/formatNumber'
 import { normIncludes } from '../../../utils/normText'
+import { DRIVER_VIA_EXPLOITATION_MSG } from '../../../utils/moneyFlow'
 
 const VERSEMENT_TYPES = [
   { value: 'port_du', label: 'Port Dû', emoji: '📮' },
@@ -91,6 +92,8 @@ export default function VersementChefModal({
   const handleSubmit = async () => {
     const amt = parseFloat(amount)
     setSuccess('')
+    // 💸 Circuit livreur → chef d'exploitation → chef d'agence : plus de nouveau versement direct au chef d'agence
+    if (!editingVersement) { setError(DRIVER_VIA_EXPLOITATION_MSG); return }
     if (!amt || amt <= 0) {
       setError('Montant invalide')
       return
@@ -205,6 +208,13 @@ export default function VersementChefModal({
               <X className="w-5 h-5 text-gray-400" />
             </button>
           </div>
+
+          {/* 💸 Nouveau circuit de l'argent */}
+          {!editingVersement && (
+            <div className="mb-4 p-3 bg-amber-950/40 border border-amber-800/60 rounded-xl text-xs text-amber-200">
+              💸 {DRIVER_VIA_EXPLOITATION_MSG}
+            </div>
+          )}
 
           {/* Mode édition - Bannière */}
           {editingVersement && (

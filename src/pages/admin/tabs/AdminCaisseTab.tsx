@@ -1,4 +1,5 @@
 import { auth } from '../../../firebase/config'
+import { isAgencyStaff } from '../../../utils/roles'
 import { createCaisseCloture, REMARK_TYPES, resolveRemark, deleteRemark } from '../../../firebase/firestore'
 import { deleteCaisseEntries } from '../../../firebase/caisse'
 import { CAISSE_CATEGORIES } from '../../../firebase/constants'
@@ -81,7 +82,7 @@ export default function AdminCaisseTab({
             const sor    = cityEs.filter((e: any) => e.type === 'sortie').reduce((s: any, e: any) => s + (e.amount || 0), 0)
             return { city: agCity, entrees: ent, sorties: sor, solde: ent - sor, count: cityEs.length, lastCloture: lastClotureForCity(agCity) }
           })
-          const agentUsers = users.filter((u: any) => u.role === 'agent')
+          const agentUsers = users.filter((u: any) => isAgencyStaff(u.role))
           const agentNameMap = new Map(agentUsers
             .filter((u: any) => u.name)
             .map((u: any) => [u.name.trim().toLowerCase(), u]))

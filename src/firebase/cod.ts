@@ -4,9 +4,11 @@ import {
   serverTimestamp, arrayUnion, increment, writeBatch, setDoc, Timestamp, runTransaction, deleteField
 } from 'firebase/firestore'
 import { db } from './db'
+import { assertCanCollectHere } from './parcels'
 import { bumpPresence } from '../services/presenceCounters'
 import { COD_STATUS, COD_PAYMENT_TYPES, STATUSES, sanitizeParcelCodWrite } from './constants'
 import { findOrCreateClientForReceiver } from './clients'
+import { codMoneyOnly, entriesFromStart, moneyFromStart } from '../utils/moneyFlow'
 
 type DynamicData = Record<string, any>
 type FirestoreRow = DynamicData & { id: string }
@@ -14,7 +16,7 @@ type FirestoreRow = DynamicData & { id: string }
 const rowFromDoc = (d: { id: string; data: () => DynamicData }): FirestoreRow => ({ id: d.id, ...d.data() })
 
 /** Type de valeur encaissé : celui du service demandé (un colis C/Chèque n'est jamais encaissé « espèces »). */
-const coherentCodPaymentType = (parcel: DynamicData, paymentType: string): string =>
+export const coherentCodPaymentType = (parcel: DynamicData, paymentType: string): string =>
   sanitizeParcelCodWrite({ codPaymentType: paymentType }, parcel?.serviceType).codPaymentType
 
 export async function collectCod(
@@ -31,6 +33,8 @@ export async function collectCod(
     if (data.codStatus === 'collected' || data.codStatus === 'remis') {
       throw new Error('Ce COD a déjà été encaissé.')
     }
+    // 🔒 La valeur se paie à l'arrivée : seule l'agence de destination l'encaisse
+    await assertCanCollectHere(data, 'valeur (COD)')
     tx.update(ref, {
       codStatus:      'collected',
       codPaymentType: coherentCodPaymentType(data, paymentType),
@@ -42,7 +46,6 @@ export async function collectCod(
   bumpPresence('cod')
 }
 
-// Collecte directe par l'agence destination (client vient sur place) — passe directement à 'remis'
 /** Annule la collecte d'une valeur (COD) tant qu'elle n'est pas remise au chef d'agence. */
 export async function uncollectCod(parcelId: string): Promise<void> {
   await runTransaction(db, async tx => {
@@ -60,7 +63,10 @@ export async function uncollectCod(parcelId: string): Promise<void> {
   })
 }
 
-export async function collectCodAtDestination(parcelId: string, paymentType: string, collectedBy: string) {
+// Collecte au guichet de l'agence destination (client vient sur place) : « collecté » par le guichet
+// (« En gare - ville »), puis reçu le soir par le chef d'exploitation et remis au chef d'agence par
+// la validation de son envoi (circuit livreur → chef d'exploitation → chef d'agence).
+export async function collectCodAtDestination(parcelId: string, paymentType: string, collectedBy: string, collectedById = '') {
   const now = new Date().toISOString()
   await runTransaction(db, async tx => {
     const ref = doc(db, 'parcels', parcelId)
@@ -69,17 +75,16 @@ export async function collectCodAtDestination(parcelId: string, paymentType: str
     const data = snap.data()
 
     // 🔒 GARDE : Éviter double-encaissement
-    if (data.codStatus === 'remis' || data.codStatus === 'regle') {
+    if (data.codStatus === 'collected' || data.codStatus === 'remis' || data.codStatus === 'regle') {
       throw new Error('Ce COD a déjà été collecté.')
     }
 
     tx.update(ref, {
-      codStatus:      'remis',
+      codStatus:      'collected',
       codPaymentType:  coherentCodPaymentType(data, paymentType),
       codCollectedAt:  now,
       codCollectedBy:  collectedBy,
-      codRemisAt:      now,
-      codRemisBy:      collectedBy,
+      ...(collectedById ? { codCollectedById: collectedById } : {}),
     })
   })
   bumpPresence('cod')
@@ -257,7 +262,8 @@ export async function fetchAllAgentCodParcels(agentId: string) {
   ])
   const all = new Map<string, FirestoreRow>()
   ;[...s1.docs, ...s2.docs].forEach(d => all.set(d.id, rowFromDoc(d)))
-  return [...all.values()].filter(p => parseFloat(p.codAmount) > 0)
+  // 📅 COD encaissés avant le 05/10/2026 (essais) : hors des soldes COD
+  return codMoneyOnly([...all.values()].filter(p => parseFloat(p.codAmount) > 0))
 }
 
 /**
@@ -295,14 +301,15 @@ export async function fetchAllAgencyCodParcels(city: string, onProgress?: (scann
       if (fieldCount >= MIN_PER_FIELD && oldestMs && oldestMs < cutoffMs) break
     }
   }
-  return [...all.values()].filter(p => parseFloat(p.codAmount) > 0)
+  // 📅 COD encaissés avant le 05/10/2026 (essais) : hors des soldes COD
+  return codMoneyOnly([...all.values()].filter(p => parseFloat(p.codAmount) > 0))
 }
 
 // 🗄️ Un colis « isArchived » peut être soit l'ancien modèle (déplacé dans parcels_archive), soit
 // le nouveau (resté dans 'parcels' avec isArchived: true — archivage auto 30/45 j). Les pages
 // Caisse / Chef d'exploitation chargent maintenant ces derniers : cibler aveuglément
 // parcels_archive faisait échouer la collecte (« introuvable »). On vérifie où il se trouve.
-async function resolveParcelCollection(parcelId: string, isArchived: boolean): Promise<'parcels' | 'parcels_archive'> {
+export async function resolveParcelCollection(parcelId: string, isArchived: boolean): Promise<'parcels' | 'parcels_archive'> {
   if (!isArchived) return 'parcels'
   try {
     const snap = await getDoc(doc(db, 'parcels_archive', parcelId))
@@ -311,13 +318,16 @@ async function resolveParcelCollection(parcelId: string, isArchived: boolean): P
     return 'parcels'
   }
 }
-export async function collectPortDu(parcelId: string, agentName: string, agentId: string, isArchived: boolean = false) {
+export async function collectPortDu(parcelId: string, agentName: string, agentId: string, isArchived: boolean = false, extraFields: DynamicData = {}) {
   const updates = {
     portStatus:          'collected',
     portCollectedBy:     agentName,
     portCollectedById:   agentId,
-    portCollectedAt:     serverTimestamp(),
+    // Date du moment côté navigateur (Timestamp) : jamais « vide en attente du serveur » (sinon la règle du 05/10 se
+    // rabattait un instant sur la date de création et la carte « par jour » ne savait pas où ranger le port)
+    portCollectedAt:     Timestamp.now(),
     portDuReceivedMethod: 'especes', // Par défaut espèces pour cette fonction
+    ...extraFields,
   }
 
   // 🗄️ Les résultats de recherche peuvent provenir de la collection d'archives
@@ -332,6 +342,19 @@ export async function collectPortDu(parcelId: string, agentName: string, agentId
 
       if (!snap.exists()) {
         throw new Error(`Colis ${parcelId} introuvable dans ${coll}`)
+      }
+      // 🔒 Le port dû se paie à l'arrivée : seule l'agence de destination l'encaisse
+      await assertCanCollectHere(snap.data() as any, 'port dû')
+      // 🔒 Déjà encaissé (par quelqu'un d'autre, sur un écran pas encore à jour) : rien n'est réécrit — l'encaissement
+      // existant (méthode, auteur, date) est conservé et le même port n'est jamais encaissé deux fois. Pas d'erreur :
+      // l'écran du livreur, qui collecte puis marque « Livré », n'est jamais bloqué.
+      const st = (snap.data() as any).portStatus
+      if (st === 'collected' || st === 'received') return
+      // 🔒 Seul un PORT DÛ s'encaisse ici (comme collectPortDuCheque) : avant, un port déjà passé « en compte » ou
+      // payé au départ pouvait être « encaissé » depuis un écran pas à jour (diagnostic du 24/10/2026, point 1.3)
+      const cur = snap.data() as any
+      if (cur.portType !== 'port_du' || cur.portPayeMethod) {
+        throw new Error(`${cur.senderNic || cur.trackingId || parcelId} : ce n'est plus un port dû (type actuel : ${cur.portType || '—'}) — rien à encaisser.`)
       }
 
       transaction.update(ref, updates)
@@ -402,7 +425,8 @@ export async function collectPortDuCheque(
     dateEncaissement: string
   },
   collectedBy: string,
-  collectedById: string
+  collectedById: string,
+  extraFields: DynamicData = {}
 ): Promise<void> {
   const parcelRef = doc(db, 'parcels', parcelId)
 
@@ -416,19 +440,25 @@ export async function collectPortDuCheque(
   if (parcel.portType !== 'port_du') {
     throw new Error('Ce colis n\'est pas un port dû')
   }
+  await assertCanCollectHere(parcel as any, 'port dû')
+  // 🔒 Déjà encaissé (espèces ou chèque) par quelqu'un d'autre : ne pas l'écraser
+  if (parcel.portStatus === 'collected' || parcel.portStatus === 'received') {
+    throw new Error('Ce port dû est déjà encaissé.')
+  }
 
   // Mettre à jour avec les détails du chèque
   const updates = {
     portStatus: 'collected',
     portCollectedBy: collectedBy,
     portCollectedById: collectedById,
-    portCollectedAt: serverTimestamp(),
+    portCollectedAt: Timestamp.now(),
     portDuReceivedMethod: 'cheque',
     portDuChequeBanque: details.banque,
     portDuChequeNumero: details.numero,
     portDuChequeDateEncaissement: details.dateEncaissement,
     portDuChequeFinalizedAt: new Date().toISOString(),
     portDuChequeFinalizedBy: collectedBy,
+    ...extraFields,
   }
 
   await updateDoc(parcelRef, updates)
@@ -601,7 +631,7 @@ export function subscribeClientPortDuTransactions(
     orderBy('createdAt', 'desc')
   )
   return onSnapshot(q, snap => {
-    const transactions = snap.docs.map(rowFromDoc)
+    const transactions = entriesFromStart(snap.docs.map(rowFromDoc)) // 📅 depuis le vrai calcul (05/10/2026)
     callback(transactions)
   }, onError)
 }
@@ -661,7 +691,8 @@ export function subscribeCodParcels(city: string, callback: (rows: FirestoreRow[
     const map = new Map<string, FirestoreRow>()
     ;[...recent, ...older].forEach(p => map.set(p.id, p))
     const ms = (p: FirestoreRow) => (p.createdAt?.toMillis ? p.createdAt.toMillis() : 0)
-    callback([...map.values()].filter(matches).sort((a, b) => ms(b) - ms(a)))
+    // 📅 argent encaissé avant le 05/10/2026 (essais) : hors des soldes
+    callback(moneyFromStart([...map.values()].filter(matches)).sort((a, b) => ms(b) - ms(a)))
   }
 
   // 1) Tous les colis de la ville des COD_RECENT_DAYS derniers jours (même filtre client qu'avant)
@@ -682,6 +713,23 @@ export function subscribeCodParcels(city: string, callback: (rows: FirestoreRow[
   const unsubRecent = onSnapshot(qRecent, snap => { recent = snap.docs.map(rowFromDoc); emit() }, onError)
   const unsubOlder = onSnapshot(qOlder, snap => { older = snap.docs.map(rowFromDoc); emit() }, onError)
   return () => { unsubRecent(); unsubOlder() }
+}
+
+/**
+ * ⚡ Pointeur : seulement les expéditions de la ville dont le RETOUR FOND est en chèque / traite (filtre fait par
+ * Firestore). Avant : toutes les expéditions arrivées sur 90 jours (≈ 31 000 à Agadir, ~75 Mo) pour n'en garder
+ * que les chèques / traites. Même règle d'argent (moneyFromStart), même tri.
+ */
+export function subscribeCodChequeTraiteParcels(city: string, callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
+  const q = query(
+    collection(db, 'parcels'),
+    where('destinationCity', '==', city),
+    where('codPaymentType', 'in', ['cheque', 'traite', 'cod_cheque', 'cod_traite']),
+  )
+  const ms = (p: FirestoreRow) => (p.createdAt?.toMillis ? p.createdAt.toMillis() : 0)
+  return onSnapshot(q, snap => {
+    callback(moneyFromStart(snap.docs.map(rowFromDoc)).sort((a, b) => ms(b) - ms(a)))
+  }, onError)
 }
 
 // ────────────────────────────────────────────────────────────────────────────

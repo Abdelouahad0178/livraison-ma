@@ -8,6 +8,7 @@ import { db } from './db'
 import { bumpPresence } from '../services/presenceCounters'
 import { CITIES, STATUSES } from './constants'
 import { daysAgoTimestamp } from './firestoreUtils'
+import { isCodMoneyBeforeStart } from '../utils/moneyFlow'
 import { isParcelVisibleInDestinationAgency } from './parcels'
 
 // 🚉 Livreur-gare d'une ville (assignation auto « Livraison en gare »). Même requête qu'avant,
@@ -44,7 +45,8 @@ export function subscribePendingCods(city: any, callback: any) {
     snap => {
       callback(
         (snap.docs.map(d => ({ id: d.id, ...d.data() })) as any[])
-          .filter(p => p.codStatus === 'collected' && p.codAmount > 0 && p.codPaymentType !== 'bon_livraison')
+          .filter(p => p.codStatus === 'collected' && p.codAmount > 0 && p.codPaymentType !== 'bon_livraison'
+            && !isCodMoneyBeforeStart(p)) // 📅 encaissés avant le 05/10/2026 (essais) : hors solde
           .sort((a, b) => {
             const da = a.codCollectedAt ? new Date(a.codCollectedAt) : new Date(0)
             const db2 = b.codCollectedAt ? new Date(b.codCollectedAt) : new Date(0)
@@ -124,22 +126,33 @@ export function subscribeDeliveryDriverParcels(
   callback: any,
   onError: (err?: any) => void = () => {},
   pageLimit = 100, // Limite configurable (100 par défaut)
-  callbackWithLastDoc?: (lastDocs: any) => void // Callback pour retourner les derniers documents (pagination)
+  callbackWithLastDoc?: (lastDocs: any) => void, // Callback pour retourner les derniers documents (pagination)
+  opts: { lite?: boolean } = {}
 ) {
   const since = daysAgoTimestamp(30)
 
   // Deux requêtes : colis assignés + colis retournés par ce livreur (historique)
-  const q1 = query(collection(db, 'parcels'), where('deliveryDriverId', '==', driverId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
+  // ⚡ opts.lite : les expéditions assignées sont lues dans parcelsLite (sans historique ni champs
+  // d'audit). ⚠️ returnedByDriverId N'EST PAS dans parcelsLite (LITE_EXCLUDED_FIELDS) : la 2ᵉ
+  // requête reste donc sur parcels (peu de documents : retours du livreur sur 30 jours).
+  const q1 = query(collection(db, opts.lite ? 'parcelsLite' : 'parcels'), where('deliveryDriverId', '==', driverId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
   const q2 = query(collection(db, 'parcels'), where('returnedByDriverId', '==', driverId), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(pageLimit))
+
+  // 🚚 TOUTES les expéditions « En cours de livraison » du livreur, sans date ni plafond : ce qu'il a à livrer
+  // aujourd'hui. Avant, la liste s'arrêtait aux 100 plus récentes des 30 derniers jours (ex. Marrakech : 212 en
+  // cours invisibles sans « Charger plus »). Même collection que q1 ; deux égalités → aucun index composé requis.
+  const q3 = query(collection(db, opts.lite ? 'parcelsLite' : 'parcels'), where('deliveryDriverId', '==', driverId), where('status', '==', 'En cours de livraison'))
 
   let assigned: any[] = []
   let returned: any[] = []
+  let enCours: any[] = []
   let lastAssignedDoc: any = null
   let lastReturnedDoc: any = null
 
   const merge = () => {
     // Fusionner et dédupliquer par ID
     const map = new Map()
+    enCours.forEach(p => map.set(p.id, p))
     assigned.forEach(p => map.set(p.id, p))
     returned.forEach(p => map.set(p.id, p))
     callback([...map.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)))
@@ -171,9 +184,19 @@ export function subscribeDeliveryDriverParcels(
     merge()
   })
 
+  const unsub3 = onSnapshot(q3, snap => {
+    enCours = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+    merge()
+  }, err => {
+    console.warn('subscribeDeliveryDriverParcels (en cours) permission error:', err.code)
+    enCours = []
+    merge()
+  })
+
   return () => {
     unsub1()
     unsub2()
+    unsub3()
   }
 }
 
@@ -255,6 +278,58 @@ export async function assignDeliveryDriver(parcelId: any, deliveryDriverId: any,
   await updateDoc(doc(db, 'parcels', parcelId), patch)
   bumpPresence('updated')
 }
+/**
+ * 🚚 Après une correction de la VILLE DE DESTINATION (diagnostic du 24/10/2026, point 2.1) : le livreur affecté
+ * restait celui de l'ancienne ville (souvent « En gare - Agadir » sur une expédition devenue « pour Marrakech »),
+ * l'expédition disparaissait de la gare de la nouvelle ville. Réaligne, sur l'état RELU :
+ * - compte « En gare » d'une autre ville → compte « En gare » de la nouvelle ville (s'il existe) ;
+ * - vrai livreur d'une autre ville → assignation retirée (« En cours de livraison » redevient « Arrivé en agence »).
+ * Rien n'est fait pour une expédition livrée / en retour, ni quand de l'argent est déjà encaissé (à régler à la main),
+ * ni pour la paire Agadir / Ait Melloul (livreurs partagés). Renvoie un message (ou null si rien à faire).
+ */
+export async function realignDeliveryAfterDestinationChange(parcelId: string, by: string): Promise<string | null> {
+  const snap = await getDoc(doc(db, 'parcels', parcelId))
+  if (!snap.exists()) return null
+  const p: any = snap.data()
+  const dest = String(p.destinationCity || '')
+  const { auth } = await import('./auth')
+  if (auth.currentUser) {
+    const actor = (await getDoc(doc(db, 'users', auth.currentUser.uid))).data()
+    if (['agentpro', 'chef_agence'].includes(actor?.role) && actor?.city !== dest) {
+      return 'La nouvelle agence de destination prend en charge le livreur.'
+    }
+  }
+  if (!p.deliveryDriverId || !dest) return null
+  if (p.status === 'Livré' || /Retour/.test(p.status || '') || p.status === 'Retourné') return null
+  const drv: any = (await getDoc(doc(db, 'users', p.deliveryDriverId))).data() || {}
+  const isGare = drv.role === 'livreur-gare' || /^En gare/i.test(p.deliveryDriverName || '')
+  const drvCity = String(drv.city || (isGare ? String(p.deliveryDriverName || '').replace(/^En gare - /i, '') : ''))
+  const sharedPair = (a: string, b: string) => [a, b].sort().join('|') === 'Agadir|Ait Melloul'
+  if (drvCity === dest || (!isGare && sharedPair(drvCity, dest))) return null
+  const portCashed = (p.portType === 'port_du' || p.portType === 'port_du_cheque') && (p.portStatus === 'collected' || p.portStatus === 'received')
+  const codCashed = (parseFloat(String(p.codAmount ?? '').replace(',', '.')) || 0) > 0 && !!p.codStatus && p.codStatus !== 'pending'
+  if (portCashed || codCashed) return `Livreur ${p.deliveryDriverName || ''} (${drvCity || 'autre ville'}) gardé : argent déjà encaissé — à régler par l'admin.`
+  const now = new Date().toISOString()
+  if (isGare) {
+    const gare = await getGareDriverForCity(dest)
+    if (gare) {
+      await updateDoc(doc(db, 'parcels', parcelId), {
+        deliveryDriverId: gare.id, deliveryDriverName: `En gare - ${dest}`, deliveryAssignedAt: now, deliveryAssignedBy: by,
+        history: arrayUnion({ status: p.status, timestamp: now, note: `🚉 Destination corrigée → ${dest} : « ${p.deliveryDriverName || 'En gare'} » remplacé par « En gare - ${dest} » par ${by}` }),
+      })
+      return `Livreur remplacé par « En gare - ${dest} ».`
+    }
+  }
+  await updateDoc(doc(db, 'parcels', parcelId), {
+    deliveryDriverId: null, deliveryDriverName: null, deliverySectorId: null, deliverySectorCode: null, deliverySectorName: null,
+    deliveryVehicleId: null, deliveryVehicleLabel: null, deliveryAssignedAt: null, deliveryAssignedBy: null,
+    ...(p.status === 'En cours de livraison' ? { status: 'Arrivé en agence' } : {}),
+    history: arrayUnion({ status: p.status === 'En cours de livraison' ? 'Arrivé en agence' : p.status, timestamp: now,
+      note: `🚚 Destination corrigée → ${dest} : assignation à ${p.deliveryDriverName || 'un livreur'} (${drvCity || 'autre ville'}) retirée par ${by}` }),
+  })
+  return `Assignation à ${p.deliveryDriverName || 'un livreur'} (${drvCity || 'autre ville'}) retirée.`
+}
+
 export async function rejectDeliveryAssignment(parcelId: any, driverId: any, driverName: any, note = '') {
   const now = new Date().toISOString()
   await updateDoc(doc(db, 'parcels', parcelId), {
@@ -284,6 +359,20 @@ export async function rejectDeliveryAssignment(parcelId: any, driverId: any, dri
 // ⛔ Refusé côté client ET côté règles Firestore (keepsDeliveredStatus) si le colis est déjà "Livré".
 export async function cancelDeliveryAssignment(parcelId: any, previousDriverName: any, cancelledBy: any, keepStatus = false) {
   const now = new Date().toISOString()
+  // 🔒 Argent déjà encaissé (port dû / COD) : l'expédition ne redevient pas « Arrivé en agence » (diagnostic du
+  // 24/10/2026, point 1.4 — ex. 1086850, 1090665, 1096131 à Ait Melloul le 19/10 : encaissées puis remises en agence).
+  // Il faut d'abord annuler l'encaissement. État RELU (pas celui de l'écran).
+  if (!keepStatus) {
+    const snap = await getDoc(doc(db, 'parcels', parcelId))
+    const cur: any = snap.exists() ? snap.data() : null
+    if (cur) {
+      const portCashed = (cur.portType === 'port_du' || cur.portType === 'port_du_cheque') && (cur.portStatus === 'collected' || cur.portStatus === 'received')
+      const codCashed = (parseFloat(String(cur.codAmount ?? '').replace(',', '.')) || 0) > 0 && !!cur.codStatus && cur.codStatus !== 'pending'
+      if (portCashed || codCashed) {
+        throw new Error(`${cur.senderNic || cur.trackingId || parcelId} : ${portCashed && codCashed ? 'port dû et COD déjà encaissés' : portCashed ? 'port dû déjà encaissé' : 'COD déjà encaissé'} — annulez d'abord l'encaissement avant d'annuler l'assignation.`)
+      }
+    }
+  }
   // keepStatus : colis déjà "Livré" — le statut ne change pas (les règles Firestore interdisent de
   // quitter "Livré" hors Admin), seule l'assignation au livreur est retirée.
   await updateDoc(doc(db, 'parcels', parcelId), {
@@ -418,13 +507,23 @@ export async function createArrivage({ city, arrivedColisDetail, missingParcelId
     createdAt:           serverTimestamp(),
   })
 
-  // Colis arrivés ? "Arrivé en agence"
-  await Promise.all(arrivedColisDetail.map(({ parcelId, arrived, total }: any) => {
+  // Colis arrivés → "Arrivé en agence". 🔒 Chaque expédition est RELUE : une expédition déjà en livraison,
+  // livrée ou en retour n'est PAS remise « Arrivé en agence » (avant : 430 expéditions livrées réécrites, stock et
+  // caisse faussés) — seule une note est ajoutée à son historique.
+  const NO_REARRIVAL = ['En cours de livraison', 'En livraison', 'Livré', 'Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
+  const skippedParcelIds: string[] = []
+  const skippedStatus: Record<string, string> = {}
+  await Promise.all(arrivedColisDetail.map(({ parcelId, arrived, total }: any) => runTransaction(db, async tx => {
+    const pref = doc(db, 'parcels', parcelId)
+    const snap = await tx.get(pref)
+    if (!snap.exists()) return
+    const cur = snap.data()?.status || ''
+    if (NO_REARRIVAL.includes(cur)) { skippedParcelIds.push(parcelId); skippedStatus[parcelId] = cur; return }
     const isPartial = arrived < total
     const noteText = isPartial
       ? `Arrivage partiel — ${arrived}/${total} colis reçus (Réf : ${arrivageRef})`
       : `Arrivage confirmé — Réf : ${arrivageRef}`
-    return updateDoc(doc(db, 'parcels', parcelId), {
+    tx.update(pref, {
       status: 'Arrivé en agence',
       visibleInDestinationAgency: true,
       destinationArrivedAt: now,
@@ -441,7 +540,14 @@ export async function createArrivage({ city, arrivedColisDetail, missingParcelId
         note: noteText,
       }),
     })
-  }))
+  })))
+  if (skippedParcelIds.length) {
+    // Traces (sans effet sur le statut) : dans l'arrivage et dans l'historique de chaque expédition ignorée
+    try { await updateDoc(ref, { skippedParcelIds, skippedCount: skippedParcelIds.length }) } catch { /* trace seulement */ }
+    await Promise.all(skippedParcelIds.map(id => updateDoc(doc(db, 'parcels', id), {
+      history: arrayUnion({ status: skippedStatus[id], timestamp: now, note: `Présent dans l'arrivage ${arrivageRef} — déjà « ${skippedStatus[id]} », statut conservé` }),
+    }).catch(() => { /* trace seulement */ })))
+  }
 
   // Colis manquants ? note dans l'historique (status inchangé)
   await Promise.all(missingParcelIds.map((parcelId: any) =>
@@ -454,7 +560,7 @@ export async function createArrivage({ city, arrivedColisDetail, missingParcelId
     })
   ))
 
-  return { id: ref.id, arrivageRef }
+  return { id: ref.id, arrivageRef, skippedParcelIds }
 }
 
 const sortArrivagesDocs = (docs: any) => docs.sort((a: any, b: any) => {
@@ -464,7 +570,13 @@ const sortArrivagesDocs = (docs: any) => docs.sort((a: any, b: any) => {
 })
 export function subscribeArrivages(city: any, callback: any, onError: (err?: any) => void = () => {}) {
   const since = daysAgoTimestamp(60)
-  const q = query(collection(db, 'arrivages'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(60))
+  // ⚡ Filtre ville CÔTÉ SERVEUR (index arrivages city+createdAt) : avant, les 60 derniers arrivages
+  // de TOUTES les villes (~40 Ko chacun) étaient téléchargés puis filtrés ici. Tous les arrivages
+  // portent un champ city (vérifié). 30 derniers de LA ville (avant : la part de la ville parmi les 60
+  // derniers toutes villes, soit ~12 à 26). Sans ville : comportement inchangé.
+  const q = city
+    ? query(collection(db, 'arrivages'), where('city', '==', city), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(30))
+    : query(collection(db, 'arrivages'), where('createdAt', '>=', since), orderBy('createdAt', 'desc'), limit(60))
   return onSnapshot(q, snap => {
     let docs: any[] = snap.docs.map(d => ({ id: d.id, ...d.data() }))
     if (city) docs = docs.filter(d => !d.city || d.city === city)

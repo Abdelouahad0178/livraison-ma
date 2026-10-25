@@ -1,3 +1,4 @@
+import DateInput from '../components/DateInput'
 import { useRef, useState, useEffect, useCallback, useMemo } from 'react'
 import { setPresenceTab } from '../services/presenceCounters'
 import { signOut } from 'firebase/auth'
@@ -29,11 +30,13 @@ import {
 } from 'lucide-react'
 import CompanyContact from '../components/CompanyContact'
 import LiveClock from '../components/LiveClock'
+import { ParcelParties } from '../components/ParcelParties'
 import { printDeliveryList } from '../utils/printDeliveryList'
 import SignatureViewerModal from '../components/SignatureViewerModal'
 import VersementChefModal from './driver/components/VersementChefModal'
 import { fmt } from '../utils/formatNumber'
 import { normIncludes } from '../utils/normText'
+import { isCodMoneyBeforeStart, isPortDuMoneyBeforeStart } from '../utils/moneyFlow'
 
 const QRCodeSVG = lazy(() => import('../components/QRCodeSvg'))
 
@@ -276,7 +279,6 @@ export default function DriverPage() {
       !['chauffeur', 'livreur'].includes(u.role)
     )
     const manager = sameCityStaff.find(u => u.role === 'chef_agence')
-      || sameCityStaff.find(u => u.role === 'agent')
       || sameCityStaff[0]
     return manager?.name || '-'
   }
@@ -440,20 +442,22 @@ export default function DriverPage() {
     .reduce((s: number, v: any) => s + (parseFloat(v.amount) || 0), 0)
 
   // Port Dû collecté : EXACTEMENT la même logique que l'onglet "Port Dû" qui fonctionne (ligne 1991)
-  const myPortDuParcels = deliveryParcels.filter((p: any) => p.portType === 'port_du' && p.portStatus === 'collected')
+  // 📅 Argent encaissé avant le 05/10/2026 (essais) : hors solde
+  const myPortDuParcels = deliveryParcels.filter((p: any) => p.portType === 'port_du' && p.portStatus === 'collected' && !isPortDuMoneyBeforeStart(p))
   const portDuTotalCollected = myPortDuParcels.reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
+  // 💸 Remis au chef d'exploitation (ou, avant, reçu par le chef d'agence) : plus détenu par le livreur
   const portDuReceivedByChef = myPortDuParcels
-    .filter((p: any) => p.portChefReceivedAt)
+    .filter((p: any) => p.portChefReceivedAt || p.portExpReceivedAt)
     .reduce((s: number, p: any) => s + (parseFloat(p.price) || 0), 0)
   const portDuHeld = portDuTotalCollected - portDuReceivedByChef
 
-  // COD collecté : colis avec COD collecté par le livreur mais pas encore reçu par le chef
+  // COD collecté : colis avec COD collecté par le livreur mais pas encore remis (chef d'exploitation / chef)
   const codHeld = deliveryParcels
     .filter((p: any) => {
       const hasCod = parseFloat(p.codAmount || 0) > 0
       const isCollected = ['collected_by_driver', 'collected_at_destination', 'collected', 'remis'].includes(p.codStatus || '')
-      const notReceivedByChef = !p.codReceivedByChef
-      return hasCod && isCollected && notReceivedByChef
+      const notReceivedByChef = !p.codReceivedByChef && !p.codExpReceivedAt
+      return hasCod && isCollected && notReceivedByChef && !isCodMoneyBeforeStart(p)
     })
     .reduce((s: number, p: any) => s + (parseFloat(p.codAmount) || 0), 0)
 
@@ -1379,11 +1383,11 @@ export default function DriverPage() {
               </div>
               {datePreset === 'custom' && (
                 <div className="flex items-center gap-2 pl-6">
-                  <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                  <DateInput value={dateFrom} onChange={e => setDateFrom(e.target.value)}
                     className="bg-gray-700 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 flex-1"
                   />
                   <span className="text-gray-400 text-xs shrink-0">→</span>
-                  <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                  <DateInput value={dateTo} onChange={e => setDateTo(e.target.value)}
                     className="bg-gray-700 border border-gray-700 rounded-lg px-2 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 flex-1"
                   />
                 </div>
@@ -2081,8 +2085,14 @@ export default function DriverPage() {
                       {/* Destinataire + Téléphone + Infos sur UNE ligne */}
                       <div className="flex items-center justify-between gap-2 mb-1">
                         <div className="flex-1 min-w-0">
-                          <p className={`font-semibold truncate ${isDeliveryView ? 'text-slate-950 text-base font-bold' : 'text-xs text-white'}`}>{parcel.receiver?.name}</p>
-
+                          <p className={`truncate ${isDeliveryView ? 'text-xs text-slate-700' : 'text-[10px] text-gray-300'}`}>
+                            📤 Expéditeur : <b className={isDeliveryView ? 'text-slate-950' : 'text-white'}>{parcel.sender?.name || parcel.senderName || '—'}</b>
+                          </p>
+                          <p className={`font-semibold truncate ${isDeliveryView ? 'text-slate-950 text-base font-bold' : 'text-xs text-white'}`}>
+                            <span className={`font-normal ${isDeliveryView ? 'text-sm text-slate-700' : 'text-gray-300'}`}>👤 Destinataire : </span>
+                            {parcel.receiver?.name || parcel.receiverName || '—'}
+                            {parcel.portType === 'port_en_compte_destinataire' && <span className="ml-1" title="Port en compte destinataire">🖐️</span>}
+                          </p>
                         </div>
                         <a href={`tel:${parcel.receiver?.tel}`}
                           className={`inline-flex items-center gap-0.5 font-medium shrink-0 ${isDeliveryView ? 'text-sm text-blue-800 bg-blue-50 border border-blue-200 rounded-md px-2 py-1' : 'text-[10px] text-blue-400 hover:text-blue-300'}`}
@@ -2629,7 +2639,7 @@ export default function DriverPage() {
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex-1 min-w-0">
                           <p className="text-white font-bold text-sm truncate">EXP {p.trackingId}</p>
-                          <p className="text-white text-xs truncate">{p.receiver?.name}</p>
+                          <ParcelParties parcel={p} dark />
                           {p.codCollectedAt && (
                             <p className="text-gray-400 text-xs">
                               Collecté le {fmtDate(collectedDate)}

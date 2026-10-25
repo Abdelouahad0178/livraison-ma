@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { Inbox, X, Check } from 'lucide-react'
 import { COD_PAYMENT_TYPES } from '../../../firebase/constants'
 import { isMixedCod, codPartsDetailLabel } from '../../../utils/codParts'
@@ -142,8 +143,7 @@ export default function AgentReceiveModal({ receiveModal, setReceiveModal, handl
             </div>
             <div>
               <label className="block text-xs font-bold uppercase tracking-wide text-gray-400 mb-1">Date echeance</label>
-              <input
-                type="date"
+              <DateInput
                 value={receiveModal.echeance || ''}
                 onChange={e => setReceiveModal((m: any) => m ? { ...m, echeance: e.target.value, error: '' } : m)}
                 disabled={receiveModal.loading}

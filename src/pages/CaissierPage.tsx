@@ -1,3 +1,4 @@
+import DateInput from '../components/DateInput'
 import { useState, useEffect, useMemo } from 'react'
 import { setPresenceTab } from '../services/presenceCounters'
 import { codPaymentTypeOf } from '../firebase/constants'
@@ -23,6 +24,7 @@ import {
 } from '../firebase/firestore'
 import CompanyContact from '../components/CompanyContact'
 import LiveClock from '../components/LiveClock'
+import { ParcelParties } from '../components/ParcelParties'
 import {
   LogOut, Plus, X, Check, Search, Calendar, Trash2, Menu,
   TrendingUp, TrendingDown, Wallet, MapPin, ChevronDown,
@@ -118,10 +120,10 @@ const ListFilters = ({
         </div>
         {preset === 'custom' && (
           <div className="flex items-center gap-2 pl-6">
-            <input type="date" value={from} onChange={e => onFrom(e.target.value)}
+            <DateInput value={from} onChange={e => onFrom(e.target.value)}
               className={`border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none ${focus} flex-1`} />
             <span className="text-gray-400 text-xs shrink-0">a</span>
-            <input type="date" value={to} onChange={e => onTo(e.target.value)}
+            <DateInput value={to} onChange={e => onTo(e.target.value)}
               className={`border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none ${focus} flex-1`} />
           </div>
         )}
@@ -196,8 +198,8 @@ export default function CaissierPage() {
     let unsubRecoveryRequests: any = null
     let unsubCash: any = null
     const unsubUsers = subscribeAllUsers(data => {
-      setAgents(data.filter(u => u.role === 'agent'))
-      setStaffUsers(data.filter(u => ['directeur', 'agent', 'chauffeur', 'caissier', 'salarie'].includes(u.role)))
+      setAgents(data.filter(u => u.role === 'chef_agence' || u.role === 'agentpro'))
+      setStaffUsers(data.filter(u => ['directeur', 'chef_agence', 'agentpro', 'chauffeur', 'caissier', 'salarie'].includes(u.role)))
     })
     let currentCity: any = null
 
@@ -649,7 +651,7 @@ export default function CaissierPage() {
 
       {/* ---- Header ---- */}
       <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-10">
-        <div className="max-w-2xl mx-auto px-4">
+        <div className="max-w-2xl xl:max-w-none xl:w-[95%] mx-auto px-4">
           <div className="flex items-center justify-between py-3">
             <div className="flex items-center gap-2">
               <img src="/LOGO.jpg" alt="BG Express" className="h-9 object-contain" />
@@ -761,7 +763,7 @@ export default function CaissierPage() {
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto p-4 pb-20">
+      <main className="max-w-2xl xl:max-w-none xl:w-[95%] mx-auto p-4 pb-20">
 
         {/* ══════════════ ACCUEIL ══════════════ */}
         {tab === 'home' && (
@@ -1244,10 +1246,10 @@ export default function CaissierPage() {
               </div>
               {datePreset === 'custom' && (
                 <div className="flex items-center gap-2 pl-6">
-                  <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                  <DateInput value={dateFrom} onChange={e => setDateFrom(e.target.value)}
                     className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-teal-500 flex-1" />
                   <span className="text-gray-400 text-xs shrink-0">a</span>
-                  <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                  <DateInput value={dateTo} onChange={e => setDateTo(e.target.value)}
                     className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-teal-500 flex-1" />
                 </div>
               )}
@@ -1905,12 +1907,10 @@ export default function CaissierPage() {
                                 </span>
                               )}
                             </div>
-                            <p className="text-xs text-gray-600 truncate mt-0.5">
-                              {p.receiver?.name}
-                              {(p.codCollectedBy || p.deliveryDriverName) && (
-                                <span className="text-gray-400"> - par {p.codCollectedBy || p.deliveryDriverName}</span>
-                              )}
-                            </p>
+                            <ParcelParties parcel={p} className="mt-0.5" />
+                            {(p.codCollectedBy || p.deliveryDriverName) && (
+                              <p className="text-xs text-gray-400 truncate">par {p.codCollectedBy || p.deliveryDriverName}</p>
+                            )}
                           </div>
                           <div className="text-right shrink-0 flex items-center gap-2">
                             <span className="font-black text-amber-700 text-sm">{fmt(p.codAmount)} DH</span>

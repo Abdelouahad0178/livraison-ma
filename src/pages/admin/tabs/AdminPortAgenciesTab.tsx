@@ -1,15 +1,23 @@
+import DateInput from '../../../components/DateInput'
 import { useMemo, useState, useEffect, useRef, useDeferredValue, startTransition } from 'react'
 import PendingBadge from '../../../components/PendingBadge'
 import { Building2, TrendingUp, Package, Printer, Filter, X, Calendar, ChevronDown, Loader2, AlertCircle, Eye } from 'lucide-react'
 import { CITIES } from '../../../firebase/constants'
 import { collection, query, orderBy, onSnapshot, where, Timestamp } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
+import { getLiteDaySliceCached, PARCELS_LITE_COLLECTION } from '../../../firebase/parcels'
+import { ALL_CITIES } from '../../../utils/liteDayCache'
 import { getOperationalDayRange, getCurrentOperationalDay } from '../../../config/operationalDay'
 import { useOperationalDay } from '../../../hooks/useOperationalDay'
-import { buildDaySlices } from '../../../utils/daySlices'
+import { useStartOnPreviousWorkedDay } from '../../../hooks/useStartOnPreviousWorkedDay'
+import { buildDaySlices, opDayOf } from '../../../utils/daySlices'
 import { parcelDate } from '../../../utils/dateFilter'
-import { agencyPortAmounts, isInAgencyScope, isSentFromAgency, isReceivedInAgency, type AgencyDirection } from '../../../utils/billingAgency'
+import { isInAgencyScope, type AgencyDirection } from '../../../utils/billingAgency'
+import { computeAgencyPortStats, resteAEncaisserLines } from '../../../utils/agencyFollowUp'
 import AdminCaisseView from '../components/AdminCaisseView'
+import AgencyFollowUpBlock from '../components/AgencyFollowUpBlock'
+import ResteParAgence, { type ResteRow } from '../components/ResteParAgence'
+import { printPortCaisseReceipt } from '../../../utils/printPortCaisseReceipt'
 import HScrollArrows from '../../../components/HScrollArrows'
 import LoadProgress from '../../../components/LoadProgress'
 
@@ -29,6 +37,9 @@ const DEFAULT_DAYS = 10
 const MAX_DAYS = 45
 // Journées en attente de la 1re réponse serveur en même temps (écoutes temps réel jour par jour)
 const SLICE_CONCURRENCY = 12
+// Journées passées : taille des pages de lecture (parcelsLite) et rafraîchissement (rattrapage) tant que l'onglet est ouvert
+const PAST_PAGE_SIZE = 2000
+const PAST_REFRESH_MS = 60 * 1000
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const pad2 = (n: number) => String(n).padStart(2, '0')
@@ -107,12 +118,16 @@ export default function AdminPortAgenciesTab({
   operationalDay,
   setOperationalDay
 }: Props) {
+  // 📅 Démarrage sur la veille travaillée (comme chef d'agence / chef d'exploitation) — le chargement attend `startReady`
+  const startReady = useStartOnPreviousWorkedDay('admin-port-agencies', { setDatePreset, setOperationalDay, setDateFrom, setDateTo })
   // États pour filtres
   const [selectedCity, setSelectedCity] = useState<string>('all') // all ou nom de ville
   const [portTypeFilter, setPortTypeFilter] = useState('all') // all, port_paye, port_du, port_en_compte_expediteur
   const [directionFilter, setDirectionFilter] = useState<string>('all') // all, sent (envoyées), received (reçues)
   const [originCityFilter, setOriginCityFilter] = useState<string>('all') // Filtre ville d'origine (pour mode "Reçues")
   const [showFilters, setShowFilters] = useState(true)
+  // ⏳ 3e vue « Reste à encaisser » (même organisation dans Port par agence et COD par agence)
+  const [showReste, setShowReste] = useState(false)
   const [viewMode, setViewMode] = useState<'theoretical' | 'physical'>('theoretical') // theoretical = tous les ports, physical = argent physique en caisse
 
   // État pour la modale Caisse Agence
@@ -121,8 +136,17 @@ export default function AdminPortAgenciesTab({
   // 📅 Période active (recalculée aussi au changement de journée d'opération)
   const { dayString: currentOpDay } = useOperationalDay()
   const operationalDayMs = operationalDay ? operationalDay.getTime() : null
+  // 📅 « Période » personnalisée appliquée seulement quand les DEUX dates sont choisies : en attendant, la
+  // période déjà chargée est gardée (pas de rechargement après le seul choix de la date de début).
+  const lastPeriodRef = useRef<ReturnType<typeof computePeriod> | null>(null)
+  const customIncomplete = datePreset === 'custom' && !(dateFrom && dateTo)
   const period = useMemo(
-    () => computePeriod(datePreset, dateFrom, dateTo, operationalDay),
+    () => {
+      if (customIncomplete && lastPeriodRef.current) return lastPeriodRef.current
+      const p = computePeriod(datePreset, dateFrom, dateTo, operationalDay)
+      if (!customIncomplete) lastPeriodRef.current = p
+      return p
+    },
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [datePreset, dateFrom, dateTo, operationalDayMs, currentOpDay]
   )
@@ -130,10 +154,15 @@ export default function AdminPortAgenciesTab({
   const periodEndMs = period.end.getTime()
 
   // États de chargement
-  // ⚡ TEMPS RÉEL sur TOUTE la période : une écoute onSnapshot par journée d'opération (mêmes
-  // bornes que l'ancienne lecture ponctuelle jour par jour). Toute modification faite ailleurs
-  // (Chef d'agence, Agent pro, livreurs… : port encaissé, statut, prix, affectation) sur un colis
-  // de la période — y compris des journées passées — est reflétée sans recharger la page.
+  // ⚡ Journée d'opération EN COURS : écoute temps réel (onSnapshot). Journées PASSÉES : lues UNE fois
+  // en version allégée (parcelsLite) via la MÉMOIRE DES JOURNÉES (firebase/parcels getLiteDaySliceCached,
+  // clé « toutes villes ») — réutilisées d'une période à l'autre, au retour sur l'onglet et même après
+  // rechargement de la page (IndexedDB), après rattrapage des expéditions modifiées. Elles sont
+  // rafraîchies chaque minute tant que l'onglet est ouvert (rattrapage, quasi gratuit) : une
+  // modification faite ailleurs sur une journée passée apparaît sans recharger la page.
+  // ⚠️ Avant : une écoute temps réel sur les expéditions COMPLÈTES de toutes les villes pour CHAQUE
+  // journée (≈ 75 Mo pour « Ce mois »), relancée à chaque changement de période.
+  // Champs lus (cet onglet, utils/billingAgency) : tous présents dans parcelsLite → mêmes montants.
   const [periodParcels, setPeriodParcels] = useState<any[]>([])
   const [loading, setLoading] = useState(true)
   // ⚠️ Avec le cache local Firestore, un onSnapshot renvoie d'abord un résultat depuis le CACHE
@@ -153,16 +182,18 @@ export default function AdminPortAgenciesTab({
   }, [directionFilter])
 
   // ⚡ CHARGEMENT de la période : mêmes requêtes que la page Chef d'agence (createdAt dans
-  // [début, fin] exacts de la période, archivés inclus), découpées par journée d'opération.
-  // Chaque journée est une écoute TEMPS RÉEL (onSnapshot, includeMetadataChanges) :
-  // - chargement initial : au plus SLICE_CONCURRENCY journées en attente du serveur à la fois
-  //   (la suivante démarre dès qu'une journée est confirmée par le serveur) ;
+  // [début, fin] exacts de la période, archivés inclus), découpées par journée d'opération :
+  // - journée(s) en cours ou à venir : écoute TEMPS RÉEL (onSnapshot, includeMetadataChanges) ;
+  // - journées passées : lecture unique via la mémoire des journées (réutilisée), relancée 2 fois
+  //   en cas d'échec réseau ;
+  // - chargement initial : au plus SLICE_CONCURRENCY journées en attente à la fois ;
   // - « chargé » = TOUTES les journées confirmées par le serveur (pas seulement le cache local) ;
-  // - ensuite, chaque modification (n'importe quelle page) met à jour les totaux (regroupées
-  //   toutes les ~250 ms, en transition React pour ne pas bloquer les clics).
+  // - ensuite, chaque modification met à jour les totaux (regroupées toutes les ~250 ms, en
+  //   transition React pour ne pas bloquer les clics).
   // À CHAQUE changement de période : écoutes coupées, données vidées, progression affichée, aucune
   // donnée de l'ancienne période ne peut revenir (génération).
   useEffect(() => {
+    if (!startReady) return
     const gen = ++loadGenRef.current
     const start = new Date(periodStartMs)
     const end = new Date(periodEndMs)
@@ -177,6 +208,7 @@ export default function AdminPortAgenciesTab({
     // Tranches contiguës (union = exactement [start, end]), de la plus récente à la plus ancienne :
     // la journée en cours (si incluse) démarre en premier.
     const slices = buildDaySlices(start, end)
+    const todayOp = opDayOf(new Date()) // journées antérieures : mémoire ; en cours / à venir : temps réel
     const sliceDocs: any[][] = slices.map(() => [])
     const confirmed: boolean[] = slices.map(() => false)
     const fromCacheFlags: boolean[] = slices.map(() => true)
@@ -219,10 +251,39 @@ export default function AdminPortAgenciesTab({
       }
     }
 
+    // 🧠 Journée passée : mémoire des journées (lecture réseau seulement si la journée n'y est pas)
+    const readPastSlice = async (i: number) => {
+      const s = slices[i]
+      for (let attempt = 0; ; attempt++) {
+        try { return await getLiteDaySliceCached(ALL_CITIES, 'createdAt', s, PAST_PAGE_SIZE) } catch (err) {
+          if (attempt >= 2 || gen !== loadGenRef.current) throw err
+          await new Promise(r => setTimeout(r, 3000))
+        }
+      }
+    }
+
     function startSlice(i: number) {
       const s = slices[i]
+      if (s.day < todayOp) {
+        readPastSlice(i).then(docs => {
+          if (gen !== loadGenRef.current) return
+          sliceDocs[i] = docs
+          fromCacheFlags[i] = false
+          setSyncing(fromCacheFlags.some((f, k) => f && k < started))
+          setLoadedCount(total())
+          markConfirmed(i)
+        }).catch(err => {
+          console.error(`Port par Agence - erreur de lecture (${s.label}):`, err)
+          if (gen !== loadGenRef.current) return
+          setLoadError(err?.message || 'Erreur de chargement')
+          fromCacheFlags[i] = false
+          setSyncing(fromCacheFlags.some((f, k) => f && k < started))
+          markConfirmed(i)
+        })
+        return
+      }
       const q = query(
-        collection(db, 'parcels'),
+        collection(db, PARCELS_LITE_COLLECTION),
         where('createdAt', '>=', Timestamp.fromDate(s.start)),
         where('createdAt', s.endInclusive ? '<=' : '<', Timestamp.fromDate(s.end)),
         orderBy('createdAt', 'desc')
@@ -263,21 +324,39 @@ export default function AdminPortAgenciesTab({
     setDayProgress({ done: 0, total: slices.length, label: slices[0].label })
     startNext()
 
+    // 🔄 Journées passées rafraîchies chaque minute (page visible, chargement terminé) : rattrapage des
+    // expéditions modifiées via la mémoire — seules les journées réellement changées sont republiées.
+    const pastIdx = slices.map((s, i) => (s.day < todayOp ? i : -1)).filter(i => i >= 0)
+    let refreshing = false
+    const refreshTimer = pastIdx.length ? setInterval(async () => {
+      if (!allReady || refreshing || gen !== loadGenRef.current) return
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return
+      refreshing = true
+      try {
+        let changed = false
+        for (const i of pastIdx) {
+          const docs = await getLiteDaySliceCached(ALL_CITIES, 'createdAt', slices[i], PAST_PAGE_SIZE)
+          if (gen !== loadGenRef.current) return
+          const prev = sliceDocs[i]
+          if (docs.length !== prev.length || docs.some((d, k) => d !== prev[k])) { sliceDocs[i] = docs; changed = true }
+        }
+        if (changed) schedulePublish()
+      } catch (err) {
+        console.warn('Port par Agence - rafraîchissement des journées passées impossible', err)
+      } finally {
+        refreshing = false
+      }
+    }, PAST_REFRESH_MS) : undefined
+
     return () => {
       loadGenRef.current += 1 // ignore toute réponse tardive de cette période
       if (publishTimer) clearTimeout(publishTimer)
+      if (refreshTimer) clearInterval(refreshTimer)
       unsubs.forEach((u) => u())
     }
-  }, [periodStartMs, periodEndMs])
+  }, [periodStartMs, periodEndMs, startReady])
   // Note: ville, type de port, direction et mode sont appliqués côté frontend (useMemo) : pas de
   // rechargement Firestore pour ces filtres.
-
-  // 🔒 Fonction sécurisée pour parser les nombres
-  const safeParseFloat = (value: any): number => {
-    if (value === null || value === undefined || value === '') return 0
-    const num = parseFloat(String(value).replace(',', '.'))
-    return (!isNaN(num) && isFinite(num) && num >= 0) ? num : 0
-  }
 
   // ✅ Filtrer les colis par période - parcelDate (workDate = jour d'opération, repli createdAt),
   // mêmes bornes EXACTES que la requête et que la page Chef d'agence.
@@ -309,116 +388,10 @@ export default function AdminPortAgenciesTab({
   // ✅ Calculer les statistiques par agence
   // Mode theoretical = tous les ports (actuel)
   // Mode physical = argent réellement collecté en caisse
+  // Règles PARTAGÉES avec le « Suivi de l'agence » (utils/agencyFollowUp → computeAgencyPortStats)
   const portStats = useMemo(() => {
     const { directionFilter, originCityFilter, viewMode } = deferredFilters
-    if (!Array.isArray(filteredByDate)) return []
-
-    const stats: Record<string, {
-      city: string
-      portPaye: number              // ✅ Port Payé (expéditeur) OU Ports payés reçus (mode physical)
-      portDu: number                 // 💰 Port Dû (destinataire) OU Ports dû collectés (mode physical)
-      portDuCheque: number           // 📋 Port Dû Chèque
-      enCompteExp: number            // 📤 En Compte Expéditeur
-      enCompteDest: number           // 📥 En Compte Destinataire
-      totalPort: number
-      nbExpeditions: number          // Seulement les expéditions (pas colis) — locales comptées 2 fois en « Toutes »
-      nbUnique: number               // Expéditions distinctes (= nombre affiché sur la page Chef d'agence)
-    }> = {}
-
-    // Initialiser toutes les villes
-    CITIES.forEach(city => {
-      stats[city] = {
-        city,
-        portPaye: 0,
-        portDu: 0,
-        portDuCheque: 0,
-        enCompteExp: 0,
-        enCompteDest: 0,
-        totalPort: 0,
-        nbExpeditions: 0,
-        nbUnique: 0,
-      }
-    })
-
-    // Parcourir tous les colis filtrés par date
-    filteredByDate.forEach((p: any) => {
-      // ✅ Utiliser SEULEMENT originCity et destinationCity (comme dans AgentPage)
-      const originCity = p.originCity
-      const destCity = p.destinationCity
-
-      // 🔗 Agences concernées : ville d'expédition / de destination (et villes expéditeur /
-      // destinataire des anciens colis). Le périmètre et la répartition des ports suivent la règle
-      // PARTAGÉE avec la page Chef d'agence (utils/billingAgency) → mêmes expéditions, mêmes montants.
-      const agencyDir: AgencyDirection = directionFilter === 'sent' ? 'sent' : directionFilter === 'received' ? 'received' : 'all'
-      const matchesOriginFilter = directionFilter !== 'received' || originCityFilter === 'all' || originCity === originCityFilter
-      const involvedCities = [...new Set([originCity, p.sender?.city, destCity, p.receiver?.city])]
-        .filter((c: any) => c && stats[c]) as string[]
-
-      if (viewMode === 'theoretical') {
-        // 📊 MODE THÉORIQUE : ports de chaque expédition du périmètre de l'agence
-        // Port payé / En compte exp. → ORIGINE ; Port dû (espèces, chèque) / En compte dest. → DESTINATION
-        if (matchesOriginFilter) {
-          for (const c of involvedCities) {
-            if (!isInAgencyScope(p, c, agencyDir)) continue
-            const a = agencyPortAmounts(p, c)
-            stats[c].portPaye += a.portPaye
-            stats[c].portDu += a.portDu
-            stats[c].portDuCheque += a.portDuCheque
-            stats[c].enCompteExp += a.enCompteExp
-            stats[c].enCompteDest += a.enCompteDest
-          }
-        }
-      } else {
-        // 💵 MODE SITUATION CAISSE : ARGENT PHYSIQUE COLLECTÉ
-        const price = safeParseFloat(p.price)
-        const portType = p.portType
-        const portStatus = p.portStatus
-
-        // 1️⃣ PORTS DÛ COLLECTÉS : portType = 'port_du', portStatus = 'collected' ou 'received'
-        if (portType === 'port_du' && (portStatus === 'collected' || portStatus === 'received') && price > 0 && destCity && stats[destCity]) {
-          stats[destCity].portDu += price
-        }
-
-        // 1️⃣ bis PORTS DÛ CHÈQUE COLLECTÉS : portType = 'port_du_cheque', portStatus = 'collected' ou 'received'
-        if (portType === 'port_du_cheque' && (portStatus === 'collected' || portStatus === 'received') && price > 0 && destCity && stats[destCity]) {
-          stats[destCity].portDuCheque += price
-        }
-
-        // 2️⃣ PORTS PAYÉS REÇUS LOCALEMENT : portType = 'port_paye', from this city, portStatus = 'received'
-        if (portType === 'port_paye' && !p.portPayeMethod && portStatus === 'received' && price > 0 && originCity && stats[originCity]) {
-          stats[originCity].portPaye += price
-        }
-      }
-
-      // ✅ EXPÉDITIONS : même périmètre que la page Chef d'agence (envoyées depuis la ville,
-      // reçues = arrivées dans la ville ET visibles à destination ; les retours sont suivis dans
-      // l'onglet Retours). En « Toutes », une expédition LOCALE (même ville) compte 2 fois pour son
-      // agence (1 envoyée + 1 reçue) ; nbUnique la compte une seule fois (= total Chef d'agence).
-      if (matchesOriginFilter) {
-        for (const c of involvedCities) {
-          const sent = agencyDir !== 'received' && isSentFromAgency(p, c)
-          const received = agencyDir !== 'sent' && isReceivedInAgency(p, c)
-          stats[c].nbExpeditions += (sent ? 1 : 0) + (received ? 1 : 0)
-          if (sent || received) stats[c].nbUnique += 1
-        }
-      }
-    })
-
-    // Calculer les totaux et arrondir - afficher toutes les agences
-    return Object.values(stats).map(stat => {
-      // 💰 Total Port = Somme de tous les ports (sans déduire les versements)
-      const totalPort = stat.portPaye + stat.portDu + stat.portDuCheque + stat.enCompteExp + stat.enCompteDest
-
-      return {
-        ...stat,
-        portPaye: Math.round(stat.portPaye * 100) / 100,
-        portDu: Math.round(stat.portDu * 100) / 100,
-        portDuCheque: Math.round(stat.portDuCheque * 100) / 100,
-        enCompteExp: Math.round(stat.enCompteExp * 100) / 100,
-        enCompteDest: Math.round(stat.enCompteDest * 100) / 100,
-        totalPort: Math.round(totalPort * 100) / 100,
-      }
-    })
+    return computeAgencyPortStats(filteredByDate, { viewMode, directionFilter, originCityFilter })
   }, [filteredByDate, deferredFilters])
 
   // Appliquer les filtres de ville et type de port
@@ -483,10 +456,38 @@ export default function AdminPortAgenciesTab({
     }
   }, [filteredStats])
 
+  // ⏳ Reste à encaisser par agence (attendu − encaissé, hors en compte) — même calcul que le Suivi de l'agence
+  const restePeriodText = datePreset === 'operational' && operationalDay
+    ? `jour d'opération du ${operationalDay.toLocaleDateString('fr-FR')}`
+    : `${/^p[ée]riode$/i.test(String(period.label || '').trim()) ? '' : `${period.label} — `}du ${periodRangeText}`
+  const resteRows = useMemo<ResteRow[]>(() => {
+    if (!showReste) return []
+    const { selectedCity } = deferredFilters
+    return CITIES.filter(c => selectedCity === 'all' || c === selectedCity).map(c => {
+      const t = computeAgencyPortStats(filteredByDate, { viewMode: 'theoretical', cities: [c] })[0]
+      const ph = computeAgencyPortStats(filteredByDate, { viewMode: 'physical', cities: [c] })[0]
+      const attendu = Math.round((t.portPaye + t.portDu + t.portDuCheque) * 100) / 100
+      const encaisse = Math.round((ph.portPaye + ph.portDu + ph.portDuCheque) * 100) / 100
+      return { city: c, attendu, encaisse, reste: Math.round((attendu - encaisse) * 100) / 100, lines: resteAEncaisserLines(filteredByDate, c) }
+    }).filter(r => r.attendu || r.encaisse)
+  }, [showReste, filteredByDate, deferredFilters])
+
   const hasActiveFilter = selectedCity !== 'all' || portTypeFilter !== 'all' || datePreset !== 'all' || directionFilter !== 'all'
 
   // 🖨️ Fonction d'impression
   const handlePrint = () => {
+    // 💵 Mode Caisse : « Résumé de caisse » en 2 exemplaires sur une page, avec accusé de réception pour l'agence
+    if (viewMode === 'physical') {
+      printPortCaisseReceipt({
+        rows: filteredStats.map(st => ({ city: st.city, nbExpeditions: st.nbExpeditions, nbUnique: st.nbUnique, portPaye: st.portPaye, portDu: st.portDu, portDuCheque: st.portDuCheque })),
+        cityLabel: selectedCity !== 'all' ? selectedCity : 'Toutes les agences',
+        periodText: datePreset === 'operational' && operationalDay
+          ? `jour d'opération du ${operationalDay.toLocaleDateString('fr-FR')}`
+          : `${/^p[ée]riode$/i.test(String(period.label || '').trim()) ? '' : `${period.label} — `}du ${periodRangeText}`,
+        expeditionsCount: uniqueExpeditionsCount,
+      })
+      return
+    }
     window.print()
   }
 
@@ -527,6 +528,19 @@ export default function AdminPortAgenciesTab({
           .shadow-xl, .shadow-lg, .shadow-sm {
             box-shadow: none !important;
           }
+          /* 🖨️ Tableau par agence : TOUTES les colonnes tiennent sur la largeur A4 (avant, les
+             grandes marges et gros chiffres débordaient et la fin du tableau était coupée). */
+          .port-agence-table-wrap, .port-agence-table-wrap * { overflow: visible !important; }
+          .port-agence-table { width: 100% !important; table-layout: auto; font-size: 9px !important; }
+          .port-agence-table th, .port-agence-table td {
+            padding: 4px 4px !important;
+            white-space: normal !important;
+            word-break: keep-all;
+          }
+          .port-agence-table th { font-size: 8px !important; line-height: 1.15; }
+          .port-agence-table td span, .port-agence-table td div { font-size: 9px !important; line-height: 1.2; }
+          .port-agence-table td span { padding: 0 !important; white-space: nowrap; }
+          .port-agence-table svg { width: 10px !important; height: 10px !important; }
         }
       `}</style>
 
@@ -626,7 +640,7 @@ export default function AdminPortAgenciesTab({
                   <p className="text-blue-100 text-xs sm:text-sm mt-1 hidden sm:block">
                     {viewMode === 'theoretical'
                       ? 'Port Payé et En Compte (collecté par expéditeur) · Port Dû (collecté à destination)'
-                      : 'Situation physique de la caisse - Argent réellement collecté'}
+                      : 'Situation caisse · Ports dus collectés (destination) · Ports payés encaissés (origine)'}
                   </p>
                 </div>
               </div>
@@ -634,9 +648,9 @@ export default function AdminPortAgenciesTab({
                 {/* Toggle Vue Théorique / Situation Caisse */}
                 <div className="flex items-center gap-1 sm:gap-2 bg-white/20 backdrop-blur-sm rounded-xl p-1 w-full sm:w-auto">
                   <button
-                    onClick={() => setViewMode('theoretical')}
+                    onClick={() => { setViewMode('theoretical'); setShowReste(false) }}
                     className={`flex-1 sm:flex-none px-2 sm:px-4 py-2 rounded-lg transition-all font-bold text-xs sm:text-sm whitespace-nowrap ${
-                      viewMode === 'theoretical'
+                      viewMode === 'theoretical' && !showReste
                         ? 'bg-white text-purple-600 shadow-lg'
                         : 'text-white hover:bg-white/10'
                     }`}
@@ -645,15 +659,26 @@ export default function AdminPortAgenciesTab({
                     <span className="xs:hidden">📊 Théorique</span>
                   </button>
                   <button
-                    onClick={() => setViewMode('physical')}
+                    onClick={() => { setViewMode('physical'); setShowReste(false) }}
                     className={`flex-1 sm:flex-none px-2 sm:px-4 py-2 rounded-lg transition-all font-bold text-xs sm:text-sm whitespace-nowrap ${
-                      viewMode === 'physical'
+                      viewMode === 'physical' && !showReste
                         ? 'bg-white text-purple-600 shadow-lg'
                         : 'text-white hover:bg-white/10'
                     }`}
                   >
                     <span className="hidden xs:inline">💵 Situation Caisse</span>
                     <span className="xs:hidden">💵 Caisse</span>
+                  </button>
+                  {/* ⏳ 3e vue : reste à encaisser (attendu − encaissé), par agence + liste des expéditions */}
+                  <button
+                    onClick={() => setShowReste(true)}
+                    className={`flex-1 sm:flex-none px-2 sm:px-4 py-2 rounded-lg transition-all font-bold text-xs sm:text-sm whitespace-nowrap ${
+                      showReste
+                        ? 'bg-white text-purple-600 shadow-lg'
+                        : 'text-white hover:bg-white/10'
+                    }`}
+                  >
+                    ⏳ Reste à encaisser
                   </button>
                 </div>
                 {/* Bouton pour ouvrir la fenêtre Caisse Agence */}
@@ -740,8 +765,7 @@ export default function AdminPortAgenciesTab({
                 {datePreset === 'operational' && (
                   <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:ml-2 w-full sm:w-auto">
                     <span className="text-xs text-gray-500 whitespace-nowrap">Jour d'opération (8H → 6H lendemain)</span>
-                    <input
-                      type="date"
+                    <DateInput
                       value={operationalDay ? `${operationalDay.getFullYear()}-${String(operationalDay.getMonth() + 1).padStart(2, '0')}-${String(operationalDay.getDate()).padStart(2, '0')}` : ''}
                       onChange={e => {
                         if (!e.target.value) {
@@ -757,15 +781,13 @@ export default function AdminPortAgenciesTab({
 
                 {datePreset === 'custom' && (
                   <div className="flex flex-col sm:flex-row items-start sm:items-center gap-2 sm:ml-2 w-full sm:w-auto">
-                    <input
-                      type="date"
+                    <DateInput
                       value={dateFrom}
                       onChange={e => setDateFrom(e.target.value)}
                       className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500 w-full sm:w-auto"
                     />
                     <span className="text-gray-400 text-xs font-bold">→</span>
-                    <input
-                      type="date"
+                    <DateInput
                       value={dateTo}
                       onChange={e => setDateTo(e.target.value)}
                       className="border border-gray-200 rounded-lg px-3 py-1.5 text-xs focus:outline-none focus:ring-2 focus:ring-purple-500 w-full sm:w-auto"
@@ -1023,7 +1045,20 @@ export default function AdminPortAgenciesTab({
         </div>
       )}
 
-      {!loading && (
+      {!loading && showReste && (
+        <ResteParAgence rows={resteRows} subject={"Ports"} periodText={restePeriodText} kindLabels={undefined} help={"ports dus et ports payés attendus moins encaissés (en compte exclus)"}>
+          {/* 🧭 Suivi de l'agence (déplacé ici depuis le bas du résumé) */}
+          <AgencyFollowUpBlock
+            city={deferredFilters.selectedCity}
+            parcels={filteredByDate}
+            periodStartMs={deferredFilters.periodStartMs}
+            periodEndMs={deferredFilters.periodEndMs}
+            periodText={restePeriodText}
+          />
+        </ResteParAgence>
+      )}
+
+      {!loading && !showReste && (
       <>
       {/* Carte résumé (filtré) */}
       <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-orange-200 rounded-xl p-6 shadow-lg print:bg-gray-50 print:rounded-none print:mb-6">
@@ -1109,9 +1144,9 @@ export default function AdminPortAgenciesTab({
       </div>
 
       {/* Tableau par agence */}
-      <div className="bg-white rounded-2xl shadow-xl border-2 border-purple-100 overflow-hidden print:rounded-none print:border print:border-gray-300">
+      <div className="port-agence-table-wrap bg-white rounded-2xl shadow-xl border-2 border-purple-100 overflow-hidden print:rounded-none print:border print:border-gray-300">
         <HScrollArrows className="print:overflow-visible">
-          <table className="w-full print:text-sm">
+          <table className="port-agence-table w-full">
             <thead className="bg-gradient-to-r from-blue-600 via-purple-600 to-pink-600 text-white">
               <tr>
                 <th className="px-6 py-4 text-left font-bold whitespace-nowrap">
@@ -1135,13 +1170,13 @@ export default function AdminPortAgenciesTab({
                 <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-green-600/30">
                   💵 Total (Payé + Dû + Chèque)
                 </th>
-                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-indigo-600/30 print:hidden">
+                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-indigo-600/30">
                   📤 En Compte Exp
                 </th>
-                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-pink-600/30 print:hidden">
+                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-pink-600/30">
                   📥 En Compte Dest
                 </th>
-                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-green-600/30 print:hidden">
+                <th className="px-6 py-4 text-right font-bold whitespace-nowrap bg-green-600/30">
                   💵 Total Port
                 </th>
               </tr>
@@ -1189,17 +1224,17 @@ export default function AdminPortAgenciesTab({
                       {(stat.portPaye + stat.portDu + stat.portDuCheque).toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-right font-bold bg-indigo-50/50 print:hidden">
+                  <td className="px-6 py-4 text-right font-bold bg-indigo-50/50">
                     <span className="text-indigo-700 text-lg">
                       {stat.enCompteExp.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-right font-bold bg-pink-50/50 print:hidden">
+                  <td className="px-6 py-4 text-right font-bold bg-pink-50/50">
                     <span className="text-pink-700 text-lg">
                       {stat.enCompteDest.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-4 text-right font-bold bg-green-50/50 print:hidden">
+                  <td className="px-6 py-4 text-right font-bold bg-green-50/50">
                     <span className="text-green-700 text-xl">
                       {stat.totalPort.toLocaleString('fr-MA')} DH
                     </span>
@@ -1240,17 +1275,17 @@ export default function AdminPortAgenciesTab({
                       {(totauxFiltres.portPaye + totauxFiltres.portDu + totauxFiltres.portDuCheque).toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-5 text-right bg-indigo-100 print:hidden">
+                  <td className="px-6 py-5 text-right bg-indigo-100">
                     <span className="text-indigo-900 text-xl font-black">
                       {totauxFiltres.enCompteExp.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-5 text-right bg-pink-100 print:hidden">
+                  <td className="px-6 py-5 text-right bg-pink-100">
                     <span className="text-pink-900 text-xl font-black">
                       {totauxFiltres.enCompteDest.toLocaleString('fr-MA')} DH
                     </span>
                   </td>
-                  <td className="px-6 py-5 text-right bg-green-100 print:hidden">
+                  <td className="px-6 py-5 text-right bg-green-100">
                     <span className="text-green-900 text-2xl font-black">
                       {(totauxFiltres.portPaye + totauxFiltres.portDu + totauxFiltres.portDuCheque + totauxFiltres.enCompteExp + totauxFiltres.enCompteDest).toLocaleString('fr-MA')} DH
                     </span>
@@ -1294,6 +1329,7 @@ export default function AdminPortAgenciesTab({
           )}
         </div>
       )}
+
       </>
       )}
         </div>

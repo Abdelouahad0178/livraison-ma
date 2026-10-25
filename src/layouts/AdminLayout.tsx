@@ -54,7 +54,7 @@ const AdminLayout = () => {
       <div className="min-h-screen bg-gradient-to-br from-purple-50 via-white to-blue-50">
         {/* Header */}
         <div className="bg-white border-b border-gray-200 sticky top-0 z-50">
-          <div className="max-w-[1800px] mx-auto px-6 py-4 flex items-center justify-between">
+          <div className="max-w-[1800px] xl:max-w-none xl:w-[95%] mx-auto px-6 py-4 flex items-center justify-between">
             <div className="flex items-center gap-4">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-gradient-to-br from-purple-600 to-blue-600 rounded-xl flex items-center justify-center">
@@ -107,7 +107,7 @@ const AdminLayout = () => {
           </aside>
 
           {/* Main Content */}
-          <main className="flex-1 p-6 max-w-[1400px]">
+          <main className="flex-1 p-6 min-w-0 max-w-[1400px] xl:max-w-none">
             <Outlet />
           </main>
         </div>

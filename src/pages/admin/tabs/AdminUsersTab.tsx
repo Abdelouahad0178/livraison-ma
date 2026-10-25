@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { Ban, Calendar, Copy, Edit2, Search, ShieldCheck, Trash2, UserPlus } from 'lucide-react'
 
 export default function AdminUsersTab({
@@ -55,10 +56,10 @@ export default function AdminUsersTab({
                 ))}
                 {usersDatePreset === 'custom' && (
                   <div className="flex items-center gap-2 ml-1">
-                    <input type="date" value={usersDateFrom} onChange={e => setUsersDateFrom(e.target.value)}
+                    <DateInput value={usersDateFrom} onChange={e => setUsersDateFrom(e.target.value)}
                       className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500" />
                     <span className="text-gray-400 text-xs">→</span>
-                    <input type="date" value={usersDateTo} onChange={e => setUsersDateTo(e.target.value)}
+                    <DateInput value={usersDateTo} onChange={e => setUsersDateTo(e.target.value)}
                       className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500" />
                   </div>
                 )}

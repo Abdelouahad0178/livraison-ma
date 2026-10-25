@@ -1,4 +1,7 @@
-import { useState, useRef, useEffect, useMemo, useCallback, useDeferredValue, startTransition, lazy, Suspense } from 'react'
+import { useState, useRef, useEffect, useMemo, useCallback, useDeferredValue, startTransition, lazy, Suspense, memo, type ComponentType } from 'react'
+import { isFloralUser } from '../components/FloralTheme'
+import { canManageClientAccounts } from '../config/clientAccountsAccess'
+import KeepAlive from '../components/KeepAlive'
 import { setPresenceTab } from '../services/presenceCounters'
 import { createLoadProgressStore } from '../utils/loadProgressStore'
 import { useGarePending } from './exploitation/useGarePending'
@@ -15,10 +18,15 @@ import {
   updateParcelStatus, isParcelVisibleInDestinationAgency,
   subscribeAgencyParcels, subscribeAgencyParcelsFull, subscribeAgencyReturnParcels, subscribePendingAideAgentParcels, subscribeAllParcels,
   subscribeAllParcelsWithDateFilter, loadMoreParcelsWithDateFilter,
-  createReturnParcel, searchParcelByTrackingId, searchParcels, getMoreAgencyParcels, getAgencyParcelsDaySlice, getParcelsPage,
+  createReturnParcel, searchParcelByTrackingId, searchParcels, getMoreAgencyParcels, getAgencyParcelsDaySlice, getLiteDaySliceCached, getParcelsPage,
   subscribeAllParcelsWithArchives, loadMoreParcelsWithArchives,
 } from '../firebase/parcels'
 import { shouldTriggerSearch } from '../utils/searchUtils'
+import { agentProCanEditBon, isRestrictedAgentPro } from '../utils/agentProAccess'
+import { canBulkLoadTransport } from '../utils/parcelBulkSelection'
+import { agencyCanDeliver, agencyCanTransport } from '../utils/agencyDeliveryAccess'
+import { agencyCanDeleteParcel, isAgencyDeletionRestricted } from '../utils/parcelDeletionAccess'
+import { useAgentArchiveSearch } from '../hooks/useAgentArchiveSearch'
 import { markPortDuReceivedByChef, markParcelChefPointed } from '../firebase/finance'
 import { collectPortDu } from '../firebase/cod'
 import { createCentralCodDeposit } from '../firebase/central'
@@ -54,9 +62,10 @@ import {
   subscribeAgentCodRequests, markAgentCodRequestRead, addAgentCodRequestReply, resolveAgentCodRequest,
 } from '../firebase/agentCodRequests'
 import {
-  subscribeClients, createClient, updateClient, addPayment,
+  subscribeClientsByCity, subscribeCodedClients, lookupClients, createClient, updateClient, addPayment,
   subscribeAgencyModificationRequests, resolveModificationRequest, deleteModificationRequest,
 } from '../firebase/clients'
+import { mergeClientLists } from '../utils/clientLookup'
 import { subscribeVehicles } from '../firebase/vehicles'
 import { createBankDeposit, subscribeBankDepositsByCity } from '../firebase/bankDeposits'
 import {
@@ -78,30 +87,47 @@ import {
   RotateCcw, Save, BarChart2, Archive,
 } from 'lucide-react'
 import { AgentCtx } from './agent/AgentCtx'
+import { useStableCtxValue } from './agent/useStableCtxValue'
+import { subscribeEnvois } from '../firebase/valeursEnvois'
 import { useAgentHandlers } from './agent/hooks/useAgentHandlers'
 import AgentHeader from './agent/AgentHeader'
 import AgentReceiveModal from './agent/modals/AgentReceiveModal'
 import AgentReturnModal from './agent/modals/AgentReturnModal'
-import { printCharge, printTable, printBonRamassage } from '../utils/agentPrintUtils'
-import { getOperationalDayRange, getCurrentOperationalDay } from '../config/operationalDay'
+import { getOperationalDayRange, getCurrentOperationalDay, previousWorkedOperationalDays } from '../config/operationalDay'
 import { buildDaySlices } from '../utils/daySlices'
 import DateFilter from './agent/DateFilter'
 import { useOperationalDaySelector } from '../hooks/useOperationalDay' // 🗓️ Journée opérationnelle
 // ⚡ OPTIMISATION : Lazy loading pour tous les tabs (y compris ParcelsTab) pour chargement rapide
-const ParcelsTab = lazy(() => import('./agent/tabs/ParcelsTab'))
-const DirectorCaisseSimple = lazy(() => import('./director/DirectorCaisseSimple'))
+// ⚡ Onglets sans props (tout vient du contexte AgentCtx) : React.memo — un rendu de la page qui ne change pas
+// le contexte (stabilisé, voir useStableCtxValue) ne redessine plus l'onglet ouvert.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const memoTab = (load: () => Promise<{ default: ComponentType<any> }>) => lazy(() => load().then(m => ({ default: memo(m.default) })))
+const canPreloadAgentTabs = () => {
+  const connection = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection
+  return window.matchMedia('(min-width: 768px)').matches && !connection?.saveData
+    && !['slow-2g', '2g'].includes(connection?.effectiveType || '')
+}
+// Constante (même objet à chaque rendu : le contexte stabilisé n'est pas invalidé)
+const ARR_TYPE_CONFIG: Record<string, any> = {
+  complet: { label: 'Complet',  color: 'bg-green-50 text-green-700',  dot: 'bg-green-500' },
+  partiel: { label: 'Partiel',  color: 'bg-amber-50 text-amber-700',  dot: 'bg-amber-500' },
+  sans_transit: { label: 'Sans transit', color: 'bg-gray-50 text-gray-600', dot: 'bg-gray-400' },
+}
+const loadParcelsTab = () => import('./agent/tabs/ParcelsTab')
+const ParcelsTab = memoTab(loadParcelsTab)
 const HomeTab = lazy(() => import('./agent/tabs/HomeTab'))
-const NewTab = lazy(() => import('./agent/tabs/NewTab'))
-const CodTab = lazy(() => import('./agent/tabs/CodTab'))
-const ValeursAValiderTab = lazy(() => import('./agent/tabs/ValeursAValiderTab'))
+const NewTab = memoTab(() => import('./agent/tabs/NewTab'))
+const CodTab = memoTab(() => import('./agent/tabs/CodTab'))
+const ValeursAValiderTab = memoTab(() => import('./agent/tabs/ValeursAValiderTab'))
 const AgentClientsTab = lazy(() => import('./agent/tabs/AgentClientsTab'))
-const ModificationsTab = lazy(() => import('./agent/tabs/ModificationsTab'))
-const ChargeTab = lazy(() => import('./agent/tabs/ChargeTab'))
-const SectorsTab = lazy(() => import('./agent/tabs/SectorsTab'))
-const DriversTab = lazy(() => import('./agent/tabs/DriversTab'))
-const DashboardTab = lazy(() => import('./agent/tabs/DashboardTab'))
-const AideAgentsTab = lazy(() => import('./agent/tabs/AideAgentsTab'))
-const ArrivageTab = lazy(() => import('./agent/tabs/ArrivageTab'))
+const ClientAccountsTab = lazy(() => import('./agent/tabs/ClientAccountsTab'))
+const ModificationsTab = memoTab(() => import('./agent/tabs/ModificationsTab'))
+const ChargeTab = memoTab(() => import('./agent/tabs/ChargeTab'))
+const SectorsTab = memoTab(() => import('./agent/tabs/SectorsTab'))
+const DriversTab = memoTab(() => import('./agent/tabs/DriversTab'))
+const DashboardTab = memoTab(() => import('./agent/tabs/DashboardTab'))
+const AideAgentsTab = memoTab(() => import('./agent/tabs/AideAgentsTab'))
+const ArrivageTab = memoTab(() => import('./agent/tabs/ArrivageTab'))
 const RetoursTab = lazy(() => import('./agent/tabs/RetoursTab'))
 const NotesAgentsTab = lazy(() => import('./agent/tabs/NotesAgentsTab'))
 const LostParcelsTab = lazy(() => import('./agent/tabs/LostParcelsTab'))
@@ -111,7 +137,8 @@ const AgentVersementsTab = lazy(() => import('./agent/tabs/AgentVersementsTab'))
 const AgentInvoicesTab = lazy(() => import('./agent/tabs/AgentInvoicesTab'))
 const PortPayeChequeTab = lazy(() => import('./agent/tabs/PortPayeChequeTab'))
 const PortDuChequeTab = lazy(() => import('./agent/tabs/PortDuChequeTab'))
-const CaisseChefTab = lazy(() => import('./agent/tabs/CaisseChefTab'))
+const loadCaisseChefTab = () => import('./agent/tabs/CaisseChefTab')
+const CaisseChefTab = memoTab(loadCaisseChefTab)
 
 // ⚠️ 'caisse' est inclus volontairement : CaisseChefTab a sa PROPRE souscription indépendante
 // et ne lit pas `parcels` — mais si 'caisse' est absent de cette liste, `needsParcels` passe à
@@ -129,7 +156,12 @@ const CaisseChefTab = lazy(() => import('./agent/tabs/CaisseChefTab'))
 // false = retour immédiat à la lecture de parcels (aucune autre modification nécessaire).
 const USE_PARCELS_LITE = true
 
-const TABS_NEEDING_PARCELS = ['home', 'parcels', 'cod', 'charge', 'arrivage', 'retours', 'portsDu', 'portsEnCompte', 'caisse']
+// ⚡ 'new' (Saisie) inclus : passer de la Saisie aux Expéditions (aller-retour fréquent) ne coupe plus l'abonnement —
+// avant, chaque retour vidait la liste et rechargeait toute la période. Pendant la saisie, la liste filtrée et les
+// statistiques ne sont PAS recalculées (filteredParcels / dash* limités à leur onglet) : la frappe n'est pas ralentie.
+/** Liste vide STABLE (même référence à chaque rendu : les mémos qui en dépendent ne se recalculent pas). */
+const EMPTY_LIST: any[] = []
+const TABS_NEEDING_PARCELS = ['home', 'parcels', 'cod', 'charge', 'arrivage', 'retours', 'portsDu', 'portsEnCompte', 'caisse', 'new']
 
 const MOD_STATUS = {
   pending:  { label: 'En attente', bg: 'bg-amber-100', text: 'text-amber-700' },
@@ -245,7 +277,7 @@ import { getWorkingDateStr } from '../utils/workingDate'
 import { getEmptyParcelForm } from './agent/emptyParcelForm'
 import { normName, isBilledByAgency, isInAgencyScope } from '../utils/billingAgency'
 import { isAwaitingArrival } from '../utils/awaitingArrival'
-import { normIncludes, normText } from '../utils/normText'
+import { normIncludes, normText, digitAwareIncludes } from '../utils/normText'
 import { makeAgentSearchMatcher, sortByCreatedAtDesc } from '../utils/parcelSearch'
 
 const parsePositiveNumber = (value: any, fallback = 0) => {
@@ -256,14 +288,39 @@ const parsePositiveNumber = (value: any, fallback = 0) => {
 // Formulaire vide : source unique partagée (voir agent/emptyParcelForm.ts)
 const EMPTY_FORM = getEmptyParcelForm()
 
-export default function AgentPage() {
+/**
+ * `adminSaisie` (route /admin/saisie) : l'ADMIN utilise la saisie d'expédition de l'agent pro, pour TOUTES les villes.
+ * La page tourne comme un agent pro de la ville d'expédition choisie (clients, livreurs, secteurs de cette ville) ;
+ * l'expédition garde l'identité réelle de l'admin (agentId, agentName, agentRole « admin »).
+ */
+const ADMIN_SAISIE_CITY_KEY = 'adminSaisieCity'
+export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisie?: boolean }> = {}) {
   const navigate  = useNavigate()
   const ticketRef  = useRef<any>(null)
   const scanInputRef = useRef<HTMLInputElement>(null)
 
-  const [profile, setProfile]           = useState<any>(null)
+  const [rawProfile, setProfile]        = useState<any>(null)
+  const [adminCity, setAdminCityState]  = useState<string>(() => {
+    try { return localStorage.getItem(ADMIN_SAISIE_CITY_KEY) || 'Agadir' } catch { return 'Agadir' }
+  })
+  const setAdminCity = useCallback((c: string) => {
+    setAdminCityState(c)
+    try { localStorage.setItem(ADMIN_SAISIE_CITY_KEY, c) } catch { /* stockage indisponible */ }
+  }, [])
+  const profile = useMemo(
+    () => (adminSaisie && rawProfile ? { ...rawProfile, role: 'agentpro', city: adminCity, realRole: rawProfile.role, adminSaisie: true } : rawProfile),
+    [adminSaisie, rawProfile, adminCity],
+  )
   const [drivers, setDrivers]           = useState<any[]>([])
-  const [tab, setTab]                   = useState('home')
+  const [tab, setTab]                   = useState(adminSaisie ? 'new' : 'home')
+  // 🧊 Onglets gardés en mémoire une fois ouverts (KeepAlive) : Expéditions, Caisse Agence
+  const [keptTabs, setKeptTabs]         = useState<Set<string>>(() => new Set())
+  useEffect(() => {
+    if (tab === 'parcels' || tab === 'caisse') setKeptTabs(s => (s.has(tab) ? s : new Set(s).add(tab)))
+  }, [tab])
+  const parcelsTabKept = tab === 'parcels' || keptTabs.has('parcels')
+  // Mode saisie admin : seule la page de saisie est proposée
+  useEffect(() => { if (adminSaisie && tab !== 'new') setTab('new') }, [adminSaisie, tab])
   // 👁️ Présence : onglet courant (libellé affiché dans la carte « L'œil qui ne dort pas » de l'Admin)
   useEffect(() => { setPresenceTab(tab); return () => setPresenceTab('') }, [tab])
   // Onglets qui exploitent la liste des colis. Sert de dépendance à l'abonnement Firestore :
@@ -388,6 +445,8 @@ export default function AgentPage() {
   const setMoreParcelsT: typeof setMoreParcels = u => startTransition(() => setMoreParcels(u))
   const setLiveParcelsT: typeof setLiveParcels = u => startTransition(() => setLiveParcels(u))
   const [hasMoreAgency, setHasMoreAgency] = useState(true)
+  // ⚠️ « Tout » + filtre : affichage plafonné à FILTERED_PAGE_SIZE expéditions par sens (bandeau dans l'onglet Expéditions)
+  const [agencyCapReached, setAgencyCapReached] = useState(false)
   const [loadingMoreAgency, setLoadingMoreAgency] = useState(false)
   const [loadingAllAgency, setLoadingAllAgency] = useState(false)
   // ⚡ Progression (expéditions reçues + journée en cours) HORS de l'état React de la page : elle
@@ -422,20 +481,48 @@ export default function AgentPage() {
   const [loadAllCitiesProgress, setLoadAllCitiesProgress] = useState(0)
 
   const [search, setSearch]             = useState('')
-  const [includeArchived, setIncludeArchived] = useState(false) // 🗄️ Inclure archives dans recherche
   const [serverSearchResults, setServerSearchResults] = useState<any[] | null>(null) // Résultats recherche serveur
   const [isSearching, setIsSearching]   = useState(false) // Loading state pour recherche
+  // 🎯 Recherche CIBLÉE avec une période choisie (N° EXP, téléphone, N° LMA) : l'expédition est lue directement
+  // dans la base, sans recharger de période — affichée À PART si elle n'est pas dans la liste (hors période)
+  const [outOfPeriodResults, setOutOfPeriodResults] = useState<any[] | null>(null)
+  const [outOfPeriodSearching, setOutOfPeriodSearching] = useState(false)
   // Utiliser 'all' par défaut pour voir tous les colis, pas seulement ceux du jour de travail
   const [datePreset, setDatePreset]     = useState('all')
   const [dateFrom, setDateFrom]         = useState('')
   const [dateTo, setDateTo]             = useState('')
   const [dateFilterType, setDateFilterType] = useState<'creation' | 'livraison'>('creation')
+  const { includeArchived, setIncludeArchived, archiveSearchOnly } = useAgentArchiveSearch({
+    role: profile?.role, datePreset, dateFrom, dateTo, setDatePreset, setDateFrom, setDateTo,
+  })
+  const pauseBulkParcels = archiveSearchOnly && tab === 'parcels'
 
   // 🗓️ Journée opérationnelle
   const {
     selectedDay: operationalDay,
     setSelectedDay: setOperationalDay,
   } = useOperationalDaySelector()
+
+  // 📅 DÉMARRAGE (chef d'agence / agent pro) : seule la VEILLE TRAVAILLÉE est chargée (demande du 23/10/2026 : les
+  // expéditions du 21/10 s'affichent le 22/10 ; le lundi, celles du samedi, avec le dimanche). Tout autre filtre de
+  // date reste disponible et charge sa période en entier. `startDayReady` retient le chargement tant que cette
+  // journée n'est pas choisie (sinon « Récent », 30 jours, partait une fraction de seconde pour rien).
+  const [startDayReady, setStartDayReady] = useState(false)
+  useEffect(() => {
+    if (!profile || startDayReady) return
+    setStartDayReady(true)
+    if (adminSaisie || (profile.role !== 'chef_agence' && profile.role !== 'agentpro')) return
+    const { from, to } = previousWorkedOperationalDays()
+    if (from.getTime() === to.getTime()) {
+      setOperationalDay(from)
+      setDatePreset('operational')
+    } else {
+      const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      setDateFrom(ymd(from))
+      setDateTo(ymd(to))
+      setDatePreset('custom')
+    }
+  }, [profile, startDayReady, adminSaisie]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const [parcelDirection, setParcelDirection] = useState('all')
   const [serviceFilter, setServiceFilter]   = useState('all')
@@ -506,38 +593,64 @@ export default function AgentPage() {
   useEffect(() => {
     const query = debouncedSearch.trim()
     // debouncedSearch est déjà « complet » (7 chiffres / 3 lettres) ou forcé par Entrée
+    setOutOfPeriodResults(null)
+    setOutOfPeriodSearching(false)
     if (!query) {
       setServerSearchResults(null)
       setIsSearching(false)
       return
     }
     // ⚡ Période précise choisie (Aujourd'hui, 7 j, Mois, Journée, Période…) : les expéditions de
-    // cette période sont déjà chargées pour l'agence → recherche LOCALE uniquement (accents ignorés),
-    // sans interroger toute la base (toutes dates confondues). Recherche serveur seulement sur « Tout ».
-    if (datePreset !== 'all' && !showAllCities) {
+    // cette période sont déjà chargées pour l'agence → recherche LOCALE (accents ignorés), sans interroger
+    // toute la base. 🎯 Exception : N° EXP / téléphone / N° LMA (1 à 2 expéditions) — lus AUSSI directement
+    // dans la base, pour trouver une expédition HORS de la période sans recharger quoi que ce soit.
+    if (datePreset !== 'all' && !showAllCities && !includeArchived) {
       setServerSearchResults(null)
       setIsSearching(false)
-      return
+      const compact = query.replace(/[\s\-().]/g, '')
+      if (!/^\d{7,}$/.test(compact) && !/^LMA/i.test(compact)) return
+      let cancelledTargeted = false
+      setOutOfPeriodSearching(true)
+      const city = profile?.city
+      searchParcels(query, { includeArchived, lite: USE_PARCELS_LITE })
+        .then(results => {
+          if (cancelledTargeted) return
+          // Chef d'agence : seulement les expéditions de SON agence (départ, arrivée ou retour)
+          const mine = city ? results.filter((p: any) => p.originCity === city || p.destinationCity === city
+            || p.returnToCity === city || p.sender?.city === city || p.receiver?.city === city) : results
+          setOutOfPeriodResults(mine)
+          setOutOfPeriodSearching(false)
+        })
+        .catch(err => {
+          if (cancelledTargeted) return
+          console.error('Recherche ciblée hors période:', err)
+          setOutOfPeriodSearching(false)
+        })
+      return () => { cancelledTargeted = true }
     }
 
     // ⚡ Recherche serveur dans TOUTE la base
-    const performServerSearch = async () => {
-      setIsSearching(true)
-      try {
-        console.warn(`🔍 Recherche serveur AgentPage: "${query}" ${includeArchived ? '(avec archives)' : '(sans archives)'}`)
-        const results = await searchParcels(query, { limit: 50000, includeArchived, nameScope: searchScope })
+    // - Résultats de la recherche PRÉCÉDENTE effacés tout de suite : en attendant le serveur, la liste
+    //   montre aussitôt les expéditions DÉJÀ chargées qui correspondent (recherche locale), au lieu
+    //   d'afficher les anciens résultats.
+    // - Une recherche dépassée (terme changé entre-temps) n'écrase jamais la plus récente.
+    let cancelled = false
+    setServerSearchResults(null)
+    setIsSearching(true)
+    searchParcels(query, { limit: 50000, includeArchived, nameScope: searchScope, lite: USE_PARCELS_LITE })
+      .then(results => {
+        if (cancelled) return
         setServerSearchResults(results)
         setIsSearching(false)
-        console.warn(`✅ Recherche serveur AgentPage: ${results.length} résultats trouvés`)
-      } catch (error) {
+      })
+      .catch(error => {
+        if (cancelled) return
         console.error('❌ Erreur recherche serveur AgentPage:', error)
         setServerSearchResults(null)
         setIsSearching(false)
-      }
-    }
-
-    performServerSearch()
-  }, [debouncedSearch, includeArchived, searchScope, datePreset, showAllCities])
+      })
+    return () => { cancelled = true }
+  }, [debouncedSearch, includeArchived, searchScope, datePreset, showAllCities, profile?.city])
 
   const [editingParcel, setEditingParcel] = useState<any>(null)
   const [editForm, setEditForm]         = useState<any>(null)
@@ -547,7 +660,36 @@ export default function AgentPage() {
   // 💰 Édition rapide du montant COD
   const [codEditModal, setCodEditModal] = useState<any>(null)
 
+  // 👥 Clients de l'AGENCE (sa ville, temps réel) — avant : les ≈ 14 000 clients de toutes les agences
+  // (~10 Mo, 15 s et plus) pour en utiliser ~2 000.
   const [clients,         setClients]         = useState<any[]>([])
+  // ⚡ Clients à CODE de toutes les villes (≈100 fiches, instantané) : saisie par code partout.
+  const [codedClients,    setCodedClients]    = useState<any[]>([])
+  // 🏙️ Clients des villes de destination choisies dans la saisie (chargés à la demande, temps réel)
+  const [otherCityClients, setOtherCityClients] = useState<Record<string, any[]>>({})
+  // Villes dont TOUS les clients sont chargés et confirmés par le serveur (recherche du destinataire existant
+  // en mémoire à la création — sinon relecture Firestore, voir createParcel / knownCities)
+  const [clientsKnownCities, setClientsKnownCities] = useState<string[]>([])
+  const cityClientSubsRef = useRef<Map<string, () => void>>(new Map())
+  const formClients = useMemo(
+    () => mergeClientLists(clients, ...Object.values(otherCityClients), codedClients),
+    [clients, otherCityClients, codedClients]
+  )
+  const markClientsCityKnown = useCallback((city: string) => {
+    setClientsKnownCities(prev => (prev.includes(city) ? prev : [...prev, city]))
+  }, [])
+  // Clients d'une autre ville (destination choisie dans la saisie) : une écoute par ville, gardée ouverte
+  const ensureCityClients = useCallback((city: string) => {
+    if (!city || city === profile?.city || cityClientSubsRef.current.has(city)) return
+    cityClientSubsRef.current.set(city, subscribeClientsByCity(city, (rows, fromCache) => {
+      setOtherCityClients(prev => ({ ...prev, [city]: rows }))
+      if (!fromCache) markClientsCityKnown(city)
+    }, err => console.error(`AgentPage clients ${city}:`, err)))
+  }, [profile?.city, markClientsCityKnown])
+  useEffect(() => () => {
+    cityClientSubsRef.current.forEach(unsub => unsub())
+    cityClientSubsRef.current.clear()
+  }, [])
   const [clientSearch,    setClientSearch]    = useState('')
   const [showClientDropdown, setShowClientDropdown] = useState(false)
   const [showSenderDropdown, setShowSenderDropdown] = useState(false)
@@ -649,14 +791,19 @@ export default function AgentPage() {
   const [confirmDeleteDriverId, setConfirmDeleteDriverId] = useState<any>(null)
   const [authTick, setAuthTick] = useState(0)
 
-  // Restart subscriptions when Firebase Auth token changes (refresh or re-login)
+  // Relance des abonnements quand l'UTILISATEUR change (connexion / reconnexion avec un autre compte).
+  // ⚡ Plus au simple renouvellement automatique du jeton (≈ toutes les heures) : il relançait TOUT le chargement
+  // (liste vidée, roue de chargement, période relue). Les refus d'accès (permission-denied) déclenchent toujours
+  // leur propre relance (getIdToken(true) → setAuthTick) dans chaque abonnement.
+  const authUidRef = useRef<string | null>(null)
   useEffect(() => {
     return onIdTokenChanged(auth, user => {
-      if (user) setAuthTick(t => t + 1)
+      if (user && user.uid !== authUidRef.current) {
+        authUidRef.current = user.uid
+        setAuthTick(t => t + 1)
+      }
     })
   }, [])
-
-  const profileLoadedOnce = useRef(false)
 
   useEffect(() => {
     const uid = auth.currentUser?.uid
@@ -667,15 +814,11 @@ export default function AgentPage() {
         if (snap.exists()) {
           const data = snap.data()
           if (data.blocked) { signOut(auth).then(() => navigate('/login')); return }
-          if (!profileLoadedOnce.current) {
-            // First load: refresh token so Firestore rules can read the user doc before subscriptions start
-            profileLoadedOnce.current = true
-            auth.currentUser?.getIdToken(true)
-              .then(() => setProfile(data))
-              .catch(() => setProfile(data))
-          } else {
-            setProfile(data)
-          }
+          // ⚡ Profil appliqué tout de suite. Avant, la 1re fois, un renouvellement FORCÉ du jeton de connexion
+          // (aller-retour chez Google, ≈ 0,4 s sur PC, davantage en 4G) retardait les onglets et tous les chargements ;
+          // inutile : les règles Firestore lisent le document utilisateur, pas le contenu du jeton. Un refus d'accès
+          // relance toujours sa propre actualisation du jeton (voir plus bas et dans chaque abonnement).
+          setProfile(data)
         }
       },
       (err) => {
@@ -739,6 +882,22 @@ export default function AgentPage() {
     return () => { clearTimeout(timer); clearInterval(interval) }
   }, [profile?.city])
 
+  // Load the most frequently used tab while the browser is idle.
+  useEffect(() => {
+    if (adminSaisie || !canPreloadAgentTabs()) return
+    const w = window as any
+    const id = w.requestIdleCallback ? w.requestIdleCallback(() => { loadParcelsTab().catch(() => {}) }, { timeout: 4000 })
+      : setTimeout(() => { loadParcelsTab().catch(() => {}) }, 2000)
+    return () => { if (w.cancelIdleCallback && w.requestIdleCallback) w.cancelIdleCallback(id); else clearTimeout(id) }
+  }, [adminSaisie])
+  useEffect(() => {
+    if (profile?.role !== 'chef_agence' || adminSaisie || !canPreloadAgentTabs()) return
+    const w = window as any
+    const run = () => { loadCaisseChefTab().catch(() => {}) }
+    const id = w.requestIdleCallback ? w.requestIdleCallback(run, { timeout: 6000 }) : setTimeout(run, 3000)
+    return () => { if (w.cancelIdleCallback && w.requestIdleCallback) w.cancelIdleCallback(id); else clearTimeout(id) }
+  }, [profile?.role, adminSaisie])
+
   // Raccourci Ctrl+Enter depuis l'accueil pour aller à Nouvelle expédition
   useEffect(() => {
     const handleGlobalKeyDown = (e: KeyboardEvent) => {
@@ -771,13 +930,14 @@ export default function AgentPage() {
           auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
         }
       }
-      // subscribeClients charge TOUS les clients de TOUTES les agences sans limite :
-      // il est démarré à la demande, par les onglets qui en ont besoin (voir plus bas)
+      // Clients : démarrés à la demande, par les onglets qui en ont besoin (voir plus bas, ville de l'agence)
       if (!isAide) {
         unsubscribers.push(subscribeDrivers(setDrivers, onListenerError('subscribeDrivers')))
         unsubscribers.push(subscribeAllUsers(data => {
           setAgencyCashiers(data.filter(u => u.role === 'caissier'))
           setAllUsers(data)
+          // Même requête que l'ancien 2ᵉ abonnement (chef/agent pro) : une seule écoute suffit
+          if (profile.role === 'chef_agence' || profile.role === 'agentpro') setUsers(data)
         }, onListenerError('subscribeAllUsers')))
         // subscribeAgentCodRequests est chargé à l'ouverture de l'onglet RETOUR FOND (bloc lazy)
       }
@@ -806,12 +966,17 @@ export default function AgentPage() {
     codDocumentStatusFilter.length > 0
   // Avec une période choisie, la taille de page est déjà maximale : changer un autre filtre ne
   // doit alors RIEN relire (needsBigPage reste true).
-  const needsBigPage = datePreset !== 'all' || hasNonDateFilters
+  // ⚡ Une fois le grand chargement utilisé, on le GARDE pour la session : sous « Tout », retirer
+  // le dernier filtre (ex : « Port dû ») faisait redescendre 2000 → 150 par direction, détruisait
+  // les écoutes et vidait la liste — puis un nouveau clic relisait tout. Ne fait que grandir.
+  const [bigPageLatched, setBigPageLatched] = useState(false)
+  const needsBigPage = bigPageLatched || datePreset !== 'all' || hasNonDateFilters
+  useEffect(() => { if (needsBigPage && !bigPageLatched) setBigPageLatched(true) }, [needsBigPage, bigPageLatched])
 
   // 🔄 Chargement optimisé avec détection de filtres (Option 3)
   // ⚡ OPTIMISATION : Charger les parcels uniquement si l'onglet nécessite des parcels
   useEffect(() => {
-    if (!profile) return
+    if (!profile || !startDayReady) return // journée de démarrage pas encore choisie (voir startDayReady)
     const uid = auth.currentUser?.uid
     if (!uid) return
 
@@ -821,6 +986,26 @@ export default function AgentPage() {
     // changement d'onglet re-télécharge tous les colis de l'agence.
     if (!needsParcels) {
       console.log(`⏭️ Onglet "${tab}" ne nécessite pas de parcels, chargement ignoré`)
+      return
+    }
+
+    // All-date archive search uses targeted server queries only. Cancel the previous
+    // period's readers instead of loading 30 days (or all cities) after clearing its dates.
+    if (pauseBulkParcels) {
+      agencyLoadGenRef.current += 1
+      unsubscribersRef.current.forEach(unsub => unsub())
+      unsubscribersRef.current = []
+      agencyLastDocsRef.current = null
+      setLoadingParcels(false)
+      setSyncingParcels(false)
+      setLoadingAllAgency(false)
+      setLoadingMoreAgency(false)
+      setLoadingAllCities(false)
+      setLoadingMoreWithDateFilter(false)
+      setHasMoreAgency(false)
+      setHasMoreWithDateFilter(false)
+      setAgencyCapReached(false)
+      agencyProgressStore.reset()
       return
     }
 
@@ -851,6 +1036,7 @@ export default function AgentPage() {
     agencyLoadGenRef.current += 1
     agencyPagedRef.current = false
     agencyLastDocsRef.current = null
+    setAgencyCapReached(false)
     setMoreParcels([])
     setHasMoreAgency(true)
     setLoadingAllAgency(false)
@@ -1089,11 +1275,17 @@ export default function AgentPage() {
         filterDateFrom = new Date(dateFrom + 'T00:00:00')
         filterDateTo = new Date(dateFrom + 'T23:59:59')
       } else {
-        // 📦 "Tout" (ou "Jour précis" sans date choisie) : pas de borne, comportement inchangé.
-        filterDateFrom = null
-        filterDateTo = null
-
-        console.log(`📦 [Chef] Chargement SANS LIMITE (tous les colis)`)
+        // 📦 « Récent » (ou « Jour précis » sans date choisie) : les 30 DERNIÈRES journées d'opération, chargées EN
+        // ENTIER par le chargement jour par jour ci-dessous (journées passées gardées en mémoire, journée en cours en
+        // temps réel). ⚠️ Avant (23/10/2026) : 150 expéditions par sens seulement (subscribeAgencyParcels, même
+        // fenêtre de 30 jours) — à Agadir, les reçues ne couvraient que la matinée ; Accueil, Expéditions, RETOUR
+        // FOND, Feuille de charge et Retours étaient calculés sur ce petit lot, sans avertissement.
+        // Fin = 2 journées après aujourd'hui : une page laissée ouverte passe la journée suivante sans rien manquer.
+        const todayOp = getCurrentOperationalDay()
+        const startOp = new Date(todayOp); startOp.setDate(startOp.getDate() - 29)
+        const endOp = new Date(todayOp); endOp.setDate(endOp.getDate() + 2)
+        filterDateFrom = getOperationalDayRange(startOp).start
+        filterDateTo = getOperationalDayRange(endOp).end
       }
 
       agencyDateFilterRef.current = { dateFrom: filterDateFrom, dateTo: filterDateTo }
@@ -1184,10 +1376,10 @@ export default function AgentPage() {
                 while (nextIdx < slices.length) {
                   const s = slices[nextIdx++]
                   if (gen !== agencyLoadGenRef.current) return
-                  const docs = (await Promise.all([
-                    getAgencyParcelsDaySlice(city, 'originCity', s.start, s.end, s.endInclusive, null, FILTERED_PAGE_SIZE, USE_PARCELS_LITE),
-                    getAgencyParcelsDaySlice(city, 'destinationCity', s.start, s.end, s.endInclusive, null, FILTERED_PAGE_SIZE, USE_PARCELS_LITE),
-                  ])).flat()
+                  // 🧠 Version allégée : journées déjà chargées reprises de la mémoire (getLiteDaySliceCached)
+                  const docs = (await Promise.all((['originCity', 'destinationCity'] as const).map(field => USE_PARCELS_LITE
+                    ? getLiteDaySliceCached(city, field, s, FILTERED_PAGE_SIZE)
+                    : getAgencyParcelsDaySlice(city, field, s.start, s.end, s.endInclusive, null, FILTERED_PAGE_SIZE, false)))).flat()
                   if (gen !== agencyLoadGenRef.current) return
                   loaded += docs.length
                   doneDays += 1
@@ -1227,6 +1419,9 @@ export default function AgentPage() {
         }
       }
 
+      // Plafond par sens atteint en « Tout » + filtre (2 × FILTERED_PAGE_SIZE) : signalé à l'écran
+      const watchCap = datePreset === 'all' && effectivePageSize === FILTERED_PAGE_SIZE
+      let capFromCache = true
       const unsubAgency = subscribeAgencyParcels(
         profile.city,
         (data: any, fromCache: boolean) => {
@@ -1242,6 +1437,7 @@ export default function AgentPage() {
           setLiveParcelsT(data)
           setLoadingParcels(false)
           setSyncingParcels(!!fromCache)
+          capFromCache = !!fromCache
           // ⚠️ CORRECTIF : `data` est la fusion DÉDUPLIQUÉE de deux requêtes (envoyés +
           // reçus), chacune plafonnée à effectivePageSize. Sa longueur peut donc être
           // inférieure à effectivePageSize même quand l'une des deux requêtes a atteint sa
@@ -1257,6 +1453,9 @@ export default function AgentPage() {
           if (!agencyPagedRef.current) {
             agencyLastDocsRef.current = lastDocs
           }
+          // ⚠️ « Tout » + filtre : pas de chargement de la suite (réservé aux périodes) → si une requête
+          // (départ ou arrivée) a atteint son plafond, bandeau d'avertissement (confirmé par le serveur)
+          if (watchCap) setAgencyCapReached(!capFromCache && !!(lastDocs?.createdFull || lastDocs?.arrivedFull))
         },
         filterDateFrom,
         filterDateTo,
@@ -1286,7 +1485,7 @@ export default function AgentPage() {
       unsubscribersRef.current.forEach(unsub => unsub())
       unsubscribersRef.current = []
     }
-  }, [needsParcels, profile?.role, profile?.city, authTick, showAllCities, datePreset, dateFrom, dateTo, operationalDay, needsBigPage]) // ⚡ needsBigPage : taille de page 150 → 2000 seulement
+  }, [needsParcels, profile?.role, profile?.city, authTick, showAllCities, datePreset, dateFrom, dateTo, operationalDay, needsBigPage, startDayReady, pauseBulkParcels]) // ⚡ needsBigPage : taille de page 150 → 2000 seulement
 
   // ⚡ PAGINATION PROGRESSIVE VISIBLE : le premier chargement reste rapide (plafonné à
   // FILTERED_PAGE_SIZE=2000 par requête, voir plus haut), mais si une agence active dépasse ce
@@ -1298,7 +1497,7 @@ export default function AgentPage() {
   // totaux affichés se complètent progressivement plutôt que de rester figés sur un sous-ensemble.
   // Limité aux vues FILTRÉES (datePreset !== 'all') pour ne pas charger toute l'agence par défaut.
   useEffect(() => {
-    if ((profile?.role !== 'chef_agence' && profile?.role !== 'agentpro') || datePreset === 'all' || showAllCities) return
+    if (pauseBulkParcels || (profile?.role !== 'chef_agence' && profile?.role !== 'agentpro') || datePreset === 'all' || showAllCities) return
     if (!hasMoreAgency || loadingAllAgency || loadingMoreAgency || !agencyLastDocsRef.current) return
     if (liveParcels.length === 0) return // Attendre le chargement initial
     const timer = setTimeout(() => {
@@ -1308,7 +1507,7 @@ export default function AgentPage() {
       }
     }, 800)
     return () => clearTimeout(timer)
-  }, [liveParcels.length, hasMoreAgency, loadingAllAgency, profile?.role, datePreset, showAllCities])
+  }, [liveParcels.length, hasMoreAgency, loadingAllAgency, profile?.role, datePreset, showAllCities, pauseBulkParcels])
 
   // Fusionner liveParcels et moreParcels pour le chef d'agence et agentpro
   useEffect(() => {
@@ -1324,6 +1523,7 @@ export default function AgentPage() {
 
   // Charger 600 colis de plus pour le chef d'agence
   const loadMoreAgencyParcels = async () => {
+    if (pauseBulkParcels) return
     if (!hasMoreAgency || loadingMoreAgency || loadingAllAgency || !agencyLastDocsRef.current || !profile?.city) return
     setLoadingMoreAgency(true)
     const gen = agencyLoadGenRef.current
@@ -1343,12 +1543,13 @@ export default function AgentPage() {
     } catch (err) {
       console.error('[Chef d\'agence] loadMore error:', err)
     } finally {
-      setLoadingMoreAgency(false)
+      if (gen === agencyLoadGenRef.current) setLoadingMoreAgency(false)
     }
   }
 
   // Charger TOUS les colis du chef d'agence en boucle
   const loadAllAgencyParcels = async () => {
+    if (pauseBulkParcels) return
     if (!profile?.city || loadingAllAgency || loadingMoreAgency || !hasMoreAgency || !agencyLastDocsRef.current) return
     setLoadingAllAgency(true)
     agencyProgressStore.set({ loaded: 0, day: null })
@@ -1404,10 +1605,12 @@ export default function AgentPage() {
 
   // 🌍 Charger plus de colis en mode "Toutes villes" (Agent Pro uniquement)
   const loadMoreAllCitiesParcels = async () => {
+    if (pauseBulkParcels) return
     if (!showAllCities || !hasMoreAgency || loadingMoreAgency) return
     if (!allCitiesParcelsLastSnap && !allCitiesArchivesLastSnap) return
 
     setLoadingMoreAgency(true)
+    const gen = agencyLoadGenRef.current
     try {
       console.log(`⏳ [Agent Pro] Chargement du lot suivant... (actuellement: ${allCitiesTotalLoaded})`)
 
@@ -1417,6 +1620,7 @@ export default function AgentPage() {
         liveParcels,
         1000 // Charger par lots de 1000
       )
+      if (gen !== agencyLoadGenRef.current) return
 
       setLiveParcelsT(result.docs)
       setAllCitiesParcelsLastSnap(result.parcelsLastSnap)
@@ -1428,7 +1632,7 @@ export default function AgentPage() {
     } catch (err) {
       console.error('[Agent Pro - Chargement progressif] Erreur:', err)
     } finally {
-      setLoadingMoreAgency(false)
+      if (gen === agencyLoadGenRef.current) setLoadingMoreAgency(false)
     }
   }
 
@@ -1449,9 +1653,29 @@ export default function AgentPage() {
     }
   }, [profile?.role])
 
+  // ⚡ Période bornée déjà ENTIÈREMENT chargée pour l'agence (lecture jour par jour / boucle de
+  // pagination de l'effet de chargement, archivés inclus) : mêmes conditions que cet effet pour
+  // filterDateFrom / filterDateTo. Seulement en « date de création » : en « date de livraison »,
+  // la lecture du livreur apporte aussi des expéditions créées AVANT la période et livrées dedans.
+  const agencyPeriodFullyLoaded =
+    (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && !!profile?.city && !showAllCities
+    && dateFilterType === 'creation'
+    && (
+      // « Récent » ('all', ou « Jour précis » sans date) : 30 dernières journées chargées en entier (depuis le 23/10/2026)
+      ['today', 'week', 'month', 'all', 'day'].includes(datePreset)
+      || (datePreset === 'operational' && !!operationalDay)
+      || (datePreset === 'custom' && (!!dateFrom || !!dateTo))
+    )
+
   // Charger tous les colis d'un livreur quand le filtre livreur change
+  // ⚠️ Avant : 2 écoutes × 1000 expéditions COMPLÈTES sur 30 jours, quelle que soit la période.
+  // - Période bornée : les expéditions de l'agence sur la période sont déjà en mémoire et le filtre
+  //   livreur s'applique côté client → aucune lecture supplémentaire (mêmes expéditions affichées :
+  //   celles du livreur hors agence sont de toute façon écartées par le filtre ville / direction).
+  // - « Tout » : la liste de l'agence est plafonnée → on complète avec les expéditions du livreur,
+  //   lues dans parcelsLite (même fenêtre de 30 jours, mêmes champs que la liste de l'agence).
   useEffect(() => {
-    if (driverFilter === 'all' || driverFilter === 'unassigned') {
+    if (pauseBulkParcels || driverFilter === 'all' || driverFilter === 'unassigned' || agencyPeriodFullyLoaded) {
       setDriverFilteredParcels([])
       setLoadingDriverParcels(false)
       return
@@ -1471,18 +1695,24 @@ export default function AgentPage() {
         console.error('Erreur chargement colis livreur:', err)
         setLoadingDriverParcels(false)
       },
-      1000 // Charger jusqu'à 1000 colis du livreur
+      1000, // Charger jusqu'à 1000 colis du livreur
+      undefined,
+      // Version allégée seulement là où la liste de l'agence l'est déjà (chef d'agence / agent pro)
+      { lite: USE_PARCELS_LITE && (profile?.role === 'chef_agence' || profile?.role === 'agentpro') }
     )
 
     return () => unsub()
-  }, [driverFilter])
+  }, [driverFilter, agencyPeriodFullyLoaded, profile?.role, pauseBulkParcels])
 
   useEffect(() => {
     if (profile?.city) setForm(p => ({ ...p, senderCity: profile.city }))
   }, [profile?.city])
 
   useEffect(() => {
-    setHasMoreParcels(parcels.length >= 200)
+    // Bouton « Charger plus » (expéditions SAISIES par le compte, getMoreAgentParcels) : aide agent seulement. Chef
+    // d'agence / agent pro : la liste de l'agence est complète sur la période (le bouton chargeait à tort les
+    // seules saisies du chef, pas celles de l'agence).
+    setHasMoreParcels(profile?.role !== 'chef_agence' && profile?.role !== 'agentpro' && parcels.length >= 200)
     // ⚡ Garder la MÊME référence si déjà vide : un nouveau [] à chaque changement de `parcels`
     // invalidait allDisplayParcels → re-tri + re-filtrage complets dans un rendu supplémentaire.
     setExtraParcels(prev => (prev.length ? [] : prev))
@@ -1541,7 +1771,9 @@ export default function AgentPage() {
     return () => { unsubAdminTx?.(); unsubSectors?.() }
   }, [profile?.city, profile?.role, authTick])
 
-  // ⭐ TEMPS RÉEL : toujours subscribe aux arrivages pour afficher le badge de notification
+  // ⭐ TEMPS RÉEL : colis en transit (badge Arrivages), bons de ramassage, notes, utilisateurs.
+  // (Les documents « arrivages » — historique des réceptions — ne servent qu'à l'onglet Arrivage :
+  // ils sont chargés à son ouverture, voir le bloc lazy plus bas.)
   // ⚡ OPTIMISATION : Retarder de 2 secondes pour affichage rapide initial
   useEffect(() => {
     if (!profile?.city) return
@@ -1558,11 +1790,9 @@ export default function AgentPage() {
           auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
         }
       }
-      unsubscribers.push(subscribeArrivages(profile.city, setArrivages, onErr('subscribeArrivages')))
       unsubscribers.push(subscribeBonRamasageBatches(profile.city, setBonBatches, onErr('subscribeBonRamasageBatches')))
       if (profile.role === 'chef_agence' || profile.role === 'agentpro') {
         unsubscribers.push(subscribeAgentNotesByCity(profile.city, setAgentNotes, onErr('subscribeAgentNotes')))
-        unsubscribers.push(subscribeAllUsers(setUsers, onErr('subscribeAllUsers')))
       }
 
       const mergeTransit = (() => {
@@ -1604,34 +1834,81 @@ export default function AgentPage() {
 
   // Lazy: caisse, versements, rapports — uniquement a la premiere visite de l'onglet
   const _agentLazyStarted = useRef<any>({})
+  const _agentLazyVisited = useRef<Record<string, boolean>>({})
   useEffect(() => {
-    if (!profile?.city || profile?.role === 'aide_agent') return
+    if (!profile?.city) return
     const started = _agentLazyStarted.current
     const onErr = (label: any) => (err: any) => {
       console.error(`AgentPage ${label}:`, err)
       if (err.code === 'permission-denied') auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {})
     }
     // 👥 Clients : collection entière sans limite — chargée seulement pour les onglets qui l'exploitent
-    if (['new', 'clients', 'invoices', 'clientportdu'].includes(tab) && !started.clients) {
-      started.clients = [subscribeClients(setClients, onErr('subscribeClients'))]
+    // ✏️ Aide agent inclus : même saisie que le chef d'agence (code client, F1/F2, knownClients à
+    // la création). Avant, l'aide n'avait AUCUN client chargé → autocomplétion et popups vides.
+    if (!started.codedClients) {
+      started.codedClients = [subscribeCodedClients(setCodedClients, onErr('subscribeCodedClients'))]
     }
-    if (tab === 'caisse' && !started.caisse) {
-      started.caisse = [
+    // ✏️ Aide agent : la saisie est son travail principal → clients chargés dès l'ouverture
+    // 🏙️ Clients de la VILLE de l'agence seulement (les onglets Clients / Factures chargent les leurs) ;
+    // ceux des autres villes : à la demande (ville de destination choisie, recherche F1 / F2).
+    if ((['new', 'clients', 'invoices', 'clientportdu'].includes(tab) || profile?.role === 'aide_agent') && !started.clients) {
+      const city = profile.city
+      started.clients = [subscribeClientsByCity(city, (rows, fromCache) => {
+        setClients(rows)
+        if (!fromCache) markClientsCityKnown(city)
+      }, onErr('subscribeClientsByCity'))]
+    }
+    if (profile?.role === 'aide_agent') {
+      // 🚚 Livreurs + secteurs : nécessaires à la saisie (client destinataire → secteur / livreur
+      // attitrés, comme chez le chef d'agence). Les autres données (caisse, arrivages…) restent
+      // réservées au chef / agent.
+      if (tab === 'new' && !started.aideSaisie) {
+        started.aideSaisie = [
+          subscribeDrivers(setDrivers, onErr('subscribeDrivers')),
+          subscribeAllSectors(setAllSectors, onErr('subscribeAllSectors')),
+        ]
+      }
+      return
+    }
+    // ⏸️ Arrivages / caisse / charge : ouverts à la première visite de leur onglet (comme avant), puis
+    // actifs SEULEMENT pendant qu'un onglet qui affiche ces données est ouvert ; coupés ailleurs
+    // (les dernières valeurs restent affichées et sont rafraîchies au retour).
+    const visited = _agentLazyVisited.current
+    const isChefOrPro = profile?.role === 'chef_agence' || profile?.role === 'agentpro'
+    if (tab === 'arrivage') visited.arrivages = true
+    if (tab === 'caisse') visited.caisse = true
+    if (tab === 'charge' && isChefOrPro) visited.charge = true
+    const LAZY_CONSUMERS: Record<string, string[]> = {
+      arrivages: ['arrivage', 'dashboard'],
+      caisse: ['caisse', 'home', 'dashboard'],
+      charge: ['charge', 'aideagents', 'cod'],
+    }
+    // 🧊 Caisse Agence est GARDÉE en mémoire une fois ouverte (KeepAlive) : ses écoutes restent ouvertes — avant,
+    // chaque aller-retour Expéditions ⇄ Caisse les coupait puis les rouvrait (relecture complète à chaque retour)
+    const KEEP_OPEN = new Set(['caisse'])
+    const syncLazy = (key: string, open: () => any[]) => {
+      if (visited[key] && LAZY_CONSUMERS[key].includes(tab)) {
+        if (!started[key]) started[key] = open()
+      } else if (started[key] && !KEEP_OPEN.has(key)) {
+        started[key].forEach((unsub: any) => unsub?.())
+        delete started[key]
+      }
+    }
+    // 📥 Historique des arrivages (≈40 Ko/document) : seulement à l'ouverture de l'onglet Arrivage
+    syncLazy('arrivages', () => [subscribeArrivages(profile.city, setArrivages, onErr('subscribeArrivages'))])
+    syncLazy('caisse', () => [
         subscribeCaisseByCity(profile.city, (data: any) => setAgentEntries(data), onErr('subscribeCaisseByCity')),
         subscribeBankDepositsByCity(profile.city, setBankDeposits, onErr('subscribeBankDepositsByCity')),
         subscribeAgencyCash(profile.city, setAgencyCash, onErr('subscribeAgencyCash')),
         subscribeAgentCashRecoveryRequests(profile.city, setCashRecoveryRequests, onErr('subscribeAgentCashRecoveryRequests')),
         (profile.role === 'chef_agence' || profile.role === 'agentpro') ? subscribeDriverVersements(profile.city, setDriverVersements, onErr('subscribeDriverVersements')) : null,
-      ].filter(Boolean)
-    }
-    if (tab === 'charge' && !started.charge && (profile?.role === 'chef_agence' || profile?.role === 'agentpro')) {
-      const retry = (err: any) => { if (err.code === 'permission-denied') auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {}) }
-      started.charge = [
-        subscribeRapports(profile.city, setPointeurRapports, err => { console.error('subscribeRapports:', err); retry(err) }),
-        subscribeAllReglements(profile.city, setPointeurReglements, err => { console.error('subscribeAllReglements:', err); retry(err) }),
-        subscribeSourceReglements(profile.city, setSourcePointeurReglements, err => { console.error('subscribeSourceReglements:', err); retry(err) }),
-      ]
-    }
+      ].filter(Boolean))
+    const retry = (err: any) => { if (err.code === 'permission-denied') auth.currentUser?.getIdToken(true).then(() => setAuthTick(t => t + 1)).catch(() => {}) }
+    syncLazy('charge', () => [
+      subscribeRapports(profile.city, setPointeurRapports, err => { console.error('subscribeRapports:', err); retry(err) }),
+      subscribeAllReglements(profile.city, setPointeurReglements, err => { console.error('subscribeAllReglements:', err); retry(err) }),
+      subscribeSourceReglements(profile.city, setSourcePointeurReglements, err => { console.error('subscribeSourceReglements:', err); retry(err) }),
+    ])
   }, [tab, profile?.city, profile?.role, authTick])
   useEffect(() => {
     return () => { ;(Object.values(_agentLazyStarted.current).flat() as any[]).forEach(unsub => unsub?.()) }
@@ -1739,7 +2016,7 @@ export default function AgentPage() {
     // parcel form
     form, setForm, loading, setLoading, error, setError,
     createdParcel, setCreatedParcel, price: parseFloat((form as any).portPrice) || 0,
-    clients, setClients,
+    clients: formClients, setClients, clientsKnownCities,
     inlineNewClient, setInlineNewClient,
     showClientDropdown, setShowClientDropdown,
     showSenderDropdown, setShowSenderDropdown,
@@ -1870,6 +2147,8 @@ export default function AgentPage() {
     arrNbColis: (p: any) => p.nbColis || 1,
     // helper functions set below
     canEditParcelDetails: null as any,
+    canDeleteParcel: null as any,
+    adminScopeAllowsEdit: null as any,
     isChefAgencyAideParcel: null as any,
     aideAgents: [] as any[],
   })
@@ -1942,14 +2221,15 @@ export default function AgentPage() {
     setShowSenderDropdown(false)
   }
 
-  const filteredClientSearch = (() => {
+  // ⚡ Mémoïsé : recalculé quand la liste ou le texte cherché change — plus à CHAQUE frappe dans la fiche de saisie
+  const filteredClientSearch = useMemo(() => {
     const cityClients = clients.filter(c => !profile?.city || c.city === profile.city)
     if (!clientSearch.trim()) return cityClients
     const s = clientSearch.toLowerCase()
     return cityClients.filter(c =>
-      normIncludes(c.name, s) || c.tel?.includes(s) || normIncludes(c.nic, s)
+      normIncludes(c.name, s) || digitAwareIncludes(String(c.tel ?? ''), s) || normIncludes(c.nic, s)
     )
-  })()
+  }, [clients, clientSearch, profile?.city])
   const ef = (field: any) => (e: any) => setEditForm((p: any) => ({ ...p, [field]: e.target.value }))
 
   // ⚡ RÉACTIVITÉ DES BOUTONS DE FILTRE : l'état des filtres (période, direction, port, statut,
@@ -1966,8 +2246,15 @@ export default function AgentPage() {
     encaissementTypesFilter, codDocumentStatusFilter, showAllCities, searchScope])
   const deferredParcelFilters = useDeferredValue(urgentParcelFilters)
 
+  // ⚡ La fusion ne dépend QUE du livreur, de la période et du jour d'opération : dépendre de tout
+  // l'objet de filtres refusionnait et retriait ~15 000 expéditions (et recalculait les listes de
+  // villes / livreurs de ParcelsTab) à CHAQUE clic sur « Port dû », un statut, une direction…
+  // (période et jour d'opération n'interviennent que si un livreur précis est filtré)
+  const mergeDriverSpecific = deferredParcelFilters.driverFilter !== 'all' && deferredParcelFilters.driverFilter !== 'unassigned'
+  const mergeDatePreset = mergeDriverSpecific ? deferredParcelFilters.datePreset : null
+  const mergeOperationalDay = mergeDriverSpecific ? deferredParcelFilters.operationalDay : null
   const allDisplayParcels = useMemo(() => {
-    const { driverFilter, datePreset, operationalDay } = deferredParcelFilters
+    const datePreset = mergeDatePreset, operationalDay = mergeOperationalDay
     const map = new Map()
     // ⚠️ extraParcels (lot "Charger plus", lecture ponctuelle) D'ABORD : les listes temps réel
     // (parcels, returnParcels) doivent l'emporter, sinon une ancienne copie masquait la valeur
@@ -1976,7 +2263,7 @@ export default function AgentPage() {
     ;(parcels || []).forEach(p => map.set(p.id, p))
     ;(returnParcels || []).forEach(p => map.set(p.id, p))
     // Si un livreur est filtré, inclure ses colis (filtrés par date opérationnelle si actif)
-    if (driverFilter !== 'all' && driverFilter !== 'unassigned') {
+    if (mergeDriverSpecific) {
       let driverParcels = driverFilteredParcels || []
       // ⚠️ FILTRE CRITIQUE: Si le jour d'opération est sélectionné, ne garder QUE les colis de ce jour
       if (datePreset === 'operational' && operationalDay) {
@@ -1990,14 +2277,18 @@ export default function AgentPage() {
     }
     // ⚡ Même ordre (createdAt décroissant, tri stable) mais chaque date n'est convertie qu'une fois
     return sortByCreatedAtDesc([...map.values()])
-  }, [parcels, returnParcels, extraParcels, deferredParcelFilters, driverFilteredParcels])
+  }, [parcels, returnParcels, extraParcels, mergeDriverSpecific, mergeDatePreset, mergeOperationalDay, driverFilteredParcels])
 
   const profileCity = profile?.city
   const profileRole = profile?.role
 
   // 🏬 « En gare - ville » : toutes les expéditions ARRIVÉES en attente (hors fenêtre de dates)
+  // ⚡ Écoute démarrée seulement à la première ouverture de l'onglet Expéditions (seul utilisateur
+  // de cette liste sur cette page ; Caisse Agence a la sienne) — pas au chargement sur l'Accueil.
+  const [gareNeeded, setGareNeeded] = useState(false)
+  useEffect(() => { if (tab === 'parcels') setGareNeeded(true) }, [tab])
   const garePendingList = useGarePending(
-    (profile?.role === 'chef_agence' || profile?.role === 'agentpro') ? profile?.city : undefined)
+    gareNeeded && !pauseBulkParcels && (profile?.role === 'chef_agence' || profile?.role === 'agentpro') ? profile?.city : undefined)
 
   // ⚡ Filtrage en priorité BASSE (comme le Facturier) : la frappe, les clics sur les filtres et
   // l'arrivée de nouvelles journées restent fluides ; React calcule la nouvelle liste filtrée
@@ -2007,7 +2298,12 @@ export default function AgentPage() {
   const fAllDisplay = useDeferredValue(allDisplayParcels)
   // ⏳ Vrai tant que la liste/les totaux affichés ne reflètent pas encore le dernier filtre cliqué
   const parcelFiltersPending = deferredParcelFilters !== urgentParcelFilters || fSearch !== debouncedSearch
+  // ⚡ Liste filtrée : utilisée SEULEMENT par l'onglet Expéditions → pas de filtrage / tri sur les autres onglets
   const filteredParcels = useMemo(() => {
+    // 🧊 Onglet Expéditions gardé en mémoire (KeepAlive) : la liste filtrée est GARDÉE après sa première ouverture —
+    // revenir sur l'onglet ne relance pas tout le filtrage
+    if (!parcelsTabKept) return EMPTY_LIST
+    if (archiveSearchOnly && !fSearch) return EMPTY_LIST
     const {
       datePreset, dateFrom, dateTo, dateFilterType, operationalDay, subTab, serviceFilter, parcelStatusFilter,
     parcelDirection, parcelEditorFilter, destinationCityFilter, driverFilter, portTypeFilter, encaissementFilter,
@@ -2203,7 +2499,7 @@ export default function AgentPage() {
     })
 
     return filtered
-  }, [fAllDisplay, deferredParcelFilters, profileCity, profileRole, uid, fSearch, serverSearchResults, garePendingList])
+  }, [parcelsTabKept, fAllDisplay, deferredParcelFilters, profileCity, profileRole, uid, fSearch, serverSearchResults, garePendingList, archiveSearchOnly])
 
   // 📊 Nombre d'expéditions affichées : UNE expédition = UNE ligne = compte 1.
   // ⚠️ Avant, pour la direction « Tous », un colis LOCAL (ville d'expédition = ville de destination) était
@@ -2220,14 +2516,16 @@ export default function AgentPage() {
   // Note: homeChefStats and homeAgentStats are now calculated in HomeTab.tsx
   // to properly respect the date filter selection
 
+  // ⚡ Statistiques du Tableau de bord : calculées SEULEMENT quand cet onglet est ouvert
   const dashCityParcels = useMemo(() => {
+    if (tab !== 'dashboard') return EMPTY_LIST
     const c = profile?.city
     if (!c) return parcels
     return parcels.filter(p =>
       p.sender?.city === c || p.originCity === c ||
       p.destinationCity === c || p.receiver?.city === c
     )
-  }, [parcels, profile?.city])
+  }, [tab, parcels, profile?.city])
 
   const dashKPIs = useMemo(() => {
     const today = new Date()
@@ -2293,12 +2591,15 @@ export default function AgentPage() {
 
   const dashCaisseKPIs = useMemo(() => {
     let totalIn = 0, totalOut = 0
+    if (tab !== 'dashboard') return { totalIn, totalOut }
     agentEntries.forEach(e => {
-      if (e.type === 'in') totalIn += e.amount || 0
-      else if (e.type === 'out') totalOut += e.amount || 0
+      // Les entrées de caisse sont écrites 'entree' / 'sortie' ('in' / 'out' : anciennes valeurs) — le tableau de bord
+      // ne lisait que 'in' / 'out' et affichait toujours 0 DH
+      if (e.type === 'entree' || e.type === 'in') totalIn += e.amount || 0
+      else if (e.type === 'sortie' || e.type === 'out') totalOut += e.amount || 0
     })
     return { totalIn, totalOut }
-  }, [agentEntries])
+  }, [tab, agentEntries])
 
   const whatsappMsg  = createdParcel
     ? encodeURIComponent(
@@ -2327,8 +2628,10 @@ export default function AgentPage() {
     (parcel?.agentRole === 'aide_agent' || parcel?.agentRole === 'client_portal') &&
     (parcel?.originCity === profile?.city || parcel?.sender?.city === profile?.city ||
       allUsers.find((u: any) => u.id === parcel?.agentId)?.city === profile?.city)
-  const canActAsParcelOwner = (parcel: any) => isParcelCreator(parcel) || isChefAgencyAideParcel(parcel)
+  const canActAsParcelOwner = (parcel: any) => isRestrictedAgentPro(profile)
+    ? agentProCanEditBon(profile, parcel) : isParcelCreator(parcel) || isChefAgencyAideParcel(parcel)
   const canEditParcelDetails = (parcel: any) => {
+    if (!agentProCanEditBon(profile, parcel)) return false
     // 👑 Admin peut TOUJOURS éditer
     if (profile?.role === 'admin') return true
 
@@ -2345,6 +2648,23 @@ export default function AgentPage() {
 
     // Chef peut toujours éditer (sauf si livré/retourné)
     return !['Livré', 'Retourné', 'Retour en transit'].includes(parcel?.status)
+  }
+
+  const canDeleteParcel = (parcel: any) => agencyCanDeleteParcel(profile, parcel)
+    && (isAgencyDeletionRestricted(profile) || canEditParcelDetails(parcel))
+
+  // ✏️ Modification des données d'une expédition AUTORISÉE PAR L'ADMIN (Admin › Permissions ›
+  // « Expéditions modifiables ») : chef d'agence / agent pro, expéditions qu'il a créées (lui ou ses
+  // aides-agents) et / ou reçues par son agence, quel que soit le statut SAUF « Livré » — même chargées
+  // dans un camion. Les champs restent ceux cochés par l'admin (canEditField). Même règle côté Firestore.
+  const adminScopeAllowsEdit = (parcel: any) => {
+    if (!agentProCanEditBon(profile, parcel)) return false
+    const role = profile?.role
+    if (role !== 'chef_agence' && role !== 'agentpro') return false
+    const scope = editPermissions?.parcelEditScope?.[role]
+    if (!scope || ['Livré', 'LivrÃ©'].includes(parcel?.status)) return false
+    if (scope.created && canActAsParcelOwner(parcel)) return true
+    return !!scope.received && sameCity(parcel?.destinationCity, profile?.city)
   }
 
   // ⭐ Vérifier si un champ spécifique peut être modifié selon les permissions Admin
@@ -2367,17 +2687,6 @@ export default function AgentPage() {
       return editPermissions?.aide_agent?.includes(fieldPath) ?? false
     }
 
-    // Agent: correction de SES propres bons (le bouton Modifier n'apparaît que pour le créateur,
-    // et firestore.rules n'autorise que le créateur). Liste configurable via editPermissions.agent,
-    // sinon champs du bon + COD (pas le type de port ni le statut, gérés par le chef).
-    if (profile?.role === 'agent') {
-      const agentFields: string[] = Array.isArray(editPermissions?.agent) ? editPermissions.agent : [
-        'sender.name', 'sender.nic', 'sender.tel', 'sender.city', 'sender.address',
-        'receiver.name', 'receiver.tel', 'receiver.city', 'receiver.address',
-        'weight', 'nbColis', 'serviceType', 'codAmount', 'price', 'notes', 'fragile',
-      ]
-      return agentFields.includes(fieldPath)
-    }
 
     // Par défaut: pas autorisé
     return false
@@ -2403,19 +2712,21 @@ export default function AgentPage() {
   }
 
   const canManageStatus = (parcel: any) =>
-    profile?.role === 'admin' || profile?.role === 'chef_agence' || profile?.role === 'agentpro' || isParcelCreator(parcel)
-  const canManageReturnDelivery = (_parcel: any) =>
-    profile?.role === 'chef_agence' || profile?.role === 'agentpro' || profile?.role === 'admin'
+    (agencyCanDeliver(profile, parcel) || (parcel?.wasReturned === true && agencyCanTransport(profile, parcel))) &&
+    (profile?.role === 'admin' || profile?.role === 'chef_agence' || profile?.role === 'agentpro' || isParcelCreator(parcel))
+  const canManageReturnDelivery = (parcel: any) =>
+    (agencyCanDeliver(profile, parcel) || (parcel?.wasReturned === true && agencyCanTransport(profile, parcel))) &&
+    (profile?.role === 'chef_agence' || profile?.role === 'agentpro' || profile?.role === 'admin')
   const isReturnOriginCity = (parcel: any) =>
     parcel?.returnToCity === profile?.city || parcel?.sender?.city === profile?.city
-  const canManageDeliveryAssignment = (_parcel: any) =>
-    profile?.role === 'chef_agence' || profile?.role === 'agentpro' || profile?.role === 'admin' || profile?.role === 'directeur'
+  const canManageDeliveryAssignment = (parcel: any) =>
+    agencyCanDeliver(profile, parcel) &&
+    (profile?.role === 'chef_agence' || profile?.role === 'agentpro' || profile?.role === 'admin' || profile?.role === 'directeur')
   const isPointedForDelivery = (parcel: any) =>
     parcel?.status === 'Arrivé en agence' &&
     (parcel?.chefPointedAt || parcel?.destinationArrivedAt)
   const canLoadTransportParcel = (parcel: any) =>
-    (profile?.role === 'agent' || profile?.role === 'chef_agence' || profile?.role === 'agentpro' || profile?.role === 'admin') &&
-    parcel?.status === 'Initialisé'
+    canBulkLoadTransport(profile, parcel)
   // NOUVELLE POLITIQUE : Plus de validation requise
   // Un colis d'aide-agent est "verrouillé" seulement si chargé (transportAssignedAt existe)
   const isAideParcelLockedForEdit = (p: any) => {
@@ -2448,11 +2759,7 @@ export default function AgentPage() {
   const destinationDrivers = drivers.filter((d: any) => d.city === (form as any).receiverCity || !d.city)
 
   // ── Arrivage computed values ───────────────────────────────────────────────
-  const ARR_TYPE_CONFIG: Record<string, any> = {
-    complet: { label: 'Complet',  color: 'bg-green-50 text-green-700',  dot: 'bg-green-500' },
-    partiel: { label: 'Partiel',  color: 'bg-amber-50 text-amber-700',  dot: 'bg-amber-500' },
-    sans_transit: { label: 'Sans transit', color: 'bg-gray-50 text-gray-600', dot: 'bg-gray-400' },
-  }
+  // ARR_TYPE_CONFIG : constante du module (même objet à chaque rendu — contexte stabilisé)
   const arrNbColis = (p: any) => p?.nbColis || 1
   const arrArrived = (p: any) => (arrivedBoxes as any)[p?.id] ?? 0
   const arrNexp = (p: any) => p?.senderNic || p?.nexp || p?.nExp || p?.sender?.nic || ''
@@ -2575,7 +2882,7 @@ export default function AgentPage() {
   // ── Update stateRef with newly computed values ─────────────────────────────
   Object.assign(_s.current, {
     uid, aideAgents, pointeurUsers, sameCity,
-    isParcelCreator, isChefAgencyAideParcel, canActAsParcelOwner, canEditParcelDetails,
+    isParcelCreator, isChefAgencyAideParcel, canActAsParcelOwner, canEditParcelDetails, canDeleteParcel, adminScopeAllowsEdit,
     canManageStatus, canManageReturnDelivery, isReturnOriginCity, canManageDeliveryAssignment,
     isPointedForDelivery, canLoadTransportParcel, isPendingAideParcelForAgency,
     isAideParcelLockedForEdit, // NOUVEAU : indique si colis verrouillé pour aide
@@ -2719,9 +3026,11 @@ export default function AgentPage() {
 
   // 📄 Charger plus de colis avec filtre de date
   const handleLoadMoreWithDateFilter = async () => {
+    if (pauseBulkParcels) return
     if (!lastSnapWithDateFilter || loadingMoreWithDateFilter) return
 
     setLoadingMoreWithDateFilter(true)
+    const gen = agencyLoadGenRef.current
 
     try {
       const dateFromObj = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
@@ -2733,6 +3042,7 @@ export default function AgentPage() {
         dateTo: dateToObj,
         lite: USE_PARCELS_LITE, // même collection que le curseur (abonnement « Toutes les villes »)
       })
+      if (gen !== agencyLoadGenRef.current) return
 
       if (result.docs.length > 0) {
         // Ajouter les nouveaux colis à la liste existante
@@ -2749,16 +3059,18 @@ export default function AgentPage() {
     } catch (error) {
       console.error('Erreur chargement colis supplémentaires:', error)
     } finally {
-      setLoadingMoreWithDateFilter(false)
+      if (gen === agencyLoadGenRef.current) setLoadingMoreWithDateFilter(false)
     }
   }
 
   // 🔵 Charge automatiquement TOUT le reste (mode "Toutes les villes") par tranches de
   // FILTERED_PAGE_SIZE, avec progression visible — même principe que loadAllAgencyParcels.
   const loadAllCitiesParcels = async () => {
+    if (pauseBulkParcels) return
     if (!showAllCities || loadingAllCities || loadingMoreWithDateFilter || !hasMoreWithDateFilter || !lastSnapWithDateFilter) return
     setLoadingAllCities(true)
     setLoadAllCitiesProgress(0)
+    const gen = agencyLoadGenRef.current
     try {
       const dateFromObj = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
       const dateToObj = dateTo ? new Date(dateTo + 'T23:59:59') : null
@@ -2770,6 +3082,7 @@ export default function AgentPage() {
         const result = await loadMoreParcelsWithDateFilter(cursor, {
           pageSize: FILTERED_PAGE_SIZE, dateFrom: dateFromObj, dateTo: dateToObj, lite: USE_PARCELS_LITE
         })
+        if (gen !== agencyLoadGenRef.current) return
         if (result.docs.length > 0) {
           setParcels(prev => [...prev, ...result.docs])
           setLiveParcels(prev => [...prev, ...result.docs])
@@ -2786,13 +3099,13 @@ export default function AgentPage() {
     } catch (err) {
       console.error('[Agent Pro] loadAllCities error:', err)
     } finally {
-      setLoadingAllCities(false)
+      if (gen === agencyLoadGenRef.current) setLoadingAllCities(false)
     }
   }
 
   // Déclenchement automatique dès qu'il reste des données à charger (vue filtrée uniquement)
   useEffect(() => {
-    if (!showAllCities || datePreset === 'all') return
+    if (pauseBulkParcels || !showAllCities || datePreset === 'all') return
     if (!hasMoreWithDateFilter || loadingAllCities || loadingMoreWithDateFilter || !lastSnapWithDateFilter) return
     if (parcels.length === 0) return // Attendre le chargement initial
     const timer = setTimeout(() => {
@@ -2802,7 +3115,7 @@ export default function AgentPage() {
       }
     }, 800)
     return () => clearTimeout(timer)
-  }, [parcels.length, hasMoreWithDateFilter, showAllCities, datePreset])
+  }, [parcels.length, hasMoreWithDateFilter, showAllCities, datePreset, pauseBulkParcels])
 
   // Mise à jour optimiste d'un parcel (pour affichage instantané)
   const updateParcelOptimistic = (parcelId: string, updates: Record<string, any>) => {
@@ -2820,10 +3133,25 @@ export default function AgentPage() {
     }
   }
 
-  const ctxValue = {
+  // 📥 Chef d'agence : versements du chef d'exploitation en attente de sa confirmation (badge menu + bandeau caisse)
+  const [pendingVersements, setPendingVersements] = useState<{ n: number; amount: number }>({ n: 0, amount: 0 })
+  useEffect(() => {
+    if (profile?.role !== 'chef_agence' || !profile?.city) return
+    return subscribeEnvois(profile.city, (list: any[]) => {
+      const p = list.filter((e: any) => e.status === 'envoye')
+      setPendingVersements({ n: p.length, amount: Math.round(p.reduce((s: number, e: any) => s + (e.totals?.total?.amount || 0), 0) * 100) / 100 })
+    }, (e: any) => console.error("Versements chef d'exploitation :", e))
+  }, [profile?.role, profile?.city])
+
+  // ⚡ Contexte STABILISÉ (voir agent/useStableCtxValue) : même objet tant qu'aucune valeur ne change ; fonctions
+  // relayées vers leur dernière version. Second argument : états de la page lus par des fonctions du contexte
+  // (ex. droits canEditField / canPerformAction) mais absents du contexte — un changement recrée le contexte.
+  const ctxValue = useStableCtxValue({
     // ── Core
     profile, navigate,
+    adminSaisie, setAdminCity,
     tab, setTab,
+    pendingVersements,
     subTab, setSubTab,
     uid,
     inputCls, selectCls,
@@ -2849,7 +3177,8 @@ export default function AgentPage() {
     showClientDropdown, setShowClientDropdown,
     showSenderDropdown, setShowSenderDropdown,
     inlineNewClient, setInlineNewClient,
-    clients, setClients,
+    clients: formClients, setClients,
+    ensureCityClients, lookupClients, // 🏙️ clients d'autres villes : à la demande (NewTab)
     clientSearch, setClientSearch,
     whatsappMsg, whatsappLink,
     handleSubmit,
@@ -2870,8 +3199,9 @@ export default function AgentPage() {
     pendingAideParcels, setPendingAideParcels,
     search, setSearch,
     searchScope, setSearchScope,
-    includeArchived, setIncludeArchived,  // 🗄️ Inclure archives dans recherche
+    includeArchived, setIncludeArchived, archiveSearchOnly,  // 🗄️ Recherche d’archives sur toutes les dates
     isSearching,
+    outOfPeriodResults, outOfPeriodSearching,  // 🎯 recherche ciblée hors période (onglet Expéditions)
     datePreset, setDatePreset,
     dateFrom, setDateFrom,
     dateTo, setDateTo,
@@ -2926,7 +3256,7 @@ export default function AgentPage() {
     allUsers, setAllUsers,
     sameCity,
     isParcelCreator, isChefAgencyAideParcel,
-    canActAsParcelOwner, canEditParcelDetails, canEditField, canPerformAction,
+    canActAsParcelOwner, canEditParcelDetails, canDeleteParcel, adminScopeAllowsEdit, canEditField, canPerformAction,
     canManageStatus, canManageReturnDelivery,
     isReturnOriginCity, canManageDeliveryAssignment,
     isPointedForDelivery, canLoadTransportParcel,
@@ -3158,6 +3488,7 @@ export default function AgentPage() {
 
     // ── Agency parcels loading (for chef_agence)
     hasMoreAgency,
+    agencyCapReached, agencyCapSize: FILTERED_PAGE_SIZE,
     loadMoreAgencyParcels,
     loadingMoreAgency,
     loadingAllAgency,
@@ -3175,7 +3506,7 @@ export default function AgentPage() {
     hasMoreWithDateFilter,
     loadingMoreWithDateFilter,
     handleLoadMoreWithDateFilter,
-  }
+  }, [users, chefPointing, returnParcels, liveParcels, moreParcels, lastSnapWithDateFilter, serverSearchResults, driverFilteredParcels, globalScanModal, codedClients, editPermissions, actionPermissions, allCitiesParcelsLastSnap, allCitiesArchivesLastSnap, otherCityClients, clientsKnownCities])
 
   // ⭐ Calculer le nombre de COD qui nécessitent une action (badge notification)
   const newCodCount = (() => {
@@ -3193,13 +3524,32 @@ export default function AgentPage() {
 
   // ⭐ Calculer le nombre de colis perdus non résolus (badge notification)
   const lostParcelsCount = lostParcels.filter(lp => lp.status !== 'found').length
+  // 🌸 Thème fleurs pour certains comptes (FloralTheme)
+  const floral = isFloralUser(auth.currentUser?.email || profile?.email)
 
   return (
     <AgentCtx.Provider value={ctxValue}>
-    <div className="min-h-screen bg-gray-50 overflow-x-hidden">
+    <div className={`min-h-screen overflow-x-clip relative isolate bg-gray-50 ${floral ? 'floral-page' : ''}`}>
       <CompanyContact />
 
-      {/* Header */}
+      {/* Header — mode saisie ADMIN : barre simple (retour admin + ville d'expédition) */}
+      {adminSaisie ? (
+        <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-10">
+          <div className="w-[95%] mx-auto px-4 py-3 flex flex-wrap items-center gap-3 justify-between">
+            <div className="flex items-center gap-3">
+              <button onClick={() => navigate('/admin')} className="text-sm font-semibold text-gray-600 hover:text-blue-700 px-2 py-1 rounded-lg hover:bg-blue-50">← Retour à l'admin</button>
+              <img src="/LOGO.jpg" alt="BG Express" className="h-8 object-contain" />
+              <span className="font-bold text-gray-800">➕ Nouvelle expédition <span className="text-xs font-semibold text-purple-700 bg-purple-50 border border-purple-200 rounded-full px-2 py-0.5 ml-1">Admin · toutes villes</span></span>
+            </div>
+            <label className="flex items-center gap-2 text-sm font-semibold text-gray-700">
+              Ville d'expédition
+              <select value={adminCity} onChange={e => setAdminCity(e.target.value)} className="border-2 border-blue-300 rounded-lg px-3 py-1.5 text-sm font-bold text-blue-800 bg-white">
+                {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </label>
+          </div>
+        </header>
+      ) : (
       <AgentHeader
         profile={profile}
         tab={tab}
@@ -3219,7 +3569,9 @@ export default function AgentPage() {
         arrivedBoxes={arrivedBoxes}       // ⭐ Badge arrivages
         newCodCount={newCodCount}          // ⭐ Badge COD
         lostParcelsCount={lostParcelsCount} // ⭐ Badge Colis perdus
+        pendingVersementsCount={pendingVersements.n} // 📥 Versements du chef d'exploitation à confirmer
       />
+      )}
 
       <main className="w-[95%] mx-auto px-3 sm:px-4 md:px-5 pb-16">
 
@@ -3245,21 +3597,23 @@ export default function AgentPage() {
         )}
 
         {/* ── EXPÉDITIONS ── */}
-        {tab === 'parcels' && <ParcelsTab />}
+        {/* Suspense LOCAL : sans lui, le premier affichage (téléchargement du module) remontait jusqu'au
+            chargement général du site (écran noir plein écran) avant d'afficher l'onglet */}
+        {/* 🧊 Expéditions et Caisse Agence GARDÉES en mémoire une fois ouvertes (KeepAlive) : passer de l'une à
+            l'autre ne relance plus aucun chargement ni recherche, et leurs filtres sont conservés */}
+        <KeepAlive active={tab === 'parcels'} visited={keptTabs.has('parcels')}>
+          <Suspense fallback={<div className="flex items-center justify-center gap-3 py-16 text-sm text-gray-500"><span className="w-6 h-6 border-[3px] border-blue-500 border-t-transparent rounded-full animate-spin" />Chargement des expéditions…</div>}>
+            <ParcelsTab />
+          </Suspense>
+        </KeepAlive>
 
-        {tab === 'caisse' && (
-          profile?.role === 'chef_agence' ? (
+        {/* Caisse : uniquement le chef d'agence (l'ancienne « Ma Caisse » de l'agent simple a été supprimée avec ce rôle) */}
+        {profile?.role === 'chef_agence' && (
+          <KeepAlive active={tab === 'caisse'} visited={keptTabs.has('caisse')}>
             <Suspense fallback={<div className="text-center py-8">Chargement...</div>}>
               <CaisseChefTab />
             </Suspense>
-          ) : (
-            <DirectorCaisseSimple
-              profile={profile}
-              agencyCash={agencyCash}
-              driverVersements={driverVersements}
-              adminTransfers={myAdminTransfers}
-            />
-          )
+          </KeepAlive>
         )}
 
         {tab === 'cod' && (
@@ -3325,6 +3679,13 @@ export default function AgentPage() {
       {tab === 'arrivage' && (
         <Suspense fallback={null}>
           <ArrivageTab />
+        </Suspense>
+      )}
+
+      {/* ── COMPTES CLIENTS (fiche d'ouverture de compte) ── */}
+      {tab === 'comptes' && canManageClientAccounts(auth.currentUser?.email || profile?.email) && (
+        <Suspense fallback={null}>
+          <ClientAccountsTab profile={profile} />
         </Suspense>
       )}
 
@@ -3479,10 +3840,11 @@ export default function AgentPage() {
                 Voulez-vous vraiment supprimer cette expédition ?
               </p>
               <div className="bg-gray-50 p-3 rounded mb-4 text-sm">
-                <p><strong>N° Expédition:</strong> {deleteConfirm.trackingRef || deleteConfirm.id}</p>
-                <p><strong>Expéditeur:</strong> {deleteConfirm.senderName}</p>
-                <p><strong>Destinataire:</strong> {deleteConfirm.receiverName}</p>
-                <p><strong>Ville:</strong> {deleteConfirm.receiverCity}</p>
+                <p><strong>N° Expédition:</strong> {deleteConfirm.trackingRef || deleteConfirm.trackingId || deleteConfirm.id}</p>
+                {(deleteConfirm.senderNic || deleteConfirm.sender?.nic) && <p><strong>N° EXP:</strong> {deleteConfirm.senderNic || deleteConfirm.sender?.nic}</p>}
+                <p><strong>Expéditeur:</strong> {deleteConfirm.senderName || deleteConfirm.sender?.name}</p>
+                <p><strong>Destinataire:</strong> {deleteConfirm.receiverName || deleteConfirm.receiver?.name}</p>
+                <p><strong>Ville:</strong> {deleteConfirm.receiverCity || deleteConfirm.receiver?.city || deleteConfirm.destinationCity}</p>
               </div>
               <p className="text-sm text-red-600 mb-4">
                 ⚠️ Cette action est irréversible !

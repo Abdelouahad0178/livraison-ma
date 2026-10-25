@@ -1,7 +1,7 @@
 import { Check, Edit2, MapPin, Phone, Search, Users, X } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import { fmt } from '../../../utils/formatNumber'
-import { normIncludes } from '../../../utils/normText'
+import { normIncludes, digitAwareIncludes } from '../../../utils/normText'
 
 export default function ClientsTab() {
   const {
@@ -19,7 +19,7 @@ export default function ClientsTab() {
   const filtered = q
     ? cityClients.filter((c: any) =>
         normIncludes(c.name, q) ||
-        c.tel?.includes(q) ||
+        digitAwareIncludes(String(c.tel ?? ''), q) ||
         normIncludes(c.address, q)
       )
     : cityClients

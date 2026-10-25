@@ -1,3 +1,5 @@
+import DateInput from '../components/DateInput'
+import { isAgencyStaff, matchesActivityRole } from '../utils/roles'
 import { useEffect, useRef, useState, useMemo } from 'react'
 import { setPresenceTab } from '../services/presenceCounters'
 import { codPaymentTypeOf } from '../firebase/constants'
@@ -39,6 +41,9 @@ import DirectorVersementsTab from './director/tabs/DirectorVersementsTab'
 import DirectorCaisseSimple from './director/DirectorCaisseSimple'
 import { fmt } from '../utils/formatNumber'
 import { normIncludes } from '../utils/normText'
+import { shouldTriggerSearch } from '../utils/searchUtils'
+import { searchParcels } from '../firebase/parcels'
+import { codMoneyOnly } from '../utils/moneyFlow'
 
 const parcelDate = (p: any) => {
   // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire — voir
@@ -72,7 +77,6 @@ const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parc
 const currentSalaryMonth = () => new Date().toISOString().slice(0, 7)
 
 const EDIT_ROLES = [
-  { key: 'agent',     label: 'Agent',     emoji: '🧑‍💼', badge: 'bg-blue-100 text-blue-700'    },
   { key: 'chauffeur', label: 'Chauffeur', emoji: '🚚',  badge: 'bg-orange-100 text-orange-700' },
   { key: 'caissier',  label: 'Caissier',  emoji: '🏦',  badge: 'bg-teal-100 text-teal-700'     },
   { key: 'salarie',   label: 'Salarié',   emoji: '👤',  badge: 'bg-rose-100 text-rose-700'     },
@@ -200,12 +204,26 @@ export default function DirectorPage() {
 
   useEffect(() => {
     setLoading(true)
-    // Recherche active : 10000 colis pour trouver anciens colis
-    // Par défaut : 500 colis pour chargement rapide
-    const loadLimit = isSearchActive ? 10000 : 500
-    const unsubParcels = subscribeAllParcels((data: any) => { setParcels(data); setLoading(false) }, console.error, 0, loadLimit)
+    // ⚡ Toujours les 500 expéditions les plus récentes en temps réel. La recherche ne recharge plus 10 000
+    // expéditions : elle interroge directement la base (N° EXP, suivi, téléphone, nom) — voir searchResults.
+    const unsubParcels = subscribeAllParcels((data: any) => { setParcels(data); setLoading(false) }, console.error, 0, 500)
     return () => { unsubParcels() }
-  }, [isSearchActive])
+  }, [])
+
+  // 🔎 Recherche CIBLÉE (même fonction que l'Admin et l'agent) : quelques lectures au lieu de 10 000
+  const [searchResults, setSearchResults] = useState<any[]>([])
+  const [searching, setSearching] = useState(false)
+  useEffect(() => {
+    const q = debouncedSearch.trim()
+    if (!isSearchActive || !shouldTriggerSearch(q)) { setSearchResults([]); return }
+    let cancelled = false
+    setSearching(true)
+    searchParcels(q, { limit: 300, includeArchived: true })
+      .then(r => { if (!cancelled) setSearchResults(r || []) })
+      .catch(() => { if (!cancelled) setSearchResults([]) })
+      .finally(() => { if (!cancelled) setSearching(false) })
+    return () => { cancelled = true }
+  }, [debouncedSearch, isSearchActive])
 
   useEffect(() => {
     const unsubUsers   = subscribeAllUsers(setUsers)
@@ -374,18 +392,24 @@ export default function DirectorPage() {
 
   // ---- Computed — Expéditions
   const filtered = useMemo(() => {
-    const byDate = filterByDate(parcels, datePreset, dateFrom, dateTo)
+    // Recherche : expéditions récentes + résultats de la recherche ciblée en base (anciennes comprises), sans doublon
+    const source = searchResults.length
+      ? [...new Map([...parcels, ...searchResults].map((p: any) => [p.id, p])).values()]
+      : parcels
+    // Une recherche porte sur toute la base : le filtre de date ne s'applique pas à ses résultats
+    const byDate = searchResults.length ? source : filterByDate(source, datePreset, dateFrom, dateTo)
     return byDate.filter((p: any) => {
       const cityOk   = cityFilter   === 'Toutes' || p.receiver?.city === cityFilter || p.sender?.city === cityFilter
       const statusOk = statusFilter === 'Tous'   || p.status === statusFilter
-      const searchOk = !search || [p.trackingId, p.sender?.name, p.receiver?.name, p.receiver?.tel]
+      const searchOk = !search || [p.trackingId, p.senderNic, p.sender?.nic, p.sender?.name, p.receiver?.name, p.receiver?.tel, p.sender?.tel]
         .some(v => normIncludes(v, search.toLowerCase()))
       return cityOk && statusOk && searchOk
     })
-  }, [parcels, cityFilter, statusFilter, search, datePreset, dateFrom, dateTo])
+  }, [parcels, searchResults, cityFilter, statusFilter, search, datePreset, dateFrom, dateTo])
 
   // ---- Computed — RETOUR FOND
-  const codParcels    = useMemo(() => parcels.filter(p => p.codAmount > 0), [parcels])
+  // 📅 COD encaissés avant le 05/10/2026 (essais) : hors des soldes COD
+  const codParcels    = useMemo(() => codMoneyOnly(parcels).filter(p => p.codAmount > 0), [parcels])
 
   const codDateFiltered = useMemo(() =>
     filterByDate(codParcels, codDatePreset, codDateFrom, codDateTo),
@@ -465,10 +489,10 @@ export default function DirectorPage() {
     const filteredP = filterByDate(parcels, activityDatePreset, activityDateFrom, activityDateTo)
     const filteredCaisse = filterByDate(caisseEntries, activityDatePreset, activityDateFrom, activityDateTo, caisseEntryDate)
     return nonAdminUsers
-      .filter(u => u.role === 'agent' || u.role === 'chauffeur' || u.role === 'caissier')
-      .filter(u => activityRoleFilter === 'all' || u.role === activityRoleFilter)
+      .filter(u => isAgencyStaff(u.role) || u.role === 'chauffeur' || u.role === 'caissier')
+      .filter(u => matchesActivityRole(activityRoleFilter, u.role))
       .map(u => {
-        if (u.role === 'agent') {
+        if (isAgencyStaff(u.role)) {
           const created = filteredP.filter((p: any) => p.agentId === u.id)
           const claimed = filteredP.filter((p: any) => p.destinationAgentId === u.id)
           const all = [...new Map([...created, ...claimed].map(p => [p.id, p])).values()]
@@ -489,7 +513,7 @@ export default function DirectorPage() {
             user: u, transports, deliveries,
             activeTransports: transports.filter((p: any) => !['Livré','Retourné','Arrivé en agence'].includes(p.status)).length,
             activeDeliveries: deliveries.filter((p: any) => p.status === 'En cours de livraison').length,
-            codCollected: deliveries.filter((p: any) => ['collected','remis'].includes(p.codStatus)).reduce((s: any,p: any) => s+(p.codAmount||0), 0),
+            codCollected: codMoneyOnly<any>(deliveries).filter((p: any) => ['collected','remis'].includes(p.codStatus)).reduce((s: any,p: any) => s+(p.codAmount||0), 0),
             lastActivity: all.length ? Math.max(...all.map(p => parcelDate(p).getTime())) : null,
           }
         } else {
@@ -560,7 +584,7 @@ export default function DirectorPage() {
 
       {/* ------ HEADER ------ */}
       <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4">
+        <div className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto px-4">
           {/* Top bar */}
           <div className="flex items-center justify-between py-3">
             <div className="flex items-center gap-3">
@@ -665,7 +689,7 @@ export default function DirectorPage() {
         </div>
       )}
 
-      <main className="max-w-7xl mx-auto p-4 pb-16">
+      <main className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto p-4 pb-16">
 
         {/* ══ ACCUEIL ══ */}
         {mainTab === 'home' && permissions.length > 0 && (() => {
@@ -932,9 +956,11 @@ export default function DirectorPage() {
             <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-4 mb-4 space-y-3">
               <div className="flex flex-wrap gap-3 items-center">
                 <Filter className="w-4 h-4 text-gray-400 shrink-0" />
-                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher..."
+                <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Rechercher (N° EXP 7 chiffres, téléphone, nom…)"
                   className="border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:border-purple-500 focus:outline-none flex-1 min-w-36"
                 />
+                {searching && <span className="text-xs text-purple-600 font-semibold whitespace-nowrap">Recherche dans toute la base…</span>}
+                {!searching && searchResults.length > 0 && <span className="text-xs text-gray-500 whitespace-nowrap">{searchResults.length} trouvée(s) dans toute la base</span>}
                 <select value={cityFilter} onChange={e => setCityFilter(e.target.value)} className={selectCls}>
                   <option value="Toutes">Toutes les villes</option>
                   {CITIES.map(c => <option key={c}>{c}</option>)}
@@ -959,10 +985,10 @@ export default function DirectorPage() {
                 ))}
                 {datePreset === 'custom' && (
                   <div className="flex items-center gap-2">
-                    <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                    <DateInput value={dateFrom} onChange={e => setDateFrom(e.target.value)}
                       className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
                     <span className="text-gray-400 text-xs">→</span>
-                    <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                    <DateInput value={dateTo} onChange={e => setDateTo(e.target.value)}
                       className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
                   </div>
                 )}
@@ -1200,7 +1226,7 @@ export default function DirectorPage() {
               <div className="flex gap-1.5">
                 {[
                   { key: 'all', label: 'Tous', emoji: '👥' },
-                  { key: 'agent', label: 'Agents', emoji: '🧑‍💼' },
+                  { key: 'agent', label: "Agents d'agence", emoji: '🧑‍💼' },
                   { key: 'chauffeur', label: 'Chauffeurs', emoji: '🚚' },
                   { key: 'caissier', label: 'Caissiers', emoji: '🏦' },
                 ].map(({ key, label, emoji }) => (
@@ -1222,9 +1248,9 @@ export default function DirectorPage() {
                 ))}
                 {activityDatePreset === 'custom' && (
                   <div className="flex items-center gap-2">
-                    <input type="date" value={activityDateFrom} onChange={e => setActivityDateFrom(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
+                    <DateInput value={activityDateFrom} onChange={e => setActivityDateFrom(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
                     <span className="text-gray-400 text-xs">→</span>
-                    <input type="date" value={activityDateTo} onChange={e => setActivityDateTo(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
+                    <DateInput value={activityDateTo} onChange={e => setActivityDateTo(e.target.value)} className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none" />
                   </div>
                 )}
               </div>
@@ -1235,7 +1261,7 @@ export default function DirectorPage() {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {activityStats.map(stat => {
-                  const isAgent    = stat.user.role === 'agent'
+                  const isAgent    = isAgencyStaff(stat.user.role)
                   const isCashier  = stat.user.role === 'caissier'
                   const totalCount = isAgent ? stat.created.length : isCashier ? stat.entries.length : (stat.transports.length + stat.deliveries.length)
                   const lastDate   = stat.lastActivity ? new Date(stat.lastActivity).toLocaleDateString('fr-MA', { day:'2-digit', month:'short' }) : '—'
@@ -1444,15 +1470,15 @@ export default function DirectorPage() {
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date de naissance</label>
-                      <input type="date" value={userEdit.dateNaissance||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateNaissance: e.target.value }))} className={inputCls} />
+                      <DateInput value={userEdit.dateNaissance||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateNaissance: e.target.value }))} className={inputCls} />
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date d'embauche</label>
-                      <input type="date" value={userEdit.dateEmbauche||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateEmbauche: e.target.value }))} className={inputCls} />
+                      <DateInput value={userEdit.dateEmbauche||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateEmbauche: e.target.value }))} className={inputCls} />
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date de sortie</label>
-                      <input type="date" value={userEdit.dateSortie||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateSortie: e.target.value }))} className={inputCls} />
+                      <DateInput value={userEdit.dateSortie||''} onChange={e => setUserEdit((m: any) => ({ ...m, dateSortie: e.target.value }))} className={inputCls} />
                     </div>
                     <div>
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Salaire (DH/mois)</label>

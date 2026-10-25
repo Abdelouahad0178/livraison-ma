@@ -6,12 +6,10 @@ import {
   subscribeAgencyInvoices, subscribeClientInvoices,
   type Invoice
 } from '../../../firebase/invoices'
-import { subscribeClients } from '../../../firebase/clients'
 import { normIncludes } from '../../../utils/normText'
 
 export default function AgentInvoicesTab({ profileCity, uid }: any) {
   const [invoices, setInvoices] = useState<Invoice[]>([])
-  const [clients, setClients] = useState<any[]>([])
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'paid' | 'cancelled'>('all')
   const [clientFilter, setClientFilter] = useState<string>('all')
@@ -24,18 +22,20 @@ export default function AgentInvoicesTab({ profileCity, uid }: any) {
     }
 
     const unsubInvoices = subscribeAgencyInvoices(profileCity, setInvoices)
-    const unsubClients = subscribeClients(setClients)
 
     return () => {
       unsubInvoices()
-      unsubClients()
     }
   }, [profileCity])
 
   // Clients de cette agence
+  // ⚡ Liste de choix construite à partir des FACTURES de l'agence (nom + identifiant du client déjà sur chaque facture) :
+  // plus aucun téléchargement des ≈ 17 000 fiches clients. Avant, la liste restait VIDE (champ agencyCity absent des fiches).
   const agencyClients = useMemo(() => {
-    return clients.filter(c => c.agencyCity === profileCity)
-  }, [clients, profileCity])
+    const m = new Map<string, { id: string; name: string }>()
+    for (const inv of invoices as any[]) if (inv.clientId && !m.has(inv.clientId)) m.set(inv.clientId, { id: inv.clientId, name: inv.clientName || inv.clientId })
+    return [...m.values()].sort((a, b) => a.name.localeCompare(b.name))
+  }, [invoices])
 
   // Filtrage
   const filteredInvoices = useMemo(() => {

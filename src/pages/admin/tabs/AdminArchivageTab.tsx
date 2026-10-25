@@ -1,19 +1,17 @@
-import { useState, useEffect, useMemo } from 'react'
-import { Archive, Calendar, RotateCcw, Search, TrendingDown, AlertCircle, CheckCircle, Trash2 } from 'lucide-react'
-import { collection, query, where, orderBy, limit, getDocs, doc, deleteDoc, setDoc, Timestamp } from 'firebase/firestore'
+import DateInput from '../../../components/DateInput'
+import { useState, useEffect } from 'react'
+import { Archive, Calendar, RotateCcw, TrendingDown, AlertCircle, CheckCircle, Trash2 } from 'lucide-react'
+import { collection, query, where, limit, getDocs, getCountFromServer, Timestamp } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
 import { getFunctions, httpsCallable } from 'firebase/functions'
-import { STATUS_COLORS, CITIES } from '../../../firebase/constants'
-import { searchParcels } from '../../../firebase/parcels'
-import { normIncludes } from '../../../utils/normText'
+import { CITIES } from '../../../firebase/constants'
+import AdminArchiveBrowser from '../components/AdminArchiveBrowser'
 
 export default function AdminArchivageTab() {
   const [stats, setStats] = useState<any>(null)
   const [archiving, setArchiving] = useState(false)
   const [archiveResult, setArchiveResult] = useState<any>(null)
-  const [searchQuery, setSearchQuery] = useState('')
-  const [archivedParcels, setArchivedParcels] = useState<any[]>([])
-  const [loadingArchives, setLoadingArchives] = useState(false)
+  const [archiveRevision, setArchiveRevision] = useState(0)
   const [daysInput, setDaysInput] = useState('7')
   const [selectedStatuses, setSelectedStatuses] = useState<string[]>(['Livré', 'Retourné', 'Retour finalisé'])
   const [selectedCity, setSelectedCity] = useState<string>('Toutes')
@@ -27,59 +25,14 @@ export default function AdminArchivageTab() {
   const [archiveDateFrom, setArchiveDateFrom] = useState('')
   const [archiveDateTo, setArchiveDateTo] = useState('')
 
-  // Filtres pour le tableau
-  const [statusFilter, setStatusFilter] = useState('all')
-  const [cityFilter, setCityFilter] = useState('all')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
-
   const functions = getFunctions()
-  const CITIES = ['Toutes', 'Casablanca', 'Rabat', 'Marrakech', 'Fès', 'Tanger', 'Agadir', 'Meknès', 'Oujda', 'Kénitra', 'Tétouan']
   const ARCHIVABLE_STATUSES = ['Livré', 'Retourné', 'Retour finalisé']
   const SERVICE_TYPES = ['Tous', 'Standard', 'Express', 'Économique', 'Premium']
   const PORT_TYPES = ['Tous', 'Port simple', 'Port contre-remboursement', 'Franco']
 
   useEffect(() => {
     loadStats()
-    loadAllArchives()
   }, [])
-
-  // Recherche automatique avec debounce - utilise searchParcels pour chercher dans TOUTE la base
-  useEffect(() => {
-    const timer = setTimeout(async () => {
-      if (!searchQuery.trim()) {
-        await loadAllArchives()
-        return
-      }
-
-      setLoadingArchives(true)
-      try {
-        // Utiliser searchParcels pour chercher dans TOUTE la base d'archives
-        const parcels = await searchParcels(searchQuery.trim(), {
-          includeArchived: true,
-          limit: 50000
-        })
-
-        // Filtrer pour garder seulement les archives
-        const archivedOnly = parcels.filter((p: any) => p.isArchived)
-
-        // Trier par date d'archivage
-        archivedOnly.sort((a: any, b: any) => {
-          const dateA = a.archivedAt?.toDate?.() || new Date(0)
-          const dateB = b.archivedAt?.toDate?.() || new Date(0)
-          return dateB.getTime() - dateA.getTime()
-        })
-
-        setArchivedParcels(archivedOnly)
-      } catch (error: any) {
-        console.error('Erreur recherche:', error)
-      } finally {
-        setLoadingArchives(false)
-      }
-    }, 300)
-
-    return () => clearTimeout(timer)
-  }, [searchQuery])
 
   const loadStats = async () => {
     try {
@@ -101,11 +54,18 @@ export default function AdminArchivageTab() {
         totalArchivable += snapshot.size
       }
 
-      const archiveSnapshot = await getDocs(query(collection(db, 'parcels_archive'), limit(1000)))
+      const [softArchiveCount, separateArchiveCount] = await Promise.all([
+        getCountFromServer(query(collection(db, 'parcels'), where('isArchived', '==', true))),
+        getCountFromServer(collection(db, 'parcels_archive'))
+      ])
+      const archivedInParcels = softArchiveCount.data().count
+      const archivedInSeparateCollection = separateArchiveCount.data().count
 
       setStats({
         totalArchivable,
-        totalArchived: archiveSnapshot.size,
+        totalArchived: archivedInParcels + archivedInSeparateCollection,
+        archivedInParcels,
+        archivedInSeparateCollection,
         estimatedSavings: `${((totalArchivable * 0.5) / 1000).toFixed(2)} €/mois`
       })
     } catch (error) {
@@ -147,6 +107,7 @@ export default function AdminArchivageTab() {
       })
 
       setArchiveResult({ success: true, ...(result.data as Record<string, any>) })
+      setArchiveRevision(value => value + 1)
       await loadStats()
     } catch (error: any) {
       setArchiveResult({ success: false, error: error.message })
@@ -172,6 +133,7 @@ export default function AdminArchivageTab() {
       const result = await manualArchiving()
 
       setAutoArchiveResult({ success: true, ...(result.data as Record<string, any>) })
+      setArchiveRevision(value => value + 1)
       await loadStats()
 
       const data = result.data as any
@@ -193,116 +155,9 @@ export default function AdminArchivageTab() {
     )
   }
 
-  const loadAllArchives = async () => {
-    setLoadingArchives(true)
-    try {
-      const q = query(collection(db, 'parcels_archive'), limit(500))
-      const snapshot = await getDocs(q)
-      const parcels = snapshot.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-        .sort((a: any, b: any) => {
-          const dateA = a.archivedAt?.toDate?.() || new Date(0)
-          const dateB = b.archivedAt?.toDate?.() || new Date(0)
-          return dateB.getTime() - dateA.getTime()
-        })
-      setArchivedParcels(parcels)
-    } catch (error: any) {
-      console.error('❌ Erreur chargement:', error)
-      alert('❌ Erreur: ' + error.message)
-    } finally {
-      setLoadingArchives(false)
-    }
-  }
-
-  const handleSearchArchive = async () => {
-    if (!searchQuery.trim()) {
-      await loadAllArchives()
-      return
-    }
-
-    setLoadingArchives(true)
-    try {
-      const q = query(collection(db, 'parcels_archive'), limit(500))
-      const snapshot = await getDocs(q)
-      const parcels = snapshot.docs
-        .map(doc => ({ id: doc.id, ...doc.data() }))
-        .filter((p: any) => {
-          const search = searchQuery.toLowerCase()
-          const nic = String(p.senderNic || p.sender?.nic || p.trackingId || '').toLowerCase()
-          return (
-            normIncludes(p.trackingId, search) ||
-            normIncludes(p.sender?.name, search) ||
-            normIncludes(p.receiver?.name, search) ||
-            nic.includes(search)
-          )
-        })
-        .sort((a: any, b: any) => {
-          const dateA = a.archivedAt?.toDate?.() || new Date(0)
-          const dateB = b.archivedAt?.toDate?.() || new Date(0)
-          return dateB.getTime() - dateA.getTime()
-        })
-
-      setArchivedParcels(parcels)
-      if (parcels.length === 0) {
-        alert(`Aucun résultat pour "${searchQuery}"`)
-      }
-    } catch (error: any) {
-      console.error('Erreur recherche:', error)
-      alert('❌ Erreur: ' + error.message)
-    } finally {
-      setLoadingArchives(false)
-    }
-  }
-
-  // Filtrage des archives
-  const filteredArchives = useMemo(() => {
-    let list = archivedParcels
-
-    if (statusFilter !== 'all') {
-      list = list.filter((p: any) => p.status === statusFilter)
-    }
-
-    if (cityFilter !== 'all') {
-      list = list.filter((p: any) =>
-        p.originCity === cityFilter || p.destinationCity === cityFilter
-      )
-    }
-
-    if (dateFrom || dateTo) {
-      list = list.filter((p: any) => {
-        const date = p.archivedAt?.toDate?.() || new Date(0)
-        // 📅 CORRECTION TIMEZONE: 00:00 → 23:59
-        const from = dateFrom ? new Date(dateFrom + 'T00:00:00') : null
-        const to = dateTo ? new Date(dateTo + 'T23:59:59') : null
-        if (from && date < from) return false
-        if (to && date > to) return false
-        return true
-      })
-    }
-
-    return list
-  }, [archivedParcels, statusFilter, cityFilter, dateFrom, dateTo])
-
-  const handleRestoreParcel = async (parcel: any) => {
-    if (!confirm(`Restaurer le colis ${parcel.trackingId}?`)) return
-
-    try {
-      const { archivedAt, archivedReason, archivedBy, archivedByName, ...parcelData } = parcel
-      await setDoc(doc(db, 'parcels', parcel.id), parcelData)
-      await deleteDoc(doc(db, 'parcels_archive', parcel.id))
-
-      setArchivedParcels(prev => prev.filter(p => p.id !== parcel.id))
-      await loadStats()
-
-      alert('✅ Colis restauré!')
-    } catch (error: any) {
-      alert('❌ Erreur: ' + error.message)
-    }
-  }
-
   const handleDeleteArchive = async (deleteAll: boolean = false) => {
     const confirmMsg = deleteAll
-      ? '⚠️ ATTENTION!\n\nSupprimer TOUTES les archives?\nCette action est IRRÉVERSIBLE!\n\nTaper "SUPPRIMER" pour confirmer:'
+      ? '⚠️ ATTENTION!\n\nSupprimer TOUTES les archives transférées?\nCette action est IRRÉVERSIBLE!\n\nTaper "SUPPRIMER" pour confirmer:'
       : `Supprimer les archives de plus de ${daysInput} jours?\n\nCette action est IRRÉVERSIBLE!`
 
     if (deleteAll) {
@@ -324,7 +179,7 @@ export default function AdminArchivageTab() {
 
       setDeleteResult({ success: true, ...(result.data as Record<string, any>) })
       await loadStats()
-      setArchivedParcels([])
+      setArchiveRevision(value => value + 1)
     } catch (error: any) {
       setDeleteResult({ success: false, error: error.message })
     } finally {
@@ -333,7 +188,7 @@ export default function AdminArchivageTab() {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-6 max-w-7xl xl:max-w-none xl:w-[95%] mx-auto">
       <div className="flex items-center gap-3 mb-6">
         <Archive className="w-8 h-8 text-purple-600" />
         <div>
@@ -358,8 +213,10 @@ export default function AdminArchivageTab() {
               <TrendingDown className="w-6 h-6 text-blue-600" />
               <span className="text-sm font-medium text-blue-900">Archivés</span>
             </div>
-            <div className="text-3xl font-bold text-blue-900">{stats.totalArchived}</div>
-            <div className="text-xs text-blue-700 mt-1">Dans parcels_archive</div>
+            <div className="text-3xl font-bold text-blue-900">{stats.totalArchived.toLocaleString('fr-FR')}</div>
+            <div className="text-xs text-blue-700 mt-1">
+              {stats.archivedInParcels.toLocaleString('fr-FR')} archivées sur place + {stats.archivedInSeparateCollection.toLocaleString('fr-FR')} transférées aux archives
+            </div>
           </div>
 
           <div className="bg-gradient-to-br from-green-50 to-green-100 p-6 rounded-xl border border-green-200">
@@ -477,7 +334,7 @@ export default function AdminArchivageTab() {
                 onChange={e => setSelectedCity(e.target.value)}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
               >
-                {CITIES.map(city => (
+                {['Toutes', ...CITIES].map(city => (
                   <option key={city} value={city}>{city}</option>
                 ))}
               </select>
@@ -521,8 +378,7 @@ export default function AdminArchivageTab() {
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Date de création du (optionnel):
               </label>
-              <input
-                type="date"
+              <DateInput
                 value={archiveDateFrom}
                 onChange={e => setArchiveDateFrom(e.target.value)}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
@@ -533,8 +389,7 @@ export default function AdminArchivageTab() {
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Date de création au (optionnel):
               </label>
-              <input
-                type="date"
+              <DateInput
                 value={archiveDateTo}
                 onChange={e => setArchiveDateTo(e.target.value)}
                 className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-purple-500"
@@ -612,8 +467,9 @@ export default function AdminArchivageTab() {
       <div className="bg-white rounded-xl border border-red-100 p-6 mb-6">
         <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
           <Trash2 className="w-5 h-5 text-red-600" />
-          Supprimer les Archives
+          Supprimer les archives transférées
         </h2>
+        <p className="text-sm text-gray-600 mb-4">Ces actions concernent les archives transférées par l’ancien système.</p>
 
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
           <div className="flex gap-2">
@@ -681,165 +537,7 @@ export default function AdminArchivageTab() {
         )}
       </div>
 
-      <div className="bg-white rounded-xl border border-gray-200 p-6">
-        <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
-          <Search className="w-5 h-5 text-blue-600" />
-          Consulter Archives ({filteredArchives.length} résultats)
-        </h2>
-
-        {/* Recherche automatique */}
-        <div className="mb-4">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="🔍 Recherche automatique par N EXP, Tracking ID, expéditeur, destinataire..."
-            className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 text-sm"
-          />
-          {searchQuery && (
-            <p className="text-xs text-gray-500 mt-2">
-              {loadingArchives ? 'Recherche en cours...' : `${filteredArchives.length} résultat(s) trouvé(s)`}
-            </p>
-          )}
-        </div>
-
-        {/* Filtres */}
-        <div className="grid grid-cols-4 gap-4 mb-4">
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-2">Statut</label>
-            <select
-              value={statusFilter}
-              onChange={e => setStatusFilter(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">Tous</option>
-              <option value="Livré">Livré</option>
-              <option value="Retourné">Retourné</option>
-              <option value="Arrivé en agence">Arrivé en agence</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-2">Ville</label>
-            <select
-              value={cityFilter}
-              onChange={e => setCityFilter(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
-            >
-              <option value="all">Toutes</option>
-              {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-2">Du</label>
-            <input
-              type="date"
-              value={dateFrom}
-              onChange={e => setDateFrom(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-gray-600 mb-2">Au</label>
-            <input
-              type="date"
-              value={dateTo}
-              onChange={e => setDateTo(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-        </div>
-
-        {loadingArchives ? (
-          <div className="flex items-center justify-center py-16 gap-3 text-gray-400">
-            <div className="w-6 h-6 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
-            <span className="text-sm">Chargement des archives...</span>
-          </div>
-        ) : filteredArchives.length > 0 ? (
-          <div className="overflow-x-auto rounded-lg border border-gray-200">
-            <table className="w-full">
-              <thead className="bg-gray-50 border-b border-gray-200">
-                <tr>
-                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">N EXP</th>
-                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Tracking ID</th>
-                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Expéditeur</th>
-                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">De</th>
-                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Destinataire</th>
-                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Vers</th>
-                  <th className="px-3 py-3 text-right text-xs font-bold text-gray-600 uppercase">COD</th>
-                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Statut</th>
-                  <th className="px-3 py-3 text-left text-xs font-bold text-gray-600 uppercase">Archivé le</th>
-                  <th className="px-3 py-3 text-center text-xs font-bold text-gray-600 uppercase">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {filteredArchives.map((parcel: any) => {
-                  const sc = STATUS_COLORS[parcel.status] || STATUS_COLORS['Livré']
-                  const nexp = parcel.senderNic || parcel.sender?.nic || parcel.trackingId || ''
-                  return (
-                    <tr key={parcel.id} className="hover:bg-gray-50 transition">
-                      <td className="px-3 py-3">
-                        <span className="font-mono text-sm font-bold text-blue-700">
-                          {nexp || '—'}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className="font-mono text-xs text-gray-600">{parcel.trackingId || '—'}</span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className="text-xs font-medium text-gray-800">{parcel.sender?.name || '—'}</span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className="text-xs font-semibold text-blue-700">{parcel.originCity}</span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className="text-xs font-medium text-gray-800">{parcel.receiver?.name || '—'}</span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className="text-xs font-semibold text-orange-700">{parcel.destinationCity}</span>
-                      </td>
-                      <td className="px-3 py-3 text-right">
-                        {parcel.codAmount > 0 ? (
-                          <span className="text-xs font-semibold text-green-700">
-                            {parcel.codAmount.toLocaleString('fr-MA')} DH
-                          </span>
-                        ) : (
-                          <span className="text-xs text-gray-400">—</span>
-                        )}
-                      </td>
-                      <td className="px-3 py-3">
-                        <span className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded-full font-medium ${sc.bg} ${sc.text}`}>
-                          <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
-                          {parcel.status}
-                        </span>
-                      </td>
-                      <td className="px-3 py-3 text-xs text-gray-600">
-                        {parcel.archivedAt?.toDate?.()?.toLocaleDateString('fr-MA') || 'N/A'}
-                      </td>
-                      <td className="px-3 py-3 text-center">
-                        <button
-                          onClick={() => handleRestoreParcel(parcel)}
-                          className="px-3 py-1.5 bg-green-600 text-white rounded-lg hover:bg-green-700 flex items-center gap-1 text-xs mx-auto"
-                        >
-                          <RotateCcw className="w-3 h-3" />
-                          Restaurer
-                        </button>
-                      </td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="text-center py-12 text-gray-400">
-            <Search className="w-12 h-12 mx-auto mb-3 opacity-50" />
-            <p>Aucune archive trouvée</p>
-          </div>
-        )}
-      </div>
+      <AdminArchiveBrowser revision={archiveRevision} onRestored={loadStats} />
     </div>
   )
 }

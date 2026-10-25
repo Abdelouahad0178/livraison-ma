@@ -1,6 +1,8 @@
 import { Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import ErrorBoundary from './components/ErrorBoundary'
+import MaintenanceOverlay from './components/MaintenanceOverlay'
+import RefreshTipBanner from './components/RefreshTipBanner'
 import { initMonitoring, setUserContext } from './utils/monitoring'
 import { loadWorkingDateFromFirestore } from './utils/workingDate'
 
@@ -27,19 +29,25 @@ const isPublicPath = (pathname: any) =>
 
 const HomePage    = lazy(() => import('./pages/HomePage'))
 const LoginPage   = lazy(() => import('./pages/LoginPage'))
-const AgentPage   = lazy(() => import('./pages/AgentPage'))
-const ChefExploitationPage = lazy(() => import('./pages/ChefExploitationPage'))
-const AdminPage   = lazy(() => import('./pages/AdminPage'))
+const loadAgentPage = () => import('./pages/AgentPage')
+const loadChefExploitationPage = () => import('./pages/ChefExploitationPage')
+const loadAdminPage = () => import('./pages/AdminPage')
+const AgentPage   = lazy(loadAgentPage)
+const ChefExploitationPage = lazy(loadChefExploitationPage)
+const AdminPage   = lazy(loadAdminPage)
+// ⚡ Code de la page demandée téléchargé PENDANT la vérification de connexion et la lecture du profil (avant : seulement
+// après, l'un après l'autre). Même code, simplement chargé plus tôt.
+const PRELOAD_BY_PATH: Record<string, () => Promise<unknown>> = {
+  '/agent': loadAgentPage, '/exploitation': loadChefExploitationPage, '/admin': loadAdminPage,
+}
+PRELOAD_BY_PATH[window.location.pathname]?.().catch(() => { /* rechargé normalement par lazy() */ })
 const TrackingPage  = lazy(() => import('./pages/TrackingPage'))
 const ClientsPage   = lazy(() => import('./pages/ClientsPage'))
 const FleetPage     = lazy(() => import('./pages/FleetPage'))
 const DirectorPage  = lazy(() => import('./pages/DirectorPage'))
 const DashboardPage  = lazy(() => import('./pages/DashboardPage'))
 const CaissierPage   = lazy(() => import('./pages/CaissierPage'))
-const DriverPage     = lazy(() => import('./pages/DriverPage'))
 const DriverGarePage = lazy(() => import('./pages/DriverGarePage'))
-const DriverGarePageTest = lazy(() => import('./pages/DriverGarePageTest'))
-const TestMinimal = lazy(() => import('./pages/TestMinimal'))
 const CaisseAdminPage = lazy(() => import('./pages/CaisseAdminPage'))
 const ClientPortalPage = lazy(() => import('./pages/ClientPortalPage'))
 const FacturierPage    = lazy(() => import('./pages/FacturierPage'))
@@ -53,7 +61,6 @@ const SeedPage         = lazy(() => import('./pages/SeedPage'))
 const ArchivePage      = lazy(() => import('./pages/ArchivePage'))
 const DRFEPage         = lazy(() => import('./pages/DRFEPage'))
 const DRFCPage         = lazy(() => import('./pages/DRFCPage'))
-const InternetStatusDemo = lazy(() => import('./pages/InternetStatusDemo'))
 
 // Auth vérifié UNE SEULE FOIS au niveau App — pas à chaque navigation
 function BlockedScreen({ profile, operationLocks }: any) {
@@ -101,9 +108,10 @@ function PrivateRoute({ user, role, profile, operationLocks, requiredRole, child
 
 function Loader() {
   return (
-    <div className="min-h-screen bg-gray-950 flex flex-col items-center justify-center gap-4">
+    // Fond CLAIR (comme les pages) : plus d'écran noir entre deux affichages
+    <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center gap-4">
       <div className="w-12 h-12 border-4 border-blue-500 border-t-transparent rounded-full animate-spin" />
-      <p className="text-gray-400 text-sm">Chargement...</p>
+      <p className="text-gray-500 text-sm">Chargement...</p>
     </div>
   )
 }
@@ -289,8 +297,14 @@ function AppContent() {
               <AdminPage />
             </PrivateRoute>
           } />
+          {/* ➕ Admin : saisie d'expédition de l'agent pro, pour toutes les villes */}
+          <Route path="/admin/saisie" element={
+            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="admin">
+              <AgentPage adminSaisie />
+            </PrivateRoute>
+          } />
           <Route path="/agent" element={
-            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole={['agent', 'chef_agence', 'aide_agent', 'agentpro']}>
+            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole={['chef_agence', 'aide_agent', 'agentpro']}>
               <AgentPage />
             </PrivateRoute>
           } />
@@ -324,23 +338,14 @@ function AppContent() {
               <CaissierPage />
             </PrivateRoute>
           } />
-          <Route path="/driver" element={
-            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole={['chauffeur', 'livreur']}>
-              <DriverPage />
-            </PrivateRoute>
-          } />
+          {/* 🚫 Page Livreur / Chauffeur retirée du site (demande du 23/10/2026) : les livreurs sont gérés dans les pages
+              du chef d'agence, du chef d'exploitation, de l'agent pro et de l'admin. La page « livreur en gare » reste. */}
+          <Route path="/driver" element={<Navigate to="/login" replace />} />
           <Route path="/gare-driver" element={
             <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="livreur-gare">
               <DriverGarePage />
             </PrivateRoute>
           } />
-          <Route path="/gare-driver-test" element={
-            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="livreur-gare">
-              <DriverGarePageTest />
-            </PrivateRoute>
-          } />
-          <Route path="/gare-driver-test-public" element={<DriverGarePageTest />} />
-          <Route path="/test-minimal" element={<TestMinimal />} />
           <Route path="/caisse-admin" element={
             <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole="admin">
               <CaisseAdminPage />
@@ -354,7 +359,7 @@ function AppContent() {
           <Route path="/client" element={<Navigate to="/" replace />} />
 
           <Route path="/arrivage" element={
-            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole={['agent', 'chef_agence', 'admin', 'directeur']}>
+            <PrivateRoute user={user} role={role} profile={profile} operationLocks={operationLocks} requiredRole={['chef_agence', 'admin', 'directeur']}>
               <ArrivagePage />
             </PrivateRoute>
           } />
@@ -407,12 +412,16 @@ function AppContent() {
             </PrivateRoute>
           } />
 
-          {/* Page de démo pour l'indicateur de connexion */}
-          <Route path="/internet-status-demo" element={<InternetStatusDemo />} />
 
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
       </Suspense>
+
+      {/* 🚧 Message « plateforme occupée » (settings/maintenance) — toutes les pages */}
+      <MaintenanceOverlay role={role} userName={profile?.name || profile?.email || ''} />
+
+      {/* 🔄 Rappel Ctrl+Shift+R / Ctrl+F5 (en arabe) : pages des utilisateurs connectés, une fois toutes les 3 h */}
+      {user && !publicPath && <RefreshTipBanner scope={`${user.uid}:/${location.pathname.split('/')[1] || ''}`} />}
 
       {/* ── Popup de blocage de compte ── */}
       {blockedOut && (

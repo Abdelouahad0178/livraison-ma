@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { X, AlertTriangle, MapPin, MessageSquare } from 'lucide-react'
 import { declareLostParcel } from '../firebase/lostParcels'
 import { CITIES } from '../firebase/constants'
+import { ParcelParties } from './ParcelParties'
 
 interface DeclareLostModalProps {
   parcel: any
@@ -80,9 +81,7 @@ export default function DeclareLostModal({
           <p className="text-sm font-mono font-bold text-red-700">
             {parcel.trackingId}
           </p>
-          <p className="text-sm text-gray-700 mt-1">
-            {parcel.receiver?.name}
-          </p>
+          <ParcelParties parcel={parcel} className="mt-1" />
           <p className="text-xs text-gray-500">
             {parcel.originCity} → {parcel.destinationCity}
           </p>

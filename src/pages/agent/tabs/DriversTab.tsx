@@ -1,7 +1,10 @@
+import DateInput from '../../../components/DateInput'
+import { ParcelParties } from '../../../components/ParcelParties'
 import { Banknote, Trash2, CheckSquare, Square, X, CheckCircle } from 'lucide-react'
 import { useState } from 'react'
 import { useAgentCtx } from '../AgentCtx'
 import { fmtFixed as fmtAmt } from '../../../utils/formatNumber'
+import { VIA_EXPLOITATION_MSG } from '../../../utils/moneyFlow'
 import { updateParcel, collectPortDuCheque, createCaisseEntry } from '../../../firebase/firestore'
 
 export default function DriversTab() {
@@ -90,22 +93,9 @@ export default function DriversTab() {
   }
 
   // 💳 Ouvrir la modal de choix du mode de paiement
-  const handleOpenPaymentModal = (parcel: any) => {
-    // 🔒 Vérification: seuls Chef d'agence et Agent pro peuvent collecter
-    if (profile?.role !== 'chef_agence' && profile?.role !== 'agentpro') {
-      alert('⚠️ Seuls le Chef d\'agence et l\'Agent pro peuvent réceptionner les ports dus.')
-      return
-    }
-
-    setSelectedParcel(parcel)
-    setPaymentMethod(null)
-    setChequeForm({
-      banque: '',
-      numero: '',
-      dateEncaissement: new Date().toISOString().split('T')[0]
-    })
-    setShowPaymentModal(true)
-  }
+  // 💸 Circuit livreur → chef d'exploitation → chef d'agence : plus de réception directe du port dû ici
+  // (la fenêtre espèces / chèque ci-dessous n'est donc plus ouverte)
+  const handleOpenPaymentModal = (_parcel: any) => { alert(VIA_EXPLOITATION_MSG) }
 
   // 💳 Collecter le port dû par chèque
   const handleCollectPortDuCheque = async () => {
@@ -321,7 +311,7 @@ export default function DriversTab() {
                     <p className="text-sm font-bold text-gray-800 font-mono">{p.trackingId}</p>
                     <span className="text-xs bg-orange-100 text-orange-700 px-2 py-0.5 rounded-full font-semibold">Port dû</span>
                   </div>
-                  <p className="text-xs text-gray-500 mt-0.5">{p.sender?.name} → {p.receiver?.name}</p>
+                  <ParcelParties parcel={p} className="mt-0.5" />
                   <p className="text-xs text-indigo-500 mt-0.5">🚴 {p.portCollectedBy || '—'} · {fmtD(p.portCollectedAt)}</p>
                 </div>
                 <div className="text-right shrink-0">
@@ -362,7 +352,7 @@ export default function DriversTab() {
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-bold text-gray-700 font-mono">{p.trackingId}</p>
                   </div>
-                  <p className="text-xs text-gray-500 mt-0.5">{p.sender?.name} → {p.receiver?.name}</p>
+                  <ParcelParties parcel={p} className="mt-0.5" />
                   <p className="text-xs text-gray-400 mt-0.5">Réceptionné le {fmtD(p.portChefReceivedAt)} · par {p.portChefReceivedBy}</p>
                 </div>
                 <p className="text-sm font-black text-green-700 shrink-0">{fmtAmt(p.price || 0)} DH</p>
@@ -394,7 +384,7 @@ export default function DriversTab() {
                 <div key={p.id} className="flex items-center justify-between px-4 py-3 gap-3">
                   <div className="flex-1 min-w-0">
                     <p className="text-sm font-bold text-gray-800 font-mono">{p.trackingId}</p>
-                    <p className="text-xs text-gray-500 mt-0.5">{p.sender?.name} → {p.receiver?.name}</p>
+                    <ParcelParties parcel={p} className="mt-0.5" />
                     <p className="text-xs text-indigo-500 mt-0.5">🚴 {p.deliveryDriverName || p.portCollectedBy || '—'}</p>
                   </div>
                   <div className="text-right shrink-0">
@@ -510,8 +500,7 @@ export default function DriversTab() {
                     <label className="block text-sm font-semibold text-gray-700 mb-1">
                       Date d'encaissement <span className="text-red-500">*</span>
                     </label>
-                    <input
-                      type="date"
+                    <DateInput
                       value={chequeForm.dateEncaissement}
                       onChange={(e) => setChequeForm({ ...chequeForm, dateEncaissement: e.target.value })}
                       className="w-full px-3 py-2 border-2 border-gray-300 rounded-lg focus:border-blue-500 focus:outline-none"

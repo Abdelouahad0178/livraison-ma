@@ -1,3 +1,5 @@
+import DateInput from '../../../components/DateInput'
+import { isAgencyStaff } from '../../../utils/roles'
 import {
   ArrowRight, Banknote, BarChart2, Calendar, CheckCircle, MapPin, Package, Truck, Users, Wallet,
 } from 'lucide-react'
@@ -25,7 +27,7 @@ export default function AdminActivityTab({
               <div className="flex gap-1.5 flex-wrap">
                 {[
                   { key: 'all',       label: 'Tous',        emoji: '👥' },
-                  { key: 'agent',     label: 'Agents',      emoji: '🧑‍💼' },
+                  { key: 'agent',     label: "Agents d'agence", emoji: '🧑‍💼' },
                   { key: 'chauffeur', label: 'Chauffeurs',  emoji: '🚚' },
                   { key: 'livreur',   label: 'Livreurs',    emoji: '🛵' },
                   { key: 'caissier',  label: 'Caissiers',   emoji: '🏦' },
@@ -70,11 +72,11 @@ export default function AdminActivityTab({
                 ))}
                 {activityDatePreset === 'custom' && (
                   <div className="flex items-center gap-2">
-                    <input type="date" value={activityDateFrom} onChange={e => setActivityDateFrom(e.target.value)}
+                    <DateInput value={activityDateFrom} onChange={e => setActivityDateFrom(e.target.value)}
                       className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
                     />
                     <span className="text-gray-400 text-xs">→</span>
-                    <input type="date" value={activityDateTo} onChange={e => setActivityDateTo(e.target.value)}
+                    <DateInput value={activityDateTo} onChange={e => setActivityDateTo(e.target.value)}
                       className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500"
                     />
                   </div>
@@ -93,8 +95,8 @@ export default function AdminActivityTab({
                 },
                 {
                   label: 'Agents actifs',
-                  value: safeActivityStats.filter((s: any) => s.user.role === 'agent' && s.created?.length > 0).length,
-                  total: safeUsers.filter((u: any) => u.role === 'agent').length,
+                  value: safeActivityStats.filter((s: any) => isAgencyStaff(s.user.role) && s.created?.length > 0).length,
+                  total: safeUsers.filter((u: any) => isAgencyStaff(u.role)).length,
                   icon: Users, color: 'bg-blue-50 text-blue-600'
                 },
                 {
@@ -111,7 +113,7 @@ export default function AdminActivityTab({
                 },
                 {
                   label: 'Colis créés',
-                  value: safeActivityStats.filter((s: any) => s.user.role === 'agent').reduce((sum: any, s: any) => sum + (s.created?.length || 0), 0),
+                  value: safeActivityStats.filter((s: any) => isAgencyStaff(s.user.role)).reduce((sum: any, s: any) => sum + (s.created?.length || 0), 0),
                   icon: Package, color: 'bg-green-50 text-green-600'
                 },
                 {
@@ -309,7 +311,7 @@ export default function AdminActivityTab({
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
                 {safeActivityStats.map((stat: any) => {
-                  const isAgent   = stat.user.role === 'agent'
+                  const isAgent   = isAgencyStaff(stat.user.role)
                   const isCashier = stat.user.role === 'caissier'
                   const totalCount = isAgent
                     ? stat.created.length

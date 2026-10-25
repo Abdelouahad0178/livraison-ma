@@ -21,6 +21,7 @@ import { db } from './db'
 import { daysAgoTimestamp } from './firestoreUtils'
 import { normIncludes } from '../utils/normText'
 import { normalizeServiceType, codPaymentTypeForService } from './constants'
+import { mergeClientLists, clientNameVariants, phoneDigits } from '../utils/clientLookup'
 
 const CLIENTS_PAGE_LIMIT = 500
 type FirestoreRow = Record<string, any> & { id: string; createdAt?: any }
@@ -180,6 +181,90 @@ export function subscribeClients(callback: (rows: FirestoreRow[]) => void, onErr
   const q = query(collection(db, 'clients'), orderBy('createdAt', 'desc'))
   return onSnapshot(q, snap => {
     callback(snap.docs.map(rowFromDoc))
+  }, onError)
+}
+
+/**
+ * 👥 Clients AJOUTÉS MANUELLEMENT d'une ville (onglet « Clients » du chef d'agence) : lus directement dans la base
+ * (≈ 100 fiches) au lieu des ≈ 17 000 fiches de toutes les agences filtrées ensuite — même liste (contrôlé le
+ * 21/10/2026, ville par ville), même ordre (création la plus récente d'abord).
+ */
+export function subscribeManualClientsOfCity(city: string, callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
+  const q = query(collection(db, 'clients'), where('city', '==', city), where('manuallyAdded', '==', true))
+  const ms = (v: any) => (v?.toMillis ? v.toMillis() : v ? new Date(v).getTime() || 0 : 0)
+  return onSnapshot(q, snap => {
+    callback(snap.docs.map(rowFromDoc).sort((a: any, b: any) => ms(b.createdAt) - ms(a.createdAt)))
+  }, onError)
+}
+
+/**
+ * 🏙️ Clients d'UNE ville (temps réel) — onglet « Nouvelle expédition » : clients de l'agence, puis ceux d'une
+ * ville de destination choisie (au lieu des ≈ 14 000 clients de toutes les agences, ~10 Mo, 15 s et plus).
+ * fromCache : premier résultat servi par le cache local (peut être incomplet) — la ville n'est considérée
+ * « complète » (recherche de destinataire existant en mémoire) qu'une fois confirmée par le serveur.
+ */
+export function subscribeClientsByCity(
+  city: string,
+  callback: (rows: FirestoreRow[], fromCache: boolean) => void,
+  onError: (err?: any) => void = () => {},
+) {
+  const q = query(collection(db, 'clients'), where('city', '==', city))
+  let last: boolean | null = null
+  return onSnapshot(q, { includeMetadataChanges: true }, snap => {
+    // Métadonnées seules (écriture confirmée…) et même état cache / serveur : rien de nouveau
+    if (last !== null && snap.docChanges().length === 0 && snap.metadata.fromCache === last) return
+    last = snap.metadata.fromCache
+    callback(snap.docs.map(rowFromDoc), snap.metadata.fromCache)
+  }, onError)
+}
+
+/**
+ * 🔎 Recherche PONCTUELLE de clients de toutes les villes (fenêtres de choix F1 / F2) : code exact,
+ * téléphone exact, ou début du nom (variantes de casse). Quelques dizaines de fiches au plus.
+ */
+export async function lookupClients(term: string, max = 30): Promise<FirestoreRow[]> {
+  const t = term.trim()
+  if (t.length < 2) return []
+  const col = collection(db, 'clients')
+  const queries = [query(col, where('code', '==', t.toUpperCase()), limit(5))]
+  const digits = phoneDigits(t)
+  if (digits) {
+    queries.push(query(col, where('tel', '==', digits), limit(10)))
+    if (digits !== t) queries.push(query(col, where('tel', '==', t), limit(10)))
+  }
+  for (const v of clientNameVariants(t)) {
+    queries.push(query(col, where('name', '>=', v), where('name', '<=', v + ''), limit(max)))
+  }
+  const results = await Promise.allSettled(queries.map(q => getDocs(q)))
+  const lists = results.map(r => (r.status === 'fulfilled' ? r.value.docs.map(rowFromDoc) : []))
+  return mergeClientLists(...lists)
+}
+
+/**
+ * ⚡ Clients ayant un CODE de saisie rapide (≈100 fiches, lues en une fraction de seconde).
+ * La liste complète (≈14 000 clients, 15 s et plus) arrive ensuite : en attendant, la saisie par
+ * code client (expéditeur, destinataire) fonctionne dès l'ouverture du formulaire.
+ */
+export function subscribeCodedClients(callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
+  const q = query(collection(db, 'clients'), where('code', '>', ''))
+  return onSnapshot(q, snap => {
+    callback(snap.docs.map(rowFromDoc))
+  }, onError)
+}
+
+/**
+ * 💼 Sociétés « en compte » d'une ville (accountType == 'compte'), triées par createdAt décroissant.
+ * Remplace subscribeClients + filtre client sur l'Accueil du chef d'agence (≈14 000 clients, ~10 Mo,
+ * pour en garder ~5 à 10). Même résultat : l'ancien orderBy('createdAt') excluait les fiches sans
+ * createdAt — reproduit ici.
+ */
+export function subscribeEnCompteClientsByCity(city: string, callback: (rows: FirestoreRow[]) => void, onError: (err?: any) => void = () => {}) {
+  const q = query(collection(db, 'clients'), where('city', '==', city), where('accountType', '==', 'compte'))
+  const ms = (v: any) => (v?.toMillis ? v.toMillis() : v?.seconds != null ? v.seconds * 1000 : new Date(v).getTime() || 0)
+  return onSnapshot(q, snap => {
+    callback(snap.docs.map(rowFromDoc)
+      .filter((c: any) => c.createdAt != null)
+      .sort((a: any, b: any) => ms(b.createdAt) - ms(a.createdAt)))
   }, onError)
 }
 

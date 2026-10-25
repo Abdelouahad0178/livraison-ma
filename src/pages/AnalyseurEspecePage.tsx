@@ -1,3 +1,4 @@
+import DateInput from '../components/DateInput'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { codPaymentTypeOf } from '../firebase/constants'
 import { signOut } from 'firebase/auth'
@@ -33,8 +34,9 @@ import ProfilePhotoUpload from '../components/ProfilePhotoUpload'
 import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
-import { normText } from '../utils/normText'
+import { normText, isDigitsOnly, numberStartsWith } from '../utils/normText'
 import { codHasType, isMixedCod, codPartsOf, codPartsBreakdown, codPartsLabel } from '../utils/codParts'
+import { codMoneyOnly, isCodSenderPaid } from '../utils/moneyFlow'
 
 const PAGE_SIZE = 800 // Chargement progressif par tranches de 800
 
@@ -52,13 +54,16 @@ const senderKey = (p: any) => `${String(p.sender?.name || '').trim().toLowerCase
 const parcelAgency = (p: any) => p?.centralDepositCity || p?.destinationCity || p?.receiver?.city || p?.originCity || p?.sender?.city || 'Agence non definie'
 const supplierAgency = (p: any) => p?.originCity || p?.sender?.city || 'Agence non definie'
 const supplierAgenciesText = (parcels: any) => [...new Set((parcels || []).map(supplierAgency).filter(Boolean))].join(', ') || '-'
-const isParcelPaid = (p: any) => !!p.centralSupplierPaid || !!p.codSenderPaid || p.centralSupplierPaymentStatus === 'paid'
+const isParcelPaid = isCodSenderPaid
 const isParcelPrepared = (p: any) => !isParcelPaid(p) && (p.centralSupplierPaymentStatus === 'prepared' || !!p.centralSupplierPaymentId)
 const paymentStatus = (pay: any) => pay?.status || 'paid'
 const normalizeSearch = (value: any) => normText(value).replace(/\s+/g, '')
 const hasSearch = (values: any, q: any) => {
   if (!q) return true
   const compactQ = normalizeSearch(q)
+  // 🔢 Numéro (N° EXP, téléphone) : le 0 compte, correspondance depuis le 1er chiffre
+  const digitsQ = normText(q).replace(/[\s.\-\/]/g, '')
+  if (isDigitsOnly(digitsQ)) return values.some((v: any) => numberStartsWith(v, digitsQ))
   return values.some((v: any) => {
     const raw = normText(v)
     return raw.includes(normText(q)) || normalizeSearch(raw).includes(compactQ)
@@ -357,7 +362,8 @@ export default function AnalyseurEspecePage() {
   const parcelCity = (p: any) => p.destinationCity || p.receiver?.city || 'Ville inconnue'
   const isControlled = (p: any) => !!p.controlled
 
-  const codParcels = useMemo(() => parcels.filter((p: any) => (parseFloat(p.codAmount) || 0) > 0), [parcels])
+  // 📅 COD encaissés avant le 05/10/2026 (essais) : hors des soldes COD
+  const codParcels = useMemo(() => codMoneyOnly(parcels).filter((p: any) => (parseFloat(p.codAmount) || 0) > 0), [parcels])
 
   const ctlCities = useMemo(() => [...new Set(codParcels.map(parcelCity).filter(Boolean))].sort(), [codParcels])
 
@@ -1196,7 +1202,7 @@ export default function AnalyseurEspecePage() {
     <div className="min-h-screen bg-gradient-to-br from-rose-50 via-purple-50 to-pink-50 text-slate-900">
       {/* Header magnifique */}
       <header className="bg-white/80 backdrop-blur-xl border-b border-pink-100/50 px-6 py-5 sticky top-0 z-20 shadow-sm">
-        <div className="max-w-7xl mx-auto flex items-center gap-4">
+        <div className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto flex items-center gap-4">
           {/* Photo de profil avec effet brillant */}
           {auth.currentUser?.uid && (
             <div className="relative">
@@ -1238,7 +1244,7 @@ export default function AnalyseurEspecePage() {
         </div>
       </header>
 
-      <main className="p-6 max-w-7xl mx-auto space-y-6">
+      <main className="p-6 max-w-7xl xl:max-w-none xl:w-[95%] mx-auto space-y-6">
         {/* Onglets */}
         <div className="flex gap-2 bg-white/70 backdrop-blur-xl rounded-2xl border border-pink-100/50 p-1.5 shadow-sm w-fit">
           <button
@@ -1503,8 +1509,8 @@ export default function AnalyseurEspecePage() {
                   </div>
                 ) : (
                   <>
-                    <input type="date" value={ctlDateFrom} onChange={e => { setCtlDateFrom(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
-                    <input type="date" value={ctlDateTo} onChange={e => { setCtlDateTo(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
+                    <DateInput value={ctlDateFrom} onChange={e => { setCtlDateFrom(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
+                    <DateInput value={ctlDateTo} onChange={e => { setCtlDateTo(e.target.value); setCtlDatePreset('custom') }} className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium transition-all duration-300" />
                   </>
                 )}
                 <input type="number" min="0" value={ctlMinAmount} onChange={e => setCtlMinAmount(e.target.value)} placeholder="Min DH" className="px-3 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 text-sm font-medium placeholder:text-purple-300 transition-all duration-300" />
@@ -1923,14 +1929,12 @@ export default function AnalyseurEspecePage() {
                 <option value="custom">🎯 Personnalisé</option>
               </select>
             </div>
-            <input
-              type="date"
+            <DateInput
               value={dateFrom}
               onChange={e => { setDateFrom(e.target.value); setDatePreset('custom') }}
               className="px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm text-sm font-medium transition-all duration-300"
             />
-            <input
-              type="date"
+            <DateInput
               value={dateTo}
               onChange={e => { setDateTo(e.target.value); setDatePreset('custom') }}
               className="px-4 py-3 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/50 backdrop-blur-sm text-sm font-medium transition-all duration-300"
@@ -2390,8 +2394,7 @@ export default function AnalyseurEspecePage() {
                         <>
                           <div>
                             <label className="block text-xs font-bold text-purple-800 mb-2">Du</label>
-                            <input
-                              type="date"
+                            <DateInput
                               value={archiveDateFrom}
                               onChange={(e) => setArchiveDateFrom(e.target.value)}
                               className="w-full px-3 py-2 rounded-xl border border-purple-200 text-sm focus:ring-2 focus:ring-purple-400 focus:outline-none"
@@ -2399,8 +2402,7 @@ export default function AnalyseurEspecePage() {
                           </div>
                           <div>
                             <label className="block text-xs font-bold text-purple-800 mb-2">Au</label>
-                            <input
-                              type="date"
+                            <DateInput
                               value={archiveDateTo}
                               onChange={(e) => setArchiveDateTo(e.target.value)}
                               className="w-full px-3 py-2 rounded-xl border border-purple-200 text-sm focus:ring-2 focus:ring-purple-400 focus:outline-none"
@@ -2593,7 +2595,7 @@ export default function AnalyseurEspecePage() {
               </label>
               <label className="text-xs font-bold text-slate-500 col-span-2">
                 Date cheque
-                <input type="date" value={modal.chequeDate} onChange={e => setModal((m: any) => ({ ...m, chequeDate: e.target.value }))} className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none" />
+                <DateInput value={modal.chequeDate} onChange={e => setModal((m: any) => ({ ...m, chequeDate: e.target.value }))} className="mt-1 w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none" />
               </label>
               <label className="text-xs font-bold text-slate-500 col-span-2">
                 Note
@@ -2665,8 +2667,7 @@ export default function AnalyseurEspecePage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="block text-sm font-bold text-slate-700 mb-1">Date d'échéance</label>
-                  <input
-                    type="date"
+                  <DateInput
                     value={editPaymentModal.chequeDate || ''}
                     onChange={e => setEditPaymentModal({ ...editPaymentModal, chequeDate: e.target.value })}
                     className="w-full border border-slate-200 rounded-xl px-3 py-2 text-sm focus:border-emerald-500 focus:outline-none"

@@ -17,7 +17,7 @@ import {
 import CompanyContact from '../components/CompanyContact'
 import LiveClock from '../components/LiveClock'
 import { fmt } from '../utils/formatNumber'
-import { normIncludes } from '../utils/normText'
+import { normIncludes, digitAwareIncludes } from '../utils/normText'
 
 const ACCOUNT_TYPES = [
   { key: 'cash',   label: 'Comptant',  color: 'bg-gray-100 text-gray-700'  },
@@ -106,7 +106,7 @@ export default function ClientsPage() {
     const s = search.toLowerCase()
     return list.filter(c =>
       normIncludes(c.name, s) ||
-      c.tel?.includes(s) ||
+      digitAwareIncludes(String(c.tel ?? ''), s) ||
       normIncludes(c.city, s) ||
       normIncludes(c.nic, s) ||
       normIncludes(c.createdByName, s)
@@ -220,7 +220,7 @@ export default function ClientsPage() {
 
       {/* Header */}
       <header className="bg-white border-b border-gray-200 px-4 py-3 sticky top-0 z-10 no-print">
-        <div className="max-w-7xl mx-auto flex items-center justify-between">
+        <div className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button onClick={() => navigate(-1)}
               className="p-2 hover:bg-gray-100 rounded-xl transition">
@@ -243,7 +243,7 @@ export default function ClientsPage() {
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-6 print-page">
+      <main className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto px-4 py-6 print-page">
 
         {/* ── LIST VIEW ── */}
         {!selectedClient && (

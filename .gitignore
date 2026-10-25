@@ -16,3 +16,12 @@ serviceAccountKey.json
 
 # context-mem
 .context-mem/
+
+# Sauvegardes de données faites avant chaque correction (contiennent des noms / téléphones de clients) : restent sur le PC
+scripts/*backup*.json
+scripts/*.bak*.json
+
+# Fichiers d'outils / divers
+.cursor/
+.windsurf/
+/0

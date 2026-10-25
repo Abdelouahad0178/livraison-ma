@@ -1,0 +1,22 @@
+# BG EXPRESS — instructions pour les robots des moteurs de recherche.
+# Visibles : l'accueil et le suivi de colis. Pages de travail (connexion obligatoire) : à ne pas parcourir.
+User-agent: *
+Allow: /$
+Allow: /track
+Disallow: /login
+Disallow: /admin
+Disallow: /agent
+Disallow: /exploitation
+Disallow: /driver
+Disallow: /caissier
+Disallow: /central
+Disallow: /facturier
+Disallow: /pointeur
+Disallow: /director
+Disallow: /dashboard
+Disallow: /archive
+Disallow: /clients
+Disallow: /fleet
+Disallow: /client
+Disallow: /portal
+Disallow: /sign

@@ -1,8 +1,8 @@
-﻿
+
 import {
   collection, addDoc, updateDoc, deleteDoc, doc, getDoc,
-  query, where, orderBy, getDocs, onSnapshot, limit, startAfter, getCountFromServer,
-  serverTimestamp, arrayUnion, increment, writeBatch, setDoc, Timestamp, runTransaction, deleteField, documentId
+  query, where, orderBy, getDocs, getDocsFromServer, onSnapshot, limit, startAfter, getCountFromServer,
+  serverTimestamp, arrayUnion, increment, writeBatch, setDoc, Timestamp, runTransaction, deleteField, documentId, GeoPoint
 } from 'firebase/firestore'
 import type { Query, DocumentData } from 'firebase/firestore'
 import { db } from './db'
@@ -13,11 +13,83 @@ import {
 } from './constants'
 import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
 import { codPartView, isMixedCod } from '../utils/codParts'
+import { codMoneyOnly } from '../utils/moneyFlow'
 import { getOperationalDayString } from '../config/operationalDay'
-import { buildDaySlices, opDayOf } from '../utils/daySlices'
+import { buildDaySlices, opDayOf, opStart } from '../utils/daySlices'
+import { planLiveEmit } from '../utils/liveThrottle'
+import {
+  ALL_CITIES, liteDayKey, parseLiteDayKey, createdMsOf as createdMs, opDayOfParcel, applyChangedParcels,
+  citiesInCache, dropCityEntries, encodeLiteValue, decodeLiteValue, selectPersistableKeys, shiftDay,
+  LITE_PERSIST_MAX_DAYS, type LiteDayField,
+} from '../utils/liteDayCache'
+import { loadPersistedLiteDays, savePersistedLiteDays, removePersistedLiteDays, type PersistedLiteTag } from './liteDayStore'
 import { addPayment } from './clients'
 import { bumpPresence } from '../services/presenceCounters'
 import { normName, isVisibleInDestinationAgency } from '../utils/billingAgency'
+import { deliveryCityBlock, collectCityBlock } from '../utils/deliveryCity'
+import { auth } from './auth'
+import { daysBetween, shiftParcelDates } from '../utils/shiftParcelDates'
+import { guichetHolderForCity } from '../config/guichetHolders'
+import { portTypeChangeBlock } from '../utils/portTypeGuard'
+import { deliveryStatusChangeBlock } from '../utils/agencyDeliveryAccess'
+
+/**
+ * 📅 ADMIN : change la journée d'une expédition (`newDay` = « AAAA-MM-JJ », journée d'opération). TOUTES ses dates
+ * (création, journée, historique, livraison, encaissements…) sont décalées du même nombre de jours, heures gardées
+ * (utils/shiftParcelDates). Une ligne d'historique est ajoutée et l'ancienne date gardée dans dateChangeLog et
+ * adminChanges. Une seule transaction, sur la collection `parcels` (pas les archives séparées).
+ */
+export async function moveParcelDate(parcelId: string, newDay: string, by: string): Promise<{ days: number; count: number; oldDay: string }> {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(newDay)) throw new Error('Date invalide.')
+  return runTransaction(db, async tx => {
+    const ref = doc(db, 'parcels', parcelId)
+    const snap = await tx.get(ref)
+    if (!snap.exists()) throw new Error("Expédition introuvable (archivée hors de la liste principale ?).")
+    const p: any = snap.data()
+    const createdMsVal = p.createdAt?.toMillis ? p.createdAt.toMillis() : 0
+    const oldDay: string = p.workDate || (createdMsVal ? calculateWorkDate(new Date(createdMsVal).toISOString()) : '')
+    if (!oldDay) throw new Error("Date actuelle de l'expédition inconnue.")
+    const days = daysBetween(oldDay, newDay)
+    if (!days) throw new Error("L'expédition est déjà à cette date.")
+    const { patch, count } = shiftParcelDates(p, days, ms => Timestamp.fromMillis(ms))
+    const now = new Date().toISOString()
+    const fr = (d: string) => d.split('-').reverse().join('/')
+    const note = `📅 Date modifiée par l'admin : ${fr(oldDay)} → ${fr(newDay)} (toutes les dates décalées de ${days > 0 ? '+' : ''}${days} jour(s))`
+    patch.history = [...(patch.history ?? p.history ?? []), { status: p.status, timestamp: now, note, by }]
+    patch.workDate = newDay // journée demandée (même si l'ancienne était absente)
+    patch.dateChangeLog = [...(Array.isArray(p.dateChangeLog) ? p.dateChangeLog : []), { at: now, by, from: oldDay, to: newDay, days, shifted: count }]
+    patch.adminChanges = [...(Array.isArray(p.adminChanges) ? p.adminChanges : []), { field: "Date de l'expédition", oldValue: fr(oldDay), newValue: fr(newDay), changedAt: now, changedBy: by }]
+    patch.lastAdminEditAt = now
+    patch.lastAdminEditBy = by
+    tx.update(ref, patch)
+    return { days, count, oldDay }
+  })
+}
+
+/** 🚚 Livraison réservée à l'agence de destination (même garde que deliveryCityGuard() côté serveur). */
+let deliveryUserCache: { uid: string; role: string; city: string } | null = null
+async function deliveryUser(uid: string) {
+  if (deliveryUserCache?.uid !== uid) {
+    const u = (await getDoc(doc(db, 'users', uid))).data() || {}
+    deliveryUserCache = { uid, role: u.role || '', city: u.city || '' }
+  }
+  return deliveryUserCache
+}
+/** 💰 Encaissement (COD / port dû) réservé à l'agence de destination (sans exception). */
+export async function assertCanCollectHere(parcel: { destinationCity?: string | null; senderNic?: string | null; trackingId?: string | null }, what: 'valeur (COD)' | 'port dû' = 'valeur (COD)'): Promise<void> {
+  const uid = auth.currentUser?.uid
+  if (!uid) return
+  const u = await deliveryUser(uid)
+  const msg = collectCityBlock(u.role, u.city, parcel, what)
+  if (msg) throw new Error(msg)
+}
+export async function assertCanDeliverHere(parcel: { status?: string | null; destinationCity?: string | null }): Promise<void> {
+  const uid = auth.currentUser?.uid
+  if (!uid || parcel.status === 'Livré') return
+  const u = await deliveryUser(uid)
+  const msg = deliveryCityBlock(u.role, u.city, parcel)
+  if (msg) throw new Error(msg)
+}
 
 export const FIRESTORE_PAGE_LIMITS = {
   adminLiveParcels: 300,  // ⚡ OPTIMISATION : Réduit de 10000 à 300 pour chargement rapide
@@ -142,7 +214,9 @@ export async function ensureFullParcels(list: any[]): Promise<any[]> {
 // entière, onglet Nouvelle expédition). Si fournie, la recherche se fait en mémoire (même règle :
 // même tél + même ville, sinon même nom insensible à la casse + même ville) au lieu de relire
 // Firestore — la requête « tous les clients de la ville » téléchargeait 2 à 5 Mo (Agadir : 7 750 docs).
-async function ensureReceiverClientForAgency(parcel: any, parcelId: any, knownClients?: any[] | null) {
+// knownCities (facultatif) : villes pour lesquelles knownClients est COMPLET (Nouvelle expédition : ville de
+// l'agence + villes de destination chargées) — pour une autre ville, recherche Firestore (comme sans liste).
+async function ensureReceiverClientForAgency(parcel: any, parcelId: any, knownClients?: any[] | null, knownCities?: string[] | null) {
   if (parcel.receiverClientId) {
     const receiver = parcel.receiver || {}
     await updateDoc(doc(db, 'clients', parcel.receiverClientId), {
@@ -164,7 +238,7 @@ async function ensureReceiverClientForAgency(parcel: any, parcelId: any, knownCl
   if (!city || (!name && !tel)) return null
 
   let existing: any = null
-  const useKnown = Array.isArray(knownClients) && knownClients.length > 0
+  const useKnown = Array.isArray(knownClients) && knownClients.length > 0 && (!knownCities || knownCities.includes(city))
   if (tel) {
     if (useKnown) {
       existing = knownClients!.find((c: any) => c?.id && c.tel === tel && c.city === city) || null
@@ -237,7 +311,8 @@ async function ensureReceiverClientForAgency(parcel: any, parcelId: any, knownCl
 }
 export async function createParcel(
   data: Record<string, unknown>,
-  opts?: { knownClients?: any[] | null },
+  // knownCities : villes dont knownClients contient TOUS les clients (sinon recherche Firestore pour cette ville)
+  opts?: { knownClients?: any[] | null; knownCities?: string[] | null },
 ): Promise<Record<string, unknown> & { id: string; trackingId: string }> {
   const trackingId    = generateTrackingId()
   // ⚠️ VALIDATION DÉSACTIVÉE : Les saisies des aides agents et portail client ne nécessitent plus de validation par le chef
@@ -247,8 +322,9 @@ export async function createParcel(
   const isLocalDelivery = sameText(sender?.city, receiver?.city)
   const hasLocalDeliveryDriver = !!data.deliveryDriverId && isLocalDelivery && !data.chauffeurId
 
-  // Agent PRO : expédition arrive directement en agence de destination
-  const isAgentProDirectShipment = data.agentRole === 'agentpro' && !isLocalDelivery && !data.chauffeurId
+  // Agent PRO : ne saisit plus que les expéditions de SA ville (22/10/2026) → circuit normal comme le chef d'agence.
+  // (Avant : expédition d'une autre ville créée directement « Arrivé en agence » à destination.)
+  const isAgentProDirectShipment = false
 
   const initialStatus = data.chauffeurId
     ? 'En transit'
@@ -273,9 +349,12 @@ export async function createParcel(
   const opDate        = data.operationDate
     ? Timestamp.fromDate(new Date(data.operationDate + 'T12:00:00'))
     : serverTimestamp()
-  const historyTs     = data.operationDate
+  // Les dates de classement et d'encaissement gardent la journée d'opération choisie.
+  const operationTs   = data.operationDate
     ? new Date(data.operationDate + 'T12:00:00').toISOString()
     : new Date().toISOString()
+  // La journée choisie sert au classement, jamais à fabriquer l'heure d'un événement.
+  const historyTs     = new Date().toISOString()
   const parcel = {
     trackingId,
     sender:               data.sender,
@@ -305,10 +384,9 @@ export async function createParcel(
     }],
     photoUrl:             '',
     createdAt:            opDate,
-    // ⚠️ 'T12:00:00' obligatoire : new Date('2026-09-09') (date seule) est interprété comme
-    // minuit UTC = 1h locale au Maroc, ce qui bascule à tort le colis sur la VEILLE une fois
-    // passé dans la règle 8h→6h (voir calculateWorkDate). Même ancrage midi que opDate/historyTs
-    // ci-dessus, sinon workDate se retrouvait décalé d'un jour par rapport à createdAt.
+    // createdAt garde la date de classement utilisée par les requêtes existantes.
+    // L'heure réelle d'enregistrement est dans history[0].timestamp ; midi sert uniquement
+    // à ancrer la journée choisie, sans décalage dans les filtres de journée d'opération.
     workDate:             calculateWorkDate(
       data.operationDate ? `${data.operationDate}T12:00:00` : historyTs
     ), // 📅 Date de travail (gère sessions de nuit)
@@ -327,11 +405,11 @@ export async function createParcel(
     originCity:           sender.city        || null,
     createdByCity:        sender.city        || null,  // Ne change JAMAIS (même après retour)
     shipmentLoadedAt:     loadedAt,
-    destinationArrivedAt: isAgentProDirectShipment ? historyTs : null,
+    destinationArrivedAt: isAgentProDirectShipment ? operationTs : null,
     visibleInDestinationAgency: !!data.chauffeurId || hasLocalDeliveryDriver || isAgentProDirectShipment,
     destinationAgentId:   hasLocalDeliveryDriver ? (data.agentId || null) : null,
     destinationAgentName: hasLocalDeliveryDriver ? (data.agentName || null) : null,
-    deliveryAssignedAt:   hasLocalDeliveryDriver ? historyTs : null,
+    deliveryAssignedAt:   hasLocalDeliveryDriver ? operationTs : null,
     deliveryAssignedBy:   hasLocalDeliveryDriver ? (data.agentName || '') : '',
     deliveryMethod:       data.deliveryMethod || 'domicile',  // 🚉 Mode de livraison (gare ou domicile)
     codStatus:            hasCod ? 'pending' : null,
@@ -344,9 +422,15 @@ export async function createParcel(
     codRemisBy:           null,
     portType:             data.portType   || 'port_paye',
     portStatus:           (data.portType === 'port_paye' || !data.portType) ? 'collected' : null,  // Port payé = déjà collecté au ramassage
-    portCollectedAt:      (data.portType === 'port_paye' || !data.portType) ? historyTs : null,
+    portCollectedAt:      (data.portType === 'port_paye' || !data.portType) ? operationTs : null,
     portCollectedBy:      (data.portType === 'port_paye' || !data.portType) ? (data.agentName || '') : null,
     portCollectedById:    (data.portType === 'port_paye' || !data.portType) ? (data.agentId || null) : null,
+    // 🏬 Port payé encaissé AU GUICHET : l'argent est chez la personne en gare de la ville (config/guichetHolders) —
+    // il se reçoit dans SA carte. Ville sans détenteur : « En gare - <ville> » comme avant (23/10/2026).
+    ...(() => {
+      const holder = (data.portType === 'port_paye' || !data.portType) && !data.pickupDriverId ? guichetHolderForCity(String(sender?.city || '')) : null
+      return holder ? { portGuichetHolderId: holder.id, portGuichetHolderName: holder.name } : {}
+    })(),
     clientId:             data.clientId   || null,
     clientName:           data.clientName || null,
     receiverClientId:     data.receiverClientId || null,
@@ -376,6 +460,8 @@ export async function createParcel(
     senderNameNorm:       normName(sender?.name),
     receiverNameNorm:     normName(receiver?.name),
     hasRetourBL:          data.hasRetourBL === true,  // ⭐ Retour BL obligatoire
+    // 🗄️ Toujours présent : les requêtes « En gare » filtrent côté serveur sur isArchived == false
+    isArchived:           false,
   }
   // ⚡ Seule l'écriture de l'expédition est attendue (accusé serveur = colis réellement enregistré).
   // Les écritures annexes ci-dessous partent EN ARRIÈRE-PLAN : elles ajoutaient jusqu'à 5 allers-
@@ -398,7 +484,7 @@ export async function createParcel(
   }
 
   // NOUVELLE POLITIQUE : Toujours créer le client destinataire (pas d'attente de validation)
-  ensureReceiverClientForAgency(parcel, ref.id, opts?.knownClients)
+  ensureReceiverClientForAgency(parcel, ref.id, opts?.knownClients, opts?.knownCities)
     .then(receiverClientId => (receiverClientId ? updateDoc(ref, { receiverClientId }) : undefined))
     .catch((err: any) => {
       if (err?.code !== 'permission-denied') {
@@ -411,6 +497,63 @@ export async function createParcel(
 }
 
 // Mise à jour de statut — non bloquant sur la géolocalisation
+/**
+ * 📦 Port dû ou COD COLLECTÉ alors que l'expédition est encore « En cours de livraison » : l'argent encaissé prouve
+ * la livraison → passage AUTOMATIQUE à « Livré » (même écriture que le bouton « Livrer » : statut, date de livraison,
+ * ligne d'historique). Relit le statut actuel : rien n'est fait si elle n'est plus « En cours de livraison ».
+ * Retourne les champs modifiés (mise à jour immédiate de l'écran) ou null.
+ */
+export async function markDeliveredAfterCollect(p: any, byName: string, what: string): Promise<Record<string, any> | null> {
+  if (!p?.id) return null
+  const snap = await getDoc(doc(db, 'parcels', p.id))
+  const current: any = snap.exists() ? snap.data() : null
+  // « Arrivé en agence » aussi : remise au guichet / en gare, l'encaissement prouve la livraison (pas de collecte sans livraison)
+  if (!current || (current.status !== 'En cours de livraison' && current.status !== 'Arrivé en agence')) return null
+  const deliveredAt = new Date().toISOString()
+  await updateParcelStatus(p.id, 'Livré', {
+    deliveredAt,
+    note: `${AUTO_DELIVERED_NOTE} (${what})${current.deliveryDriverName ? ` — ${current.deliveryDriverName}` : ''} par ${byName}`,
+  })
+  return { status: 'Livré', deliveredAt }
+}
+
+export const AUTO_DELIVERED_NOTE = 'Marqué livré automatiquement après collecte'
+/** 💰 Collecte (port dû / COD) possible seulement si l'expédition est livrée ou se livre à l'instant : on peut livrer sans
+ *  collecter, mais jamais collecter sans livrer. La collecte fait passer « Livré » (markDeliveredAfterCollect). */
+export const COLLECT_ALLOWED_STATUSES = ['Livré', 'En cours de livraison', 'Arrivé en agence']
+export function assertCollectAllowedStatus(p: any) {
+  if (p && !COLLECT_ALLOWED_STATUSES.includes(p.status)) {
+    throw new Error(`${p.senderNic || p.sender?.nic || p.trackingId || ''} : statut « ${p.status || '—'} » — collecte impossible (l'expédition doit être livrée ou en cours de livraison).`)
+  }
+}
+/**
+ * ↩️ Inverse de markDeliveredAfterCollect : la collecte (port dû / COD) vient d'être ANNULÉE. Si la livraison avait été
+ * mise automatiquement par une collecte (dernière ligne « Livré » de l'historique) et que plus rien n'est encaissé,
+ * l'expédition revient « En cours de livraison » (livreur assigné) ou « Arrivé en agence », SANS date de livraison.
+ * Une livraison faite autrement (livreur, bouton « Livré »…) n'est jamais touchée. Retourne les champs modifiés ou null.
+ */
+export async function undoAutoDeliveryAfterUncollect(parcelId: string, byName: string): Promise<Record<string, any> | null> {
+  if (!parcelId) return null
+  const ref = doc(db, 'parcels', parcelId)
+  const snap = await getDoc(ref)
+  const cur: any = snap.exists() ? snap.data() : null
+  if (!cur || cur.status !== 'Livré') return null
+  // 🚫 Demande de l'admin (20/10/2026) : annuler une collecte NE TOUCHE PLUS au statut « Livré » (on peut être livré
+  // sans collecte). Fonction gardée (appelée par toutes les annulations) mais sans effet.
+  if (cur.status === 'Livré') return null
+  const portStillCollected = cur.portStatus === 'collected' || cur.portStatus === 'received'
+  const codStillCollected = !!cur.codCollectedAt || (cur.codStatus && cur.codStatus !== 'pending')
+  if (portStillCollected || codStillCollected) return null
+  const status = cur.deliveryDriverId ? 'En cours de livraison' : 'Arrivé en agence'
+  const now = new Date().toISOString()
+  await updateDoc(ref, {
+    status,
+    deliveredAt: deleteField(),
+    history: arrayUnion({ status, timestamp: now, note: `Livraison automatique annulée (collecte annulée) par ${byName || 'utilisateur'}` }),
+  })
+  return { status, deliveredAt: null }
+}
+
 export async function updateParcelStatus(parcelId: string, status: string, extra: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const parcelRef = doc(db, 'parcels', parcelId)
 
@@ -431,11 +574,21 @@ export async function updateParcelStatus(parcelId: string, status: string, extra
     historyEntry[key] = value
   })
 
+  // Check the latest document inside the transaction so a concurrent arrival cannot be overwritten.
+  const uidNow = auth.currentUser?.uid
+  const statusActor = uidNow ? await deliveryUser(uidNow) : null
+
+  // 👑 L'admin peut tout corriger, y compris livrer une expédition retournée (et en changer les villes)
+  const isAdminUser = statusActor?.role === 'admin'
+
   // 🔒 Transaction pour éviter race conditions sur circuit retour
   await runTransaction(db, async tx => {
     const parcelSnap = await tx.get(parcelRef)
     if (parcelSnap.exists()) {
       const current = parcelSnap.data() as any
+      const statusBlocked = deliveryStatusChangeBlock(statusActor, current, status)
+        || (status === 'Livré' && statusActor ? deliveryCityBlock(statusActor.role, statusActor.city, current) : null)
+      if (statusBlocked) throw new Error(statusBlocked)
 
       // ✅ RÈGLE 1 DÉSACTIVÉE: L'Admin peut modifier le statut même si le colis est livré
       // if (isDeliveredStatus(current.status) && !isDeliveredStatus(status)) {
@@ -443,7 +596,7 @@ export async function updateParcelStatus(parcelId: string, status: string, extra
       // }
 
       // RÈGLE 2: Un colis dans le circuit retour ne peut JAMAIS être marqué "Livré"
-      if (isInReturnCircuit(current) && status === 'Livré') {
+      if (isInReturnCircuit(current) && status === 'Livré' && !isAdminUser) {
         throw new Error('Un colis retourne ne peut pas etre marque comme Livre. Utilisez "Retour finalise" pour terminer le retour.')
       }
     }
@@ -597,6 +750,32 @@ export function parcelSearchFields(sender?: any, receiver?: any): Record<string,
  * et modal de confirmation après saisie). Ne contient QUE les champs réellement modifiés,
  * afin de rester dans la liste autorisée par firestore.rules (parcelBonEditFields).
  */
+/**
+ * 💵 Changement de type de port avec un encaissement cohérent, comme à la création (createParcel) : une expédition
+ * corrigée EN port payé est encaissée au guichet ; corrigée HORS port payé, l'encaissement est retiré tant que
+ * l'argent n'a pas été remis au chef d'exploitation. Avant : 1061664 (corrigée en port payé) restait sans
+ * portStatus et sortait de la caisse (écart de 20 DH Admin / Marrakech).
+ */
+export function portTypeChangeFields(parcel: any, nextType: string, modifier?: { uid?: string | null, name?: string }, opts: { allowCollected?: boolean } = {}): Record<string, any> {
+  // 🔒 Port déjà encaissé : changement de type refusé (utils/portTypeGuard) — sauf correction par l'admin
+  const block = opts.allowCollected ? null : portTypeChangeBlock(parcel, nextType)
+  if (block) throw new Error(block)
+  const out: Record<string, any> = { portType: nextType }
+  const collected = parcel.portStatus === 'collected' || parcel.portStatus === 'received'
+  if (nextType === 'port_paye' && !collected && !parcel.portPayeMethod) {
+    out.portStatus = 'collected'
+    out.portCollectedAt = new Date().toISOString()
+    out.portCollectedBy = modifier?.name || 'Agent'
+    out.portCollectedById = modifier?.uid || null
+  } else if (parcel.portType === 'port_paye' && nextType !== 'port_paye' && parcel.portStatus === 'collected' && !parcel.portPayeExpReceivedAt) {
+    out.portStatus = null
+    out.portCollectedAt = null
+    out.portCollectedBy = null
+    out.portCollectedById = null
+  }
+  return out
+}
+
 export function buildParcelCorrectionPatch(
   parcel: any,
   next: {
@@ -692,7 +871,9 @@ export function buildParcelCorrectionPatch(
     if (parcel.codStatus === 'pending') patch.codStatus = null
   }
 
-  if (next.portType !== undefined && next.portType && next.portType !== (parcel.portType || '')) patch.portType = next.portType
+  if (next.portType !== undefined && next.portType && next.portType !== (parcel.portType || '')) {
+    Object.assign(patch, portTypeChangeFields(parcel, next.portType, modifier))
+  }
   if (next.fragile !== undefined && !!next.fragile !== !!parcel.fragile) patch.fragile = !!next.fragile
   if (next.notes !== undefined && txt(next.notes) !== txt(parcel.notes)) patch.notes = txt(next.notes)
 
@@ -703,7 +884,7 @@ export function buildParcelCorrectionPatch(
 export function describeParcelSaveError(err: any, parcel?: any): string {
   if (err?.code === 'permission-denied') {
     if (parcel?.shipmentLoadedAt) {
-      return "Modification refusée : ce colis a déjà été chargé dans un camion. Seul l'administrateur peut encore le modifier."
+      return "Modification refusée : cette expédition a déjà été chargée dans un camion. L'administrateur peut l'autoriser dans Admin › Permissions › « Expéditions modifiables » (expéditions créées et / ou reçues par votre agence ; prix, COD et type de port selon les champs cochés)."
     }
     if (parcel?.status === 'Livré' || parcel?.status === LEGACY_DELIVERED_STATUS) {
       return "Modification refusée : ce colis est déjà livré. Seul le chef d'agence ou l'administrateur peut le corriger."
@@ -742,6 +923,10 @@ export async function updateParcel(parcelId: string, data: Partial<Parcel> & Rec
   }
 }
 export async function markParcelAsReturned(parcel: any, extra: any = {}) {
+  // 🔒 COD déjà encaissé : retour réservé à l'admin (même garde dans firestore.rules → returnNotCollected)
+  if (!extra.byAdmin && (parcel?.codCollectedAt || !['pending', '', null, undefined].includes(parcel?.codStatus))) {
+    throw new Error(`${parcel?.senderNic || parcel?.trackingId || 'Expédition'} : la valeur (COD) est déjà encaissée — le retour doit être fait par l'admin.`)
+  }
   const now = new Date().toISOString()
   const newSender   = parcel.receiver   || {}
   const newReceiver = parcel.sender     || {}
@@ -1160,7 +1345,15 @@ export function subscribeAllParcels(callback: any, onError: (err?: any) => void 
   // includeMetadataChanges: true — sinon Firestore ne redéclenche pas de callback quand le
   // cache contenait déjà les mêmes documents que le serveur, et fromCache resterait bloqué à
   // true à tort (même piège que subscribeAgencyParcels).
+  // ⚡ Signal sans aucun changement (seules les métadonnées d'une écriture confirmée) et même état cache / serveur :
+  // ignoré — sinon chaque pointage / écriture refaisait 2 à 3 fois la liste et tous les totaux (même filtre que
+  // subscribeAgencyParcels). Le 1er signal et tout passage cache → serveur sont toujours transmis.
+  let delivered = false
+  let lastFromCache: boolean | null = null
   return onSnapshot(q, { includeMetadataChanges: true }, snap => {
+    if (delivered && snap.docChanges().length === 0 && snap.metadata.fromCache === lastFromCache) return
+    delivered = true
+    lastFromCache = snap.metadata.fromCache
     const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
     const lastSnap = snap.docs[snap.docs.length - 1] || null
     callback(docs, lastSnap, snap.metadata.fromCache)
@@ -1177,6 +1370,7 @@ export function subscribeAllParcelsWithDateFilter(
     dateFrom?: Date | null  // Date de début (inclusive)
     dateTo?: Date | null    // Date de fin (inclusive)
     lite?: boolean          // 🪶 lire parcelsLite (version allégée) au lieu de parcels
+    whereIn?: { field: string; values: string[] } | null // filtre serveur supplémentaire (ex. COD chèque / traite)
   } = {}
 ) {
   const {
@@ -1184,10 +1378,12 @@ export function subscribeAllParcelsWithDateFilter(
     dateFrom = null,
     dateTo = null,
     lite = false,
+    whereIn = null,
   } = options
 
   // Construction de la requête avec filtres de date
   const queryConstraints: any[] = []
+  if (whereIn) queryConstraints.push(where(whereIn.field, 'in', whereIn.values))
 
   // ⚡ FILTRE DE DATE PRIORITAIRE: appliqué au niveau Firestore, pas en mémoire
   if (dateFrom) {
@@ -1212,7 +1408,15 @@ export function subscribeAllParcelsWithDateFilter(
     pageSize,
   })
 
+  // ⚡ Signal sans aucun changement (seules les métadonnées d'une écriture confirmée) et même état cache / serveur :
+  // ignoré — sinon chaque pointage / écriture refaisait 2 à 3 fois la liste et tous les totaux (même filtre que
+  // subscribeAgencyParcels). Le 1er signal et tout passage cache → serveur sont toujours transmis.
+  let delivered = false
+  let lastFromCache: boolean | null = null
   return onSnapshot(q, { includeMetadataChanges: true }, snap => {
+    if (delivered && snap.docChanges().length === 0 && snap.metadata.fromCache === lastFromCache) return
+    delivered = true
+    lastFromCache = snap.metadata.fromCache
     const docs = snap.docs.map(d => ({ id: d.id, ...d.data() }))
     const lastSnap = snap.docs[snap.docs.length - 1] || null
     callback(docs, lastSnap, snap.metadata.fromCache)
@@ -1227,6 +1431,7 @@ export async function loadMoreParcelsWithDateFilter(
     dateFrom?: Date | null
     dateTo?: Date | null
     lite?: boolean // 🪶 parcelsLite — doit correspondre à la collection du curseur lastDoc
+    whereIn?: { field: string; values: string[] } | null // même filtre que la page temps réel du curseur
   } = {}
 ) {
   const {
@@ -1234,6 +1439,7 @@ export async function loadMoreParcelsWithDateFilter(
     dateFrom = null,
     dateTo = null,
     lite = false,
+    whereIn = null,
   } = options
 
   if (!lastDoc) {
@@ -1242,6 +1448,7 @@ export async function loadMoreParcelsWithDateFilter(
 
   try {
     const queryConstraints: any[] = []
+    if (whereIn) queryConstraints.push(where(whereIn.field, 'in', whereIn.values))
 
     if (dateFrom) {
       queryConstraints.push(where('createdAt', '>=', Timestamp.fromDate(dateFrom)))
@@ -1492,6 +1699,35 @@ export async function getMoreAgentParcels(agentId: any, beforeTimestamp: any, pa
   return { parcels: result, hasMore: s1.docs.length === pageSize || s2.docs.length === pageSize }
 }
 
+/**
+ * 📋 « Mes saisies » (aide agent) : expéditions SAISIES par cet utilisateur sur une tranche
+ * [dateFrom, dateTo] (journée ou mois), en TEMPS RÉEL.
+ * On filtre sur aideAgentId (et non agentId) : quand le chef valide une saisie, agentId devient
+ * celui du chef — aideAgentId, lui, garde toujours l'aide qui a saisi (anciennes saisies comprises).
+ * Requête bornée par la tranche (index aideAgentId ASC + createdAt DESC, sur parcels ET parcelsLite).
+ */
+export function subscribeMyEntries(
+  aideId: string,
+  dateFrom: Date,
+  dateTo: Date,
+  callback: (rows: any[], meta: { fromCache: boolean }) => void,
+  onError: (err?: any) => void = () => {},
+  lite = true,
+  // Repli (index aideAgentId en construction) : agentId — sans les saisies déjà validées par le chef
+  field: 'aideAgentId' | 'agentId' = 'aideAgentId',
+) {
+  const q = query(
+    collection(db, lite ? PARCELS_LITE_COLLECTION : 'parcels'),
+    where(field, '==', aideId),
+    where('createdAt', '>=', Timestamp.fromDate(dateFrom)),
+    where('createdAt', '<=', Timestamp.fromDate(dateTo)),
+    orderBy('createdAt', 'desc'),
+  )
+  return onSnapshot(q, snap => {
+    callback(snap.docs.map(d => ({ id: d.id, ...d.data() })), { fromCache: snap.metadata.fromCache })
+  }, onError)
+}
+
 // Counts précis pour le home tab chef_agence — utilise getCountFromServer (0 document téléchargé)
 export async function getAccurateAgencyStats(city: any) {
   const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0)
@@ -1579,6 +1815,8 @@ export function subscribeAgencyParcels(
   // que le serveur, Firestore ne redéclenche PAS de callback lors de la confirmation serveur
   // (snapshot "identique" ignoré par défaut), et fromCache resterait bloqué à true à tort.
   const unsub1 = onSnapshot(q1, { includeMetadataChanges: true }, snap => {
+    // ⚡ Métadonnées seules (écriture locale confirmée) et même état cache/serveur : rien à refaire
+    if (snap.docChanges().length === 0 && snap.metadata.fromCache === fromCache1 && lastCreatedDoc !== null) return
     // 🗄️ Filtrer les archivés côté client
     created = (snap.docs
       .map(d => ({ id: d.id, ...d.data() })) as any[])
@@ -1589,6 +1827,7 @@ export function subscribeAgencyParcels(
     merge()
   }, onError)
   const unsub2 = onSnapshot(q2, { includeMetadataChanges: true }, snap => {
+    if (snap.docChanges().length === 0 && snap.metadata.fromCache === fromCache2 && lastArrivedDoc !== null) return
     // 🗄️ Filtrer les archivés côté client
     arrived = (snap.docs
       .map(d => ({ id: d.id, ...d.data() })) as any[])
@@ -1616,7 +1855,7 @@ export function subscribeAgencyParcels(
 // - meta.complete = toutes les pages sont confirmées par le serveur et la dernière est incomplète.
 export function subscribeAgencyParcelsFull(
   city: string,
-  opts: { dateFrom?: Date | null; dateTo?: Date | null; pageSize?: number; includeArchived?: boolean; lite?: boolean },
+  opts: { dateFrom?: Date | null; dateTo?: Date | null; pageSize?: number; includeArchived?: boolean; lite?: boolean; liteLive?: boolean; live?: boolean; liveDays?: number },
   onData: (parcels: any[], meta: { loaded: number; complete: boolean; fromCache: boolean }) => void,
   onError: (err?: any) => void = () => {}
 ): () => void {
@@ -1626,14 +1865,26 @@ export function subscribeAgencyParcelsFull(
   // - Journées passées : lecture ponctuelle (getAgencyParcelsDaySlice, paginée jusqu'à épuisement).
   const pageSize = opts.pageSize ?? 2000
   const includeArchived = opts.includeArchived ?? true
-  const lite = opts.lite ?? false // 🪶 parcelsLite (onglet Expéditions) ; Caisse / Chef d'exploitation : parcels
+  const lite = opts.lite ?? false // 🪶 parcelsLite pour les journées passées (onglet Expéditions, pages de caisse)
+  // Journée(s) en cours : parcelsLite aussi (Expéditions) ou expéditions COMPLÈTES (pages de caisse : liteLive=false,
+  // temps réel exact là où se passe l'activité)
+  const liteLive = opts.liteLive ?? lite
   const start = opts.dateFrom ?? new Date(Date.now() - 45 * 24 * 60 * 60 * 1000)
   const end = opts.dateTo ?? new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)
-  const FIELDS = ['originCity', 'destinationCity'] as const
+  // city = ALL_CITIES ('*') : TOUTES les villes (Admin « Expéditions » avec une période) — une seule requête par journée
+  const allCities = city === ALL_CITIES
+  const FIELDS: readonly LiteDayField[] = allCities ? ['createdAt'] : ['originCity', 'destinationCity']
   const slices = buildDaySlices(start, end)
   const today = opDayOf(new Date())
-  const liveSlices = slices.filter(sl => sl.day >= today)
-  const pastSlices = slices.filter(sl => sl.day < today)
+  // live : TOUTES les journées en temps réel (Chef d'exploitation : une collecte / réception faite par le chef
+  // d'agence ou un livreur sur une journée passée doit s'afficher sans recharger la page)
+  const allLive = opts.live ?? false
+  // liveDays : seulement les N DERNIÈRES journées en temps réel, les plus anciennes lues une fois (Admin « Expéditions » :
+  // « Ce mois » toutes villes = ~20 000 expéditions — tout en temps réel alourdissait la page)
+  const liveFrom = opts.liveDays && opts.liveDays > 0 ? shiftDay(today, -(opts.liveDays - 1)) : null
+  const isLiveDay = (day: string) => (liveFrom ? day >= liveFrom : allLive || day >= today)
+  const liveSlices = slices.filter(sl => isLiveDay(sl.day))
+  const pastSlices = slices.filter(sl => !isLiveDay(sl.day))
 
   let stopped = false
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -1644,7 +1895,9 @@ export function subscribeAgencyParcelsFull(
   let pastDone = pastSlices.length === 0
   const unsubs: (() => void)[] = []
 
+  let settled = false // chargement initial livré (complet) : ensuite, au plus une mise à jour par seconde
   const emitNow = () => {
+    timer = undefined
     if (stopped) return
     lastEmit = Date.now()
     const map = new Map<string, any>()
@@ -1652,28 +1905,38 @@ export function subscribeAgencyParcelsFull(
     liveDocs.forEach(list => list.forEach(p => map.set(p.id, p)))
     const all = [...map.values()].filter(p => includeArchived || !p.isArchived)
     const liveOk = [...liveServer.values()].every(Boolean) && liveServer.size === liveSlices.length * FIELDS.length
+    if (liveOk && pastDone) settled = true
     onData(sortByCreatedDesc(all), { loaded: all.length, complete: liveOk && pastDone, fromCache: !liveOk })
   }
-  // Au plus une mise à jour / 800 ms pendant la lecture des jours passés (chaque mise à jour
-  // relance les calculs de la page), immédiate (60 ms) pour le temps réel et à la fin.
+  // Chargement initial : au plus une mise à jour / 800 ms pendant la lecture des jours passés
+  // (chaque mise à jour relance les calculs de la page), immédiate (60 ms) pour le temps réel et à la fin.
+  // ⚡ Ensuite (settled) : au plus UNE mise à jour par seconde, la dernière toujours livrée
+  // (utils/liveThrottle) — avant, chaque modification d'une expédition relançait tous les calculs
+  // de la page 60 ms après, et deux fois par écriture locale.
   const emit = (urgent = false) => {
+    const plan = planLiveEmit({ settled, timerPending: timer !== undefined, lastEmit, now: Date.now(), urgent })
+    if (plan.action === 'keep') return
     clearTimeout(timer)
-    const wait = urgent ? 60 : Math.max(60, 800 - (Date.now() - lastEmit))
-    timer = setTimeout(emitNow, wait)
+    timer = setTimeout(emitNow, plan.delay)
   }
 
   liveSlices.forEach(sl => FIELDS.forEach(field => {
     const key = sl.day + '|' + field
     liveServer.set(key, false)
-    const q = query(parcelsSource(lite),
-      where(field, '==', city),
+    const q = query(parcelsSource(liteLive),
+      ...(allCities ? [] : [where(field, '==', city)]),
       where('createdAt', '>=', Timestamp.fromDate(sl.start)),
       where('createdAt', sl.endInclusive ? '<=' : '<', Timestamp.fromDate(sl.end)),
       orderBy('createdAt', 'desc'))
     unsubs.push(onSnapshot(q, { includeMetadataChanges: true }, snap => {
       if (stopped) return
+      const server = !snap.metadata.fromCache
+      // ⚡ Rien de changé (ex. écriture locale confirmée par le serveur : seul hasPendingWrites
+      // bascule) → pas de nouvelle liste ni de recalcul. docChanges() ignore les changements de
+      // métadonnées seules ; l'état cache/serveur, lui, est vérifié à part (il compte pour `complete`).
+      if (liveDocs.has(key) && snap.docChanges().length === 0 && liveServer.get(key) === server) return
       liveDocs.set(key, snap.docs.map(d => ({ id: d.id, ...d.data() })))
-      liveServer.set(key, !snap.metadata.fromCache)
+      liveServer.set(key, server)
       emit(true)
     }, err => { if (!stopped) onError(err) }))
   }))
@@ -1683,8 +1946,17 @@ export function subscribeAgencyParcelsFull(
     const worker = async () => {
       while (next < pastSlices.length && !stopped) {
         const sl = pastSlices[next++]
-        const docs = (await Promise.all(FIELDS.map(field =>
-          getAgencyParcelsDaySlice(city, field, sl.start, sl.end, sl.endInclusive, null, pageSize, lite)))).flat()
+        const readDay = async () => (await Promise.all(FIELDS.map(field => lite
+          ? getLiteDaySliceCached(city, field, sl, pageSize)
+          : getAgencyParcelsDaySlice(city, field, sl.start, sl.end, sl.endInclusive, null, pageSize, lite)))).flat()
+        // Journée en échec (réseau coupé malgré les relances) : relue 2 fois encore (3 s d'écart) avant d'abandonner
+        let docs: any[] = []
+        for (let attempt = 0; ; attempt++) {
+          try { docs = await readDay(); break } catch (err) {
+            if (attempt >= 2 || stopped) throw err
+            await new Promise(r => setTimeout(r, 3000))
+          }
+        }
         if (stopped) return
         for (const d of docs) pastDocs.push(d)
         emit()
@@ -1702,6 +1974,267 @@ export function subscribeAgencyParcelsFull(
     clearTimeout(timer)
     unsubs.forEach(u => u())
   }
+}
+
+// 🧠 MÉMOIRE DES JOURNÉES PASSÉES (parcelsLite) — une période déjà chargée, puis une période incluse ou qui la
+// recoupe : les journées déjà lues ne sont PAS relues. Clé : ville|champ|journée d'opération (journée entière,
+// découpée ensuite aux bornes demandées), partagée par toutes les pages (Caisse Agence, Collecte du soir, Expéditions),
+// plus « *|createdAt|journée » = TOUTES les villes (Admin « Port par agence »). Logique pure : utils/liteDayCache.
+// Exactitude, avant chaque réutilisation :
+// 1) RATTRAPAGE : seules les expéditions modifiées depuis la dernière synchronisation (parcelsLite.liteUpdatedAt,
+//    posé par syncParcelLite à chaque changement) sont relues et replacées dans leur journée (y compris un
+//    changement de ville ou un retour). Requêtes limitées aux VILLES présentes en mémoire (départ / arrivée) ;
+//    global seulement si des journées « toutes villes » sont gardées. Trop de changements pour une ville → seules
+//    les journées de CETTE ville sont oubliées (avant : toute la mémoire, ≈ toutes les 2-3 h aux heures chargées).
+// 2) COMPTAGE serveur (getCountFromServer, 1 lecture par 1 000 entrées) d'une journée réutilisée plus de 10 min
+//    après sa lecture / dernière vérification : une expédition sortie de la journée sans passer par le
+//    rattrapage (supprimée, ou partie vers une ville absente de la mémoire) → journée relue.
+// 💾 Les journées passées sont conservées entre deux chargements (IndexedDB, firebase/liteDayStore) : au
+// démarrage elles sont rechargées, rattrapées et vérifiées (comptage) avant toute réutilisation. Jamais la
+// journée en cours. Tout échec IndexedDB → lecture réseau normale.
+const LITE_DAY_CACHE = new Map<string, Map<string, any>>()
+const LITE_DAY_CACHE_MAX = 900 // journées × champs × villes gardées au plus (les plus anciennes sortent)
+const LITE_SYNC_MARGIN_MS = 10 * 60 * 1000 // marge (décalage d'horloge, délai de la Cloud Function)
+const LITE_DELTA_MAX = 2000
+const LITE_VALIDATE_TTL_MS = 10 * 60 * 1000
+const LITE_HYDRATE_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000 // mémoire enregistrée plus ancienne : rattrapage trop lourd → ignorée
+const LITE_VALIDATED = new Map<string, number>() // clé → dernière lecture / vérification (0 : à vérifier)
+let liteSyncedAt = 0
+let liteSyncing: Promise<void> | null = null
+let liteLastSyncRun = 0 // une seule synchronisation par chargement (les journées d'une période arrivent ensemble)
+// false : index parcelsLite (ville, liteUpdatedAt) pas encore déployés → rattrapage global (ancien fonctionnement)
+let litePerCityCatchUp = true
+
+type LiteDaySlice = { start: Date; end: Date; endInclusive: boolean; day: string }
+
+// ── Persistance (IndexedDB) : clés à réécrire / à effacer au prochain enregistrement
+const litePersistDirty = new Set<string>()
+const litePersistRemoved = new Set<string>()
+let litePersistTimer: ReturnType<typeof setTimeout> | undefined
+let liteHydrating: Promise<void> | null = null
+// Validité enregistrée (onglet + synchronisation) correspondant à la version EN MÉMOIRE d'une journée
+const litePersistTag = new Map<string, PersistedLiteTag>()
+const LITE_SESSION = Math.random().toString(36).slice(2) + Date.now().toString(36) // cet onglet
+
+function forgetLiteKeys(keys: string[]) {
+  for (const k of keys) { LITE_VALIDATED.delete(k); litePersistDirty.delete(k); litePersistRemoved.add(k) }
+}
+function dropLiteCity(city: string) { forgetLiteKeys(dropCityEntries(LITE_DAY_CACHE, city)) }
+function dropLiteKey(key: string) { if (LITE_DAY_CACHE.delete(key)) forgetLiteKeys([key]) }
+
+/** Expéditions modifiées depuis `since` (toutes villes, ou d'une ville au départ / à l'arrivée). */
+async function readLiteChanges(field: 'originCity' | 'destinationCity' | null, city: string | null, since: number) {
+  const snap = await getDocsServerFirst(query(collection(db, PARCELS_LITE_COLLECTION),
+    ...(field ? [where(field, '==', city)] : []),
+    where('liteUpdatedAt', '>', Timestamp.fromMillis(since)),
+    orderBy('liteUpdatedAt'), limit(LITE_DELTA_MAX)))
+  return { docs: snap.docs.map(d => ({ id: d.id, ...d.data() } as any)), overflow: snap.size >= LITE_DELTA_MAX }
+}
+
+function syncLiteDayCache(): Promise<void> {
+  if (!LITE_DAY_CACHE.size) return Promise.resolve()
+  if (liteSyncing) return liteSyncing
+  if (Date.now() - liteLastSyncRun < 5000) return Promise.resolve()
+  liteSyncing = (async () => {
+    const startedAt = Date.now()
+    const since = liteSyncedAt - LITE_SYNC_MARGIN_MS
+    try {
+      const { cities, hasAllCities } = citiesInCache(LITE_DAY_CACHE.keys())
+      const changed: any[] = []
+      // Rattrapage global (toutes villes) : vrai = complet, faux = trop de changements
+      const globalCatchUp = async () => {
+        const r = await readLiteChanges(null, null, since)
+        if (r.overflow) return false
+        for (const p of r.docs) changed.push(p)
+        return true
+      }
+      let globalDone = false
+      if (hasAllCities) {
+        try { globalDone = await globalCatchUp() } catch (err) { console.warn('Mémoire des journées : rattrapage global impossible', err) }
+        // Journées « toutes villes » non rattrapées → oubliées ; les journées par ville sont rattrapées ci-dessous
+        if (!globalDone) dropLiteCity(ALL_CITIES)
+      }
+      if (!globalDone && cities.length) {
+        const lost = new Set<string>()
+        if (litePerCityCatchUp) {
+          await Promise.all(cities.map(async city => {
+            try {
+              const [o, d] = await Promise.all([readLiteChanges('originCity', city, since), readLiteChanges('destinationCity', city, since)])
+              for (const p of o.docs) changed.push(p)
+              for (const p of d.docs) changed.push(p)
+              if (o.overflow || d.overflow) lost.add(city)
+            } catch (err: any) {
+              if (err?.code === 'failed-precondition') litePerCityCatchUp = false // index absent
+              else console.warn(`Mémoire des journées : rattrapage ${city} impossible`, err)
+              lost.add(city)
+            }
+          }))
+        }
+        if (!litePerCityCatchUp) {
+          // Index par ville pas encore déployés : rattrapage global (comme avant)
+          changed.length = 0
+          lost.clear()
+          let ok = false
+          try { ok = await globalCatchUp() } catch (err) { console.warn('Mémoire des journées : rattrapage global impossible', err) }
+          if (!ok) cities.forEach(c => lost.add(c))
+        }
+        lost.forEach(dropLiteCity)
+      }
+      applyChangedParcels(LITE_DAY_CACHE, changed).forEach(k => litePersistDirty.add(k))
+      liteSyncedAt = startedAt
+      liteLastSyncRun = Date.now()
+    } catch (err) {
+      console.warn('Mémoire des journées : synchronisation impossible, relecture complète', err)
+      forgetLiteKeys([...LITE_DAY_CACHE.keys()])
+      LITE_DAY_CACHE.clear()
+    } finally {
+      liteSyncing = null
+      scheduleLitePersist()
+    }
+  })()
+  return liteSyncing
+}
+
+/** Le nombre d'expéditions de la journée en mémoire est-il celui du serveur ? (comptage, sans téléchargement) */
+async function liteDayCountMatches(key: string, size: number): Promise<boolean> {
+  const { city, field, day } = parseLiteDayKey(key)
+  const dStart = opStart(day)
+  const dEnd = new Date(dStart); dEnd.setDate(dEnd.getDate() + 1)
+  const snap = await getCountFromServer(query(collection(db, PARCELS_LITE_COLLECTION),
+    ...(city === ALL_CITIES ? [] : [where(field, '==', city)]),
+    where('createdAt', '>=', Timestamp.fromDate(dStart)),
+    where('createdAt', '<', Timestamp.fromDate(dEnd)),
+    orderBy('createdAt', 'desc')))
+  return snap.data().count === size
+}
+
+/** Recharge (une fois par chargement de page) les journées enregistrées dans IndexedDB. */
+function hydrateLiteDayCache(): Promise<void> {
+  if (liteHydrating) return liteHydrating
+  liteHydrating = (async () => {
+    const saved = await loadPersistedLiteDays()
+    if (!saved || !saved.length) return
+    const today = opDayOf(new Date())
+    const oldest = shiftDay(today, -LITE_PERSIST_MAX_DAYS)
+    const now = Date.now()
+    const dec = { timestamp: (s: number, ns: number) => new Timestamp(s, ns), geoPoint: (a: number, b: number) => new GeoPoint(a, b) }
+    const stale: string[] = []
+    let minSynced = Infinity
+    for (const row of saved) {
+      const { day } = parseLiteDayKey(row.key)
+      // Journée en cours / trop ancienne, ou rattrapage trop lourd (validité de plus de 3 jours) → effacée
+      if (day >= today || day < oldest || now - row.syncedAt > LITE_HYDRATE_MAX_AGE_MS) { stale.push(row.key); continue }
+      if (LITE_DAY_CACHE.has(row.key)) continue
+      const m = new Map<string, any>()
+      for (const enc of row.docs) { const p = decodeLiteValue(enc, dec); if (p?.id) m.set(p.id, p) }
+      LITE_DAY_CACHE.set(row.key, m)
+      LITE_VALIDATED.set(row.key, 0) // vérifiée (comptage serveur) avant la 1re réutilisation
+      litePersistTag.set(row.key, { session: row.session, syncedAt: row.syncedAt })
+      minSynced = Math.min(minSynced, row.syncedAt)
+    }
+    // Rattrapage depuis la plus ancienne validité rechargée (couvre toutes les journées)
+    if (minSynced !== Infinity) {
+      liteSyncedAt = liteSyncedAt ? Math.min(liteSyncedAt, minSynced) : minSynced
+      liteLastSyncRun = 0
+    }
+    if (stale.length) await removePersistedLiteDays(stale)
+  })().catch(err => { console.warn('Mémoire des journées : rechargement IndexedDB impossible', err) })
+  return liteHydrating
+}
+
+function scheduleLitePersist() {
+  if (litePersistTimer || !LITE_DAY_CACHE.size && !litePersistRemoved.size) return
+  litePersistTimer = setTimeout(() => { persistLiteDayCache().catch(() => {}) }, 5000)
+}
+
+/**
+ * Enregistre les journées passées (au plus 45 jours / 120 000 expéditions, jamais la journée en cours) :
+ * journées modifiées réécrites, autres journées seulement « validées » à la dernière synchronisation.
+ */
+async function persistLiteDayCache() {
+  litePersistTimer = undefined
+  if (liteSyncing) await liteSyncing.catch(() => {})
+  const syncedAt = liteSyncedAt
+  if (!syncedAt) return
+  const today = opDayOf(new Date())
+  const keep = new Set(selectPersistableKeys([...LITE_DAY_CACHE].map(([k, m]) => [k, m.size] as [string, number]), today))
+  const dirty = new Set(litePersistDirty)
+  const removed = new Set(litePersistRemoved)
+  litePersistDirty.clear()
+  litePersistRemoved.clear()
+  const requeue = () => { dirty.forEach(k => litePersistDirty.add(k)); removed.forEach(k => litePersistRemoved.add(k)) }
+  const put: { key: string; docs: any[] }[] = []
+  const refresh: { key: string; tag: PersistedLiteTag }[] = []
+  for (const key of keep) {
+    const tag = litePersistTag.get(key)
+    if (!dirty.has(key) && tag) { refresh.push({ key, tag }); continue }
+    const m = LITE_DAY_CACHE.get(key)
+    if (!m) continue
+    put.push({ key, docs: [...m.values()].map(encodeLiteValue) })
+    await new Promise(r => setTimeout(r, 0)) // une journée à la fois : la page reste réactive
+  }
+  // Journées oubliées, ou gardées en mémoire mais hors limites (taille, ancienneté) : effacées d'IndexedDB
+  const remove = [...new Set([...removed, ...[...LITE_DAY_CACHE.keys()].filter(k => !keep.has(k) && litePersistTag.has(k))])]
+  // Mémoire modifiée pendant la préparation (synchronisation) : on recommence avec l'état à jour
+  if (syncedAt !== liteSyncedAt) { requeue(); scheduleLitePersist(); return }
+  if (!put.length && !refresh.length && !remove.length) return
+  const refreshed = await savePersistedLiteDays(LITE_SESSION, syncedAt, put, refresh, remove)
+  if (!refreshed) { requeue(); return }
+  const tag = { session: LITE_SESSION, syncedAt }
+  for (const r of put) if (!litePersistDirty.has(r.key)) litePersistTag.set(r.key, tag)
+  const ok = new Set(refreshed)
+  for (const r of refresh) {
+    if (ok.has(r.key)) litePersistTag.set(r.key, tag)
+    else litePersistTag.delete(r.key) // réécrite par un autre onglet : réécrite par celui-ci au prochain enregistrement
+  }
+  for (const k of remove) litePersistTag.delete(k)
+}
+
+/**
+ * Tranche passée lue en parcelsLite, via la mémoire des journées (journée entière lue une fois, puis découpée).
+ * city = ALL_CITIES ('*') avec field 'createdAt' : toutes les villes (Admin « Port par agence »).
+ */
+export async function getLiteDaySliceCached(
+  city: string, field: LiteDayField, sl: LiteDaySlice, pageSize: number,
+): Promise<any[]> {
+  await hydrateLiteDayCache()
+  await syncLiteDayCache()
+  const key = liteDayKey(city, field, sl.day)
+  let day = LITE_DAY_CACHE.get(key)
+  if (day && Date.now() - (LITE_VALIDATED.get(key) ?? 0) > LITE_VALIDATE_TTL_MS) {
+    const checked = day
+    let ok = false
+    try { ok = await liteDayCountMatches(key, checked.size) } catch (err) { console.warn('Mémoire des journées : vérification impossible, journée relue', err) }
+    if (LITE_DAY_CACHE.get(key) !== checked) day = LITE_DAY_CACHE.get(key) // remplacée entre-temps (autre lecture)
+    else if (ok) LITE_VALIDATED.set(key, Date.now())
+    else { dropLiteKey(key); day = undefined }
+  }
+  if (!day) {
+    const fetchedAt = Date.now()
+    const dStart = opStart(sl.day)
+    const dEnd = new Date(dStart); dEnd.setDate(dEnd.getDate() + 1)
+    // Journée entière + éventuelles marges de la tranche (tranches extrêmes d'une période)
+    const from = new Date(Math.min(dStart.getTime(), sl.start.getTime()))
+    const to = new Date(Math.max(dEnd.getTime(), sl.end.getTime()))
+    const docs = await getAgencyParcelsDaySlice(city, field, from, to, true, null, pageSize, true)
+    day = new Map()
+    for (const p of docs) if (opDayOfParcel(p) === sl.day) day.set(p.id, p)
+    if (!LITE_DAY_CACHE.size) liteSyncedAt = fetchedAt
+    LITE_DAY_CACHE.set(key, day)
+    LITE_VALIDATED.set(key, fetchedAt)
+    litePersistRemoved.delete(key)
+    litePersistDirty.add(key)
+    while (LITE_DAY_CACHE.size > LITE_DAY_CACHE_MAX) dropLiteKey(LITE_DAY_CACHE.keys().next().value as string)
+    scheduleLitePersist()
+    // Marges hors journée (rattachées à une tranche extrême) : renvoyées sans être gardées en mémoire
+    const extra = docs.filter(p => { const d = opDayOfParcel(p); return d !== '' && d !== sl.day })
+    return [...day.values(), ...extra].filter(p => inSlice(p, sl))
+  }
+  return [...day.values()].filter(p => inSlice(p, sl))
+}
+const inSlice = (p: any, sl: { start: Date; end: Date; endInclusive: boolean }) => {
+  const t = createdMs(p)
+  return !isNaN(t) && t >= sl.start.getTime() && (sl.endInclusive ? t <= sl.end.getTime() : t < sl.end.getTime())
 }
 
 // Charger plus de colis pour une agence (pagination)
@@ -1810,15 +2343,31 @@ export async function getMoreAgencyParcels(
   }
 }
 
+// 🌐 Lecture ponctuelle GARANTIE serveur. getDocs renvoie SANS ERREUR le cache local quand le navigateur a
+// perdu le contact avec Firestore (réseau instable, PC sorti de veille…) — pour une journée jamais lue, ce cache
+// est VIDE : la page affichait une liste vide / des chiffres à 0, « réparés » seulement en revenant sur la page.
+// Ici une réponse venue du cache est relancée vers le serveur (3 essais, ≈ 6 s) ; toujours injoignable → erreur
+// (signalée par l'appelant) au lieu d'un résultat vide présenté comme complet.
+async function getDocsServerFirst(q: Query<DocumentData>) {
+  let snap = await getDocs(q)
+  for (let attempt = 0; snap.metadata.fromCache && attempt < 3; attempt++) {
+    await new Promise(r => setTimeout(r, 1000 * (attempt + 1)))
+    try { snap = await getDocsFromServer(q) } catch (err) { if (attempt === 2) throw err }
+  }
+  if (snap.metadata.fromCache) throw new Error('Firestore injoignable : lecture interrompue (cache local).')
+  return snap
+}
+
 // 📅 Colis d'une agence pour UNE tranche de temps (une journée d'opération), une requête
 // (originCity OU destinationCity), archivés inclus, paginée par pageSize jusqu'à épuisement.
 // Sert au chargement « jour par jour » de l'onglet Expéditions du chef d'agence / agent pro :
 // - [start, end[ (ou [start, end] si endInclusive) ;
 // - afterDoc : curseur de la page temps réel — seuls les colis PLUS ANCIENS que lui sont lus
 //   (ceux au-dessus sont déjà affichés par l'écoute temps réel).
+// - city = ALL_CITIES ('*') : toutes les villes (bornes createdAt seules — Admin « Port par agence »).
 export async function getAgencyParcelsDaySlice(
   city: string,
-  field: 'originCity' | 'destinationCity',
+  field: LiteDayField,
   start: Date,
   end: Date,
   endInclusive: boolean,
@@ -1830,14 +2379,14 @@ export async function getAgencyParcelsDaySlice(
   let cursor: any = afterDoc
   for (let guard = 0; guard < 200; guard++) {
     const constraints: any[] = [
-      where(field, '==', city),
+      ...(city === ALL_CITIES ? [] : [where(field, '==', city)]),
       where('createdAt', '>=', Timestamp.fromDate(start)),
       where('createdAt', endInclusive ? '<=' : '<', Timestamp.fromDate(end)),
       orderBy('createdAt', 'desc'),
       ...(cursor ? [startAfter(cursor)] : []),
       limit(pageSize),
     ]
-    const snap = await getDocs(query(parcelsSource(lite), ...constraints))
+    const snap = await getDocsServerFirst(query(parcelsSource(lite), ...constraints))
     snap.docs.forEach(d => out.push({ id: d.id, ...d.data() }))
     if (snap.docs.length < pageSize) break
     cursor = snap.docs[snap.docs.length - 1]
@@ -2134,6 +2683,26 @@ export async function searchParcelByTrackingGlobal(trackingId: string) {
   }
 }
 
+/**
+ * 🚫 Expédition existante portant ce N° EXP (senderNic ou sender.nic), ou null. Lue sur le SERVEUR (pas le cache
+ * local, qui peut ignorer une saisie d'un autre poste). Contrôle avant création : en cas d'erreur réseau ou au-delà
+ * de `timeoutMs`, renvoie null (l'enregistrement n'est pas bloqué faute de réseau).
+ */
+export async function findParcelByNic(nic: string, timeoutMs = 4000): Promise<any | null> {
+  const v = String(nic || '').trim()
+  if (!v) return null
+  const lookup = (async () => {
+    const [a, b] = await Promise.all([
+      getDocsFromServer(query(collection(db, 'parcels'), where('senderNic', '==', v), limit(1))),
+      getDocsFromServer(query(collection(db, 'parcels'), where('sender.nic', '==', v), limit(1))),
+    ])
+    const d = a.docs[0] || b.docs[0]
+    return d ? { id: d.id, ...d.data() } : null
+  })().catch(e => { console.warn('findParcelByNic:', e); return null })
+  const timeout = new Promise<null>(r => setTimeout(() => r(null), timeoutMs))
+  return Promise.race([lookup, timeout])
+}
+
 // ⚡ Recherche ULTRA-RAPIDE par N° EXP (optimisée avec index Firestore)
 export async function searchParcelByNicOptimized(nic: string) {
   try {
@@ -2189,6 +2758,9 @@ export async function searchParcels(
     // 🔍 Restreint la recherche par NOM à l'expéditeur seul, au destinataire seul, ou les deux
     // (défaut). N'affecte pas les recherches par tracking/NIC/téléphone.
     nameScope?: 'all' | 'sender' | 'receiver'
+    // 🪶 Version allégée (parcelsLite) pour les expéditions non archivées — onglet Expéditions, qui affiche
+    // déjà cette version (≈ −35 % de données téléchargées). Les archives restent lues en version complète.
+    lite?: boolean
   } = {}
 ): Promise<any[]> {
   try {
@@ -2196,9 +2768,16 @@ export async function searchParcels(
 
     const searchTerm = term.trim()
     const includeArchived = options.includeArchived ?? false // Par défaut: NE PAS inclure archives (performance)
-    const results: any[] = []
-    const uniqueIds = new Set<string>()
     const agencyCity = options.agencyCity
+    const nameScope = options.nameScope || 'all'
+
+    // 🧠 Mémoire courte (60 s) : la même recherche relancée (retour en arrière, filtre changé puis remis…)
+    // s'affiche immédiatement, sans nouvelle lecture
+    const lite = options.lite ?? false
+    const prefixLimit = Math.max(1, Math.floor(options.limit ?? 300)) // recherches par début de nom seulement
+    const cacheKey = JSON.stringify([searchTerm, includeArchived, agencyCity || '', nameScope, lite, prefixLimit])
+    const hit = SEARCH_CACHE.get(cacheKey)
+    if (hit && Date.now() - hit.at < SEARCH_CACHE_TTL_MS) return hit.results
 
     // Collections à chercher
     const collections = ['parcels']
@@ -2206,165 +2785,121 @@ export async function searchParcels(
       collections.push('parcels_archive')
     }
 
-    // Chercher dans chaque collection
+    // ⚡ TOUTES les requêtes (N° EXP, tracking, téléphone, chèque/traite, noms — expéditions ET archives)
+    // partent EN MÊME TEMPS : le temps d'attente est celui de la plus lente, et non plus leur somme.
+    // Mêmes requêtes et même ordre de fusion qu'avant (résultats et dédoublonnage identiques).
+    const groups: { isArchived: boolean; label: string; queries: Query<DocumentData>[] }[] = []
     for (const collectionName of collections) {
-      const parcelsCol = collection(db, collectionName)
       const isArchived = collectionName === 'parcels_archive'
+      // …NameLower n'existe pas dans parcelsLite : ses requêtes exactes restent sur la collection complète
+      const fullCol = collection(db, collectionName)
+      const parcelsCol = lite && !isArchived ? collection(db, 'parcelsLite') : fullCol
 
       // Test 1: Recherche EXACTE par senderNic ou nic
-      try {
-        const qSenderNic = query(parcelsCol, where('senderNic', '==', searchTerm))
-        const qNic = query(parcelsCol, where('nic', '==', searchTerm))
-        const [snapSenderNic, snapNic] = await Promise.all([getDocs(qSenderNic), getDocs(qNic)])
-        for (const d of [...snapSenderNic.docs, ...snapNic.docs]) {
-          if (!uniqueIds.has(d.id)) {
-            uniqueIds.add(d.id)
-            results.push({ id: d.id, ...d.data(), isArchived })
-          }
-        }
-      } catch (e) {
-        console.error('Erreur requête senderNic/nic:', e)
-      }
+      groups.push({ isArchived, label: 'senderNic/nic', queries: [
+        query(parcelsCol, where('senderNic', '==', searchTerm)),
+        query(parcelsCol, where('nic', '==', searchTerm)),
+      ] })
 
       // Test 2: trackingId
       const trackingId = searchTerm.toUpperCase().replace(/[\s-]/g, '')
       if (/^LMA/.test(trackingId)) {
-        try {
-          const qTrack = query(parcelsCol, where('trackingId', '==', trackingId))
-          const snapTrack = await getDocs(qTrack)
-          for (const d of snapTrack.docs) {
-            if (!uniqueIds.has(d.id)) {
-              uniqueIds.add(d.id)
-              results.push({ id: d.id, ...d.data(), isArchived })
-            }
-          }
-        } catch (e) {
-          console.error('Erreur requête trackingId:', e)
-        }
+        groups.push({ isArchived, label: 'trackingId', queries: [query(parcelsCol, where('trackingId', '==', trackingId))] })
       }
 
       // Test 3: Téléphone (≥9 chiffres)
       const phone = searchTerm.replace(/[\s\-\(\)\.]/g, '')
       if (/^\d{9,}$/.test(phone)) {
-        try {
-          const qPhone1 = query(parcelsCol, where('senderTel', '==', phone))
-          const qPhone2 = query(parcelsCol, where('receiverTel', '==', phone))
-          const [snap1, snap2] = await Promise.all([getDocs(qPhone1), getDocs(qPhone2)])
-          for (const d of [...snap1.docs, ...snap2.docs]) {
-            if (!uniqueIds.has(d.id)) {
-              uniqueIds.add(d.id)
-              results.push({ id: d.id, ...d.data(), isArchived })
-            }
-          }
-        } catch (e) {
-          console.error('Erreur requête téléphone:', e)
-        }
+        groups.push({ isArchived, label: 'téléphone', queries: [
+          query(parcelsCol, where('senderTel', '==', phone)),
+          query(parcelsCol, where('receiverTel', '==', phone)),
+        ] })
       }
 
       // Test 4: Chèque ou Traite (C/c + montant ou T/t + montant)
       if (/^[ct]/i.test(searchTerm)) {
         const firstChar = searchTerm[0].toUpperCase()
         const amount = searchTerm.substring(1).trim()
-
         if (/^\d+(\.\d+)?$/.test(amount)) {
           const numAmount = parseFloat(amount)
-
-          try {
-            // Pour chèque: serviceType = 'cheque' ET codAmount = numAmount
-            if (firstChar === 'C') {
-              const qCheque = query(
-                parcelsCol,
-                where('serviceType', '==', 'cheque'),
-                where('codAmount', '==', numAmount)
-              )
-              const snapCheque = await getDocs(qCheque)
-              for (const d of snapCheque.docs) {
-                if (!uniqueIds.has(d.id)) {
-                  uniqueIds.add(d.id)
-                  results.push({ id: d.id, ...d.data(), isArchived })
-                }
-              }
-            }
-
-            // Pour traite: serviceType = 'traite' ET codAmount = numAmount
-            if (firstChar === 'T') {
-              const qTraite = query(
-                parcelsCol,
-                where('serviceType', '==', 'traite'),
-                where('codAmount', '==', numAmount)
-              )
-              const snapTraite = await getDocs(qTraite)
-              for (const d of snapTraite.docs) {
-                if (!uniqueIds.has(d.id)) {
-                  uniqueIds.add(d.id)
-                  results.push({ id: d.id, ...d.data(), isArchived })
-                }
-              }
-            }
-          } catch (e) {
-            console.error('Erreur requête chèque/traite:', e)
-          }
+          // Chèque : serviceType = 'cheque' ET codAmount ; traite : serviceType = 'traite' ET codAmount
+          groups.push({ isArchived, label: 'chèque/traite', queries: [query(
+            parcelsCol,
+            where('serviceType', '==', firstChar === 'C' ? 'cheque' : 'traite'),
+            where('codAmount', '==', numAmount),
+          )] })
         }
       }
 
       // Test 5: Nom (expéditeur ou destinataire) - seulement si contient des lettres
       const nameLower = searchTerm.toLowerCase().trim()
       if (/[a-zA-Zà-ÿ]/.test(searchTerm)) {
-        try {
-          // ⚠️ nameScope restreint à un seul champ : on n'interroge même pas l'autre, pour
-          // que "expéditeur seul" n'affiche jamais un colis matché via le destinataire.
-          const nameScope = options.nameScope || 'all'
-          const nameNorm = normName(searchTerm)
-          const PREFIX_END = '\uf8ff'
-          const doPrefix = nameNorm.length >= 3
-          const wantSender = nameScope !== 'receiver'
-          const wantReceiver = nameScope !== 'sender'
-          const nameQueryList: Query<DocumentData>[] = []
-          // Recherche exacte (champs historiques en minuscules + champs normalisés sans accents)
-          if (wantSender) nameQueryList.push(query(parcelsCol, where('senderNameLower', '==', nameLower)))
-          if (wantReceiver) nameQueryList.push(query(parcelsCol, where('receiverNameLower', '==', nameLower)))
-          if (nameNorm) {
-            if (wantSender) nameQueryList.push(query(parcelsCol, where('senderNameNorm', '==', nameNorm)))
-            if (wantReceiver) nameQueryList.push(query(parcelsCol, where('receiverNameNorm', '==', nameNorm)))
-          }
-          // Recherche par préfixe (commence par) — seulement à partir de 3 caractères
-          if (doPrefix) {
-            if (wantSender) {
-              nameQueryList.push(query(parcelsCol, where('senderNameLower', '>=', nameLower), where('senderNameLower', '<=', nameLower + PREFIX_END)))
-              nameQueryList.push(query(parcelsCol, where('senderNameNorm', '>=', nameNorm), where('senderNameNorm', '<=', nameNorm + PREFIX_END)))
-            }
-            if (wantReceiver) {
-              nameQueryList.push(query(parcelsCol, where('receiverNameLower', '>=', nameLower), where('receiverNameLower', '<=', nameLower + PREFIX_END)))
-              nameQueryList.push(query(parcelsCol, where('receiverNameNorm', '>=', nameNorm), where('receiverNameNorm', '<=', nameNorm + PREFIX_END)))
-            }
-          }
-          const nameSnaps = await Promise.all(nameQueryList.map(q => getDocs(q)))
-
-          for (const d of nameSnaps.flatMap(snap => snap.docs)) {
-            if (!uniqueIds.has(d.id)) {
-              uniqueIds.add(d.id)
-              results.push({ id: d.id, ...d.data(), isArchived })
-            }
-          }
-        } catch (e) {
-          console.error('Erreur requête nom:', e)
+        // ⚠️ nameScope restreint à un seul champ : on n'interroge même pas l'autre, pour
+        // que "expéditeur seul" n'affiche jamais un colis matché via le destinataire.
+        const nameNorm = normName(searchTerm)
+        const PREFIX_END = ''
+        const doPrefix = nameNorm.length >= 3
+        const wantSender = nameScope !== 'receiver'
+        const wantReceiver = nameScope !== 'sender'
+        const nameQueryList: Query<DocumentData>[] = []
+        // Recherche exacte (champs historiques en minuscules + champs normalisés sans accents)
+        if (wantSender) nameQueryList.push(query(fullCol, where('senderNameLower', '==', nameLower)))
+        if (wantReceiver) nameQueryList.push(query(fullCol, where('receiverNameLower', '==', nameLower)))
+        if (nameNorm) {
+          if (wantSender) nameQueryList.push(query(parcelsCol, where('senderNameNorm', '==', nameNorm)))
+          if (wantReceiver) nameQueryList.push(query(parcelsCol, where('receiverNameNorm', '==', nameNorm)))
         }
+        // Recherche par préfixe (commence par) — seulement à partir de 3 caractères, sur les champs NORMALISÉS
+        // seuls : présents et à jour sur toutes les expéditions (vérifié : 53 391 / 53 391). Les préfixes sur
+        // …NameLower renvoyaient les MÊMES expéditions une 2e fois (téléchargement doublé) et n'ajoutaient que
+        // de fausses correspondances (ancien nom resté dans …NameLower après modification de l'expéditeur).
+        // ⚡ Plafonnées par options.limit (300 par défaut) : l'option était ignorée — un préfixe courant
+        // (« moh ») téléchargeait des milliers d'expéditions de tout le pays. Les recherches EXACTES
+        // (N° EXP, téléphone, N° LMA, nom complet) ne sont pas plafonnées.
+        if (doPrefix) {
+          if (wantSender) nameQueryList.push(query(parcelsCol, where('senderNameNorm', '>=', nameNorm), where('senderNameNorm', '<=', nameNorm + PREFIX_END), limit(prefixLimit)))
+          if (wantReceiver) nameQueryList.push(query(parcelsCol, where('receiverNameNorm', '>=', nameNorm), where('receiverNameNorm', '<=', nameNorm + PREFIX_END), limit(prefixLimit)))
+        }
+        groups.push({ isArchived, label: 'nom', queries: nameQueryList })
       }
-    } // Fin de la boucle for collections
-
-    // Filtrer par ville si spécifié (pour chefs d'agence)
-    if (agencyCity) {
-      return results.filter(p =>
-        p.originCity === agencyCity || p.destinationCity === agencyCity
-      )
     }
 
-    return results
+    // Une requête en erreur n'empêche pas les autres (comme avant : groupe ignoré, erreur journalisée)
+    const snapsByGroup = await Promise.all(groups.map(g =>
+      Promise.all(g.queries.map(q => getDocs(q))).catch(e => {
+        console.error(`Erreur requête ${g.label}:`, e)
+        return []
+      })))
+
+    const results: any[] = []
+    const uniqueIds = new Set<string>()
+    const anyFromCache = snapsByGroup.some(snaps => snaps.some(snap => snap.metadata.fromCache))
+    snapsByGroup.forEach((snaps, i) => {
+      const { isArchived } = groups[i]
+      for (const d of snaps.flatMap(snap => snap.docs)) {
+        if (!uniqueIds.has(d.id)) {
+          uniqueIds.add(d.id)
+          results.push({ id: d.id, ...d.data(), isArchived })
+        }
+      }
+    })
+
+    // Filtrer par ville si spécifié (pour chefs d'agence)
+    const out = agencyCity
+      ? results.filter(p => p.originCity === agencyCity || p.destinationCity === agencyCity)
+      : results
+    // Recherche sans résultat jamais gardée (une expédition créée juste après doit être trouvée)
+    // (ni une réponse lue dans le cache local faute de réseau)
+    if (out.length && !anyFromCache) SEARCH_CACHE.set(cacheKey, { at: Date.now(), results: out })
+    if (SEARCH_CACHE.size > 50) SEARCH_CACHE.delete(SEARCH_CACHE.keys().next().value as string)
+    return out
   } catch (error) {
     console.error('❌ Erreur searchParcels:', error)
     return []
   }
 }
+const SEARCH_CACHE = new Map<string, { at: number; results: any[] }>()
+const SEARCH_CACHE_TTL_MS = 60 * 1000
 
 // -- Archivage dynamique -------------------------------------
 
@@ -2411,7 +2946,7 @@ export async function unarchiveParcel(parcelId: string): Promise<void> {
 
   // Restaurer dans la collection active
   const parcelRef = doc(db, 'parcels', parcelId)
-  await setDoc(parcelRef, originalData)
+  await setDoc(parcelRef, { ...originalData, isArchived: false })
 
   // Supprimer de la collection archives
   await deleteDoc(archiveRef)
@@ -2533,7 +3068,8 @@ function subscribeCodByServiceType(
   limitCount: number
 ) {
   const onErr = onError || (() => {})
-  const toParcels = (snapshot: any) => snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Parcel))
+  // 📅 COD encaissés avant le 05/10/2026 (essais) : hors des soldes COD (DRFE / DRFC)
+  const toParcels = (snapshot: any): Parcel[] => codMoneyOnly<Parcel>(snapshot.docs.map((d: any) => ({ id: d.id, ...d.data() } as Parcel)))
 
   // Filtre sur un statut non soldé : aucune borne de date (rien ne doit disparaître)
   if (codStatusFilter === 'pending' || codStatusFilter === 'collected') {
@@ -2682,7 +3218,7 @@ export async function getMoreCodParcelsEspeces(
   } catch (err: any) {
     console.warn('[DRFE] RF mixtes (charger plus) indisponibles :', err?.message || err)
   }
-  return { data: sortByCreatedDesc(data as any[]) as Parcel[], lastDoc: newLastDoc, hasMore: snapshot.docs.length === limitCount || mixedMore }
+  return { data: codMoneyOnly(sortByCreatedDesc(data as any[]) as Parcel[]), lastDoc: newLastDoc, hasMore: snapshot.docs.length === limitCount || mixedMore }
 }
 
 /**
@@ -2729,7 +3265,7 @@ export async function getMoreCodParcelsCheques(
 
   const snapshot = await getDocs(q)
   // RF mixte : part chèque/traite uniquement
-  const data = snapshot.docs.map((d) => codPartView({ id: d.id, ...d.data() } as any, 'document') as Parcel)
+  const data = codMoneyOnly(snapshot.docs.map((d) => codPartView({ id: d.id, ...d.data() } as any, 'document') as Parcel))
   const newLastDoc = snapshot.docs[snapshot.docs.length - 1]
   return { data, lastDoc: newLastDoc, hasMore: snapshot.docs.length === limitCount }
 }
@@ -2773,8 +3309,10 @@ export async function markCodAsRemis(
 // endExclusive = true : borne haute stricte (<) — utilisé pour découper une plage en tranches
 // jour par jour contiguës sans doublon ni trou (voir FacturierExpeditionsTab).
 export async function getParcelsByCreatedAtRange(
-  start: Date, end: Date, pageSize = 1000, onProgress?: (loaded: number) => void, endExclusive = false
+  start: Date, end: Date, pageSize = 1000, onProgress?: (loaded: number) => void, endExclusive = false,
+  lite: boolean | 'facturier' = false // 🪶 parcelsLite (allégée) ou 🧾 parcelsFacturier (champs du Facturier seulement)
 ): Promise<any[]> {
+  const source = lite === 'facturier' ? collection(db, 'parcelsFacturier') : parcelsSource(lite)
   const out: any[] = []
   let cursor: any = null
   for (let guard = 0; guard < 200; guard++) {
@@ -2785,7 +3323,7 @@ export async function getParcelsByCreatedAtRange(
     ]
     if (cursor) constraints.push(startAfter(cursor))
     constraints.push(limit(pageSize))
-    const snap = await getDocs(query(collection(db, 'parcels'), ...constraints))
+    const snap = await getDocs(query(source, ...constraints))
     snap.docs.forEach(d => out.push({ id: d.id, ...d.data() }))
     onProgress?.(out.length)
     if (snap.docs.length < pageSize) break

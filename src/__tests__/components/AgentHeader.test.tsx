@@ -21,7 +21,7 @@ const EMPTY_FORM = { senderName: '', receiverName: '', weight: '', nbColis: '1',
 
 function makeProps(overrides = {}) {
   return {
-    profile: { name: 'Hassan', city: 'Casablanca', role: 'agent', code: 'A001' },
+    profile: { name: 'Hassan', city: 'Casablanca', role: 'chef_agence', code: 'A001' },
     tab: 'home',
     setTab: vi.fn(),
     menuOpen: false,
@@ -60,11 +60,11 @@ describe('AgentHeader', () => {
     expect(screen.getByText(/A001/)).toBeInTheDocument()
   })
 
-  it('calls openScanModal on scanner button click', () => {
-    const openScanModal = vi.fn()
-    render(<AgentHeader {...makeProps({ openScanModal })} />)
-    fireEvent.click(screen.getByTitle(/Scanner/i))
-    expect(openScanModal).toHaveBeenCalled()
+  // Boutons « Scanner » et « Archives » retirés de l'en-tête (demande du 22/10/2026)
+  it('has no Scanner nor Archives button in the header', () => {
+    render(<AgentHeader {...makeProps({ openScanModal: vi.fn() })} />)
+    expect(screen.queryByTitle(/Scanner/i)).toBeNull()
+    expect(screen.queryByText('Archives')).toBeNull()
   })
 
   it('shows mobile menu on hamburger click', () => {
@@ -87,14 +87,17 @@ describe('AgentHeader', () => {
     }
   })
 
-  it('shows pending modification badge count', () => {
+  // L'entrée « Modif. clients » (et son badge) a été masquée volontairement pour le chef d'agence
+  // (commit c4180f0 « Masquer onglets inutilisés pour chef agence et agentpro ») : elle ne doit pas réapparaître.
+  it('hides the client modifications entry and its badge in the mobile menu', () => {
     const modRequests = [
       { id: '1', status: 'pending' },
       { id: '2', status: 'approved' },
       { id: '3', status: 'pending' },
     ]
-    // Badge is in the mobile dropdown which is only rendered when menuOpen=true
+    // Le menu mobile n'est rendu que si menuOpen=true
     render(<AgentHeader {...makeProps({ profile: { ...makeProps().profile, role: 'chef_agence' }, modRequests, menuOpen: true })} />)
-    expect(screen.getByText('2')).toBeInTheDocument()
+    expect(screen.queryByText(/Modif\. clients/)).not.toBeInTheDocument()
+    expect(screen.queryByText('2')).not.toBeInTheDocument()
   })
 })

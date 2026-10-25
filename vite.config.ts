@@ -79,7 +79,8 @@ export default defineConfig({
             handler: 'CacheFirst',
             options: {
               cacheName: 'js-chunks-cache',
-              expiration: { maxEntries: 80, maxAgeSeconds: 60 * 60 * 24 * 30 },
+              // Le build produit ~150 chunks JS : avec 80, le cache évinçait des pages déjà visitées
+              expiration: { maxEntries: 250, maxAgeSeconds: 60 * 60 * 24 * 30 },
             },
           },
           {

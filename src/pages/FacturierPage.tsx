@@ -15,6 +15,9 @@ export default function FacturierPage() {
   const [profile, setProfile] = useState<any>(null)
   const [loading, setLoading] = useState(true)
   const [activeTab, setActiveTab] = useState<'expeditions' | 'factures'>('expeditions')
+  // ⚡ Onglet Factures chargé au 1er clic seulement (500 factures + clients en moins au démarrage), puis gardé monté
+  const [facturesOpened, setFacturesOpened] = useState(false)
+  useEffect(() => { if (activeTab === 'factures') setFacturesOpened(true) }, [activeTab])
 
   useEffect(() => {
     console.log('FacturierPage - useEffect chargement profil')
@@ -64,7 +67,7 @@ export default function FacturierPage() {
     <div className="min-h-screen bg-gray-50">
       {/* Header */}
       <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-10">
-        <div className="max-w-7xl mx-auto px-4">
+        <div className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto px-4">
           <div className="flex items-center justify-between py-3">
             <div className="flex items-center gap-3">
               <img src="/LOGO.jpg" alt="BG Express" className="h-9 object-contain" />
@@ -94,7 +97,7 @@ export default function FacturierPage() {
       {/* Onglets */}
       {!loading && profile && (
         <div className="border-b border-gray-200 bg-white">
-          <div className="max-w-7xl mx-auto px-4">
+          <div className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto px-4">
             <div className="flex gap-4">
               <button
                 onClick={() => setActiveTab('expeditions')}
@@ -124,7 +127,7 @@ export default function FacturierPage() {
       )}
 
       {/* Contenu */}
-      <main className="max-w-7xl mx-auto p-4">
+      <main className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto p-4">
         {loading ? (
           <div className="flex items-center justify-center h-64">
             <div className="text-center">
@@ -138,12 +141,14 @@ export default function FacturierPage() {
             <div style={{ display: activeTab === 'expeditions' ? 'block' : 'none' }}>
               <FacturierExpeditionsTab userName={profile?.name || profile?.email || 'Facturier'} />
             </div>
-            <div style={{ display: activeTab === 'factures' ? 'block' : 'none' }}>
-              <AdminInvoicesTab
-                uid={auth.currentUser?.uid}
-                userName={profile?.name || profile?.email || 'Facturier'}
-              />
-            </div>
+            {facturesOpened && (
+              <div style={{ display: activeTab === 'factures' ? 'block' : 'none' }}>
+                <AdminInvoicesTab
+                  uid={auth.currentUser?.uid}
+                  userName={profile?.name || profile?.email || 'Facturier'}
+                />
+              </div>
+            )}
           </>
         ) : (
           <>

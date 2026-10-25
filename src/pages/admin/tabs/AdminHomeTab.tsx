@@ -1,4 +1,5 @@
 import { Building2, Wallet, Users, BarChart2, Contact, Car, TrendingUp, AlertTriangle, Calculator, RotateCcw, Download, FileText, Banknote, ShieldCheck, Power, ChevronDown, Upload, Package, Monitor, Star, Archive } from 'lucide-react'
+import { isAgencyStaff } from '../../../utils/roles'
 import { lazy, Suspense } from 'react'
 import { CITIES } from '../../../firebase/constants'
 import { BACKUP_COLLECTIONS } from '../../../firebase/backupCollections'
@@ -75,7 +76,7 @@ export default function AdminHomeTab({
   const enCours  = realStats?.enCours ?? periodParcels.filter((p: any) => !['Livré','Retourné'].includes(p.status)).length
   const livres   = realStats?.livres ?? periodParcels.filter((p: any) => p.status === 'Livré').length
   const codPend  = periodParcels.filter((p: any) => p.codAmount > 0 && (!p.codStatus || p.codStatus === 'pending')).reduce((s: any,p: any) => s+(p.codAmount||0), 0)
-  const agents   = periodUsers.filter((u: any) => u.role === 'agent').length
+  const agents   = periodUsers.filter((u: any) => isAgencyStaff(u.role)).length
   const drivers  = periodUsers.filter((u: any) => u.role === 'chauffeur').length
   const livreurs  = periodUsers.filter((u: any) => u.role === 'livreur').length
   const cashiers = periodUsers.filter((u: any) => u.role === 'caissier').length
@@ -99,11 +100,12 @@ export default function AdminHomeTab({
       action: () => setMainTab('expeditions'),
     },
     {
-      key: 'cod', label: 'RETOUR FOND / Remboursement', desc: 'Gérer les paiements à remettre',
+      // 💰 Remplace l'ancienne carte « RETOUR FOND / Remboursement » : même organisation que « Port par agence »
+      key: 'cod_agencies', label: '💰 COD par agence', desc: 'Statistiques des valeurs (COD) par ville',
       icon: Wallet, grad: 'from-orange-400 via-orange-500 to-amber-600',
       glow: 'bg-orange-50/80', stat: `${fmt(codPend)} DH en attente`,
       badge: codStats.collectedDH > 0 ? `${fmt(codStats.collectedDH)} DH` : null,
-      action: () => setMainTab('cod'),
+      action: () => setMainTab('cod_agencies'),
     },
     // CACHÉ: Versements Livreurs
     // {
@@ -120,6 +122,12 @@ export default function AdminHomeTab({
       action: () => setMainTab('port_agencies'),
     },
     {
+      key: 'controleur', label: '🤖 Rapports du Contrôleur', desc: 'Erreurs des utilisateurs détectées par les règles, rapport rédigé par l\'IA',
+      icon: AlertTriangle, grad: 'from-indigo-500 via-violet-600 to-purple-700',
+      glow: 'bg-indigo-50/80', stat: 'À la demande',
+      action: () => setMainTab('controleur'),
+    },
+    {
       key: 'archivage', label: '🗄️ Archives', desc: 'Archivage cloud automatique et manuel',
       icon: Archive, grad: 'from-slate-500 via-gray-600 to-slate-700',
       glow: 'bg-slate-50/80', stat: 'Optimisation base de données',
@@ -131,12 +139,7 @@ export default function AdminHomeTab({
       glow: 'bg-teal-50/80', stat: `${agents} agents · ${drivers} chauffeurs · ${livreurs} livreurs · ${cashiers} caissiers · ${salaries} salariés`,
       action: () => setMainTab('users'),
     },
-    {
-      key: 'activity', label: 'Activité', desc: "Suivi des performances de l'équipe",
-      icon: BarChart2, grad: 'from-purple-500 via-purple-600 to-violet-700',
-      glow: 'bg-purple-50/80', stat: `${agents + drivers + livreurs} membres actifs`,
-      action: () => setMainTab('activity'),
-    },
+    // Carte « Activité » retirée de l'accueil (demande du 23/10/2026)
     // CACHÉ: Notes agents
     // {
     //   key: 'notes', label: 'Notes agents', desc: 'Évaluations hebdomadaires des agents',

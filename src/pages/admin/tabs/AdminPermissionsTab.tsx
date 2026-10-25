@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { Save, ShieldCheck, UserCog, X, CheckCircle } from 'lucide-react'
+import { Save, ShieldCheck, UserCog, X, CheckCircle, PackageCheck } from 'lucide-react'
 import { doc, getDoc, setDoc } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
 
@@ -48,6 +48,11 @@ const EDITABLE_FIELDS: FieldPermission[] = [
   { field: 'status', label: 'Statut du colis', category: 'status' },
 ]
 
+/** Expéditions dont le chef d'agence / l'agent pro peut corriger les données (tout statut sauf « Livré »). */
+interface ParcelEditScope { created: boolean; received: boolean }
+type ScopeRole = 'chef_agence' | 'agentpro'
+const NO_SCOPE: Record<ScopeRole, ParcelEditScope> = { chef_agence: { created: false, received: false }, agentpro: { created: false, received: false } }
+
 interface AdminPermissionsTabProps {
   // Add any props if needed
 }
@@ -64,6 +69,11 @@ export default function AdminPermissionsTab(_props: AdminPermissionsTabProps) {
 
   // Permissions par rôle - Actions
   const [chefAgenceActions, setChefAgenceActions] = useState<string[]>([])
+
+  // Expéditions modifiables (créées / reçues), en plus des champs cochés ci-dessous
+  const [parcelEditScope, setParcelEditScope] = useState<Record<ScopeRole, ParcelEditScope>>(NO_SCOPE)
+  const toggleScope = (role: ScopeRole, key: keyof ParcelEditScope) =>
+    setParcelEditScope(prev => ({ ...prev, [role]: { ...prev[role], [key]: !prev[role][key] } }))
 
   // Charger les permissions depuis Firestore
   useEffect(() => {
@@ -82,6 +92,10 @@ export default function AdminPermissionsTab(_props: AdminPermissionsTabProps) {
         setAgentProPermissions(data.agentpro || [])
         setAideAgentPermissions(data.aide_agent || [])
         setChefAgenceActions(data.chef_agence_actions || [])
+        setParcelEditScope({
+          chef_agence: { ...NO_SCOPE.chef_agence, ...(data.parcelEditScope?.chef_agence || {}) },
+          agentpro: { ...NO_SCOPE.agentpro, ...(data.parcelEditScope?.agentpro || {}) },
+        })
       } else {
         // Permissions par défaut: chef d'agence peut tout modifier sauf statut
         const defaultChef = EDITABLE_FIELDS
@@ -118,6 +132,7 @@ export default function AdminPermissionsTab(_props: AdminPermissionsTabProps) {
         agentpro: agentProPermissions,
         aide_agent: aideAgentPermissions,
         chef_agence_actions: chefAgenceActions,
+        parcelEditScope,
         updatedAt: new Date().toISOString(),
       })
 
@@ -242,6 +257,51 @@ export default function AdminPermissionsTab(_props: AdminPermissionsTabProps) {
           <Save className="w-5 h-5" />
           {saving ? 'Enregistrement...' : 'Enregistrer les permissions'}
         </button>
+      </div>
+
+      {/* Expéditions modifiables : créées et / ou reçues, tout statut sauf « Livré » */}
+      <div className="bg-white rounded-2xl border-2 border-emerald-200 shadow-lg overflow-hidden">
+        <div className="bg-gradient-to-r from-emerald-500 to-teal-600 p-4 text-white">
+          <div className="flex items-center gap-3">
+            <PackageCheck className="w-6 h-6" />
+            <h2 className="text-xl font-black">Expéditions modifiables</h2>
+          </div>
+          <p className="text-emerald-50 text-sm mt-1">
+            Quelles expéditions le chef d'agence et l'agent pro peuvent corriger, <b>quel que soit leur statut sauf « Livré »</b>
+            (même chargées dans un camion ou en retour). Seuls les champs cochés plus bas restent modifiables.
+          </p>
+        </div>
+        <div className="p-4 overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-gray-500 text-xs uppercase">
+                <th className="py-2 pr-4">Rôle</th>
+                <th className="py-2 px-4">📤 Expéditions qu'il a créées<span className="block normal-case font-normal text-gray-400">lui-même, ou ses aides-agents / le portail client de son agence</span></th>
+                <th className="py-2 px-4">📥 Expéditions reçues par son agence<span className="block normal-case font-normal text-gray-400">ville de destination = sa ville</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {([['chef_agence', "Chef d'agence"], ['agentpro', 'Agent Pro']] as [ScopeRole, string][]).map(([role, label]) => (
+                <tr key={role} className="border-t border-gray-100">
+                  <td className="py-3 pr-4 font-bold text-gray-800">{label}</td>
+                  {(['created', 'received'] as (keyof ParcelEditScope)[]).map(key => (
+                    <td key={key} className="py-3 px-4">
+                      <label className="inline-flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" className="w-5 h-5 accent-emerald-600" checked={parcelEditScope[role][key]} onChange={() => toggleScope(role, key)} />
+                        <span className={parcelEditScope[role][key] ? 'font-bold text-emerald-700' : 'text-gray-500'}>{parcelEditScope[role][key] ? 'Autorisé' : 'Non autorisé'}</span>
+                      </label>
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          <ul className="mt-3 text-xs text-gray-500 space-y-1 list-disc pl-5">
+            <li>Une expédition <b>livrée</b> n'est jamais modifiable par ces rôles (seul l'administrateur peut la corriger).</li>
+            <li>Le <b>montant COD</b>, le <b>prix</b> et le <b>type de port</b> ne sont modifiables que s'ils sont cochés plus bas, et seulement tant qu'ils ne sont pas encaissés ni facturés.</li>
+            <li>Ces cases sont aussi appliquées par le serveur : sans elles, la modification est refusée même hors de l'application.</li>
+          </ul>
+        </div>
       </div>
 
       {/* Grille des permissions */}

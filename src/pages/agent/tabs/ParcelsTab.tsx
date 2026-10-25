@@ -1,18 +1,22 @@
+import DateInput from '../../../components/DateInput'
+import { docPartKeepingTotal } from '../../../utils/codParts'
 import {
   AlertTriangle, Banknote, Calendar, Car, Check, CheckSquare,
   ChevronDown, ChevronLeft, ChevronRight, Download, Edit, Edit2, Filter, Hand,
   LayoutGrid, Lock, Package, Pencil, PenTool, Printer, Search, Table2, Trash2, Truck,
-  Unlock, User, X,
+  ShieldCheck, Unlock, User, X,
 } from 'lucide-react'
 import { useState, useRef, useEffect, useMemo, useDeferredValue } from 'react'
 import PendingBadge from '../../../components/PendingBadge'
-import { deleteField, Timestamp, collection, documentId, onSnapshot, query, where } from 'firebase/firestore'
+import { arrayUnion, deleteField, doc, updateDoc, Timestamp, collection, documentId, onSnapshot, query, where } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
 import { loadExcel } from '../../../utils/loadExcel'
 import {
   loadReturnedParcelOnTruck, validateReturnArrival, getMoreAgentParcels,
 } from '../../../firebase/firestore'
-import { isInReturnCircuit, updateParcel, buildParcelCorrectionPatch, describeParcelSaveError, ensureFullParcel, ensureFullParcels } from '../../../firebase/parcels'
+import { realignDeliveryAfterDestinationChange } from '../../../firebase/delivery'
+import { showToast } from '../../../utils/toast'
+import { isInReturnCircuit, updateParcel, buildParcelCorrectionPatch, describeParcelSaveError, ensureFullParcel, ensureFullParcels, markParcelAsReturned } from '../../../firebase/parcels'
 import { reservePrintWindow, releasePrintWindow } from '../../../utils/printWindow'
 
 // 🪶 La liste vient de parcelsLite (version allégée, sans historique…) : toute ouverture d'un colis
@@ -30,15 +34,23 @@ import {
   buildCodWriteFields, validateCodChoice, toggleCodService, codSelectionOf, COD_PART_EMOJI, COD_PART_LABEL,
 } from '../../../utils/codParts'
 import { useAgentCtx } from '../AgentCtx'
+import { agentProCanEditBon, agentProReadOnly } from '../../../utils/agentProAccess'
+import { agencyCanDeliver } from '../../../utils/agencyDeliveryAccess'
+import { canBulkAssignDelivery, canBulkAssignPickup, pickupAssignmentUpdates } from '../../../utils/parcelBulkSelection'
+import BulkDeliverySelection from '../components/BulkDeliverySelection'
+import { useAgencyBulkAssignment } from '../hooks/useAgencyBulkAssignment'
+import { ReadOnlyBadge, ReadOnlyParcelRow, ReadOnlyParcelCard } from '../components/ReadOnlyParcel'
+import MesSaisiesView from './MesSaisiesView'
 import { OperationalDaySelector } from '../../../components/OperationalDaySelector'
 import QuickStatusToggles from '../../../components/QuickStatusToggles'
 import HScrollArrows from '../../../components/HScrollArrows'
 import LoadProgress from '../../../components/LoadProgress'
+import { ParcelParties } from '../../../components/ParcelParties'
 import { useLoadProgress, type LoadProgressStore } from '../../../utils/loadProgressStore'
 
 import { parcelDate, filterByDate } from '../../../utils/dateFilter'
 import { formatOperationalDay } from '../../../config/operationalDay'
-import { normText } from '../../../utils/normText'
+import { normText, isDigitsOnly, numberStartsWith } from '../../../utils/normText'
 import { makeTableSearchMatcher } from '../../../utils/parcelSearch'
 import { agencyPortAmounts } from '../../../utils/billingAgency'
 
@@ -47,6 +59,9 @@ const matchesSearch = (values: any, query: any) => {
   const q = normText(query)
   if (!q) return true
   const compactQ = normalizeSearch(q)
+  // 🔢 Numéro (N° EXP, téléphone) : le 0 compte, correspondance depuis le 1er chiffre
+  const digitsQ = normText(q).replace(/[\s.\-\/]/g, '')
+  if (isDigitsOnly(digitsQ)) return values.some((v: any) => numberStartsWith(v, digitsQ))
   return values.some((v: any) => {
     const raw = normText(v)
     return raw.includes(q) || normalizeSearch(raw).includes(compactQ)
@@ -111,6 +126,32 @@ function AgencyLoadProgress({ store, displayCount, agencyLoading, citiesProgress
   )
 }
 
+/**
+ * 🔒 Expédition créée par MON agence (chef d'agence / aides) vers une AUTRE ville : livreur verrouillé — nom du livreur
+ * choisi par l'agence de destination, sinon « En gare - <destination> » — sans changement possible.
+ * Seule une expédition LOCALE (même ville d'expédition et de destination) garde le changement de livreur. (23/10/2026)
+ */
+const isLockedOutgoing = (p: any, myCity?: string) => {
+  const origin = p?.originCity || p?.createdByCity || p?.sender?.city
+  const dest = p?.destinationCity || p?.receiver?.city
+  return !!myCity && origin === myCity && !!dest && dest !== myCity
+}
+
+/**
+ * 🖐️ Statuts où l'agence de DESTINATION peut choisir / changer le livreur — MÊME règle avec ou sans livreur déjà posé
+ * (avant : « En gare - <ville> » posé à la création → main même en transit ; sans livreur → main seulement à l'arrivée).
+ * En transit : seul le livreur change, le statut reste « En transit » (assignation à l'avance).
+ */
+const DRIVER_CHANGE_STATUSES = ['En transit', 'Arrivé en agence', 'En cours de livraison', 'Livré']
+const canChangeDriverOf = (p: any, profile: any) => {
+  if (!agencyCanDeliver(profile, p)) return false
+  if (profile?.role !== 'chef_agence' && profile?.role !== 'agentpro') return false
+  if (isLockedOutgoing(p, profile?.city)) return false
+  const isLocal = !!p?.originCity && p.originCity === p.destinationCity
+  if (isLocal) return true
+  return (p?.destinationCity || profile?.city) === profile?.city && DRIVER_CHANGE_STATUSES.includes(p?.status)
+}
+
 export default function ParcelsTab() {
   const {
     // Identity
@@ -135,14 +176,16 @@ export default function ParcelsTab() {
     loadingMore, setLoadingMore,
     setExtraParcels,
     hasMoreAgency,
+    agencyCapReached, agencyCapSize,
     loadMoreAgencyParcels,
     loadingMoreAgency,
 
     // Search / filters
     search, setSearch,
     searchScope, setSearchScope,
-    includeArchived, setIncludeArchived,
+    includeArchived, setIncludeArchived, archiveSearchOnly,
     isSearching,
+    outOfPeriodResults, outOfPeriodSearching,
     datePreset, setDatePreset,
     dateFrom, setDateFrom,
     dateTo, setDateTo,
@@ -173,6 +216,8 @@ export default function ParcelsTab() {
     // Parcel logic helpers
     canActAsParcelOwner,
     canEditParcelDetails,
+    canDeleteParcel,
+    adminScopeAllowsEdit,
     canEditField,
     canManageStatus,
     canManageReturnDelivery,
@@ -424,23 +469,8 @@ export default function ParcelsTab() {
       .sort((a: any, b: any) => (a.name || '').localeCompare(b.name || ''))
   }, [allDisplayParcels, drivers, profile?.city])
 
-  // ⚡ Listes des panneaux d'actions groupées (chargement camion, assignation, Port dû) : 3 filtres
-  // de toute la liste filtrée, autrefois refaits à chaque rendu → mémoïsés. Mêmes règles.
-  const loadableParcelsMemo = useMemo(
-    () => (filteredParcels || []).filter(canLoadTransportParcel),
-    // canLoadTransportParcel ne dépend que du rôle
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [filteredParcels, profile?.role]
-  )
-  const loadableIdSet = useMemo(() => new Set(loadableParcelsMemo.map((p: any) => p.id)), [loadableParcelsMemo])
-  const assignableParcelsMemo = useMemo(() => (filteredParcels || []).filter((p: any) => {
-    // Colis assignables: arrivés dans la ville du chef, pas encore livrés
-    const isInMyCity = (p.destinationCity === profile?.city || p.receiver?.city === profile?.city)
-    // Tous les colis dans ma ville qui ne sont pas livrés ni retournés
-    const notDelivered = !p.deliveredAt && !p.returnedAt && p.status !== 'Livré'
-    return isInMyCity && notDelivered
-  }), [filteredParcels, profile?.city])
   const portDuParcelsMemo = useMemo(() => (filteredParcels || []).filter((p: any) => {
+    if (!agentProCanEditBon(profile, p)) return false
     // Filtrer les parcels Port Dû dans ma ville de destination (non livrés)
     const isDestinationAgency = p.destinationCity === profile?.city || p.receiver?.city === profile?.city
     const isPortDu = p.portType === 'port_du'
@@ -457,7 +487,8 @@ export default function ParcelsTab() {
 
   // ⭐ Navigation au clavier - Focus sur les checkboxes uniquement
   const [focusedIndex, setFocusedIndex] = useState(0)
-  const checkboxRefs = useRef<(HTMLInputElement | null)[]>([])
+  // Cases de sélection (case à cocher ou bloc « role=checkbox » de la sélection en masse) : seul focus() est utilisé
+  const checkboxRefs = useRef<(HTMLElement | null)[]>([])
 
   // ⭐ État pour gérer les couleurs des colis par livreur
   const [parcelColors, setParcelColors] = useState<{[key: string]: string}>({})
@@ -522,6 +553,112 @@ export default function ParcelsTab() {
       console.error('Erreur modification date:', err)
       alert(err?.code === 'permission-denied' ? '❌ Modification refusée : le colis est chargé/verrouillé ou vous n’avez pas le droit de modifier sa date.' : `❌ Erreur: ${err.message}`)
     }
+  }
+
+  // 🔁 Agadir ⇄ Ait Melloul : colis arrivé par erreur dans l'agence voisine.
+  // Clic sur la ville de destination = bascule directe vers l'autre ville, statut « Arrivé en agence ».
+  // Réservé au chef d'agence / Agent PRO de la ville de destination actuelle (même règle dans firestore.rules).
+  const NEIGHBOR_CITIES: Record<string, string> = { 'Agadir': 'Ait Melloul', 'Ait Melloul': 'Agadir' }
+  // deleteField() sur un champ absent ne compte pas comme modification pour firestore.rules
+  const DELIVERY_ASSIGNMENT_RESET = Object.fromEntries([
+    'deliveryDriverId', 'deliveryDriverName', 'deliverySectorId', 'deliverySectorCode', 'deliverySectorName',
+    'deliveryVehicleId', 'deliveryVehicleLabel', 'deliveryAssignedAt', 'deliveryAssignedBy',
+  ].map(k => [k, deleteField()]))
+  const [togglingCityId, setTogglingCityId] = useState<string | null>(null)
+  const neighborCityOf = (parcel: any): string | null => NEIGHBOR_CITIES[parcel?.destinationCity] || null
+  // Expédition locale (Agadir → Agadir, Ait Melloul → Ait Melloul) : créée avec un livreur
+  // (« En cours de livraison ») ou sans (« Initialisé »)
+  const isLocalNotDelivered = (parcel: any) =>
+    ['Initialisé', 'En cours de livraison'].includes(parcel.status) && parcel.originCity === parcel.destinationCity
+  const canToggleDestCity = (parcel: any) =>
+    agentProCanEditBon(profile, parcel) &&
+    !!neighborCityOf(parcel)
+    && (parcel.status === 'Arrivé en agence' || parcel.status === 'En cours de livraison' || isLocalNotDelivered(parcel))
+    && (profile?.role === 'chef_agence' || profile?.role === 'agentpro')
+    && profile?.city === parcel.destinationCity
+  // Livreurs de la ville cible (même filtre que les livreurs d'agence)
+  const driversOfCity = (city: string) => (drivers || []).filter((d: any) =>
+    d.city === city && (d.role === 'livreur' || (d.role === 'chauffeur' && d.chauffeurType !== 'transport')))
+  // Expédition assignée à un livreur : choix d'un livreur de l'autre ville avant la bascule
+  const [cityMoveModal, setCityMoveModal] = useState<{ parcel: any; target: string; driverId: string } | null>(null)
+
+  // Le clic ouvre TOUJOURS le choix du livreur de l'autre ville (ou « sans livreur » = en gare)
+  const onDestCityClick = (parcel: any) => {
+    const target = neighborCityOf(parcel)
+    if (!target || togglingCityId) return
+    setCityMoveModal({ parcel, target, driverId: '' })
+  }
+
+  /** Bascule Agadir ⇄ Ait Melloul. driver = livreur de la ville cible (→ « En cours de livraison »), null = « Arrivé en agence ». */
+  const handleToggleDestCity = async (parcel: any, driver: { id: string; name: string } | null) => {
+    const target = neighborCityOf(parcel)
+    if (!target || togglingCityId) return
+    setTogglingCityId(parcel.id)
+    try {
+      const now = new Date().toISOString()
+      const status = driver ? 'En cours de livraison' : 'Arrivé en agence'
+      // Ancien livreur retiré ; nouveau livreur de la ville cible si choisi
+      const assignment = driver
+        ? { ...DELIVERY_ASSIGNMENT_RESET, deliveryDriverId: driver.id, deliveryDriverName: driver.name || 'Livreur', deliveryAssignedAt: now, deliveryAssignedBy: profile?.name || '' }
+        : DELIVERY_ASSIGNMENT_RESET
+      // Une seule écriture, champ imbriqué 'receiver.city' uniquement : la copie affichée
+      // (recherche, version lite…) peut différer de la base, et firestore.rules refuse tout
+      // autre changement du destinataire.
+      await updateDoc(doc(db, 'parcels', parcel.id), {
+        'receiver.city': target,
+        destinationCity: target,
+        destinationArrivedAt: now,
+        status,
+        visibleInDestinationAgency: true,
+        ...assignment,
+        history: arrayUnion({
+          status,
+          timestamp: now,
+          note: `Basculée ${parcel.destinationCity} → ${target}${driver ? ` et assignée au livreur ${driver.name}` : ''}${parcel.deliveryDriverName ? ` (ancien livreur : ${parcel.deliveryDriverName})` : ''}`,
+          by: profile?.name || '',
+        }),
+      })
+      // Affichage immédiat dans toutes les listes de la page (y compris résultats de recherche)
+      const updates = {
+        receiver: { ...(parcel.receiver || {}), city: target },
+        destinationCity: target,
+        destinationArrivedAt: now,
+        status,
+        visibleInDestinationAgency: true,
+        ...Object.fromEntries(Object.keys(DELIVERY_ASSIGNMENT_RESET).map(k => [k, undefined])),
+        ...(driver ? { deliveryDriverId: driver.id, deliveryDriverName: driver.name || 'Livreur', deliveryAssignedAt: now, deliveryAssignedBy: profile?.name || '' } : {}),
+      }
+      setLocalParcelUpdates(prev => ({ ...prev, [parcel.id]: { ...prev[parcel.id], ...updates } }))
+      window.dispatchEvent(new CustomEvent('parcelUpdated', {
+        detail: { parcelId: parcel.id, updates, timestamp: now, source: 'database' },
+      }))
+      showToast(`${parcel.trackingId || 'Expédition'} → ${target}${driver ? ` · livreur ${driver.name}` : ' (Arrivé en agence)'}`, 'success', 2500)
+    } catch (err: any) {
+      console.error('Erreur bascule ville:', err)
+      showToast(err?.code === 'permission-denied'
+        ? `Bascule refusée : réservée au chef d'agence / Agent PRO de ${parcel.destinationCity}, expédition non livrée.`
+        : `Erreur : ${err?.message || err}`, 'error')
+    } finally {
+      setTogglingCityId(null)
+    }
+  }
+
+  // Badge ville de destination : cliquable (bascule) pour Agadir / Ait Melloul, sinon simple texte
+  const renderDestCity = (parcel: any, className: string, prefix = '') => {
+    const city = parcel.receiver?.city || parcel.destinationCity || '—'
+    if (!canToggleDestCity(parcel)) return <span className={className}>{prefix}{city}</span>
+    const target = neighborCityOf(parcel)
+    return (
+      <button
+        type="button"
+        onClick={e => { e.stopPropagation(); onDestCityClick(parcel) }}
+        disabled={togglingCityId === parcel.id}
+        title={`Cliquer pour passer à ${target} et choisir un livreur de ${target}`}
+        className={`${className} cursor-pointer ring-1 ring-pink-300 hover:ring-2 hover:ring-pink-500 transition disabled:opacity-50 disabled:cursor-wait`}
+      >
+        {prefix}{city} <span aria-hidden="true">⇄</span>
+      </button>
+    )
   }
 
   // ⭐ Générer une couleur pour un livreur basée sur son ID
@@ -636,6 +773,19 @@ export default function ParcelsTab() {
   )
   // ⏳ Résultat en cours de recalcul après un clic de filtre (le bouton est déjà sélectionné)
   const tablePending = !!parcelFiltersPending || deferredTableFilterOpts !== tableFilterOpts || deferredTableSearch !== tableSearch
+  // Les actions groupées suivent exactement les lignes filtrées (recherche comprise), avant pagination.
+  const loadableParcelsMemo = useMemo(
+    () => tableFilteredParcelsMemo.filter(canLoadTransportParcel),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [tableFilteredParcelsMemo, profile?.role, profile?.realRole, profile?.city]
+  )
+  const loadableIdSet = useMemo(() => new Set(loadableParcelsMemo.map((p: any) => p.id)), [loadableParcelsMemo])
+  const bulkAssignment = useAgencyBulkAssignment({
+    profile, parcels: tableFilteredParcelsMemo,
+    pickupIds: selectedPickupParcelIds, deliveryIds: bulkAssignSelectedIds,
+    setPickupIds: setSelectedPickupParcelIds, setDeliveryIds: setBulkAssignSelectedIds,
+    setTransportIds: setBulkLoadSelectedIds,
+  })
   // ⚡ Lignes « Validation des saisies aide-agent » : mémoïsées (autrefois refiltrées à chaque rendu)
   const aideValidationParcelsMemo = useMemo(
     () => (profile?.role === 'chef_agence' || profile?.role === 'agentpro')
@@ -786,7 +936,7 @@ export default function ParcelsTab() {
       return
     }
 
-    if (selectedPickupParcelIds.size === 0) {
+    if (bulkAssignment.mode !== 'pickup' || bulkAssignment.ids.length === 0) {
       alert('Aucune expédition sélectionnée')
       return
     }
@@ -797,32 +947,19 @@ export default function ParcelsTab() {
       return
     }
 
-    if (!confirm(`Assigner ${selectedPickupParcelIds.size} expédition(s) à ${driver.name} pour ramassage ?`)) {
+    const selected = bulkAssignment.parcels.filter((p: any) => bulkAssignment.selected.has(p.id))
+    if (selected.length !== selectedPickupParcelIds.size || selected.some((p: any) => !canBulkAssignPickup(profile, p))) {
+      alert('La sélection a changé. Sélectionnez à nouveau les expéditions initialisées de votre agence.')
+      return
+    }
+    if (!confirm(`Assigner ${selected.length} expédition(s) à ${driver.name} pour ramassage ?`)) {
       return
     }
 
     setAssigningPickupInProgress(true)
 
     try {
-      const promises = Array.from(selectedPickupParcelIds).map(parcelId => {
-        // Trouver l'expédition pour vérifier si c'est un port payé
-        const parcel = allDisplayParcels.find((p: any) => p.id === parcelId)
-        const updates: any = {
-          // 🆕 Champs dédiés au ramassage (séparés de la livraison)
-          pickupDriverId: assigningPickupDriver,
-          pickupDriverName: driver.name,
-          pickupAssignedAt: new Date(),
-          pickupAssignedBy: profile?.name || '',
-          status: 'En cours de ramassage'
-        }
-
-        // Si c'est un port payé, marquer comme collecté par le livreur
-        if (parcel?.portType === 'port_paye' && !parcel?.portPayeMethod) {
-          updates.portStatus = 'collected'
-        }
-
-        return updateParcel(parcelId, updates)
-      })
+      const promises = selected.map((parcel: any) => updateParcel(parcel.id, pickupAssignmentUpdates(profile, parcel, driver)))
 
       await Promise.all(promises)
 
@@ -855,20 +992,20 @@ export default function ParcelsTab() {
 
         // Vérifier si le colis peut être assigné (pour chef_agence et agentpro)
         if (profile?.role === 'chef_agence' || profile?.role === 'agentpro') {
-          const isInMyCity = (singleParcel.destinationCity === profile?.city || singleParcel.receiver?.city === profile?.city)
-          const canAssign = !singleParcel.deliveredAt && !singleParcel.returnedAt && singleParcel.status !== 'Livré'
-
-          if (isInMyCity && canAssign) {
+          if (bulkAssignment.mode === 'pickup' ? canBulkAssignPickup(profile, singleParcel) : canBulkAssignDelivery(profile, singleParcel)) {
             // Ajouter/retirer de la sélection
             setBulkAssignError('')
-            setBulkAssignSelectedIds((prev: any) => {
-              const isAlreadySelected = prev.includes(singleParcel.id)
-              if (isAlreadySelected) {
-                return prev.filter((id: any) => id !== singleParcel.id)
-              } else {
-                return [...new Set([...prev, singleParcel.id])]
-              }
-            })
+            if (bulkAssignment.mode === 'pickup') {
+              setSelectedPickupParcelIds(prev => {
+                const next = new Set(prev)
+                if (next.has(singleParcel.id)) next.delete(singleParcel.id)
+                else next.add(singleParcel.id)
+                return next
+              })
+            } else {
+              setBulkAssignSelectedIds((prev: string[]) => prev.includes(singleParcel.id)
+                ? prev.filter(id => id !== singleParcel.id) : [...prev, singleParcel.id])
+            }
 
             // Vider la recherche et remettre le focus
             setTableSearch('')
@@ -891,6 +1028,20 @@ export default function ParcelsTab() {
     parcels: []
   })
   const [printChoiceMenuOpen, setPrintChoiceMenuOpen] = useState(false)
+  // 📅 « Période » : la recherche ne part qu'une fois les DEUX dates choisies (et dans l'ordre) — d'ici là,
+  // les dates restent en brouillon et la période précédente reste appliquée (même règle que DateFilter)
+  const [periodDraft, setPeriodDraft] = useState<{ from: string; to: string } | null>(null)
+  // Période changée ailleurs (réinitialisation, raccourci…) : brouillon abandonné
+  useEffect(() => { setPeriodDraft(null) }, [datePreset, dateFrom, dateTo])
+  const editPeriod = (part: 'from' | 'to', v: string) => {
+    const next = { from: periodDraft ? periodDraft.from : (dateFrom || ''), to: periodDraft ? periodDraft.to : (dateTo || ''), [part]: v }
+    if (next.from && next.to && next.from <= next.to) {
+      setDateFrom(next.from)
+      setDateTo(next.to)
+      if (datePreset !== 'custom') setDatePreset('custom')
+      setPeriodDraft(null)
+    } else setPeriodDraft(next)
+  }
   // 📅 Période affichée dans le titre des tableaux de détail (jour d'opération ou période choisie)
   const periodLabel = useMemo(() => {
     if (datePreset === 'operational' && operationalDay) return formatOperationalDay(operationalDay, true)
@@ -1257,6 +1408,8 @@ export default function ParcelsTab() {
 
   return (
     <>
+      {/* 📋 Aide agent : vue dédiée « Mes saisies » (ses propres bons, période, totaux, actions) */}
+      {profile?.role === 'aide_agent' ? <MesSaisiesView /> : (
       <div className="mt-4 space-y-3">
         {/* Sub-tabs */}
         <div className="flex items-center gap-2">
@@ -1272,8 +1425,8 @@ export default function ParcelsTab() {
               {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') ? "Toute l'agence" : 'Tous les colis'}
             </button>
           </div>
-          <span className="flex items-center gap-1.5 text-xs text-green-600 font-medium px-2.5 py-2 bg-white border border-gray-200 rounded-xl">
-            <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" /> Live
+          <span className={`flex items-center gap-1.5 text-xs ${archiveSearchOnly ? 'text-amber-700' : 'text-green-600'} font-medium px-2.5 py-2 bg-white border border-gray-200 rounded-xl`}>
+            <span className={`w-2 h-2 ${archiveSearchOnly ? 'bg-amber-500' : 'bg-green-500 animate-pulse'} rounded-full`} /> {archiveSearchOnly ? 'Archives' : 'Live'}
           </span>
         </div>
 
@@ -1333,8 +1486,8 @@ export default function ParcelsTab() {
           </div>
         )}
 
-        {/* 🗄️ Checkbox Archives - visible seulement quand recherche active */}
-        {search && (
+        {/* Keep the option accessible when clearing an all-date archive search. */}
+        {(search || includeArchived) && (
           <label className="flex items-center gap-2 px-4 py-2 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer hover:bg-amber-100 transition-colors">
             <input
               type="checkbox"
@@ -1346,6 +1499,12 @@ export default function ParcelsTab() {
               🗄️ Inclure archives (+30 jours)
             </span>
           </label>
+        )}
+        {archiveSearchOnly && (
+          <p role="status" className="px-4 py-2 text-sm text-amber-800 bg-amber-50 rounded-lg">
+            Recherche dans toutes les archives, sans limite de date. Seules les expéditions correspondant à votre recherche sont chargées.
+            {!search.trim() && ' Saisissez un N° EXP, un numéro de suivi, un nom ou un téléphone.'}
+          </p>
         )}
 
         {/* 🛒 PANIER D'EXPORT EXCEL */}
@@ -1534,9 +1693,7 @@ export default function ParcelsTab() {
                               {parcel.sender?.city || parcel.originCity || '—'}
                             </span>
                             <span className="text-gray-400">→</span>
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-pink-100 text-pink-700 rounded text-xs font-semibold">
-                              {parcel.receiver?.city || parcel.destinationCity || '—'}
-                            </span>
+                            {renderDestCity(parcel, 'inline-flex items-center gap-1 px-1.5 py-0.5 bg-pink-100 text-pink-700 rounded text-xs font-semibold')}
                           </div>
                           {parcel.receiver?.tel && (
                             <div className="font-mono text-gray-500">
@@ -1559,6 +1716,7 @@ export default function ParcelsTab() {
                       </div>
 
                       {/* Boutons toggle - version compacte */}
+                      {agentProReadOnly(profile, parcel) && <ReadOnlyBadge />}
                       {canManageStatus(parcel) && (
                         <div className="flex-shrink-0">
                           <QuickStatusToggles
@@ -1592,19 +1750,111 @@ export default function ParcelsTab() {
           </div>
         )}
 
+        {/* 🎯 Recherche ciblée (N° EXP, téléphone, N° LMA) avec une période choisie : expéditions trouvées dans la
+            base mais ABSENTES de la liste affichée (hors période / filtres). Montrées à part, jamais comptées. */}
+        {(() => {
+          if (!search) return null
+          const shownIds = new Set((filteredParcels || []).map((p: any) => p.id))
+          const extra = (outOfPeriodResults || []).filter((p: any) => !shownIds.has(p.id))
+          if (outOfPeriodSearching && !extra.length) {
+            return (
+              <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
+                <div className="w-3 h-3 border-2 border-amber-600 border-t-transparent rounded-full animate-spin" />
+                Recherche aussi hors de la période affichée…
+              </div>
+            )
+          }
+          if (!extra.length) return null
+          const created = (p: any) => { const d = p.createdAt?.toDate ? p.createdAt.toDate() : p.createdAt ? new Date(p.createdAt) : null; return d && !isNaN(d.getTime()) ? d : null }
+          return (
+            <div className="bg-white border-2 border-amber-300 rounded-xl shadow overflow-hidden">
+              <div className="bg-gradient-to-r from-amber-500 to-orange-500 px-4 py-2 flex items-center gap-2 flex-wrap">
+                <Search className="w-4 h-4 text-white" />
+                <span className="text-sm font-bold text-white">
+                  {extra.length} expédition{extra.length > 1 ? 's' : ''} trouvée{extra.length > 1 ? 's' : ''} hors de la période affichée
+                </span>
+                <span className="text-xs font-medium text-white/90 bg-white/20 px-2 py-0.5 rounded-full">non comptée{extra.length > 1 ? 's' : ''} dans les totaux</span>
+              </div>
+              <div className="divide-y divide-gray-100">
+                {extra.slice(0, 10).map((parcel: any) => {
+                  const sc = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
+                  const d = created(parcel)
+                  return (
+                    <div key={parcel.id} className="p-3 hover:bg-amber-50/50 transition-colors">
+                      <div className="flex items-start justify-between gap-3 flex-wrap">
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
+                            <span className="font-mono font-black text-blue-600 text-sm">{parcel.sender?.nic || parcel.senderNic || parcel.trackingId || '—'}</span>
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-bold ${sc}`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${sc.dot}`} />
+                              {parcel.status || 'Initialisé'}
+                            </span>
+                            <span className="text-[11px] font-semibold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">
+                              hors période · créée le {d ? d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'}
+                            </span>
+                            {parcel.isArchived && <span className="text-[11px] font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full">archivée</span>}
+                          </div>
+                          <div className="text-xs text-gray-600 space-y-0.5">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-semibold text-gray-700">📤 {parcel.sender?.name || '—'}</span>
+                              <span className="text-gray-400">→</span>
+                              <span className="font-semibold text-gray-700">📥 {parcel.receiver?.name || '—'}</span>
+                            </div>
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded text-xs font-semibold">{parcel.sender?.city || parcel.originCity || '—'}</span>
+                              <span className="text-gray-400">→</span>
+                              {renderDestCity(parcel, 'inline-flex items-center gap-1 px-1.5 py-0.5 bg-pink-100 text-pink-700 rounded text-xs font-semibold')}
+                              {parcel.deliveryDriverName && <span className="text-gray-500">🛵 {parcel.deliveryDriverName}</span>}
+                            </div>
+                            <div className="flex items-center gap-2 mt-1 flex-wrap">
+                              {parcel.codAmount > 0 && <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-emerald-100 text-emerald-700 rounded text-xs font-bold">💰 COD: {parcel.codAmount} DH{isMixedCod(parcel) && ` (${codPartsBreakdown(parcel)})`}</span>}
+                              {parcel.price > 0 && <span className="inline-flex items-center gap-1 px-2 py-0.5 bg-orange-100 text-orange-700 rounded text-xs font-bold">📮 Port: {parcel.price} DH</span>}
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex flex-col gap-1.5 shrink-0">
+                          <button onClick={() => ensureFullParcel(parcel).then((full: any) => setHistoryModal({ open: true, parcel: full }))}
+                            className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 transition">
+                            📜 Historique
+                          </button>
+                          {d && !parcel.isArchived && (
+                            // Charge SEULEMENT la journée d'opération de cette expédition (pas toute une période)
+                            <button onClick={() => {
+                              const opDay = new Date(d)
+                              if (opDay.getHours() < 8) opDay.setDate(opDay.getDate() - 1)
+                              opDay.setHours(0, 0, 0, 0)
+                              setOperationalDay(opDay)
+                              setDatePreset('operational')
+                            }}
+                              title="Afficher la journée d'opération de cette expédition (charge seulement ce jour-là)"
+                              className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-amber-100 hover:bg-amber-200 text-amber-800 transition">
+                              📅 Afficher sa journée
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          )
+        })()}
+
         {/* Message si aucun résultat */}
-        {search && filteredParcels.length === 0 && !isSearching && (
+        {search && filteredParcels.length === 0 && !isSearching && !outOfPeriodSearching
+          && !(outOfPeriodResults || []).length && (
           <div className="bg-amber-50 border-2 border-amber-300 rounded-xl p-4 text-center">
             <div className="text-amber-700 font-semibold mb-1">
               🔍 Aucun résultat trouvé
             </div>
             <div className="text-sm text-amber-600">
-              Essayez avec un autre terme de recherche ou activez l'option "Inclure archives" ci-dessus
+              {includeArchived ? 'Précisez votre recherche ou vérifiez les autres filtres.' : 'Essayez avec un autre terme de recherche ou activez l’option « Inclure archives » ci-dessus.'}
             </div>
           </div>
         )}
 
-        {!search && (<>
+        {!search && !archiveSearchOnly && (<>
         {/* ── TOGGLE FILTRES ── */}
         {(() => {
           const activeCount = [
@@ -1642,6 +1892,7 @@ export default function ParcelsTab() {
 
               {/* ✅ Bouton "Toutes les villes" - UNIQUEMENT pour Agent Pro */}
               {profile?.role === 'agentpro' && (
+                <div className="space-y-1">
                 <button
                   onClick={() => setShowAllCities(!showAllCities)}
                   className="w-full flex items-center gap-2 px-4 py-2.5 bg-white border border-gray-200 rounded-xl shadow-sm hover:border-purple-400 hover:bg-purple-50 transition"
@@ -1655,6 +1906,8 @@ export default function ParcelsTab() {
                     {showAllCities ? '🌍 Toutes les villes' : '📍 Ma ville uniquement'}
                   </span>
                 </button>
+                {showAllCities && <p className="text-xs text-gray-500 px-2">Bon : agence de création. Livraison et livreur : agence de destination.</p>}
+                </div>
               )}
 
               <button
@@ -1940,6 +2193,12 @@ export default function ParcelsTab() {
                           citiesProgress={loadAllCitiesProgress || 0}
                         />
                       )}
+                      {/* ⚠️ « Récent » + filtre : plafond par sens atteint (la suite n'est chargée que pour une période) */}
+                      {agencyCapReached && datePreset === 'all' && (
+                        <span className="flex items-center gap-1.5 px-2 py-1 rounded-lg bg-orange-50 border border-orange-200 text-orange-700 text-[11px] font-semibold">
+                          ⚠️ Affichage limité aux {Number(agencyCapSize || 2000).toLocaleString('fr-FR')} expéditions les plus récentes par sens — choisissez une période pour tout voir
+                        </span>
+                      )}
                     </div>
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="text-[10px] text-gray-400 font-bold uppercase w-16 shrink-0">Période</span>
@@ -1953,6 +2212,8 @@ export default function ParcelsTab() {
                         { key: 'custom', label: 'Période' },
                       ].map(({ key, label }) => (
                         <button key={key} onClick={() => {
+                          if (key === 'custom') { if (datePreset !== 'custom') setPeriodDraft({ from: dateFrom || '', to: dateTo || '' }); return }
+                          setPeriodDraft(null)
                           setDatePreset(key)
                           // 🗓️ Si J.Opé et pas de date définie, utiliser dateFrom ou aujourd'hui
                           if (key === 'operational' && !operationalDay) {
@@ -1964,16 +2225,16 @@ export default function ParcelsTab() {
                           }
                         }}
                           className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition ${
-                            datePreset === key ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                            (periodDraft ? key === 'custom' : datePreset === key) ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
                           }`}
                         >{label}</button>
                       ))}
                     </div>
 
-                    {datePreset === 'operational' && (
+                    {datePreset === 'operational' && !periodDraft && (
                       <div className="flex items-center gap-2 pl-20">
                         <span className="text-xs text-gray-500">Jour d'opération (8H → 6H lendemain)</span>
-                        <input type="date" value={operationalDay ? `${operationalDay.getFullYear()}-${String(operationalDay.getMonth() + 1).padStart(2, '0')}-${String(operationalDay.getDate()).padStart(2, '0')}` : ''}
+                        <DateInput value={operationalDay ? `${operationalDay.getFullYear()}-${String(operationalDay.getMonth() + 1).padStart(2, '0')}-${String(operationalDay.getDate()).padStart(2, '0')}` : ''}
                           onChange={e => {
                             if (!e.target.value) {
                               setOperationalDay(null)
@@ -1986,23 +2247,30 @@ export default function ParcelsTab() {
                         />
                       </div>
                     )}
-                    {datePreset === 'day' && (
+                    {datePreset === 'day' && !periodDraft && (
                       <div className="flex items-center gap-2 pl-20">
-                        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                        <DateInput value={dateFrom} onChange={e => setDateFrom(e.target.value)}
                           className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500 flex-1"
                         />
                       </div>
                     )}
-                    {datePreset === 'custom' && (
+                    {(datePreset === 'custom' || periodDraft) && (
                       <div className="flex items-center gap-2 pl-20">
-                        <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                        <DateInput value={periodDraft ? periodDraft.from : dateFrom} onChange={e => editPeriod('from', e.target.value)}
                           className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500 flex-1"
                         />
                         <span className="text-gray-400 text-xs shrink-0">→</span>
-                        <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                        <DateInput value={periodDraft ? periodDraft.to : dateTo} onChange={e => editPeriod('to', e.target.value)}
                           className="border border-gray-200 rounded-lg px-2 py-1.5 text-xs focus:outline-none focus:border-blue-500 flex-1"
                         />
                       </div>
+                    )}
+                    {periodDraft && (
+                      <p className="pl-20 text-[11px] text-amber-700">
+                        {periodDraft.from && periodDraft.to && periodDraft.from > periodDraft.to
+                          ? '⚠️ La date de début doit précéder la date de fin.'
+                          : 'Choisissez les deux dates : la recherche se lance ensuite.'}
+                      </p>
                     )}
                   </div>
 
@@ -2291,8 +2559,11 @@ export default function ParcelsTab() {
                     <div className="flex items-center gap-2 flex-wrap">
                       <button
                         type="button"
+                        disabled={tablePending || bulkLoadBusy || loadableParcels.length === 0}
                         onClick={() => {
                           setBulkLoadError('')
+                          setBulkAssignSelectedIds([])
+                          setSelectedPickupParcelIds(new Set())
                           setBulkLoadSelectedIds(allSelected ? [] : loadableParcels.map((p: any) => p.id))
                         }}
                         className={`px-3 py-2 rounded-xl text-xs font-bold border transition ${
@@ -2314,8 +2585,11 @@ export default function ParcelsTab() {
                         return (
                           <button
                             type="button"
+                            disabled={tablePending || bulkLoadBusy || cityLoadables.length === 0}
                             onClick={() => {
                               setBulkLoadError('')
+                              setBulkAssignSelectedIds([])
+                              setSelectedPickupParcelIds(new Set())
                               setBulkLoadSelectedIds(allCitySelected ? [] : cityLoadables.map((p: any) => p.id))
                             }}
                             className={`px-3 py-2 rounded-xl text-xs font-bold border transition ${
@@ -2468,7 +2742,7 @@ export default function ParcelsTab() {
                       <button
                         type="button"
                         onClick={() => handleBulkLoadTransport(loadableParcels)}
-                        disabled={bulkLoadBusy || selectedCount === 0}
+                        disabled={tablePending || bulkLoadBusy || selectedCount === 0}
                         className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-sm font-bold transition"
                       >
                         {bulkLoadBusy
@@ -2483,12 +2757,8 @@ export default function ParcelsTab() {
 
               {/* ⭐ NOUVEAU: Panneau d'assignation en masse à un livreur (chef d'agence et agentpro) */}
               {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (() => {
-                // Colis assignables: arrivés dans la ville du chef, pas encore livrés
-                const assignableParcels = assignableParcelsMemo
-                const selectedCount = bulkAssignSelectedIds.length
-                const allSelected = assignableParcels.length > 0 && selectedCount === assignableParcels.length
-
-                if (assignableParcels.length === 0) return null
+                const assignableParcels = bulkAssignment.parcels
+                const selectedCount = bulkAssignment.ids.length
 
                 return (
                   <div className="bg-green-50 border border-green-200 rounded-2xl p-4 space-y-3">
@@ -2498,30 +2768,41 @@ export default function ParcelsTab() {
                           <User className="w-4 h-4" /> Assignation livreur groupée
                         </h3>
                         <p className="text-xs text-green-500 mt-0.5">
-                          {selectedCount} sélectionné(s) sur {assignableParcels.length} colis à assigner
+                          {selectedCount} sélectionné(s) sur {assignableParcels.length} {bulkAssignment.mode === 'pickup'
+                            ? `expédition(s) initialisée(s) dans votre agence (${profile?.city || ''})`
+                            : 'colis à livrer dans votre ville'}
                         </p>
                       </div>
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setBulkAssignError('')
-                            setBulkAssignSelectedIds(allSelected ? [] : assignableParcels.map((p: any) => p.id))
-                          }}
-                          className={`px-3 py-2 rounded-xl text-xs font-bold border transition ${
-                            allSelected
-                              ? 'bg-white text-green-700 border-green-300'
-                              : 'bg-green-600 text-white border-green-600 hover:bg-green-700'
-                          }`}
-                        >
-                          {allSelected ? 'Désélectionner tout' : 'Sélectionner tout'}
+                      <div className="flex gap-2 flex-wrap" role="group" aria-label="Opération d'assignation">
+                        <button type="button" aria-pressed={bulkAssignment.mode === 'pickup'}
+                          disabled={bulkAssignBusy || assigningPickupInProgress}
+                          onClick={() => bulkAssignment.setMode('pickup')}
+                          className={`px-3 py-2 rounded-xl text-xs font-bold border ${bulkAssignment.mode === 'pickup' ? 'bg-orange-600 text-white border-orange-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+                          Ramassage (initialisées)
                         </button>
+                        <button type="button" aria-pressed={bulkAssignment.mode === 'delivery'}
+                          disabled={bulkAssignBusy || assigningPickupInProgress}
+                          onClick={() => bulkAssignment.setMode('delivery')}
+                          className={`px-3 py-2 rounded-xl text-xs font-bold border ${bulkAssignment.mode === 'delivery' ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-200'}`}>
+                          Livraison (destination)
+                        </button>
+                      </div>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <BulkDeliverySelection
+                          parcels={assignableParcels}
+                          selectedIds={bulkAssignment.ids}
+                          disabled={tablePending || bulkAssignBusy || assigningPickupInProgress}
+                          onChange={ids => {
+                            setBulkAssignError('')
+                            bulkAssignment.select(ids)
+                          }}
+                        />
                         {selectedCount > 0 && (
                           <button
                             type="button"
                             onClick={() => {
                               setBulkAssignError('')
-                              setBulkAssignSelectedIds([])
+                              bulkAssignment.select([])
                             }}
                             className="px-3 py-2 rounded-xl text-xs font-bold border border-red-300 bg-white text-red-700 hover:bg-red-50 transition flex items-center gap-1"
                           >
@@ -2532,7 +2813,7 @@ export default function ParcelsTab() {
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {bulkAssignment.mode === 'delivery' && <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                       <div className="bg-white border border-green-100 rounded-xl px-3 py-2">
                         <label className="text-[10px] font-bold text-green-600 uppercase tracking-wider block mb-1">Livreur *</label>
                         <select
@@ -2563,7 +2844,7 @@ export default function ParcelsTab() {
                             ))}
                         </select>
                       </div>
-                    </div>
+                    </div>}
 
                     <div className="flex items-center justify-between gap-3 flex-wrap">
                       <p className="text-xs font-semibold text-green-600">
@@ -2578,7 +2859,7 @@ export default function ParcelsTab() {
                           onClick={async () => {
                             // ✅ CORRECTION: Utiliser allDisplayParcels au lieu de filteredParcels
                             // pour inclure TOUS les parcels sélectionnés, même si les filtres ont changé
-                            const selectedParcels = allDisplayParcels.filter((p: any) => bulkAssignSelectedSet.has(p.id))
+                            const selectedParcels = assignableParcels.filter((p: any) => bulkAssignment.selected.has(p.id))
 
                             if (selectedParcels.length === 0) {
                               alert('Aucune expédition sélectionnée à exporter')
@@ -2677,28 +2958,28 @@ export default function ParcelsTab() {
                         </button>
 
                         {/* Bouton Assigner au livreur */}
-                        <button
+                        {bulkAssignment.mode === 'delivery' && <button
                           type="button"
                           onClick={() => handleBulkAssignDriverWithColor(assignableParcels)}
-                          disabled={bulkAssignBusy || selectedCount === 0}
+                          disabled={tablePending || bulkAssignBusy || selectedCount === 0}
                           className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-green-600 hover:bg-green-700 disabled:opacity-40 text-white text-sm font-bold transition"
                         >
                           {bulkAssignBusy
                             ? <><div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" /> Assignation...</>
                             : <><User className="w-4 h-4" /> Assigner au livreur</>
                           }
-                        </button>
+                        </button>}
 
                         {/* Bouton Assigner pour ramassage */}
-                        <button
+                        {bulkAssignment.mode === 'pickup' && <button
                           type="button"
                           onClick={() => setAssignPickupModal(true)}
-                          disabled={selectedPickupParcelIds.size === 0}
+                          disabled={tablePending || selectedCount === 0 || assigningPickupInProgress}
                           className="flex items-center gap-2 px-4 py-2.5 rounded-xl bg-orange-600 hover:bg-orange-700 disabled:opacity-40 text-white text-sm font-bold transition"
                         >
                           <Package className="w-4 h-4" />
-                          Assigner pour ramassage ({selectedPickupParcelIds.size})
-                        </button>
+                          Assigner pour ramassage ({selectedCount})
+                        </button>}
 
                         {Object.keys(parcelColors).length > 0 && (
                           <button
@@ -2828,7 +3109,7 @@ export default function ParcelsTab() {
         ) : filteredParcels.length === 0 ? (
           <div className="text-center py-12 text-gray-400">
             <Package className="w-10 h-10 mx-auto mb-3 opacity-30" />
-            <p className="text-sm">Aucune expédition trouvée</p>
+            <p className="text-sm">{archiveSearchOnly && !search.trim() ? 'Recherchez une expédition dans les archives.' : 'Aucune expédition trouvée'}</p>
           </div>
         ) : (() => {
           // ⭐ Fusion + filtre de recherche du tableau sur TOUS les parcels : mémoïsés plus haut
@@ -3171,15 +3452,14 @@ export default function ParcelsTab() {
                   <tbody className="bg-white">
                     {/* pagedParcels est déjà filtré par la recherche tableau (getTableFilteredParcels) */}
                     {pagedParcels.map((parcel: any, idx: number) => {
+                      if (agentProReadOnly(profile, parcel)) return <ReadOnlyParcelRow key={parcel.id} parcel={parcel} columns={visibleColumns} />
                       const isOwn = canActAsParcelOwner(parcel)
                       const sc = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
                       const serviceType = ALL_SERVICE_TYPES.find(st => st.key === parcel.serviceType)
                       const driver = drivers?.find((d: any) => d.id === parcel.deliveryDriverId || d.id === parcel.chauffeurId)
 
-                      // Checkbox toujours affiché quelque soit le statut ou l'agence
-                      const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
-                      const isFromMyCity = (parcel.originCity === profile?.city || parcel.sender?.city === profile?.city)
-                      const isAssignable = (profile?.role === 'chef_agence' || profile?.role === 'agentpro')
+                      // Même admissibilité pour les cases individuelles et la sélection groupée.
+                      const isAssignable = bulkAssignment.mode === 'delivery' && canBulkAssignDelivery(profile, parcel)
                       const assignSelected = bulkAssignSelectedSet.has(parcel.id)
 
                       return (
@@ -3195,6 +3475,24 @@ export default function ParcelsTab() {
                           {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
                             <td className="px-3 py-3 text-center border-r border-gray-100 bg-green-50/30">
                               <div className="flex flex-col items-center gap-1">
+                                {canLoadTransportParcel(parcel) && (
+                                  <input
+                                    type="checkbox"
+                                    checked={bulkLoadSelectedSet.has(parcel.id)}
+                                    onChange={e => {
+                                      e.stopPropagation()
+                                      setBulkLoadError('')
+                                      const checked = e.target.checked
+                                      setBulkLoadSelectedIds((prev: string[]) => checked
+                                        ? [...new Set([...prev, parcel.id])]
+                                        : prev.filter(id => id !== parcel.id))
+                                    }}
+                                    className="w-4 h-4 accent-blue-600 cursor-pointer"
+                                    tabIndex={-1}
+                                    title="Chargement camion"
+                                    aria-label={`Chargement camion ${parcel.senderNic || parcel.sender?.nic || parcel.trackingId}`}
+                                  />
+                                )}
                                 {/* Checkbox assignation livreur */}
                                 {isAssignable ? (
                                   <input
@@ -3245,7 +3543,7 @@ export default function ParcelsTab() {
                                   const isPortDu = parcel.portType === 'port_du'
                                   const notDelivered = !parcel.deliveredAt && parcel.status !== 'Livré'
 
-                                  if (!isPortDu || !isDestinationAgency || !notDelivered) return null
+                                  if (!isPortDu || !isDestinationAgency || !notDelivered || !agentProCanEditBon(profile, parcel)) return null
 
                                   const portDuSelected = bulkPortDuSelectedSet.has(parcel.id)
                                   return (
@@ -3268,7 +3566,7 @@ export default function ParcelsTab() {
                                 })()}
 
                                 {/* Checkbox assignation ramassage */}
-                                {isAssignable && isFromMyCity && (
+                                {bulkAssignment.mode === 'pickup' && canBulkAssignPickup(profile, parcel) && (
                                   <input
                                     type="checkbox"
                                     checked={selectedPickupParcelIds.has(parcel.id)}
@@ -3287,7 +3585,7 @@ export default function ParcelsTab() {
                                       })
                                     }}
                                     tabIndex={0}
-                                    className="w-4 h-4 accent-orange-600 cursor-pointer"
+                                    className="w-4 h-4 accent-orange-600 cursor-pointer checkbox-assign-table"
                                     title="📦 Assigner pour ramassage"
                                   />
                                 )}
@@ -3329,7 +3627,7 @@ export default function ParcelsTab() {
                             <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
                               {(() => {
                                 const isOriginAgency = parcel.originCity === profile?.city || parcel.sender?.city === profile?.city
-                                const canEditDate = (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && isOriginAgency
+                                const canEditDate = (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && isOriginAgency && agentProCanEditBon(profile, parcel)
 
                                 // Utiliser expeditionDate si défini, sinon createdAt
                                 let currentDate: Date | null = null
@@ -3344,8 +3642,7 @@ export default function ParcelsTab() {
                                 if (canEditDate && isEditing) {
                                   return (
                                     <div className="flex flex-col gap-2 py-1">
-                                      <input
-                                        type="date"
+                                      <DateInput
                                         value={editingDateValue}
                                         onChange={e => setEditingDateValue(e.target.value)}
                                         className="border-2 border-blue-500 rounded-lg px-3 py-2 text-sm font-medium focus:outline-none focus:border-blue-600 focus:ring-2 focus:ring-blue-200 shadow-sm"
@@ -3424,7 +3721,7 @@ export default function ParcelsTab() {
                           )}
                           <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
                             <div className="flex items-center gap-2">
-                              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') ? (
+                              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && agencyCanDeliver(profile, parcel) ? (
                                 <>
                                   <button
                                     onClick={async () => {
@@ -3484,6 +3781,7 @@ export default function ParcelsTab() {
                                           setForceUpdateCounter(c => c + 1)
                                         } catch (err: any) {
                                           console.error('Erreur changement statut:', err)
+                                          alert(`❌ ${err?.message || err}`)
                                         }
                                       }
                                     }}
@@ -3500,7 +3798,7 @@ export default function ParcelsTab() {
                                 </span>
                               )}
                               {/* 🖐️ Éditer : à côté du statut */}
-                              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                              {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && agentProCanEditBon(profile, parcel) && (
                                 <button
                                   onClick={() => ensureFullParcel(parcel).then((parcel: any) => setQuickEditModal({
                                     open: true,
@@ -3563,9 +3861,7 @@ export default function ParcelsTab() {
                           )}
                           {visibleColumns.villeDest && (
                             <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100 bg-pink-50/30">
-                              <span className="inline-flex items-center gap-1 px-2 py-1 bg-pink-100 text-pink-700 rounded-lg text-xs font-semibold">
-                                📍 {parcel.receiver?.city || parcel.destinationCity || '—'}
-                              </span>
+                              {renderDestCity(parcel, 'inline-flex items-center gap-1 px-2 py-1 bg-pink-100 text-pink-700 rounded-lg text-xs font-semibold', '📍 ')}
                             </td>
                           )}
                           {visibleColumns.adresse && (
@@ -3677,7 +3973,7 @@ export default function ParcelsTab() {
                                     {isMixedCod(parcel) && (
                                       <span className="text-[10px] font-semibold text-green-700 whitespace-nowrap" title="Retour de fonds mixte">{codPartsBreakdown(parcel)}</span>
                                     )}
-                                    <button
+                                    {agentProCanEditBon(profile, parcel) && <button
                                       onClick={(e) => {
                                         e.stopPropagation()
                                         ensureFullParcel(parcel).then((parcel: any) => setCodEditModal({ parcel, ...codEditInitial(parcel), loading: false, error: '' }))
@@ -3686,8 +3982,8 @@ export default function ParcelsTab() {
                                       title={`Modifier COD (role: ${profile?.role})`}
                                     >
                                       ✏️
-                                    </button>
-                                    {(parcel.serviceType === 'cheque' || parcel.serviceType === 'traite') && (
+                                    </button>}
+                                    {agentProCanEditBon(profile, parcel) && (parcel.serviceType === 'cheque' || parcel.serviceType === 'traite') && (
                                       <button
                                         onClick={() => setCodDocumentModal({
                                           open: true,
@@ -3710,12 +4006,17 @@ export default function ParcelsTab() {
                           )}
                           {visibleColumns.livreur && (
                             <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
-                              {parcel.deliveryDriverName ? (
-                                <div className="inline-flex items-center gap-1.5">
-                                  <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded-lg font-semibold">
+                              {isLockedOutgoing(parcel, profile?.city) ? (
+                                <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded-lg font-semibold whitespace-nowrap"
+                                  title="Expédition vers une autre ville : la livraison est gérée par l'agence de destination">
+                                  🚚 {parcel.deliveryDriverName || `En gare - ${parcel.destinationCity || parcel.receiver?.city}`} <span className="text-[10px]">🔒</span>
+                                </span>
+                              ) : parcel.deliveryDriverName ? (
+                                <div className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                                  <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded-lg font-semibold whitespace-nowrap">
                                     🚚 {parcel.deliveryDriverName}
                                   </span>
-                                  {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                                  {canChangeDriverOf(parcel, profile) && (
                                     <button
                                       onClick={() => setChangeDriverModal({ open: true, parcel, newDriverId: '', loading: false, error: '' })}
                                       className="hover:scale-125 transition-transform cursor-pointer text-base"
@@ -3727,11 +4028,11 @@ export default function ParcelsTab() {
                                 </div>
                               ) : (parcel.originCity && parcel.originCity === parcel.destinationCity) ? (
                                 // Expédition LOCALE (ville d'expédition = ville de destination) : « 🚚 En gare - <ville> 🖐️ »
-                                <div className="inline-flex items-center gap-1.5">
-                                  <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded-lg font-semibold">
+                                <div className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                                  <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded-lg font-semibold whitespace-nowrap">
                                     🚚 En gare - {parcel.destinationCity}
                                   </span>
-                                  {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                                  {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && agencyCanDeliver(profile, parcel) && (
                                     <button
                                       onClick={() => setChangeDriverModal({ open: true, parcel, newDriverId: '', loading: false, error: '' })}
                                       className="hover:scale-125 transition-transform cursor-pointer text-base"
@@ -3742,7 +4043,22 @@ export default function ParcelsTab() {
                                   )}
                                 </div>
                               ) : (
-                                <span className="text-gray-500 text-xs">En gare - {parcel.destinationCity || profile?.city}</span>
+                                // « En gare - <ville> » sans livreur : la main 🖐️ permet aussi de choisir un livreur
+                                // (expéditions destinées à MA ville seulement — la livraison appartient à l'agence de destination)
+                                <div className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                                  <span className="inline-flex items-center gap-1 text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded-lg font-semibold whitespace-nowrap">
+                                    🚚 En gare - {parcel.destinationCity || profile?.city}
+                                  </span>
+                                  {canChangeDriverOf(parcel, profile) && (
+                                    <button
+                                      onClick={() => setChangeDriverModal({ open: true, parcel, newDriverId: '', loading: false, error: '' })}
+                                      className="hover:scale-125 transition-transform cursor-pointer text-base"
+                                      title="Assigner à un livreur"
+                                    >
+                                      🖐️
+                                    </button>
+                                  )}
+                                </div>
                               )}
                             </td>
                           )}
@@ -3767,7 +4083,7 @@ export default function ParcelsTab() {
 
                               {/* Boutons Éditer et Supprimer */}
                               <div className="flex items-center justify-center gap-1.5">
-                                {isOwn && (
+                                {canDeleteParcel(parcel) && (
                                   <button
                                     onClick={() => handleDeleteClick(parcel)}
                                     tabIndex={-1}
@@ -3916,6 +4232,7 @@ export default function ParcelsTab() {
               return mergedPagedParcels.map((parcel: any, idx: number) => {
                 // ⚡ Les données sont déjà fusionnées dans mergedPagedParcels
 
+                if (agentProReadOnly(profile, parcel)) return <ReadOnlyParcelCard key={parcel.id} parcel={parcel} />
                 const isOwn = canActAsParcelOwner(parcel)
                 const isAideManagedByChef = !isParcelCreator(parcel) && isChefAgencyAideParcel(parcel)
                 const sc    = STATUS_COLORS[parcel.status] || STATUS_COLORS['Initialisé']
@@ -3925,12 +4242,7 @@ export default function ParcelsTab() {
                 const aideValidationSelected = selectedAideEntryIds.includes(parcel.id)
 
                 // Vérifier si cette ligne a une checkbox assignation
-                const hasAssignCheckbox = (() => {
-                  if (profile?.role !== 'chef_agence' && profile?.role !== 'agentpro') return false
-                  const isInMyCity = (parcel.destinationCity === profile?.city || parcel.receiver?.city === profile?.city)
-                  const canAssign = !parcel.deliveredAt && !parcel.returnedAt && parcel.status !== 'Livré'
-                  return isInMyCity && canAssign
-                })()
+                const hasAssignCheckbox = bulkAssignment.mode === 'delivery' && canBulkAssignDelivery(profile, parcel)
 
                 const currentCheckboxIndex = hasAssignCheckbox ? checkboxIndex++ : -1
 
@@ -3967,12 +4279,30 @@ export default function ParcelsTab() {
                   )}
 
                   {/* ⭐ NOUVEAU: Checkbox personnalisé pour assignation livreur */}
+                  {bulkAssignment.mode === 'pickup' && canBulkAssignPickup(profile, parcel) && (
+                    <label onClick={e => e.stopPropagation()}
+                      className="mb-3 flex items-center gap-2 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 cursor-pointer text-orange-700">
+                      <input type="checkbox" checked={selectedPickupParcelIds.has(parcel.id)}
+                        onChange={e => {
+                          const checked = e.target.checked
+                          setSelectedPickupParcelIds(prev => {
+                            const next = new Set(prev)
+                            if (checked) next.add(parcel.id)
+                            else next.delete(parcel.id)
+                            return next
+                          })
+                        }}
+                        className="w-4 h-4 accent-orange-600 checkbox-assign-table"
+                        title="Assigner pour ramassage" />
+                      <span className="text-xs font-bold">Sélection ramassage</span>
+                    </label>
+                  )}
                   {hasAssignCheckbox && (() => {
                     const assignSelected = bulkAssignSelectedSet.has(parcel.id)
                     const isFocused = focusedIndex === currentCheckboxIndex
                     return (
                       <div
-                        ref={el => checkboxRefs.current[currentCheckboxIndex] = el}
+                        ref={el => { checkboxRefs.current[currentCheckboxIndex] = el }}
                         role="checkbox"
                         aria-checked={assignSelected}
                         tabIndex={0}
@@ -4014,7 +4344,7 @@ export default function ParcelsTab() {
                     const isPortDu = parcel.portType === 'port_du'
                     const notDelivered = !parcel.deliveredAt && parcel.status !== 'Livré'
 
-                    if (!isPortDu || !isDestinationAgency || !notDelivered) return null
+                    if (!isPortDu || !isDestinationAgency || !notDelivered || !agentProCanEditBon(profile, parcel)) return null
 
                     const portDuSelected = bulkPortDuSelectedSet.has(parcel.id)
                     return (
@@ -4152,7 +4482,7 @@ export default function ParcelsTab() {
                       <div className="flex items-center gap-1 font-bold text-gray-700 flex-wrap">
                         <span>{parcel.sender?.city || '—'}</span>
                         <span className="text-gray-400">→</span>
-                        <span>{parcel.receiver?.city || '—'}</span>
+                        {renderDestCity(parcel, 'rounded px-1')}
                         <span className="text-gray-400">•</span>
                         <span>{parcel.weight || 0} kg</span>
                         <span className="text-gray-400">•</span>
@@ -4161,7 +4491,7 @@ export default function ParcelsTab() {
                           <>
                             <span className="text-gray-400">•</span>
                             <span className="text-orange-600 font-bold">RF {parcel.codAmount} DH{isMixedCod(parcel) && <span className="font-semibold text-orange-500"> ({codPartsBreakdown(parcel)})</span>}</span>
-                            <button
+                            {agentProCanEditBon(profile, parcel) && <button
                               onClick={(e) => {
                                 e.stopPropagation()
                                 ensureFullParcel(parcel).then((parcel: any) => setCodEditModal({ parcel, ...codEditInitial(parcel), loading: false, error: '' }))
@@ -4170,7 +4500,7 @@ export default function ParcelsTab() {
                               title={`Modifier COD (role: ${profile?.role})`}
                             >
                               ✏️
-                            </button>
+                            </button>}
                           </>
                         )}
                       </div>
@@ -4196,13 +4526,8 @@ export default function ParcelsTab() {
                       )}
                     </div>
 
-                    {/* Ligne 5: Destinataire */}
-                    <div className="text-xs text-gray-500 flex items-center gap-1">
-                      <span className="truncate">{parcel.receiver?.name || '—'}</span>
-                      {parcel.portType === 'port_en_compte_destinataire' && (
-                        <span className="text-sm shrink-0">🖐️</span>
-                      )}
-                    </div>
+                    {/* Ligne 5: Expéditeur + Destinataire */}
+                    <ParcelParties parcel={parcel} />
                     {/* Ligne 6: Nature/Colis */}
                     {(parcel.natureOfGoods || (parcel.arrivedNbColis ?? parcel.nbColis) > 1) && (
                       <div className="flex items-center gap-1.5 flex-wrap">
@@ -4265,19 +4590,43 @@ export default function ParcelsTab() {
                     )}
 
                     {/* Transport */}
-                    {(parcel.chauffeurName || parcel.deliveryDriverName || parcel.deliverySectorCode || parcel.deliveryVehicleLabel) && (
+                    {/* + expédition sans livreur destinée à MA ville (main 🖐️ « Assigner ») ou verrouillée vers une autre ville —
+                        avant, sans livreur ni secteur, ce bloc (et donc la main) n'apparaissait pas en vue cartes */}
+                    {(parcel.chauffeurName || parcel.deliveryDriverName || parcel.deliverySectorCode || parcel.deliveryVehicleLabel
+                      || parcel.destinationCity === profile?.city || isLockedOutgoing(parcel, profile?.city)) && (
                       <div className="flex flex-wrap gap-1.5">
                         {parcel.chauffeurName && (
                           <span className="inline-flex items-center gap-0.5 text-xs bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded-full border border-indigo-200">
                             <Truck className="w-2.5 h-2.5 shrink-0" /> {parcel.chauffeurName}
                           </span>
                         )}
-                        {parcel.deliveryDriverName && (
+                        {/* 🔒 Vers une autre ville (créée par mon agence) : « En gare - <destination> », sans changement */}
+                        {isLockedOutgoing(parcel, profile?.city) && (
+                          <span className="inline-flex items-center gap-0.5 text-xs bg-orange-50 text-orange-600 px-1.5 py-0.5 rounded-full border border-orange-200 whitespace-nowrap">
+                            <User className="w-2.5 h-2.5 shrink-0" /> {parcel.deliveryDriverName || `En gare - ${parcel.destinationCity || parcel.receiver?.city}`} 🔒
+                          </span>
+                        )}
+                        {/* « En gare - <ville> » sans livreur (destinée à ma ville) : main 🖐️ pour choisir un livreur */}
+                        {!parcel.deliveryDriverName && canChangeDriverOf(parcel, profile) && (
+                          <>
+                            <span className="inline-flex items-center gap-0.5 text-xs bg-orange-50 text-orange-600 px-1.5 py-0.5 rounded-full border border-orange-200 whitespace-nowrap">
+                              <User className="w-2.5 h-2.5 shrink-0" /> En gare - {parcel.destinationCity}
+                            </span>
+                            <button
+                              onClick={() => setChangeDriverModal({ open: true, parcel, newDriverId: '', loading: false, error: '' })}
+                              className="p-0.5 hover:bg-orange-100 rounded-full transition"
+                              title="Assigner à un livreur"
+                            >
+                              <Hand className="w-3 h-3 text-orange-600" />
+                            </button>
+                          </>
+                        )}
+                        {parcel.deliveryDriverName && !isLockedOutgoing(parcel, profile?.city) && (
                           <>
                             <span className="inline-flex items-center gap-0.5 text-xs bg-orange-50 text-orange-600 px-1.5 py-0.5 rounded-full border border-orange-200">
                               <User className="w-2.5 h-2.5 shrink-0" /> {parcel.deliveryDriverName}
                             </span>
-                            {(profile?.role === 'chef_agence' || profile?.role === 'agentpro') && (
+                            {canChangeDriverOf(parcel, profile) && (
                               <button
                                 onClick={() => setChangeDriverModal({ open: true, parcel, newDriverId: '', loading: false, error: '' })}
                                 className="p-0.5 hover:bg-orange-100 rounded-full transition"
@@ -4354,7 +4703,7 @@ export default function ParcelsTab() {
                         </button>
                       )}
                       {/* Bouton Modifier - Toujours affiché pour chef d'agence, agentpro et aide agent */}
-                      {(canEditParcelDetails(parcel) || profile?.role === 'chef_agence' || profile?.role === 'agentpro' || profile?.role === 'aide_agent') && (
+                      {agentProCanEditBon(profile, parcel) && (canEditParcelDetails(parcel) || profile?.role === 'chef_agence' || profile?.role === 'agentpro' || profile?.role === 'aide_agent') && (
                         <button
                           onClick={() => handleEditClick(parcel)}
                           tabIndex={-1}
@@ -4364,11 +4713,12 @@ export default function ParcelsTab() {
                           <span className="hidden xs:inline">Modifier</span>
                         </button>
                       )}
-                      {/* Bouton Supprimer - Seulement si peut vraiment éditer */}
-                      {canEditParcelDetails(parcel) && (
+                      {/* La suppression dépend de l'agence de création, pas des droits de livraison. */}
+                      {canDeleteParcel(parcel) && (
                         <button
                           onClick={() => handleDeleteClick(parcel)}
                           tabIndex={-1}
+                          title="Supprimer"
                           className="flex items-center gap-1 text-xs bg-red-50 hover:bg-red-100 text-red-500 px-2.5 py-2 rounded-lg transition"
                         >
                           <Trash2 className="w-3.5 h-3.5" />
@@ -4816,6 +5166,7 @@ export default function ParcelsTab() {
               const apply    = (f: any, t: any) => {
                 const todayISO = toISO(now)
                 // Si c'est aujourd'hui, utiliser le preset 'today'
+                setPeriodDraft(null)
                 if (f === todayISO && t === todayISO) {
                   setDatePreset('today')
                   setDateFrom('')
@@ -4826,7 +5177,7 @@ export default function ParcelsTab() {
                   setDateTo(t)
                 }
               }
-              const clear    = ()     => { setDatePreset('all'); setDateFrom(''); setDateTo('') }
+              const clear    = ()     => { setPeriodDraft(null); setDatePreset('all'); setDateFrom(''); setDateTo('') }
               const anyActive = datePreset === 'custom' && (dateFrom || dateTo)
               const chipCls = (active: boolean) => active
                 ? 'bg-blue-600 text-white border-blue-600'
@@ -4918,6 +5269,7 @@ export default function ParcelsTab() {
         })()
         )}
       </div>
+      )}
 
       {/* ── MODAL MODIFICATION ── */}
       {editingParcel && (
@@ -4965,10 +5317,16 @@ export default function ParcelsTab() {
               }}
             >
               {editError && <div className="bg-red-50 border border-red-200 text-red-600 p-3 rounded-xl text-sm">⚠️ {editError}</div>}
-              {editingParcel.shipmentLoadedAt && profile?.role !== 'admin' && (
+              {profile?.role !== 'admin' && adminScopeAllowsEdit?.(editingParcel) && (
+                <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-3 rounded-xl text-sm flex items-start gap-2">
+                  <ShieldCheck className="w-4 h-4 mt-0.5 shrink-0" />
+                  <span>Modification autorisée par l'administrateur ({String(editingParcel.destinationCity || '').trim().toLowerCase() === String(profile?.city || '').trim().toLowerCase() ? 'expédition reçue par votre agence' : 'expédition créée par vous ou votre agence'}). Seuls les champs non verrouillés 🔒 peuvent être changés.</span>
+                </div>
+              )}
+              {editingParcel.shipmentLoadedAt && profile?.role !== 'admin' && !adminScopeAllowsEdit?.(editingParcel) && (
                 <div className="bg-amber-50 border border-amber-200 text-amber-800 p-3 rounded-xl text-sm flex items-start gap-2">
                   <Lock className="w-4 h-4 mt-0.5 shrink-0" />
-                  <span>Colis déjà chargé dans un camion : les données du bon sont verrouillées (seul l'administrateur peut les modifier).</span>
+                  <span>Expédition déjà chargée dans un camion : les données du bon sont verrouillées. L'administrateur peut autoriser leur modification dans Admin › Permissions › « Expéditions modifiables » (expéditions créées et / ou reçues par votre agence).</span>
                 </div>
               )}
 
@@ -5166,7 +5524,7 @@ export default function ParcelsTab() {
                           step="0.5"
                           placeholder="Montant espèces (DH)"
                           value={editForm.codCashAmount || ''}
-                          onChange={ef('codCashAmount')}
+                          onChange={e => { const v = e.target.value; setEditForm((p: any) => ({ ...p, codCashAmount: v, codAmount: docPartKeepingTotal(p.codAmount, p.codCashAmount, v) })) }}
                           disabled={!codEditable}
                           className={`${inputCls} ${!codEditable ? 'bg-gray-100 cursor-not-allowed opacity-60' : ''} font-bold text-green-700`}
                         />
@@ -5192,7 +5550,7 @@ export default function ParcelsTab() {
                     </div>
                     {editForm.codMixed === true && (
                       <p className="mt-1 text-xs font-bold text-gray-600">
-                        Total retour de fonds : {((parseFloat(editForm.codCashAmount) || 0) + (parseFloat(editForm.codAmount) || 0)).toLocaleString('fr-MA')} DH
+                        Total retour de fonds : {((parseFloat(editForm.codCashAmount) || 0) + (parseFloat(editForm.codAmount) || 0)).toLocaleString('fr-MA')} DH <span className="font-normal text-gray-500">— espèces retirées du chèque / de la traite, total inchangé</span>
                       </p>
                     )}
                   </div>
@@ -5440,6 +5798,45 @@ export default function ParcelsTab() {
           </div>
         </div>
       )}
+
+      {/* ── MODAL BASCULE AGADIR ⇄ AIT MELLOUL D'UNE EXPÉDITION ASSIGNÉE : choix du livreur de l'autre ville ── */}
+      {cityMoveModal && (() => {
+        const { parcel, target } = cityMoveModal
+        const targetDrivers = driversOfCity(target)
+        const chosen = targetDrivers.find((d: any) => d.id === cityMoveModal.driverId)
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-end sm:items-center justify-center z-50 p-4" onClick={() => setCityMoveModal(null)}>
+            <div className="bg-white rounded-t-2xl sm:rounded-2xl w-full max-w-sm p-6 space-y-4" onClick={e => e.stopPropagation()}>
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-bold text-gray-900">Passer à {target}</h3>
+                  <p className="text-xs font-mono text-blue-600 mt-0.5">{parcel.sender?.nic || parcel.trackingId}</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {parcel.destinationCity} → <b>{target}</b> · livreur actuel : <b>{parcel.deliveryDriverName || '—'}</b>
+                  </p>
+                </div>
+                <button onClick={() => setCityMoveModal(null)} className="p-1 rounded-lg hover:bg-gray-100"><X className="w-5 h-5 text-gray-400" /></button>
+              </div>
+              <label className="block text-xs font-semibold text-gray-600">Nouveau livreur ({target})
+                <select value={cityMoveModal.driverId} onChange={e => setCityMoveModal({ ...cityMoveModal, driverId: e.target.value })} className={`${selectCls} mt-1`}>
+                  <option value="">— Sans livreur : en gare à {target} (Arrivé en agence) —</option>
+                  {targetDrivers.map((d: any) => <option key={d.id} value={d.id}>{d.name || d.email || d.id}</option>)}
+                </select>
+              </label>
+              {targetDrivers.length === 0 && <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">Aucun livreur trouvé pour {target}.</p>}
+              <div className="flex justify-end gap-2">
+                <button onClick={() => setCityMoveModal(null)} className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-100">Annuler</button>
+                <button
+                  disabled={togglingCityId === parcel.id}
+                  onClick={() => { setCityMoveModal(null); handleToggleDestCity(parcel, chosen ? { id: chosen.id, name: chosen.name || '' } : null) }}
+                  className="px-4 py-2 rounded-xl text-sm font-semibold bg-pink-600 text-white hover:bg-pink-700 disabled:opacity-50">
+                  {chosen ? `Passer chez ${chosen.name}` : `Passer à ${target}`}
+                </button>
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* ── MODAL CHARGEMENT TRANSPORT ── */}
       {transportModal.open && (
@@ -5941,6 +6338,10 @@ export default function ParcelsTab() {
               <button
                 onClick={async () => {
                   const { parcel, newDriverId } = changeDriverModal
+                  if (!agencyCanDeliver(profile, parcel)) {
+                    setChangeDriverModal(m => ({ ...m, error: 'Lecture seule : le livreur est géré par l’agence de destination.' }))
+                    return
+                  }
                   if (!newDriverId) {
                     setChangeDriverModal(m => ({ ...m, error: 'Sélectionnez un livreur' }))
                     return
@@ -5964,6 +6365,16 @@ export default function ParcelsTab() {
                         deliveryAssignedBy: profile?.name || 'Chef agence',
                       }
                     )
+                    // 🚚 Vers un VRAI livreur, une expédition « Arrivé en agence » part en livraison — comme la fenêtre
+                    // d'assignation et l'assignation groupée. Avant : seul le livreur changeait, l'expédition restait
+                    // « Arrivé en agence » chez lui (ex. 1099644). Vers un compte « en gare » : statut inchangé.
+                    const toGare = newDriver.role === 'livreur-gare' || /^en gare/i.test(String(newDriver.name || ''))
+                    if (!toGare && parcel.status === 'Arrivé en agence') {
+                      const { updateParcelStatus } = await import('../../../firebase/parcels')
+                      await updateParcelStatus(parcel.id, 'En cours de livraison', {
+                        note: `Assigné au livreur ${newDriver.name}${parcel.deliveryDriverName ? ` (ancien : ${parcel.deliveryDriverName})` : ''} par ${profile?.name || 'Chef agence'}`,
+                      })
+                    }
 
                     // Fermer le modal
                     setChangeDriverModal({ open: false, parcel: null, newDriverId: '', loading: false, error: '' })
@@ -6096,6 +6507,7 @@ export default function ParcelsTab() {
                 <label className="block text-xs font-bold text-gray-700 mb-2">🚦 Statut</label>
                 <select
                   value={quickEditModal.status || ''}
+                  disabled={!agencyCanDeliver(profile, quickEditModal.parcel)}
                   onChange={e => setQuickEditModal(m => ({ ...m, status: e.target.value, error: '' }))}
                   className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-blue-500"
                 >
@@ -6138,11 +6550,11 @@ export default function ParcelsTab() {
                   <input
                     type="number"
                     value={quickEditModal.codCashAmount || ''}
-                    onChange={e => setQuickEditModal(m => ({ ...m, codCashAmount: e.target.value, error: '' }))}
+                    onChange={e => { const v = e.target.value; setQuickEditModal(m => ({ ...m, codCashAmount: v, codAmount: docPartKeepingTotal(m.codAmount, m.codCashAmount, v), error: '' })) }}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:border-green-500"
                     placeholder="Ex: 1200"
                   />
-                  <p className="mt-1 text-xs font-bold text-gray-600">Total : {((parseFloat(quickEditModal.codCashAmount || '') || 0) + (parseFloat(quickEditModal.codAmount) || 0)).toLocaleString('fr-MA')} DH</p>
+                  <p className="mt-1 text-xs font-bold text-gray-600">Total : {((parseFloat(quickEditModal.codCashAmount || '') || 0) + (parseFloat(quickEditModal.codAmount) || 0)).toLocaleString('fr-MA')} DH <span className="font-normal text-gray-500">— espèces retirées du chèque / de la traite, total inchangé</span></p>
                 </div>
               )}
 
@@ -6220,6 +6632,14 @@ export default function ParcelsTab() {
               <button
                 onClick={async () => {
                   const { parcel, price, portType, status, codAmount, serviceType, nbColis, poids, contenu, remarque } = quickEditModal
+                  if (!agentProCanEditBon(profile, parcel)) {
+                    setQuickEditModal(m => ({ ...m, error: 'Lecture seule : le bon est géré par son agence de création.' }))
+                    return
+                  }
+                  if (status && status !== parcel.status && !agencyCanDeliver(profile, parcel)) {
+                    setQuickEditModal(m => ({ ...m, error: 'Le statut de livraison est géré par l’agence de destination.' }))
+                    return
+                  }
                   // 💵+📋 RF mixte : chaque type coché doit avoir son montant
                   const qMixed = quickEditModal.codMixed === true && (serviceType === 'cheque' || serviceType === 'traite')
                   const codChoiceError = validateCodChoice({ serviceType, codAmount, cashAmount: quickEditModal.codCashAmount, mixed: qMixed })
@@ -6290,7 +6710,12 @@ export default function ParcelsTab() {
                         await updateParcel(parcel.id, extra)
                         Object.assign(saved, extra)
                       }
-                      if (statusChange) {
+                      if (statusChange && status === 'Retourné' && !fresh.wasReturned && !fresh.returnedAt) {
+                        // ↩️ VRAI retour (expéditeur / destinataire et villes inversés, livreur retiré) — avant (diagnostic
+                        // du 24/10/2026, point 2.3) seul le statut changeait. COD déjà encaissé : refusé (retour par l'admin).
+                        await markParcelAsReturned({ ...fresh, ...saved, id: parcel.id }, { note: 'Édition complète' })
+                        saved.status = status
+                      } else if (statusChange) {
                         await updateParcelStatus(parcel.id, status, { note: 'Édition complète' })
                         saved.status = status
                       }
@@ -6301,6 +6726,13 @@ export default function ParcelsTab() {
                         throw Object.assign(new Error("Une partie des modifications a été enregistrée (type de service / montants), mais le reste a été refusé : " + (e2?.message || e2)), { partial: true })
                       }
                       throw e2
+                    }
+
+                    // 🚚 Destination corrigée : livreur « En gare » / d'une autre ville réaligné (jamais bloquant)
+                    let realignMsg: string | null = null
+                    if (saved.destinationCity !== undefined) {
+                      realignMsg = await realignDeliveryAfterDestinationChange(parcel.id, profile?.name || 'Agent')
+                        .catch((e: any) => `Livreur non réaligné (${e?.code === 'permission-denied' ? "droits de l'agence de destination requis — à faire par l'admin" : e?.message || e}).`)
                     }
 
                     // ⚡ Affichage immédiat des valeurs RÉELLEMENT enregistrées
@@ -6326,7 +6758,7 @@ export default function ParcelsTab() {
                       loading: false,
                       error: ''
                     })
-                    alert('✅ Modifications enregistrées avec succès!')
+                    alert('✅ Modifications enregistrées avec succès!' + (realignMsg ? `\n\n🚚 ${realignMsg}` : ''))
                   } catch (err: any) {
                     console.error('Erreur édition complète:', err)
                     const msg = err?.code && !err?.partial ? describeParcelSaveError(err, parcel) : (err?.message || 'Erreur lors de la mise à jour')

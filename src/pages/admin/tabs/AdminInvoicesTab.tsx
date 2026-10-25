@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { useState, useEffect, useMemo } from 'react'
 import { Timestamp } from 'firebase/firestore'
 import {
@@ -15,6 +16,8 @@ import { subscribeClients } from '../../../firebase/clients'
 import { CITIES } from '../../../firebase/constants'
 import { normIncludes } from '../../../utils/normText'
 
+const ADMIN_INVOICES_LIMIT = 500
+
 export default function AdminInvoicesTab({ uid, userName }: any) {
   const [invoices, setInvoices] = useState<Invoice[]>([])
   const [clients, setClients] = useState<any[]>([])
@@ -27,7 +30,8 @@ export default function AdminInvoicesTab({ uid, userName }: any) {
 
   // Abonnements
   useEffect(() => {
-    const unsubInvoices = subscribeAllInvoices(setInvoices)
+    // 500 plus récentes : la numérotation passe par getNextInvoiceNumber (requête dédiée), pas par cette liste
+    const unsubInvoices = subscribeAllInvoices(setInvoices, ADMIN_INVOICES_LIMIT)
     const unsubClients = subscribeClients(setClients)
     return () => {
       unsubInvoices()
@@ -104,7 +108,7 @@ export default function AdminInvoicesTab({ uid, userName }: any) {
   }
 
   return (
-    <div className="p-6 max-w-7xl mx-auto">
+    <div className="p-6 max-w-7xl xl:max-w-none xl:w-[95%] mx-auto">
       {/* En-tête */}
       <div className="flex items-center justify-between mb-6">
         <div>
@@ -560,8 +564,7 @@ function CreateInvoiceModal({ clients, onClose, uid, userName }: any) {
                     <div className="grid grid-cols-2 gap-3">
                       <div>
                         <label className="block text-xs text-gray-600 mb-1">Date de début</label>
-                        <input
-                          type="date"
+                        <DateInput
                           value={dateFrom}
                           onChange={e => setDateFrom(e.target.value)}
                           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
@@ -569,8 +572,7 @@ function CreateInvoiceModal({ clients, onClose, uid, userName }: any) {
                       </div>
                       <div>
                         <label className="block text-xs text-gray-600 mb-1">Date de fin</label>
-                        <input
-                          type="date"
+                        <DateInput
                           value={dateTo}
                           onChange={e => setDateTo(e.target.value)}
                           className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:border-indigo-500"
@@ -769,8 +771,7 @@ function CreateInvoiceModal({ clients, onClose, uid, userName }: any) {
                 <label className="block text-sm font-semibold text-gray-700 mb-2">
                   Date d'échéance <span className="text-xs text-gray-500">(optionnel)</span>
                 </label>
-                <input
-                  type="date"
+                <DateInput
                   value={dueDate}
                   onChange={e => setDueDate(e.target.value)}
                   className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"
@@ -868,8 +869,7 @@ function EditInvoiceModal({ invoice, clients, onClose }: any) {
         <div className="p-5 space-y-4">
           <div>
             <label className="block text-sm font-semibold text-gray-700 mb-2">Date d'échéance</label>
-            <input
-              type="date"
+            <DateInput
               value={dueDate}
               onChange={e => setDueDate(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-3 py-2 focus:outline-none focus:border-indigo-500"

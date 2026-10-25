@@ -1,12 +1,14 @@
 import { useState, useEffect, useMemo } from 'react'
-import { Search, X, Check, MessageCircle, Printer, Truck, AlertTriangle, ChevronDown, ChevronUp, ClipboardList, ListChecks, Banknote } from 'lucide-react'
+import { Search, X, Check, MessageCircle, Printer, Truck, AlertTriangle, ChevronDown, ChevronUp, ClipboardList, ListChecks, Banknote, Activity } from 'lucide-react'
 import { COD_PAYMENT_TYPES, COD_STATUS, ALL_SERVICE_TYPES, codPaymentTypeOf } from '../../../firebase/constants'
 import { subscribeDeliveryDelays } from '../../../firebase/delivery'
 import DateFilter from '../DateFilter'
 import { useAgentCtx } from '../AgentCtx'
 import { filterByDate } from '../../../utils/dateFilter'
 import { fmt, fmtFixed as fmtAmt } from '../../../utils/formatNumber'
-import { normText } from '../../../utils/normText'
+import { isCodMoneyBeforeStart } from '../../../utils/moneyFlow'
+import { normText, isDigitsOnly, numberStartsWith } from '../../../utils/normText'
+import CodSuiviView from './CodSuiviView'
 import { codPartsOf, codHasType, codAmountOfType, codCashPartOf, isMixedCod, codPartsBreakdown, codServiceLabel, codPartsLabel } from '../../../utils/codParts'
 
 const DELAY_REASON_LABELS: Record<string, string> = {
@@ -52,7 +54,7 @@ const BUCKET_CLS: Record<string, string> = {
   red: 'bg-red-100 text-red-800',
 }
 
-type CodView = 'todo' | 'livreurs' | 'retards' | 'flux'
+type CodView = 'suivi' | 'todo' | 'livreurs' | 'retards' | 'flux'
 
 function openPrintWindow(title: string, subtitle: string, tableHtml: string, footer = '') {
   const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>${title}</title>
@@ -92,6 +94,9 @@ const matchesSearch = (values: any, query: any) => {
   const q = normText(query)
   if (!q) return true
   const compactQ = normalizeSearch(q)
+  // 🔢 Numéro (N° EXP, téléphone) : le 0 compte, correspondance depuis le 1er chiffre
+  const digitsQ = normText(q).replace(/[\s.\-\/]/g, '')
+  if (isDigitsOnly(digitsQ)) return values.some((v: any) => numberStartsWith(v, digitsQ))
   return values.some((v: any) => {
     const raw = normText(v)
     return raw.includes(q) || normalizeSearch(raw).includes(compactQ)
@@ -177,7 +182,7 @@ export default function CodTab() {
   const [showHistoryDst, setShowHistoryDst] = useState(20)  // Nombre à afficher pour l'historique destination
 
   // ⭐ Vue active, filtre livreur et retards signalés
-  const [view, setView] = useState<CodView>('todo')
+  const [view, setView] = useState<CodView>('suivi')
   const [driverFilter, setDriverFilter] = useState('all')
   const [expandedDrivers, setExpandedDrivers] = useState<Set<string>>(new Set())
   const [deliveryDelays, setDeliveryDelays] = useState<any[]>([])
@@ -327,8 +332,10 @@ export default function CodTab() {
     isAgencyManager && sameCity(p.originCity || p.sender?.city, profile?.city)
   const isChefAgencyCodDestination = (p: any) =>
     isAgencyManager && sameCity(p.destinationCity || p.receiver?.city, profile?.city)
+  // 📅 COD encaissés avant le 05/10/2026 (essais) : hors des soldes COD (les expéditions restent ailleurs)
   const liveParcels = (parcels as any[]).filter((p: any) =>
     (p.agentId === uid || p.destinationAgentId === uid || isChefAgencyCodSource(p) || isChefAgencyCodDestination(p)) && isRetourFondValue(p)
+    && !isCodMoneyBeforeStart(p)
   )
   const merged = allCodParcels
     ? (() => {
@@ -538,13 +545,14 @@ export default function CodTab() {
   const handleCollectFromDriver = async (row: any) => {
     const list = row.encaissables
     if (!list.length || bulkReceiving) return
+    // 🏢 Chef d'agence EN REMPLACEMENT du chef d'exploitation (absent) : encaissement marqué à son nom
     const total = list.reduce((s: number, p: any) => s + (parseFloat(p.codAmount || 0) || 0), 0)
     const detail = VALUE_TYPES
       .map(t => ({ t, n: list.filter((p: any) => inType(p, t.key)).length, m: list.reduce((s: number, p: any) => s + codAmountOfType(p, t.key), 0) }))
       .filter(x => x.n > 0)
       .map(x => `  ${x.t.emoji} ${x.t.label} : ${x.n} · ${fmt(x.m)} DH`)
       .join('\n')
-    if (!confirm(`Encaisser ${list.length} valeur(s) de ${row.name} ?\n\n${detail}\n\nTOTAL : ${fmt(total)} DH\n\nLes espèces seront enregistrées en caisse.`)) return
+    if (!confirm(`Encaisser vous-même ${list.length} valeur(s) de ${row.name}, en l'absence du chef d'exploitation ?\n\n${detail}\n\nTOTAL : ${fmt(total)} DH\n\nElles seront marquées reçues par vous (chef d'agence) ; les espèces seront enregistrées en caisse.`)) return
     setBulkReceiving(row.key)
     setCollectFeedback(null)
     try {
@@ -556,6 +564,7 @@ export default function CodTab() {
   }
 
   const handleCollectSingle = async (p: any) => {
+    if (!confirm(`Encaisser vous-même la valeur ${nic(p)} (${fmtAmt(p.codAmount)} DH), en l'absence du chef d'exploitation ?\n\nElle sera marquée reçue par vous (chef d'agence).`)) return
     setCollectFeedback(null)
     await handleReceptionCod(p)
     setCollectFeedback({ ok: true, msg: `${nic(p)} traité — ${fmtAmt(p.codAmount)} DH` })
@@ -607,14 +616,14 @@ export default function CodTab() {
 
   const handlePrintRetards = () => {
     const rows = retardsFiltered.map(r => `<tr>
-      <td><b>${ageLabel(r.hours)}</b></td><td>${nic(r.p)}</td><td>${r.label}</td><td>${r.driver}</td>
+      <td><b>${r.hours === null ? '—' : `depuis le ${new Date(Date.now() - r.hours * 3600000).toLocaleDateString('fr-FR')}`}</b></td><td>${nic(r.p)}</td><td>${r.label}</td><td>${r.driver}</td>
       <td>${r.p.sender?.name || '—'} → ${r.p.receiver?.name || '—'}</td>
       <td>${typeLabelOf(r.p)}</td>
       <td>${r.delay ? (DELAY_REASON_LABELS[r.delay.reason] || r.delay.reason) + (r.delay.reasonDetail ? ' — ' + r.delay.reasonDetail : '') : '—'}</td>
       <td class="r">${fmtAmt(r.p.codAmount)} DH</td></tr>`).join('')
     const retardParcels = retardsFiltered.map(r => r.p)
     openPrintWindow('RETOUR FOND en retard', `Agence ${profile?.city || ''} · ${printedAt()} · ${retardsFiltered.length} colis`,
-      `<table><thead><tr><th>Âge</th><th>N° EXP</th><th>Type de retard</th><th>Livreur</th><th>Client → Destinataire</th><th>Valeur</th><th>Raison signalée</th><th class="r">Montant</th></tr></thead>
+      `<table><thead><tr><th>Depuis</th><th>N° EXP</th><th>Type de retard</th><th>Livreur</th><th>Client → Destinataire</th><th>Valeur</th><th>Raison signalée</th><th class="r">Montant</th></tr></thead>
       <tbody>${rows}</tbody><tfoot><tr><td colspan="7">TOTAL</td><td class="r">${fmtAmt(totRetards)} DH</td></tr></tfoot></table>
       <table style="margin-top:14px;width:auto;min-width:340px">
         <thead><tr><th>Récapitulatif par type de valeur</th><th class="r">Nombre</th><th class="r">Montant</th></tr></thead>
@@ -710,7 +719,7 @@ export default function CodTab() {
     <div className="mt-4 space-y-5">
 
       {/* ═══ HEADER ═══ */}
-      <div className="bg-gradient-to-br from-amber-500 to-yellow-600 rounded-3xl p-5 text-white shadow-lg">
+      {view !== 'suivi' && <div className="bg-gradient-to-br from-amber-500 to-yellow-600 rounded-3xl p-5 text-white shadow-lg">
         <div className="flex items-start justify-between gap-3 mb-4">
           <div>
             <p className="text-amber-100 text-xs font-semibold uppercase tracking-wider">Agence {profile?.city}</p>
@@ -756,11 +765,12 @@ export default function CodTab() {
             <p className="text-white font-black text-lg leading-tight">{fmt(totalRegle)} DH</p>
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* ═══ SOUS-ONGLETS ═══ */}
       <div className="flex items-center gap-1.5 bg-white p-1.5 rounded-2xl border border-gray-100 shadow-sm overflow-x-auto">
         {([
+          { key: 'suivi',    label: 'Suivi',       icon: Activity,      badge: 0 },
           { key: 'todo',     label: 'À faire',     icon: ListChecks,    badge: dst_collected.length + dst_aEnvoyer.length + src_enRoute.length + src_aConfirmer.length },
           { key: 'livreurs', label: 'Par livreur', icon: Truck,         badge: driverOptions.length },
           { key: 'retards',  label: 'Retards',     icon: AlertTriangle, badge: retards.length, danger: true },
@@ -782,7 +792,7 @@ export default function CodTab() {
       </div>
 
       {/* ═══ RÉPARTITION PAR TYPE DE VALEUR ═══ */}
-      <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3">
+      {view !== 'suivi' && <div className="bg-white rounded-2xl border border-gray-100 shadow-sm p-3">
         <div className="flex items-center justify-between gap-2 mb-2.5 px-1 flex-wrap">
           <p className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Répartition par type de valeur</p>
           <div className="flex items-center gap-1">
@@ -836,7 +846,7 @@ export default function CodTab() {
             ✕ Afficher tous les types de valeur
           </button>
         )}
-      </div>
+      </div>}
 
       {/* ═══ PIPELINE ═══ */}
       {view === 'todo' && (dstHasData || src.length > 0) && (
@@ -896,7 +906,7 @@ export default function CodTab() {
             </button>
           )}
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
+        {view !== 'suivi' && <div className="flex items-center gap-2 flex-wrap">
           <select value={driverFilter} onChange={e => setDriverFilter(e.target.value)}
             className="bg-white border border-gray-200 rounded-xl px-3 py-2 text-sm focus:border-amber-400 focus:outline-none shadow-sm">
             <option value="all">🚚 Tous les livreurs</option>
@@ -908,13 +918,29 @@ export default function CodTab() {
               Effacer le filtre livreur
             </button>
           )}
-        </div>
-        {(codSearch || filteredCodParcels.length > 0) && (
+        </div>}
+        {view !== 'suivi' && (codSearch || filteredCodParcels.length > 0) && (
           <p className="text-[11px] text-gray-400 px-1">
             {filteredCodParcels.length} colis{codSearch ? ` trouvé(s) sur ${dateFilteredCodParcels.length}` : ''}
           </p>
         )}
       </div>
+
+      {/* ═══ VUE : SUIVI (simple, filtrable) ═══ */}
+      {view === 'suivi' && (
+        <CodSuiviView
+          rows={searchedCodParcels}
+          isDest={(p: any) => p.destinationAgentId === uid || isChefAgencyCodDestination(p)}
+          isSrc={(p: any) => p.agentId === uid || isChefAgencyCodSource(p)}
+          hasDocValue={hasDocValue}
+          driverNameOf={driverNameOf}
+          profile={profile}
+          onGo={(v) => setView(v)}
+          historyLoaded={!!allCodParcels}
+          loadingHistory={!!codLoadingAll}
+          onLoadHistory={handleLoadAllCod}
+        />
+      )}
 
       {/* ═══ VUE : PAR LIVREUR ═══ */}
       {view === 'livreurs' && (

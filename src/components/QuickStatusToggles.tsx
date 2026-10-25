@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { agencyCanDeliver, agencyCanTransport, isRestrictedDeliveryAgency } from '../utils/agencyDeliveryAccess'
 import { Check, Package, Banknote, RotateCcw, Truck, AlertCircle } from 'lucide-react'
 import { updateParcelStatus, markParcelAsReturned, cancelParcelReturn } from '../firebase/parcels'
 import { collectCodAtDestination } from '../firebase/cod'
@@ -8,9 +9,10 @@ interface QuickStatusTogglesProps {
   profile: any
   onSuccess?: (updates: { status?: string; codStatus?: string }) => void
   compact?: boolean
+  showCod?: boolean // bouton « Collecter … DH » (désactivé par défaut)
 }
 
-export default function QuickStatusToggles({ parcel, profile, onSuccess, compact = false }: QuickStatusTogglesProps) {
+export default function QuickStatusToggles({ parcel, profile, onSuccess, compact = false, showCod = false }: QuickStatusTogglesProps) {
   const [updating, setUpdating] = useState<string | null>(null)
   const [error, setError] = useState('')
 
@@ -20,7 +22,9 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
 
   // Vérifier si l'utilisateur peut modifier ce statut
   const canUpdateStatus = () => {
-    // Chef d'agence et Agent Pro peuvent tout modifier
+    if (isRestrictedDeliveryAgency(profile)) return agencyCanDeliver(profile, parcel)
+      || (parcel.wasReturned === true && agencyCanTransport(profile, parcel))
+    // Preserve the real admin using the agency interface.
     if (profile?.role === 'chef_agence' || profile?.role === 'agentpro') return true
     // Agent de destination peut modifier le statut de livraison
     if (parcel.destinationCity === profile?.city) return true
@@ -199,7 +203,7 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
       <div className="mt-3 p-3 bg-gray-50 border border-gray-200 rounded-lg">
         <p className="text-xs text-gray-500 flex items-center gap-1">
           <AlertCircle className="w-3.5 h-3.5" />
-          Actions rapides disponibles uniquement pour le chef d'agence
+          Statut de livraison géré par l'agence de {parcel.destinationCity || 'destination'}
         </p>
       </div>
     )
@@ -264,8 +268,9 @@ export default function QuickStatusToggles({ parcel, profile, onSuccess, compact
           </button>
         )}
 
-        {/* Toggle COD */}
-        {parcel.codAmount > 0 && !isInReturnCircuit && (
+        {/* Toggle COD — 🚫 retiré de la page Expéditions (demande de l'admin, 20/10/2026) : la collecte des COD
+            se fait uniquement par le circuit des caisses (chef d'exploitation → chef d'agence). Réactivable : showCod. */}
+        {showCod && parcel.codAmount > 0 && !isInReturnCircuit && (
           <button
             onClick={handleToggleCodCollection}
             disabled={updating !== null}

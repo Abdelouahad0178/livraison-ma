@@ -3,6 +3,7 @@ import { codPaymentTypeOf } from '../firebase/constants'
 import { isMixedCod, codPartsOf } from './codParts'
 import { fmt } from './formatNumber'
 import { parcelDate } from './dateFilter'
+import { isRamasseGuichet } from './agencyCaisseRules'
 
 /**
  * 🖨️ Feuille de charge d'un livreur (A4 portrait) — utilisée par la page Chef d'exploitation ET
@@ -21,6 +22,14 @@ export function printFeuilleDeCharge(driverName: string, city: string, parcels: 
   const isDu = (p: any) => p.portType === 'port_du' && !p.portPayeMethod
   const isPaye = (p: any) => p.portType === 'port_paye' && !p.portPayeMethod
   const isCompte = (p: any) => String(p.portType || '').startsWith('port_en_compte')
+  // 📬 Feuille de « En gare - <ville> » : les ports payés ENCAISSÉS AU GUICHET de la ville (même règle que la caisse,
+  // isRamasseGuichet) sont de l'argent détenu par la gare → montant affiché et ajouté au total à remettre.
+  // Un port payé réglé dans une autre ville reste « PAYÉ » (pas d'argent ici).
+  const isGare = /^en gare\b/i.test(String(driverName || '').trim())
+  const isGuichet = (p: any) => isGare && isPaye(p) && isRamasseGuichet(p, city)
+  // 🏢 Port payé d'une expédition CRÉÉE dans l'agence : prix affiché sur toutes les feuilles (chef d'agence, agent
+  // pro, chef d'exploitation). Sur la feuille d'un livreur, il n'est PAS ajouté à « à encaisser » (payé à l'agence).
+  const isPayeIci = (p: any) => isPaye(p) && !!city && (p.originCity === city || p.createdByCity === city)
   const amt = (p: any) => safeParseAmount(p.price)
   const codOf = (p: any) => parseFloat(p.codAmount) || 0
   const TYPE_LABEL: Record<string, string> = { especes: 'Espèces', cheque: 'Chèque', traite: 'Traite', bon_livraison: 'BL' }
@@ -40,6 +49,10 @@ export function printFeuilleDeCharge(driverName: string, city: string, parcels: 
   const payes = sorted.filter(isPaye)
   const comptes = sorted.filter(isCompte)
   const totalDu = dus.reduce((n, p) => n + amt(p), 0)
+  const guichets = sorted.filter(isGuichet)
+  const totalGuichet = guichets.reduce((n, p) => n + amt(p), 0)
+  const payesIci = sorted.filter(isPayeIci)
+  const totalPayeIci = payesIci.reduce((n, p) => n + amt(p), 0)
   const codByType: Record<string, { n: number; amount: number }> = {}
   sorted.filter(p => codOf(p) > 0).forEach(p => {
     // RF mixte : le livreur encaisse les DEUX parts (espèces + chèque/traite)
@@ -55,6 +68,8 @@ export function printFeuilleDeCharge(driverName: string, city: string, parcels: 
   const portCell = (p: any) => {
     const sep = compact ? ' ' : ''
     if (isDu(p)) return `<span class="amt">${fmt(amt(p))} DH</span>${sep}<span class="tag due">À ENCAISSER</span>`
+    if (isGuichet(p)) return `<span class="amt">${fmt(amt(p))} DH</span>${sep}<span class="tag guichet">PAYÉ AU GUICHET</span>`
+    if (isPayeIci(p)) return `<span class="amt">${fmt(amt(p))} DH</span>${sep}<span class="tag paid">PAYÉ</span>`
     if (isPaye(p)) return `<span class="tag paid" style="margin-top:0">PAYÉ</span>`
     if (isCompte(p)) return `<span class="tag acct" style="margin-top:0">EN COMPTE${p.portType === 'port_en_compte_destinataire' ? ' DEST.' : p.portType === 'port_en_compte_expediteur' ? ' EXP.' : ''}</span>`
     return '<span class="muted">—</span>'
@@ -135,7 +150,8 @@ td.nic{font-family:Consolas,monospace;font-weight:800;color:#1d4ed8;font-size:10
 .pill{display:inline-block;min-width:20px;padding:1px 6px;border-radius:10px;background:#e0e7ff;color:#3730a3;font-weight:800}
 .amt{font-weight:800;font-size:10px;color:#111827}.amt.cod{color:#15803d}.muted{color:#cbd5e1}
 .tag{display:block;font-size:7.5px;font-weight:800;letter-spacing:.4px;margin-top:2px;padding:1px 6px;border-radius:8px;width:max-content;margin-left:auto}
-.tag.due{background:#ffedd5;color:#c2410c}.tag.paid{background:#dcfce7;color:#15803d}.tag.acct{background:#ede9fe;color:#6d28d9}
+.tag.due{background:#ffedd5;color:#c2410c}.tag.guichet{background:#dbeafe;color:#1d4ed8}
+.kpi.guichet{background:#eff6ff;border-color:#bfdbfe}.kpi.guichet .v{color:#1d4ed8}.tag.paid{background:#dcfce7;color:#15803d}.tag.acct{background:#ede9fe;color:#6d28d9}
 .tag.cod-especes{background:#dcfce7;color:#15803d}.tag.cod-cheque{background:#dbeafe;color:#1d4ed8}.tag.cod-traite{background:#e0e7ff;color:#4338ca}.tag.cod-bon_livraison{background:#f1f5f9;color:#475569}
 td.sig{width:62px;border-left:1px dashed #cbd5e1}
 tfoot td{background:#eff6ff;font-weight:800;padding:8px;border-top:2px solid #1e40af;color:#1e3a8a}
@@ -167,7 +183,9 @@ ${roomy ? 'tbody td{padding:3px 4px}' : ''}
 <div class="kpis">
   <div class="kpi"><div class="k">Expéditions</div><div class="v">${sorted.length}</div><div class="s">${totalColis} colis</div></div>
   <div class="kpi due"><div class="k">Ports dus à encaisser</div><div class="v">${fmt(totalDu)} DH</div><div class="s">${dus.length} expédition(s)</div></div>
-  <div class="kpi"><div class="k">Ports payés</div><div class="v">${payes.length}</div><div class="s">déjà réglés</div></div>
+  ${isGare
+    ? `<div class="kpi guichet"><div class="k">Ports payés au guichet</div><div class="v">${fmt(totalGuichet)} DH</div><div class="s">${guichets.length} expédition(s) · à remettre</div></div>${payes.length > guichets.length ? `<div class="kpi"><div class="k">Ports payés ailleurs</div><div class="v">${payes.length - guichets.length}</div><div class="s">déjà réglés</div></div>` : ''}`
+    : `<div class="kpi"><div class="k">Ports payés</div><div class="v">${payesIci.length ? `${fmt(totalPayeIci)} DH` : payes.length}</div><div class="s">${payesIci.length ? `${payesIci.length} payé(s) à l'agence${payes.length > payesIci.length ? ` · ${payes.length - payesIci.length} ailleurs` : ''}` : 'déjà réglés'}</div></div>`}
   <div class="kpi"><div class="k">Ports en compte</div><div class="v">${comptes.length}</div><div class="s">facturés au client</div></div>
   <div class="kpi cod"><div class="k">COD total</div><div class="v">${fmt(totalCod)} DH</div><div class="s">${Object.values(codByType).reduce((n, v) => n + v.n, 0)} valeur(s)</div></div>
   ${codBoxes}
@@ -175,7 +193,9 @@ ${roomy ? 'tbody td{padding:3px 4px}' : ''}
 <table>
 <thead><tr><th class="c">#</th><th>N° EXP</th><th>Expéditeur</th><th>Destinataire</th><th>Adresse</th><th class="c">Colis</th><th class="r">Port</th><th class="r">COD</th><th>Signature</th></tr></thead>
 <tbody>${rows}</tbody>
-<tfoot><tr><td colspan="5">TOTAL — ${sorted.length} expédition(s)</td><td class="c">${totalColis}</td><td class="r">${fmt(totalDu)} DH <span style="font-size:8px;font-weight:600">à encaisser</span></td><td class="r">${fmt(totalCod)} DH</td><td></td></tr></tfoot>
+<tfoot><tr><td colspan="5">TOTAL — ${sorted.length} expédition(s)</td><td class="c">${totalColis}</td><td class="r">${isGare && totalGuichet > 0
+    ? `${fmt(totalDu + totalGuichet)} DH <span style="font-size:8px;font-weight:600">à remettre</span><div style="font-size:7.5px;font-weight:600">${fmt(totalDu)} dus + ${fmt(totalGuichet)} payés au guichet</div>`
+    : `${fmt(totalDu)} DH <span style="font-size:8px;font-weight:600">à encaisser</span>`}</td><td class="r">${fmt(totalCod)} DH</td><td></td></tr></tfoot>
 </table>
 <div class="signs"><div>Livreur : ${esc(driverName)}<br><small>Signature</small></div><div>Chef d'exploitation${preparedBy ? ' : ' + esc(preparedBy) : ''}<br><small>Signature</small></div><div>Cachet de l'agence</div></div>
 <div class="foot">BG EXPRESS — Feuille de charge générée le ${new Date().toLocaleString('fr-FR')}</div>

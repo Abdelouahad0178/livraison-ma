@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react'
 import { ChevronDown, ChevronUp, Printer, User } from 'lucide-react'
 import { fmtFixed as fmtAmt } from '../../utils/formatNumber'
-import { caisseDriverHeaderCount, type CaisseDriverGroup } from '../../utils/agencyCaisseRules'
+import { caisseDriverHeaderCount, GARE_GROUP_ID, type CaisseDriverGroup } from '../../utils/agencyCaisseRules'
+import { isPortPayeMoneyBeforeStart } from '../../utils/moneyFlow'
 
 interface Props {
   /** Groupe livreur de computeCaisseView (Caisse Agence) — y compris « En gare - <ville> ». */
@@ -27,6 +28,21 @@ interface Props {
  */
 export default function DriverCaisseCard({ driver, statusFilter, statusFilterLabel, open, onToggle, onPrint, children, className }: Readonly<Props>) {
   const h = caisseDriverHeaderCount(driver, statusFilter)
+  // 📬 « À ramasser » (en-tête) = ce qui est ENCORE à ramasser, à jour en temps réel :
+  // - carte « En gare » : ports payés encaissés au guichet pas encore remis au chef d'exploitation ni reçus
+  //   (+ compteur « Remis » : remis au chef d'exploitation, en attente du chef d'agence) ;
+  // - carte d'un livreur : ses ramassages à recevoir — un port payé encaissé au guichet n'est PAS à ramasser par
+  //   le livreur qui livre l'expédition (avant : toutes ses expéditions en port payé étaient comptées).
+  const isGare = driver.id === GARE_GROUP_ID
+  // 🏬 Ports payés du guichet de CETTE carte : « En gare » (sans détenteur) ou détenteur en gare (rachida, … — 23/10/2026)
+  const ownsGuichet = (p: any) => (isGare ? !p.portGuichetHolderId : p.portGuichetHolderId === driver.id)
+  const guichetEncaisses = driver.parcels.filter((p: any) => p.portType === 'port_paye' && !p.portPayeMethod && !p.pickupDriverId
+    && p.portStatus === 'collected' && !isPortPayeMoneyBeforeStart(p) && ownsGuichet(p))
+  const isGuichetCard = isGare || guichetEncaisses.length > 0
+  const remisCount = guichetEncaisses.filter((p: any) => !!p.portPayeExpReceivedAt).length
+  const aRamasserCount = isGuichetCard
+    ? guichetEncaisses.length - remisCount
+    : driver.portsPayesARecevoirCount
   return (
     <div className={className ?? 'bg-white border border-gray-200 rounded-xl overflow-hidden'}>
       {/* En-tête livreur */}
@@ -46,7 +62,7 @@ export default function DriverCaisseCard({ driver, statusFilter, statusFilterLab
               {statusFilter !== 'all'
                 ? `${h.total} expédition${h.total > 1 ? 's' : ''} (${statusFilterLabel.toLowerCase()})`
                 : `${h.total} expéditions${h.enCompte > 0 ? ` (dont ${h.enCompte} en compte)` : ''}`}
-              {statusFilter === 'all' && driver.portsPayesParcels.length > 0 && ` -${driver.portsPayesParcels.length} ramassés-`}
+              {statusFilter === 'all' && aRamasserCount > 0 && ` -${aRamasserCount} ${isGuichetCard ? 'port(s) payé(s) guichet à recevoir' : 'à ramasser'}-`}
             </p>
           </div>
         </div>
@@ -62,10 +78,16 @@ export default function DriverCaisseCard({ driver, statusFilter, statusFilterLab
               <div className="text-green-600 font-bold">{driver.portsCollectesCount}</div>
               <div className="text-xs text-gray-500">Collectés</div>
             </div>
-            {driver.portsPayesARecevoirCount > 0 && (
+            {aRamasserCount > 0 && (
               <div className="text-center">
-                <div className="text-indigo-600 font-bold">{driver.portsPayesARecevoirCount}</div>
-                <div className="text-xs text-gray-500">Ramassés</div>
+                <div className="text-indigo-600 font-bold">{aRamasserCount}</div>
+                <div className="text-xs text-gray-500">{isGuichetCard ? 'PP guichet à recevoir' : 'À ramasser'}</div>
+              </div>
+            )}
+            {remisCount > 0 && (
+              <div className="text-center" title="Ports payés encaissés au guichet, remis au chef d'exploitation (en attente de son envoi)">
+                <div className="text-violet-600 font-bold">{remisCount}</div>
+                <div className="text-xs text-gray-500">Remis</div>
               </div>
             )}
             {driver.enRetardCount > 0 && (

@@ -1,5 +1,5 @@
 import { db } from './db'
-import { collection, doc, setDoc, updateDoc, getDoc, getDocs, query, where, Timestamp, serverTimestamp, arrayUnion, onSnapshot } from 'firebase/firestore'
+import { collection, doc, setDoc, updateDoc, getDoc, getDocs, query, where, Timestamp, serverTimestamp, arrayUnion, onSnapshot, orderBy, limit } from 'firebase/firestore'
 
 export interface LostParcelMessage {
   id: string
@@ -187,7 +187,8 @@ export function subscribeAllLostParcels(
   onError?: (err: any) => void
 ): () => void {
   return onSnapshot(
-    query(collection(db, 'lostParcels')),
+    // 300 plus récentes : la collection ne fait que grossir, l'onglet Admin n'a besoin que des récentes
+    query(collection(db, 'lostParcels'), orderBy('declaredAt', 'desc'), limit(300)),
     snap => callback(snap.docs.map(d => ({ id: d.id, ...d.data() } as LostParcelDeclaration))),
     err => { console.error('subscribeAllLostParcels:', err); onError?.(err) }
   )

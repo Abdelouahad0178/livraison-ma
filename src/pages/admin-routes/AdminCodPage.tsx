@@ -1,7 +1,9 @@
 import { lazy, Suspense } from 'react'
 import { Banknote } from 'lucide-react'
 
-const AdminCodTab = lazy(() => import('../admin/tabs/AdminCodTab'))
+// 💰 Contrôle du COD de toutes les agences (lecture seule). L'ancien onglet AdminCodTab reste utilisé par
+// AdminPage (/admin), avec ses propres données et actions.
+const AdminCodControlTab = lazy(() => import('../admin/tabs/AdminCodControlTab'))
 
 const AdminCodPage = () => {
   return (
@@ -12,7 +14,7 @@ const AdminCodPage = () => {
         </div>
         <div>
           <h1 className="text-2xl font-bold text-gray-900">💰 Contre Remboursement</h1>
-          <p className="text-sm text-gray-500">Gestion des COD et encaissements</p>
+          <p className="text-sm text-gray-500">Contrôle du COD (retour de fonds) de toutes les agences : collecte, remise, envoi, pointage, paiement de l'expéditeur</p>
         </div>
       </div>
 
@@ -24,33 +26,7 @@ const AdminCodPage = () => {
           </div>
         </div>
       }>
-        <AdminCodTab
-          codDatePreset={'all'}
-          codDateFrom={''}
-          codDateTo={''}
-          setCodDatePreset={() => {}}
-          setCodDateFrom={() => {}}
-          setCodDateTo={() => {}}
-          codDateFiltered={[]}
-          codStatsFiltered={{}}
-          codFilter={'all'}
-          setCodFilter={() => {}}
-          codSearch={''}
-          setCodSearch={() => {}}
-          codRequestMsg={null}
-          codRequestDrafts={{}}
-          setCodRequestDrafts={() => {}}
-          codRequestBusy={''}
-          agentCodRequests={[]}
-          filteredCod={[]}
-          adminEmail={''}
-          handleBatchSettleAdmin={() => {}}
-          handleRemitCod={() => {}}
-          handleSettleCodAdmin={() => {}}
-          handleSendCodRequest={() => {}}
-          handleReplyAgentCodRequest={() => {}}
-          resolveAgentCodRequest={() => {}}
-        />
+        <AdminCodControlTab />
       </Suspense>
     </div>
   )

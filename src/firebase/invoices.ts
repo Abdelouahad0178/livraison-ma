@@ -122,12 +122,12 @@ export async function cancelInvoice(invoiceId: string): Promise<void> {
   })
 }
 
-// S'abonner à toutes les factures (pour admin)
-export function subscribeAllInvoices(callback: (invoices: Invoice[]) => void): () => void {
-  const q = query(
-    collection(db, 'invoices'),
-    orderBy('createdAt', 'desc')
-  )
+// S'abonner aux factures (pour admin) — maxCount limite aux plus récentes.
+// Sans maxCount : toutes les factures (le Facturier en a besoin pour la numérotation et les doublons).
+export function subscribeAllInvoices(callback: (invoices: Invoice[]) => void, maxCount?: number): () => void {
+  const q = maxCount
+    ? query(collection(db, 'invoices'), orderBy('createdAt', 'desc'), limit(maxCount))
+    : query(collection(db, 'invoices'), orderBy('createdAt', 'desc'))
 
   return onSnapshot(q, snapshot => {
     const invoices = snapshot.docs.map(doc => ({

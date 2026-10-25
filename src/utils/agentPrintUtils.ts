@@ -2,6 +2,7 @@ import { openPrintWindow } from './printWindow'
 import { doc, getDoc } from 'firebase/firestore'
 import { db } from '../firebase/db'
 import { codSplitAmount, isMixedCod, codPartsBreakdown, codServiceLabel } from './codParts'
+import { caisseCodAmountOfType } from './agencyCaisseRules'
 
 export function printCharge(groups: any[], profileData: any): void {
   const printDate = new Date().toLocaleDateString('fr-MA', { day: '2-digit', month: 'long', year: 'numeric' })
@@ -604,6 +605,67 @@ export function printAdminExpeditions(
 // IMPRESSION DES PORTS COLLECTÉS (avec totaux en haut et en bas)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+/** 🖨️ Valeurs (COD) collectées sur une période — montants par type (espèces / chèque / traite). */
+export function printCodCollectes(
+  parcels: any[],
+  amountOfType: (p: any, type: 'especes' | 'cheque' | 'traite') => number,
+  profileData?: any,
+  periodNote?: string
+): void {
+  if (!parcels.length) {
+    alert('Aucune valeur collectée à imprimer')
+    return
+  }
+  const fmtDH = (n: number) => n ? `${n.toFixed(2)} DH` : '—'
+  const toDate = (v: any) => (v?.toDate ? v.toDate() : v ? new Date(v) : null)
+  const esc = (s: any) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' } as any)[c])
+  const tot = { especes: 0, cheque: 0, traite: 0 }
+  const rows = parcels.map((p, i) => {
+    const e = amountOfType(p, 'especes'), c = amountOfType(p, 'cheque'), t = amountOfType(p, 'traite')
+    tot.especes += e; tot.cheque += c; tot.traite += t
+    const at = toDate(p.codCollectedAt)
+    return `<tr style="background:${i % 2 ? '#f0fdf4' : '#fff'}">
+      <td style="text-align:center;color:#555">${i + 1}</td>
+      <td style="font-family:monospace;font-weight:bold;color:#1d4ed8">${esc(p.sender?.nic || p.senderNic || p.trackingId || '—')}</td>
+      <td>${esc(p.sender?.name || '—')}</td>
+      <td>${esc(p.receiver?.name || '—')}</td>
+      <td>${esc(p.deliveryDriverName || '—')}</td>
+      <td style="color:#6b7280">${esc(p.codCollectedBy || '—')}${at && !isNaN(at.getTime()) ? `<br><span style="font-size:6.5pt">${at.toLocaleTimeString('fr-MA', { hour: '2-digit', minute: '2-digit' })}</span>` : ''}</td>
+      <td style="text-align:right">${fmtDH(e)}</td>
+      <td style="text-align:right">${fmtDH(c)}</td>
+      <td style="text-align:right">${fmtDH(t)}</td>
+      <td style="text-align:right;font-weight:bold;color:#15803d">${fmtDH(e + c + t)}</td>
+    </tr>`
+  }).join('')
+  const total = tot.especes + tot.cheque + tot.traite
+  const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Valeurs-COD-collectees</title>
+  <style>
+    @page { size: A4 landscape; margin: 10mm; }
+    * { -webkit-print-color-adjust: exact !important; print-color-adjust: exact !important; }
+    body { font-family: Arial, sans-serif; font-size: 8pt; color: #111; margin: 0; }
+    h1 { font-size: 14pt; color: #15803d; margin: 0 0 4px; }
+    .sub { color: #374151; margin-bottom: 10px; }
+    table { width: 100%; border-collapse: collapse; }
+    th { background: #15803d; color: #fff; padding: 5px; text-align: left; font-size: 7.5pt; }
+    td { padding: 4px 5px; border-bottom: 1px solid #e5e7eb; }
+    tfoot td { font-weight: bold; background: #dcfce7; }
+  </style></head><body>
+    <h1>Valeurs (COD) collectées</h1>
+    <div class="sub">${esc(profileData?.city ? `Agence ${profileData.city}` : '')}${periodNote ? ` · ${esc(periodNote)}` : ''} · ${parcels.length} expédition(s) · imprimé par ${esc(profileData?.name || '')}</div>
+    <table><thead><tr><th>#</th><th>N° EXP</th><th>Expéditeur</th><th>Destinataire</th><th>Livreur</th><th>Collecté par</th>
+      <th style="text-align:right">Espèces</th><th style="text-align:right">Chèque</th><th style="text-align:right">Traite</th><th style="text-align:right">Total</th></tr></thead>
+    <tbody>${rows}</tbody>
+    <tfoot><tr><td colspan="6">TOTAL — ${parcels.length} expédition(s)</td><td style="text-align:right">${fmtDH(tot.especes)}</td><td style="text-align:right">${fmtDH(tot.cheque)}</td><td style="text-align:right">${fmtDH(tot.traite)}</td><td style="text-align:right">${fmtDH(total)}</td></tr></tfoot>
+    </table>
+    <script>window.onload = () => { window.print() }</script>
+  </body></html>`
+  const win = openPrintWindow('width=1200,height=800')
+  if (win) {
+    win.document.write(html)
+    win.document.close()
+  }
+}
+
 export function printPortsCollectes(
   parcels: any[],
   profileData?: any,
@@ -624,6 +686,13 @@ export function printPortsCollectes(
   // Calculer les totaux
   const totalParcels = parcels.length
   const totalMontant = parcels.reduce((sum, p) => sum + (parseFloat(p.price) || 0), 0)
+  // 💰 Ports dus / 📬 ports payés ramassés au guichet (« En gare »)
+  const isPP = (p: any) => p.portType === 'port_paye'
+  const pp = parcels.filter(isPP)
+  const ppMontant = pp.reduce((sum, p) => sum + (parseFloat(p.price) || 0), 0)
+  const splitHtml = pp.length
+    ? `<div>💰 Ports dus : ${totalParcels - pp.length} · ${(totalMontant - ppMontant).toFixed(2)} DH</div><div>📬 Ports payés à ramasser : ${pp.length} · ${ppMontant.toFixed(2)} DH</div>`
+    : ''
 
   // Fonction pour formater une date
   const formatDate = (timestamp: any) => {
@@ -658,6 +727,7 @@ export function printPortsCollectes(
           <span style="color:#6b7280;font-size:6.5pt">${p.receiver?.city || ''} · ${p.receiver?.tel || ''}</span>
         </td>
         <td style="text-align:center;font-size:7.5pt">${p.deliveryDriverName || '—'}</td>
+        <td style="text-align:center;font-size:7pt;font-weight:bold;color:${isPP(p) ? '#4338ca' : '#15803d'}">${isPP(p) ? `📬 Port payé à ramasser${p.destinationCity ? `<br><span style="font-weight:normal;color:#6b7280">→ ${p.destinationCity}</span>` : ''}` : '💰 Port dû'}</td>
         <td style="text-align:right;font-weight:bold;color:#15803d;font-size:8pt">
           ${price.toFixed(2)} DH
         </td>
@@ -778,6 +848,7 @@ export function printPortsCollectes(
   <div class="summary-top">
     <div>📦 Total Expéditions : ${totalParcels}</div>
     <div>💰 Montant Total : ${totalMontant.toFixed(2)} DH</div>
+    ${splitHtml}
   </div>
 
   <table>
@@ -789,6 +860,7 @@ export function printPortsCollectes(
         <th style="width:110px">Expéditeur</th>
         <th style="width:130px">Destinataire</th>
         <th style="width:90px;text-align:center">Livreur</th>
+        <th style="width:80px;text-align:center">Type</th>
         <th style="width:70px;text-align:right">Montant</th>
         <th style="width:100px;text-align:center">Collecté Par</th>
         <th style="width:70px;text-align:center">Statut</th>
@@ -797,7 +869,7 @@ export function printPortsCollectes(
     <tbody>
       ${rows}
       <tr class="totals-row">
-        <td colspan="6" style="text-align:right;padding:8px;color:#15803d;font-size:9pt">
+        <td colspan="7" style="text-align:right;padding:8px;color:#15803d;font-size:9pt">
           TOTAL — ${totalParcels} expédition${totalParcels > 1 ? 's' : ''}
         </td>
         <td style="text-align:right;color:#15803d;font-size:9pt;font-weight:bold">
@@ -811,6 +883,7 @@ export function printPortsCollectes(
   <div class="summary-bottom">
     <div>📦 Total : ${totalParcels} expédition${totalParcels > 1 ? 's' : ''}</div>
     <div>💰 Montant Total : ${totalMontant.toFixed(2)} DH</div>
+    ${splitHtml}
   </div>
 
   <script>window.onload = function(){ window.print(); }<\/script>
@@ -1439,7 +1512,7 @@ export function printDriverExpeditionsTable(
       <div class="header-right">
         <div class="title">
           Expéditions — ${driverName}
-          ${statusText ? `<span class="status-badge ${statusText === 'À collecter' ? 'a_collecter' : statusText === 'Collecté' ? 'collecte' : (statusText === 'En compte' || statusText === 'Ramassé') ? 'a_collecter' : 'en_retard'}">${statusText}</span>` : ''}
+          ${statusText ? `<span class="status-badge ${statusText === 'À collecter' ? 'a_collecter' : statusText === 'Collecté' ? 'collecte' : (statusText === 'En compte' || statusText === 'À ramasser') ? 'a_collecter' : 'en_retard'}">${statusText}</span>` : ''}
         </div>
         <div class="subtitle">Imprimé le ${printDate}</div>
       </div>
@@ -1516,6 +1589,7 @@ export function printBilanJournee(bilanData: any[], profileData: any, dateLabel:
           <div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:4px;padding:4px 8px;display:inline-block">
             <div style="font-weight:bold;color:#991b1b">${b.montantManquant.toFixed(2)} DH</div>
             <div style="font-size:8pt;color:#dc2626">(${b.livresNonCollectes.length} colis)</div>
+            <div style="font-size:7pt;color:#dc2626">${[b.montantManquantPort > 0 ? `port ${b.montantManquantPort.toFixed(2)}` : '', b.montantManquantCod > 0 ? `COD ${b.montantManquantCod.toFixed(2)}` : ''].filter(Boolean).join(' · ')}</div>
           </div>
         ` : '<span style="color:#9ca3af">—</span>'}
       </td>
@@ -1603,7 +1677,7 @@ export function printBilanJournee(bilanData: any[], profileData: any, dateLabel:
     <strong>Taux %:</strong> Pourcentage de livraison (🟢 ≥80% | 🟡 50-79% | 🔴 &lt;50%) |
     <strong>En cours:</strong> Expéditions encore chez le livreur |
     <strong>Collectés:</strong> Montant des ports dûs encaissés |
-    <strong>🚨 Livrés non encaissés:</strong> Argent dû mais non collecté (ANOMALIE!)${hasCod ? ' | <strong>COD:</strong> collecté / total (DH) par type — colis mixte : chaque part dans sa colonne' : ''}
+    <strong>🚨 Livrés non encaissés:</strong> Port dû et/ou COD d'expéditions livrées, pas encore collectés (ANOMALIE!)${hasCod ? ' | <strong>COD:</strong> collecté / total (DH) par type — colis mixte : chaque part dans sa colonne' : ''}
   </div>
 
   <script>window.onload = function(){ window.print(); }<\/script>
@@ -1631,8 +1705,15 @@ export function printInstancesRetards(instancesData: any[], profileData: any, da
     { key: '30j+', label: 'Plus de 30 jours', color: '#fca5a5', textColor: '#7f1d1d' }
   ]
 
+  // 💰 COD de l'expédition (mixte : chaque part dans son type)
+  const COD_LABEL: Record<string, string> = { especes: 'Espèces', cheque: 'Chèque', traite: 'Traite' }
+  const codOf = (p: any) => {
+    const parts = (['especes', 'cheque', 'traite'] as const).map(k => [k, caisseCodAmountOfType(p, k)] as const).filter(([, a]) => a > 0)
+    return { total: parts.reduce((t, [, a]) => t + a, 0), label: parts.map(([k]) => COD_LABEL[k]).join(' + ') }
+  }
   const rows = instancesData.map((inst, i) => {
     const { parcel, ageJours, delay, bucket, driverName } = inst
+    const cod = codOf(parcel)
     const badgeColor = bucket === '<24h' ? '#fef3c7' : bucket === '1-7j' ? '#fed7aa' : bucket === '7-30j' ? '#fecaca' : '#fca5a5'
     const badgeText = bucket === '<24h' ? '#92400e' : bucket === '1-7j' ? '#9a3412' : bucket === '7-30j' ? '#991b1b' : '#7f1d1d'
     const delayReason = delay ? delayReasons.find((r: any) => r.key === delay.reason) : null
@@ -1641,12 +1722,13 @@ export function printInstancesRetards(instancesData: any[], profileData: any, da
       <tr style="background:${i % 2 === 0 ? '#ffffff' : '#f9fafb'}">
         <td style="padding:8px;text-align:center">
           <span style="padding:4px 8px;border-radius:4px;font-weight:bold;font-size:9pt;background:${badgeColor};color:${badgeText}">
-            ${ageJours}j
+            depuis le ${new Date(Date.now() - ageJours * 86400000).toLocaleDateString('fr-FR')}
           </span>
         </td>
         <td style="padding:8px;font-family:monospace;font-weight:bold;color:#2563eb">${parcel.senderNic || parcel.sender?.nic || parcel.trackingId || '—'}</td>
         <td style="padding:8px;font-weight:600;color:#111827">${driverName}</td>
         <td style="padding:8px;text-align:right;font-weight:bold;color:#111827">${parseFloat(parcel.price || 0).toFixed(2)} DH</td>
+        <td style="padding:8px;text-align:right">${cod.total > 0 ? `<b style="color:#047857">${cod.total.toFixed(2)} DH</b><div style="font-size:7.5pt;color:#6b7280">${cod.label}</div>` : '<span style="color:#9ca3af">—</span>'}</td>
         <td style="padding:8px">
           ${delayReason ? `<span style="background:#f3f4f6;padding:3px 8px;border-radius:4px;font-size:8pt">${delayReason.label}</span>` : '<span style="color:#9ca3af">—</span>'}
         </td>
@@ -1658,11 +1740,13 @@ export function printInstancesRetards(instancesData: any[], profileData: any, da
   const summary = buckets.map(b => {
     const count = instancesData.filter(i => i.bucket === b.key).length
     const montant = instancesData.filter(i => i.bucket === b.key).reduce((s, i) => s + parseFloat(i.parcel.price || 0), 0)
-    return { ...b, count, montant }
+    const codMontant = instancesData.filter(i => i.bucket === b.key).reduce((s, i) => s + codOf(i.parcel).total, 0)
+    return { ...b, count, montant, codMontant }
   })
 
   const totalColis = instancesData.length
   const totalMontant = instancesData.reduce((s, i) => s + parseFloat(i.parcel.price || 0), 0)
+  const totalCod = instancesData.reduce((s, i) => s + codOf(i.parcel).total, 0)
 
   const html = `<!DOCTYPE html>
 <html>
@@ -1712,7 +1796,8 @@ export function printInstancesRetards(instancesData: any[], profileData: any, da
       <div class="summary-box" style="background:${s.color}">
         <div style="font-size:8pt;font-weight:600;color:${s.textColor};margin-bottom:4px">${s.label}</div>
         <div style="font-size:18pt;font-weight:bold;color:${s.textColor}">${s.count}</div>
-        <div style="font-size:8pt;color:#6b7280;margin-top:4px">${s.montant.toFixed(2)} DH</div>
+        <div style="font-size:8pt;color:#6b7280;margin-top:4px">Port : ${s.montant.toFixed(2)} DH</div>
+        <div style="font-size:8pt;color:#047857;margin-top:2px">COD : ${s.codMontant.toFixed(2)} DH</div>
       </div>
     `).join('')}
   </div>
@@ -1720,12 +1805,13 @@ export function printInstancesRetards(instancesData: any[], profileData: any, da
   <table>
     <thead>
       <tr>
-        <th style="width:10%;text-align:center">Âge</th>
+        <th style="width:13%;text-align:center">Depuis</th>
         <th style="width:15%">N° EXP</th>
         <th style="width:20%">Livreur</th>
-        <th style="width:15%;text-align:right">Montant</th>
-        <th style="width:20%">Raison</th>
-        <th style="width:20%">Détail</th>
+        <th style="width:11%;text-align:right">Port</th>
+        <th style="width:14%;text-align:right">COD</th>
+        <th style="width:15%">Raison</th>
+        <th style="width:15%">Détail</th>
       </tr>
     </thead>
     <tbody>
@@ -1734,13 +1820,14 @@ export function printInstancesRetards(instancesData: any[], profileData: any, da
   </table>
 
   <div style="margin-top:20px;padding:12px;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:6px;text-align:center;font-weight:bold">
-    Total: <span style="color:#2563eb">${totalColis} colis</span> en instance pour 
-    <span style="color:#dc2626">${totalMontant.toFixed(2)} DH</span>
+    Total: <span style="color:#2563eb">${totalColis} colis</span> en instance —
+    port <span style="color:#dc2626">${totalMontant.toFixed(2)} DH</span> ·
+    COD <span style="color:#047857">${totalCod.toFixed(2)} DH</span>
   </div>
 
   <div style="margin-top:12px;padding:12px;background:#f9fafb;border:1px solid #e5e7eb;border-radius:6px;font-size:8pt;color:#6b7280">
     <strong style="color:#111827">Légende:</strong>
-    <strong>Âge:</strong> Nombre de jours depuis la création de l'expédition |
+    <strong>Depuis :</strong> date de création de l'expédition |
     🟡 <strong>&lt;24h:</strong> Instance récente (surveillance) |
     🟠 <strong>1-7j:</strong> Retard modéré (suivi requis) |
     🔴 <strong>7-30j:</strong> Retard sérieux (action urgente) |

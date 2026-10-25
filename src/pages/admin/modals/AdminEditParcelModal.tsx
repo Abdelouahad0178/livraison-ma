@@ -1,5 +1,66 @@
 import { X, ChevronDown, Save, Edit2 } from 'lucide-react'
 import { CITIES, STATUSES } from '../../../firebase/constants'
+import { CitySelect } from '../../../components/CitySelect'
+import { docPartKeepingTotal } from '../../../utils/codParts'
+import { useState } from 'react'
+import { auth } from '../../../firebase/config'
+import { moveParcelDate } from '../../../firebase/parcels'
+import { daysBetween } from '../../../utils/shiftParcelDates'
+
+const frDay = (d: string) => (d ? d.split('-').reverse().join('/') : '—')
+
+/** 📅 Admin : déplacer l'expédition à une autre journée — TOUTES ses dates et son historique sont décalés. */
+function MoveDateSection({ parcel, onDone }: Readonly<{ parcel: any; onDone: () => void }>) {
+  const current: string = parcel.workDate || ''
+  const [day, setDay] = useState(current)
+  const [busy, setBusy] = useState(false)
+  const [msg, setMsg] = useState('')
+  const days = current && day ? daysBetween(current, day) : 0
+  const archivedElsewhere = parcel._archivedFrom || parcel._archivedAt
+  const run = async () => {
+    if (!day || !days) return
+    if (!globalThis.confirm(
+      `Déplacer l'expédition ${parcel.senderNic || parcel.sender?.nic || parcel.trackingId} du ${frDay(current)} au ${frDay(day)} ?\n\n` +
+      `TOUTES ses dates seront décalées de ${days > 0 ? '+' : ''}${days} jour(s) : création, historique, livraison, encaissements COD / port, remises…\n` +
+      `⚠️ Son argent change aussi de journée dans Caisse Agence, Collecte du soir et Bilan.`
+    )) return
+    setBusy(true); setMsg('')
+    try {
+      const by = auth.currentUser?.email || 'Admin'
+      const r = await moveParcelDate(parcel.id, day, by)
+      globalThis.alert(`✅ Expédition déplacée au ${frDay(day)} (${r.count} date(s) décalée(s) de ${r.days > 0 ? '+' : ''}${r.days} jour(s)).`)
+      onDone()
+    } catch (e: any) {
+      setMsg(e?.message || String(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  return (
+    <div className="space-y-2 rounded-xl border border-amber-200 bg-amber-50/60 p-3">
+      <p className="text-xs font-bold text-amber-800 uppercase tracking-wider">📅 Changer la date de l'expédition</p>
+      {archivedElsewhere ? (
+        <p className="text-xs text-gray-600">Expédition dans les archives séparées : restaurez-la d'abord pour changer sa date.</p>
+      ) : (
+        <>
+          <div className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="text-gray-600">Journée actuelle : <b>{frDay(current)}</b></span>
+            <span className="text-gray-400">→</span>
+            <input type="date" value={day} onChange={e => setDay(e.target.value)}
+              className="border border-amber-300 rounded-lg px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-amber-300" />
+            <button type="button" onClick={run} disabled={busy || !days}
+              className="px-3 py-1.5 rounded-lg text-sm font-semibold bg-amber-600 text-white hover:bg-amber-700 disabled:opacity-40">
+              {busy ? 'Déplacement…' : 'Déplacer'}
+            </button>
+            {days !== 0 && <span className="text-xs font-semibold text-amber-800">{days > 0 ? '+' : ''}{days} jour(s)</span>}
+          </div>
+          <p className="text-[11px] text-gray-600">Toutes les dates suivent (création, historique, livraison, encaissements COD / port…), heures gardées. Une ligne est ajoutée à l'historique.</p>
+          {msg && <p className="text-xs font-semibold text-red-600">⚠️ {msg}</p>}
+        </>
+      )}
+    </div>
+  )
+}
 
 interface AdminEditParcelModalProps {
   adminEditModal: any
@@ -97,6 +158,22 @@ export default function AdminEditParcelModal({
             </div>
           </div>
 
+          {/* 🔢 N° EXP (NIC) — modifiable à tout moment par l'admin, unique */}
+          <div className="space-y-3">
+            <p className="text-xs font-bold text-gray-500 uppercase tracking-wider border-b pb-1">N° EXP</p>
+            <div>
+              <label className="block text-xs text-gray-500 mb-1">N° EXP (NIC)</label>
+              <input value={adminEditModal.form.senderNic ?? ''} inputMode="numeric"
+                onChange={e => setAdminEditModal((m: any) => ({ ...m, error: '', form: { ...m.form, senderNic: e.target.value } }))}
+                className="w-full sm:w-64 border border-gray-200 rounded-xl px-3 py-2 text-sm font-mono font-semibold text-blue-700 focus:outline-none focus:border-purple-400" />
+              {String(adminEditModal.form.senderNic ?? '').trim() !== String(adminEditModal.parcel.senderNic || adminEditModal.parcel.sender?.nic || '') && (
+                <p className="text-[11px] text-amber-700 mt-1">
+                  Ancien N° EXP : <b className="font-mono">{adminEditModal.parcel.senderNic || adminEditModal.parcel.sender?.nic || '—'}</b> — le nouveau numéro doit être unique ; le changement est tracé dans l'historique admin.
+                </p>
+              )}
+            </div>
+          </div>
+
           {/* Expéditeur */}
           <div className="space-y-3">
             <p className="text-xs font-bold text-gray-500 uppercase tracking-wider border-b pb-1">Expéditeur</p>
@@ -113,8 +190,8 @@ export default function AdminEditParcelModal({
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Ville</label>
-                <input value={adminEditModal.form.senderCity} onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, senderCity: e.target.value } }))}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400" />
+                {/* Liste des villes du site (plus de texte libre) — suit la ville d'origine */}
+                <CitySelect value={adminEditModal.form.senderCity} onChange={v => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, senderCity: v, originCity: v } }))} />
               </div>
             </div>
           </div>
@@ -135,8 +212,8 @@ export default function AdminEditParcelModal({
               </div>
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Ville</label>
-                <input value={adminEditModal.form.receiverCity} onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, receiverCity: e.target.value } }))}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400" />
+                {/* Liste des villes du site (plus de texte libre) — suit la ville de destination */}
+                <CitySelect value={adminEditModal.form.receiverCity} onChange={v => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, receiverCity: v, destinationCity: v } }))} />
               </div>
             </div>
           </div>
@@ -148,7 +225,7 @@ export default function AdminEditParcelModal({
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Ville origine</label>
                 <div className="relative">
-                  <select value={adminEditModal.form.originCity} onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, originCity: e.target.value } }))}
+                  <select value={adminEditModal.form.originCity} onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, originCity: e.target.value, senderCity: e.target.value } }))}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm appearance-none bg-white focus:outline-none focus:border-purple-400">
                     {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
@@ -158,7 +235,7 @@ export default function AdminEditParcelModal({
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Ville destination</label>
                 <div className="relative">
-                  <select value={adminEditModal.form.destinationCity} onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, destinationCity: e.target.value } }))}
+                  <select value={adminEditModal.form.destinationCity} onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, destinationCity: e.target.value, receiverCity: e.target.value } }))}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm appearance-none bg-white focus:outline-none focus:border-purple-400">
                     {CITIES.map(c => <option key={c} value={c}>{c}</option>)}
                   </select>
@@ -224,9 +301,9 @@ export default function AdminEditParcelModal({
                   <div className="mt-1">
                     <label className="block text-xs text-gray-500 mb-1">💵 Montant espèces (DH)</label>
                     <input type="number" min="0" step="0.01" value={adminEditModal.form.codCashAmount}
-                      onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, codCashAmount: e.target.value } }))}
+                      onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, codCashAmount: e.target.value, codAmount: docPartKeepingTotal(m.form.codAmount, m.form.codCashAmount, e.target.value) } }))}
                       className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400" />
-                    <div className="text-[11px] font-bold text-gray-600 mt-1">Total : {((parseFloat(adminEditModal.form.codAmount) || 0) + (parseFloat(adminEditModal.form.codCashAmount) || 0)).toLocaleString('fr-MA')} DH</div>
+                    <div className="text-[11px] font-bold text-gray-600 mt-1">Total : {((parseFloat(adminEditModal.form.codAmount) || 0) + (parseFloat(adminEditModal.form.codCashAmount) || 0)).toLocaleString('fr-MA')} DH <span className="font-normal text-gray-500">— la part espèces est retirée du {adminEditModal.form.serviceType === 'traite' ? 'montant traite' : 'montant chèque'} (total inchangé)</span></div>
                   </div>
                 )}
               </div>
@@ -278,6 +355,9 @@ export default function AdminEditParcelModal({
               ))}
             </div>
           </div>
+
+          {/* 📅 Changer la date de l'expédition (toutes ses dates et son historique suivent) */}
+          <MoveDateSection parcel={adminEditModal.parcel} onDone={() => setAdminEditModal(null)} />
 
           {/* Historique modifications admin */}
           {adminEditModal.parcel.adminChanges?.length > 0 && (

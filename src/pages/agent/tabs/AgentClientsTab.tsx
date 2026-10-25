@@ -1,9 +1,9 @@
 import { useState, useEffect } from 'react'
 import { Users, Search, Plus, Edit2, Save, X, Trash2, Truck, ChevronUp, ChevronDown } from 'lucide-react'
-import { subscribeClients, createClient, updateClient, deleteClient, Client } from '../../../firebase/clients'
+import { subscribeManualClientsOfCity, createClient, updateClient, deleteClient, Client } from '../../../firebase/clients'
 import { subscribeAllUsers, subscribeAllSectors } from '../../../firebase/firestore'
 import { CITIES } from '../../../firebase/constants'
-import { normIncludes } from '../../../utils/normText'
+import { normIncludes, digitAwareIncludes } from '../../../utils/normText'
 
 interface AgentClientsTabProps {
   agencyCity: string
@@ -49,14 +49,11 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
   }
 
   useEffect(() => {
-    const unsubClients = subscribeClients((data: any[]) => {
-      // Filtrer les clients de cette agence ET ajoutés manuellement
-      const agencyClients = data.filter((c: any) =>
-        c.city === agencyCity && c.manuallyAdded === true
-      )
-      setClients(agencyClients as Client[])
+    // ⚡ Clients de cette agence ajoutés manuellement, lus directement dans la base (≈ 100 fiches au lieu de ≈ 17 000)
+    const unsubClients = subscribeManualClientsOfCity(agencyCity, (data: any[]) => {
+      setClients(data as Client[])
       setLoading(false)
-    })
+    }, () => setLoading(false))
     const unsubUsers = subscribeAllUsers((data: any[]) => {
       // Filtrer les chauffeurs de cette agence
       const agencyDrivers = data.filter(u =>
@@ -84,7 +81,7 @@ export default function AgentClientsTab({ agencyCity, profile, setMsg }: AgentCl
   const filteredClients = clients.filter(c => {
     const matchSearch = !searchTerm ||
       normIncludes(c.name, searchTerm.toLowerCase()) ||
-      c.tel?.includes(searchTerm) ||
+      digitAwareIncludes(String(c.tel ?? ''), searchTerm) ||
       normIncludes(c.address, searchTerm.toLowerCase()) ||
       normIncludes(c.secteurName, searchTerm.toLowerCase())
 

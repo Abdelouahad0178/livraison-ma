@@ -138,7 +138,7 @@ export default function AdminNotesTab({ agentNotes, users }: AdminNotesTabProps)
               className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:border-amber-500 focus:outline-none"
             >
               <option value="all">Tous les rôles</option>
-              {['agent', 'chauffeur', 'livreur', 'aide_agent', 'pointeur', 'caissier'].map(r => (
+              {['chauffeur', 'livreur', 'aide_agent', 'pointeur', 'caissier'].map(r => (
                 <option key={r} value={r}>{getRoleLabel(r)}</option>
               ))}
             </select>

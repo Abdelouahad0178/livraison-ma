@@ -2,9 +2,19 @@
 @import "./styles/hero-global.css";
 @import "./styles/mobile-responsive.css";
 
+/* 🚨 Montant à surveiller (ex. espèces restant à encaisser) : clignote pour attirer l'œil */
+@keyframes blink-alert {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.25; transform: scale(1.06); }
+}
+.blink-alert { animation: blink-alert 1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) { .blink-alert { animation: none; } }
+
 @layer base {
   * {
     box-sizing: border-box;
+    /* ↔️ Un tableau défilé jusqu'au bout ne « passe » plus le geste à la page (sinon : retour arrière du navigateur) */
+    overscroll-behavior-x: contain;
   }
   html,
   body,
@@ -18,6 +28,8 @@
     -webkit-font-smoothing: antialiased;
     overflow-x: hidden;
     max-width: 100vw;
+    /* ↔️ Bloque le « glisser pour revenir en arrière » du navigateur (balayage horizontal profond = sortie du site) */
+    overscroll-behavior-x: none;
   }
   img,
   svg,
@@ -193,4 +205,11 @@ button {
   [id*="devtools"] {
     display: none !important;
   }
+}
+
+/* 🌸 Thème « fleurs » (components/FloralTheme) : en-tête rose sous la guirlande de fleurs */
+.floral-page header.sticky,
+header.floral-header {
+  background: linear-gradient(90deg, #fce7f3, #ffe4e6, #fae8ff) !important;
+  border-bottom-color: #f9a8d4 !important;
 }

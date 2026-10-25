@@ -15,12 +15,35 @@ service cloud.firestore {
     }
 
     function isStaff() {
-      return role() == 'admin' || role() == 'directeur' || role() == 'agent'
+      return role() == 'admin' || role() == 'directeur'
           || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation') || role() == 'caissier'
           || role() == 'aide_agent' || role() == 'pointeur_encaisseur'
           || role() == 'encaisseur_central' || role() == 'distributeur_especes'
           || role() == 'distributeur_cheques' || role() == 'facturier'
           || role() == 'analyseur_cheque' || role() == 'analyseur_espece';
+    }
+
+    // 🔒 Agent pro qui crée une expédition d'une autre ville que la sienne (compte sans fiche users : non concerné)
+    function isAgentProOtherCity(data) {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && userDoc().get('role', '') == 'agentpro'
+        && (userDoc().get('city', '') == ''
+          || data.get('originCity', '') != userDoc().get('city', '')
+          || data.get('createdByCity', data.get('originCity', '')) != userDoc().get('city', ''));
+    }
+
+    // La ville de création reste propriétaire du bon, y compris après un retour.
+    function parcelCreationCity(data) {
+      let created = data.get('createdByCity', '');
+      return created is string && created != '' ? created : legacyParcelCreationCity(data);
+    }
+    function legacyParcelCreationCity(data) {
+      let beforeReturn = data.get('preReturn', {}) is map ? data.get('preReturn', {}) : {};
+      let original = beforeReturn.get('originCity', '');
+      let origin = data.get('originCity', '');
+      let sender = data.get('sender', {}) is map ? data.get('sender', {}) : {};
+      return original is string && original != '' ? original
+        : origin is string && origin != '' ? origin : sender.get('city', '');
     }
 
     function isFacturier() {
@@ -33,6 +56,21 @@ service cloud.firestore {
 
     function isCentralCollector() {
       return role() == 'encaisseur_central';
+    }
+
+    // 🧾 Analyseur chèques : mêmes fonctions que l'encaisseur central, limitées aux COD chèque / traite (mixte compris)
+    function isChequeAnalyst() {
+      return role() == 'analyseur_cheque';
+    }
+    function isDocCodParcel(data) {
+      return data.get('codMixed', false) == true
+        || data.get('codPaymentType', '') in ['cheque', 'traite', 'cod_cheque', 'cod_traite']
+        || data.get('serviceType', '') in ['cheque', 'traite'];
+    }
+    // … et seulement les expéditions de SON agence (sa ville = origine ou destination)
+    function isMyAgencyDocParcel(data) {
+      return isDocCodParcel(data)
+        && (data.get('originCity', '') == userCity() || data.get('destinationCity', '') == userCity());
     }
 
     function isDistributeurEspeces() {
@@ -52,7 +90,7 @@ service cloud.firestore {
     }
 
     function isAgentOrChef() {
-      return role() == 'agent' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+      return role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
     }
 
     function isChefAgence() {
@@ -61,6 +99,14 @@ service cloud.firestore {
 
     function isAideAgent() {
       return role() == 'aide_agent';
+    }
+
+    // 🔒 Compte de TRAVAIL : fiche users avec un vrai rôle qui n'est pas client (personnel, livreurs, gare, chauffeurs…).
+    // Remplace « signedIn() » dans les règles de modification des expéditions : un compte inscrit seul (ouvert à tous),
+    // un client ou un compte sans fiche ne peut plus modifier prix, COD, statut ou livreur d'une expédition.
+    function isWorkAccount() {
+      return signedIn() && role() is string
+        && !(role() in ['client', 'client-expediteur', 'client-destinataire']);
     }
 
     function isDeliveryWorker() {
@@ -84,7 +130,8 @@ service cloud.firestore {
     }
 
     function isParcelCreator() {
-      return signedIn() && resource.data.agentId == request.auth.uid;
+      return signedIn() && (resource.data.get('agentId', '') == request.auth.uid
+        || (role() == 'agentpro' && userCity() != '' && parcelCreationCity(resource.data) == userCity()));
     }
 
     function isChefOfAideAgentParcelAgency() {
@@ -244,6 +291,46 @@ service cloud.firestore {
     // une fois posé, seul son auteur peut le reposer, le modifier ou le retirer — sinon un
     // second utilisateur pouvait écraser silencieusement le pointage du premier en cliquant
     // à nouveau sur "Pointer"/"Confirmer arrivée" après coup.
+    // 💰 Champs d'argent / d'identité d'une expédition : JAMAIS modifiés par les chemins larges (colis arrivé,
+    // retour, réessai) — seulement par les règles dédiées (chefs, livreur assigné, encaisseur central, admin).
+    function moneyIdentityKeys() {
+      return ['price', 'portType', 'clientId', 'agentId', 'codMixed', 'codCashAmount',
+        'portAdminTransferred', 'adminTransferred', 'portAdminTransferId', 'codCaisseEntryId', 'portCaisseEntryId'];
+    }
+    function collectFieldKeys() {
+      return ['portStatus', 'portCollectedAt', 'portCollectedById', 'portCollectedBy',
+        'codStatus', 'codCollectedAt', 'codCollectedBy'];
+    }
+    // ↩️ Passage en « Retourné » refusé si le COD est déjà encaissé (correction réservée à l'admin)
+    function returnNotCollected() {
+      return request.resource.data.get('status', '') != 'Retourné'
+        || resource.data.get('status', '') == 'Retourné'
+        || (resource.data.get('codCollectedAt', null) == null
+            && resource.data.get('codStatus', null) in [null, '', 'pending']);
+    }
+    // ↩️ Retour : seuls les champs du retour ; le COD ne peut que passer à 0 (markParcelAsReturned) ; aucun prix,
+    // type de port, client ni encaissement modifié.
+    function returnKeepsMoney() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return !changed.hasAny(moneyIdentityKeys().concat(collectFieldKeys()))
+        && (!changed.hasAny(['codAmount']) || request.resource.data.get('codAmount', 0) == 0)
+        && returnNotCollected();
+    }
+    // 📦 Colis arrivé (règle large), comptes non-chefs : pas de changement de montant / client, pas d'annulation
+    // d'un encaissement déjà fait (COD ou port) ; le COD ne passe à 0 que pour un retour non encaissé.
+    function arrivedKeepsMoney() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return !changed.hasAny(moneyIdentityKeys())
+        && (!changed.hasAny(['codAmount'])
+            || (request.resource.data.get('status', '') == 'Retourné' && request.resource.data.get('codAmount', 0) == 0))
+        && (resource.data.get('codStatus', null) in [null, '', 'pending']
+            || !(request.resource.data.get('codStatus', null) in [null, '', 'pending']))
+        && (resource.data.get('codCollectedAt', null) == null || request.resource.data.get('codCollectedAt', null) != null)
+        && (!(resource.data.get('portStatus', null) in ['collected', 'received'])
+            || request.resource.data.get('portStatus', null) in ['collected', 'received'])
+        && returnNotCollected();
+    }
+
     function controlOnlyKeys() {
       return ['controlled', 'controlledBy', 'controlledById', 'controlledAt'];
     }
@@ -260,13 +347,72 @@ service cloud.firestore {
       return !changed.hasAny(['codAmount', 'codMixed', 'codCashAmount'])
         && (
           !changed.hasAny(protectedParcelBonFields())
-          || resource.data.agentId == request.auth.uid
+          || isParcelCreator()
         )
         && !changed.hasAny(aideAgentValidationFields())
         && isChefAgence()
         && (!changed.hasAny(deliveryAssignmentFields()) || resource.data.agentId == request.auth.uid || isDestinationAgencyChief())
         && keepsDeliveredStatus()
-        && (!touchesOnlyControlFields() || isOwnControlChange());
+        && (!touchesOnlyControlFields() || isOwnControlChange())
+        // 🔒 Avant : statut, remarques, type de port… modifiables sur les colis de N'IMPORTE QUELLE ville
+        && isMyAgencyParcel();
+    }
+
+    // ✏️ Correction des données d'une expédition par le chef d'agence / l'agent pro, AUTORISÉE PAR L'ADMIN
+    // (settings/editPermissions.parcelEditScope.<rôle> : created = expéditions créées par lui ou par les
+    // aides-agents / le portail client de son agence ; received = expéditions reçues par son agence).
+    // Tout statut SAUF « Livré » (même chargée dans un camion). Uniquement les champs du bon ; le COD, le prix
+    // et le type de port seulement si l'admin les a cochés pour ce rôle et tant qu'ils ne sont pas encaissés.
+    function adminScopedBonEdit() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      let perms = get(/databases/$(database)/documents/settings/editPermissions).data;
+      let scope = perms.get('parcelEditScope', {}).get(role(), {});
+      let fields = perms.get(role(), []);
+      return changed.hasOnly(parcelBonEditFields().concat(['bonEditedAt', 'bonEditedBy', 'bonEditedByName']))
+        && !(resource.data.get('status', '') in ['Livré', 'LivrÃ©'])
+        && (
+          (scope.get('received', false) == true && resource.data.get('destinationCity', '') == userCity())
+          || (scope.get('created', false) == true && (
+            isParcelCreator()
+            || (resource.data.get('agentRole', '') in ['aide_agent', 'client_portal']
+                && (resource.data.get('originCity', '') == userCity() || resource.data.get('sender', {}).get('city', '') == userCity()))
+          ))
+        )
+        && (!changed.hasAny(['codAmount', 'codAmountHistory', 'codMixed', 'codCashAmount']) || fields.hasAny(['codAmount']))
+        && (!changed.hasAny(['codAmount', 'codAmountHistory', 'codMixed', 'codCashAmount', 'codStatus', 'codPaymentType', 'serviceType'])
+            || resource.data.get('codStatus', null) in [null, '', 'pending'])
+        && (!changed.hasAny(['price']) || fields.hasAny(['price']))
+        && (!changed.hasAny(['portType']) || fields.hasAny(['portType']))
+        && (!changed.hasAny(['price', 'portType'])
+            || (!(resource.data.get('portStatus', null) in ['collected', 'received']) && resource.data.get('invoiced', false) != true))
+        && keepsEnComptePortType()
+        && isNotBlocked();
+    }
+
+    // 🏢 Colis rattaché à l'agence de l'utilisateur : origine, expéditeur, destination, retour ou ville de
+    // création = sa ville ; ou colis créé par lui / qui lui est assigné en livraison.
+    // 🚚 Livraison réservée à l'agence de destination : chef d'agence, agent pro et aide agent ne peuvent
+    // passer en « Livré » qu'une expédition destinée à LEUR ville (même garde côté site : utils/deliveryCity).
+    // Ordre « du moins cher au plus cher » : une mise à jour qui ne livre pas s'arrête à la 1re comparaison.
+    function deliveryCityGuard() {
+      return request.resource.data.get('status', '') != 'Livré'
+        || resource.data.get('status', '') == 'Livré'
+        || !(role() in ['chef_agence', 'agentpro', 'aide_agent'])
+        || (userCity() == resource.data.get('destinationCity', '')
+            && userCity() == request.resource.data.get('destinationCity', ''));
+    }
+
+    function isMyAgencyParcel() {
+      let c = userCity();
+      return resource.data.get('agentId', '') == request.auth.uid
+        || resource.data.get('deliveryDriverId', '') == request.auth.uid
+        || (c != '' && (
+          resource.data.get('originCity', '') == c
+          || resource.data.get('destinationCity', '') == c
+          || resource.data.get('returnToCity', '') == c
+          || resource.data.get('createdByCity', '') == c
+          || resource.data.get('sender', {}).get('city', '') == c
+        ));
     }
 
     function isOwnControlChange() {
@@ -293,44 +439,266 @@ service cloud.firestore {
     // Ã¢â€â‚¬Ã¢â€â‚¬ Colis : lecture publique (tracking)
     // codAmount modifiable uniquement par Admin (protection double : rÃ¨gle + code)
     match /parcels/{parcelId} {
-      allow get:    if true;
+      // 💰 GARDE D'ARGENT (diagnostic du 24/10/2026) — ajoutée à TOUTES les règles « update » ci-dessous (une règle
+      // Firestore suffit à autoriser : une interdiction doit donc figurer dans chacune). Hors admin :
+      // 1. un PORT DÛ déjà encaissé (collecté / reçu) ne change pas de type (avant : passé « en compte », l'argent
+      //    sortait de la caisse — point 1.3) ;
+      // 2. une expédition dont l'argent est encaissé (port dû ou COD) ne revient pas « Arrivé en agence » depuis
+      //    « En cours de livraison » / « Livré » (avant : annulation d'assignation après encaissement — point 1.4).
+      function portDuCashedBefore() {
+        return resource.data.get('portType', '') in ['port_du', 'port_du_cheque']
+          && resource.data.get('portStatus', null) in ['collected', 'received'];
+      }
+      function codCashedBefore() {
+        return resource.data.get('codAmount', 0) is number && resource.data.get('codAmount', 0) > 0
+          && resource.data.get('codStatus', null) != null && resource.data.get('codStatus', null) != 'pending';
+      }
+      function moneyInvariantsOk() {
+        return isAdmin() || (
+          !(portDuCashedBefore() && request.resource.data.get('portType', '') != resource.data.get('portType', ''))
+          && !(request.resource.data.get('status', '') == 'Arrivé en agence'
+            && resource.data.get('status', '') in ['En cours de livraison', 'Livré']
+            && (portDuCashedBefore() || codCashedBefore()))
+        );
+      }
+      function agentProDeliveryFields() {
+        return deliveryAssignmentFields().concat([
+          'deliveryMethod', 'deliveredAt', 'deliveredBy', 'deliveredById',
+          'destinationArrivedAt', 'destinationAgentId', 'destinationAgentName',
+          'chefPointedAt', 'chefPointedBy', 'chefPointedById', 'chefPointedSource', 'arrivedNbColis',
+          'signatureToken', 'signatureTokenCreatedAt', 'signatureConfirmedAt', 'signatureMethod',
+          'returnSignatureToken', 'returnSignatureTokenCreatedAt', 'returnSignatureConfirmedAt',
+          'returnDeliveredAt', 'returnDeliveredBy', 'lastLocation'
+        ]);
+      }
+      function agentProDestinationChangesOk(changed) {
+        return resource.data.get('destinationCity', '') == userCity()
+          && request.resource.data.get('destinationCity', '') == resource.data.get('destinationCity', '')
+          && request.resource.data.get('originCity', '') == resource.data.get('originCity', '')
+          && changed.hasOnly(agentProDeliveryFields().concat([
+            'status', 'history', 'visibleInDestinationAgency', 'updatedAt', 'updatedBy', 'lastModifiedAt', 'lastModifiedBy', 'lastModifiedByName',
+            'codStatus', 'codPaymentType', 'codCollectedAt', 'codCollectedBy', 'codCollectedById',
+            'portStatus', 'portCollectedAt', 'portCollectedBy', 'portCollectedById',
+            'portDuReceivedAt', 'portDuReceivedBy', 'portDuReceivedById', 'portDuReceivedMethod',
+            'portDuReceivedChefAt', 'portDuReceivedChefBy', 'portDuReceivedChefById',
+            'codCollectCancelledAt', 'codCollectCancelledBy', 'portCollectCancelledAt', 'portCollectCancelledBy',
+            'returnArrivedAt', 'returnFinalizedAt', 'returnFinalizedBy'
+          ]));
+      }
+      function agentProReturnChangesOk(changed) {
+        return (
+          // Retourner le colis : seule l'agence qui devait le livrer inverse le circuit.
+          (resource.data.get('destinationCity', '') == userCity()
+            && request.resource.data.get('status', '') == 'Retourné'
+            && resource.data.get('wasReturned', false) != true
+            && request.resource.data.get('wasReturned', false) == true
+            && request.resource.data.get('originCity', '') == resource.data.get('destinationCity', '')
+            && request.resource.data.get('destinationCity', '') == resource.data.get('originCity', '')
+            && request.resource.data.get('sender', {}) == resource.data.get('receiver', {})
+            && request.resource.data.get('receiver', {}) == resource.data.get('sender', {})
+            && request.resource.data.get('codAmount', 0) == 0)
+          // Transport du retour par sa nouvelle agence de départ.
+          || (resource.data.get('wasReturned', false) == true
+            && resource.data.get('originCity', '') == userCity()
+            && request.resource.data.get('originCity', '') == resource.data.get('originCity', '')
+            && request.resource.data.get('destinationCity', '') == resource.data.get('destinationCity', '')
+            && request.resource.data.get('status', '') == 'Retour en transit'
+            && changed.hasOnly(['status', 'returnShippedAt', 'history', 'updatedAt', 'updatedBy']))
+        ) && changed.hasOnly(agentProDeliveryFields().concat([
+          'status', 'history', 'sender', 'receiver', 'originCity', 'destinationCity', 'returnToCity',
+          'preReturn', 'senderNameNorm', 'receiverNameNorm', 'codAmount',
+          'wasReturned', 'returnedAt', 'returnReason', 'returnedByDriverId', 'returnedByDriverName',
+          'returnShippedAt', 'updatedAt', 'updatedBy'
+        ]));
+      }
+      function agentProParcelUpdateOk() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        return role() != 'agentpro' || (userCity() != ''
+          && isNotBlocked()
+          && !changed.hasAny(controlOnlyKeys().concat(deliveryControlOnlyKeys()).concat(['createdByCity']))
+          && parcelCreationCity(request.resource.data) == parcelCreationCity(resource.data)
+          && (
+            (parcelCreationCity(resource.data) == userCity()
+              && ((resource.data.get('destinationCity', '') == userCity()
+                  && request.resource.data.get('destinationCity', '') == userCity())
+                || (!changed.hasAny(agentProDeliveryFields())
+                  && (!changed.hasAny(['status'])
+                    || (resource.data.get('status', '') in ['Initialisé', 'En cours de ramassage', 'En transit']
+                      && request.resource.data.get('status', '') in ['Initialisé', 'En cours de ramassage', 'En transit'])))))
+            || agentProDestinationChangesOk(changed)
+            || agentProReturnChangesOk(changed)
+            || agentProReturnCancelOk(changed)
+          ));
+      }
+      function agentProReturnCancelOk(changed) {
+        let before = resource.data.get('preReturn', {}) is map ? resource.data.get('preReturn', {}) : {};
+        return resource.data.get('wasReturned', false) == true
+          && resource.data.get('status', '') == 'Retourné'
+          && resource.data.get('originCity', '') == userCity()
+          && before.get('destinationCity', '') == userCity()
+          && request.resource.data.get('wasReturned', true) == false
+          && request.resource.data.get('originCity', '') == before.get('originCity', '')
+          && request.resource.data.get('destinationCity', '') == before.get('destinationCity', '')
+          && request.resource.data.get('sender', {}) == before.get('sender', {})
+          && request.resource.data.get('receiver', {}) == before.get('receiver', {})
+          && request.resource.data.get('codAmount', 0) == before.get('codAmount', 0)
+          && request.resource.data.get('deliveryDriverId', null) == before.get('deliveryDriverId', null)
+          && changed.hasOnly(agentProDeliveryFields().concat([
+            'status', 'history', 'sender', 'receiver', 'originCity', 'destinationCity', 'returnToCity',
+            'codAmount', 'codMixed', 'codCashAmount', 'preReturn', 'senderNameNorm', 'receiverNameNorm',
+            'wasReturned', 'returnedAt', 'returnReason', 'returnedByDriverId', 'returnedByDriverName',
+            'returnCancelledAt', 'returnCancelledBy'
+          ]));
+      }
+      function agentProBonSafetyOk() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        return role() != 'agentpro' || (
+          (!changed.hasAny(['codAmount', 'codMixed', 'codCashAmount', 'codAmountHistory', 'serviceType'])
+            || resource.data.get('codStatus', null) in [null, '', 'pending'])
+          && (!changed.hasAny(['price', 'portType'])
+            || (!(resource.data.get('portStatus', null) in ['collected', 'received']) && resource.data.get('invoiced', false) != true))
+          && (!isParcelLocked()
+            || !changed.hasAny(parcelCorrectionFields().concat(['codAmount', 'codMixed', 'codCashAmount', 'price', 'portType', 'fragile', 'notes']))
+            || (request.resource.data.get('status', '') == 'Retourné' && resource.data.get('wasReturned', false) != true)
+            || (resource.data.get('wasReturned', false) == true && request.resource.data.get('wasReturned', true) == false)
+            || adminScopedBonEdit())
+        );
+      }
+      function parcelAtDestination() {
+        return resource.data.get('destinationArrivedAt', null) != null
+          || resource.data.get('chefPointedAt', null) != null
+          || resource.data.get('deliveredAt', null) != null
+          || resource.data.get('status', '') in [
+            'Arrivé en agence', 'En cours de livraison', 'En livraison', 'Livré',
+            'Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'
+          ];
+      }
+      function chefAgencyDeliveryOk() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        let cancelling = resource.data.get('wasReturned', false) == true
+          && request.resource.data.get('wasReturned', true) == false;
+        let returnTransition = request.resource.data.get('status', '') in ['Retourné', 'Retour en transit']
+          && request.resource.data.get('status', '') != resource.data.get('status', '');
+        return userCity() != '' && isNotBlocked() && (cancelling
+          ? agentProReturnCancelOk(changed)
+          : returnTransition ? (agentProReturnChangesOk(changed) && returnKeepsMoney()) : (
+          // L'agence qui reçoit garde la gestion de la livraison, du livreur et des réacheminements.
+          resource.data.get('destinationCity', '') == userCity()
+          || (!changed.hasAny(agentProDeliveryFields().concat([
+                'returnDeliveryDriverId', 'returnDeliveryDriverName', 'returnDeliverySectorId',
+                'returnDeliverySectorCode', 'returnDeliverySectorName',
+                'returnDeliveryAssignedAt', 'returnDeliveryAssignedBy',
+                'returnArrivedAt', 'returnFinalizedAt', 'returnFinalizedBy'
+              ]))
+            // L'origine ne peut pas récupérer les droits en changeant la ville après l'arrivée.
+            && (!changed.hasAny(['destinationCity']) || !parcelAtDestination())
+            && (request.resource.data.get('status', '') == resource.data.get('status', '')
+              || (resource.data.get('originCity', '') == userCity()
+                && !parcelAtDestination()
+                && resource.data.get('status', '') in ['Initialisé', 'En cours de ramassage', 'En transit']
+                && request.resource.data.get('status', '') in ['Initialisé', 'En cours de ramassage', 'En transit'])))
+        ));
+      }
+      function chefOperationalShortcut() {
+        let changed = request.resource.data.diff(resource.data).affectedKeys();
+        // Chemins existants évalués avant le grand bloc pour rester sous 1000 expressions.
+        return (changed.hasOnly(['price', 'portType', 'codAmount', 'codMixed', 'codCashAmount'])
+            && !isParcelLocked() && keepsDeliveredStatus() && isMyAgencyParcel())
+          // Ces transitions ont déjà été intégralement validées par la garde commune ci-dessus.
+          || (request.resource.data.get('status', '') in ['Retourné', 'Retour en transit']
+            && request.resource.data.get('status', '') != resource.data.get('status', ''))
+          || (resource.data.get('wasReturned', false) == true
+            && request.resource.data.get('wasReturned', true) == false);
+      }
+      // Chaque chemin d'écriture applique à la fois les responsabilités d'agence et les gardes d'argent.
+      function parcelWriteGuardsOk() {
+        return role() == 'agentpro'
+          ? agentProParcelUpdateOk() && agentProBonSafetyOk() && moneyInvariantsOk()
+          : (role() != 'chef_agence'
+              || (request.resource.data.get('createdByCity', null) == resource.data.get('createdByCity', null)
+                && parcelCreationCity(request.resource.data) == parcelCreationCity(resource.data)
+                && chefAgencyDeliveryOk()))
+            && moneyInvariantsOk();
+      }
+      // 🔒 Plus de lecture SANS COMPTE (avant : « get: if true » + liste « limit <= 1 » → toute la collection aspirable).
+      // Les pages publiques « Suivre un colis » et « Signature » passent par les fonctions serveur publicTrackParcel /
+      // getSignatureParcel, qui ne renvoient que ce qu'elles affichent.
+      allow get:    if isWorkAccount() || ownsClient(resource.data.get('clientId', ''));
       allow list:   if isStaff() || isFacturier()
         || ownsClient(resource.data.clientId)
         || isDeliveryWorker()
-        || (request.query.limit != null && request.query.limit <= 1);
+        || isWorkAccount();
       // ✅ Autoriser les requêtes d'agrégation (count, sum) pour le staff et facturier
       allow read:   if isStaff() || isFacturier();
-      allow create: if (signedIn() && request.resource.data.agentId == request.auth.uid)
+      // 🔒 Agent pro : uniquement les expéditions de SA ville (ville d'origine = sa ville)
+      allow create: if ((signedIn() && request.resource.data.agentId == request.auth.uid)
         || (isStaff() && isNotBlocked())
-        || isCentralCollector();  // 📦 Permettre restauration archives
-      allow delete: if ((resource.data.status != 'LivrÃ©' && resource.data.status != 'Livr\u00c3\u00a9') || isAdmin()) && (
+        || isCentralCollector())  // 📦 Permettre restauration archives
+        && !isAgentProOtherCity(request.resource.data);
+      // Seule l'agence de création peut supprimer ; recevoir ou livrer ne donne pas ce droit.
+      // Les autres rôles conservent leurs règles, dont la validation des saisies aide-agent.
+      allow delete: if (resource.data.status != 'Livré' || isAdmin()) && (
         isAdmin()
-        || isChefOfAideAgentParcelAgency()
-        || (isAgentOrChef() && isParcelCreator())
-        // 🗑️ Chef d'agence : colis de SON agence saisis par ses AIDE-AGENTS ou ses AGENTS PRO
-        // (les siens sont couverts par « créateur » ci-dessus), tant qu'ils ne sont pas chargés dans un camion
-        || (role() == 'chef_agence' && !isParcelLocked()
-            && (resource.data.get('agentRole', '') == 'aide_agent' || resource.data.get('agentRole', '') == 'agentpro')
-            && (resource.data.get('originCity', '') == userCity() || resource.data.get('createdByCity', '') == userCity()))
-        || (isAideAgent() && isParcelCreator() && resource.data.validatedByChef != true)
-        || (isStaff() && !isAgentOrChef() && !isAideAgent())
+        || (role() in ['agentpro', 'chef_agence']
+          && isNotBlocked()
+          && userCity() != '' && parcelCreationCity(resource.data) == userCity()
+          && !isParcelLocked()
+          && !(resource.data.status in ['LivrÃ©', 'Retourné', 'Retour en transit']))
+        || (!(role() in ['agentpro', 'chef_agence']) && (
+          isChefOfAideAgentParcelAgency()
+          || (isAgentOrChef() && isParcelCreator())
+          || (isAideAgent() && isParcelCreator() && resource.data.get('validatedByChef', false) != true)
+        ))
       );
 
       // 🔒 RÈGLE GLOBALE : Admin peut TOUJOURS modifier (même après chargement camion)
-      allow update: if isAdmin();
-
+      // One common scope/money guard applies to every operational update path below.
+      allow update: if parcelWriteGuardsOk() && (
+        (role() == 'agentpro')
+        || ((isAdmin()))
+        || (role() == 'chef_agence' && chefOperationalShortcut())
+        ||
       // ⚡ Chef d'agence / Agent Pro / Chef d'exploitation : statut, remarques, etc. (voir chefFastPathUpdate)
       // ⚡ (déplacée en tête, peu coûteuse) Validation arrivée / colis déjà arrivés — comportement inchangé
-      allow update: if signedIn()
+      // 🔒 Avant : tout compte de travail pouvait modifier N'IMPORTE QUEL champ de tout colis déjà arrivé, dans
+      // toutes les villes. Désormais : comptes rattachés à une ville → colis de leur agence uniquement ;
+      // comptes centraux sans ville (encaisseur, analyseurs, directeur…) : inchangé.
+        (((signedIn()
         && 'destinationArrivedAt' in request.resource.data
         && 'history' in request.resource.data
-        && !touchesOnlyControlFields();
-      allow update: if chefFastPathUpdate();
+        && !touchesOnlyControlFields()) && isWorkAccount()
+        && (userCity() == '' || isMyAgencyParcel())
+        // 🔒 Argent : chefs → pas de retour d'un COD encaissé ; autres comptes → ni montant, ni client, ni
+        // annulation d'encaissement par ce chemin (avant : tout champ modifiable, COD effaçable après coup)
+        && (isChefAgence() ? returnNotCollected() : arrivedKeepsMoney())
+        && deliveryCityGuard()))
+        ||
+        ((chefFastPathUpdate()
+        && deliveryCityGuard()))
+        ||
+      // ✅ Aide-agent : ses propres colis non validés et non verrouillés (remontée : budget d'expressions)
+        ((isAideAgent()
+        && isParcelCreator()
+        && resource.data.get('validatedByChef', false) != true
+        && !isParcelLocked()
+        && keepsDeliveredStatus()
+        && deliveryCityGuard()))
+        ||
+      // ✏️ Correction autorisée par l'admin (Admin › Permissions › Expéditions modifiables).
+      // Garde en tête, quasi gratuite : seule une correction signée (bonEditedBy = l'auteur, bonEditedAt
+      // nouveau) va plus loin — les autres mises à jour ne consomment pas le budget de 1000 expressions.
+        ((request.resource.data.get('bonEditedBy', '') == request.auth.uid
+        && request.resource.data.get('bonEditedAt', '') != resource.data.get('bonEditedAt', '')
+        && (role() == 'chef_agence' || role() == 'agentpro')
+        && adminScopedBonEdit()
+        && deliveryCityGuard()))
+        ||
       // ↩️ Annulation d'un retour (chefs) : seulement depuis un colis marqué retourné, vers un état
       // non retourné, avec les seuls champs du retour.
-      allow update: if resource.data.get('wasReturned', false) == true
+        ((resource.data.get('wasReturned', false) == true
         && request.resource.data.get('wasReturned', true) == false
         && isChefAgence()
+        && isMyAgencyParcel()
         && !(request.resource.data.status in ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé', 'Livré'])
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status', 'history', 'sender', 'receiver', 'senderNameNorm', 'receiverNameNorm',
@@ -340,17 +708,20 @@ service cloud.firestore {
           'deliveryDriverId', 'deliveryDriverName', 'deliverySectorId', 'deliverySectorCode',
           'deliverySectorName', 'deliveryVehicleId', 'deliveryVehicleLabel', 'deliveryAssignedAt',
           'deliveryAssignedBy'
-        ]);
+        ])))
+        ||
       // ⚡ Chef de l'agence d'un colis saisi par un aide agent / portail client (même règle que le grand
       // bloc staff), évaluée tôt : test du agentRole d'abord (le moins coûteux).
-      allow update: if (resource.data.get('agentRole', '') == 'aide_agent' || resource.data.get('agentRole', '') == 'client_portal')
+        (((resource.data.get('agentRole', '') == 'aide_agent' || resource.data.get('agentRole', '') == 'client_portal')
         && isChefOfAideAgentParcelAgency()
         && keepsDeliveredStatus()
-        && (!touchesOnlyControlFields() || isOwnControlChange());
+        && (!touchesOnlyControlFields() || isOwnControlChange())
+        && deliveryCityGuard()))
+        ||
 
       // ⚡ Placée EN TÊTE (limite de 1000 expressions) : encaissement / statut par le livreur assigné.
       // Livreur local assignÃ© : statut, encaissement, refus et signature uniquement sur ses colis
-      allow update: if isAssignedDeliveryWorker()
+        ((isAssignedDeliveryWorker()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status',
@@ -386,59 +757,101 @@ service cloud.firestore {
           'deliveryRejectedAt',
           'deliveryRejectedById',
           'deliveryRejectedBy'
-        ]);
+        ])
+        && deliveryCityGuard()))
+        ||
 
       // ⚡ Placée EN TÊTE : Firestore arrête l'évaluation après 1000 expressions ; plus bas, cette règle
       // n'était jamais atteinte sur certains colis (« Missing or insufficient permissions » à l'assignation).
       // Assignation livraison locale : seuls les champs livraison sont modifiÃ©s
-      allow update: if signedIn()
+        (((signedIn()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'deliveryDriverId', 'deliveryDriverName',
           'deliverySectorId', 'deliverySectorCode', 'deliverySectorName',
           'deliveryVehicleId', 'deliveryVehicleLabel',
           'deliveryAssignedAt', 'deliveryAssignedBy'
-        ]);
+        ])) && isWorkAccount()))
+        ||
 
       // 🧾 RÈGLE : Facturier peut marquer un colis comme facturé et corriger le prix / type de port
-      allow update: if isFacturier()
+        ((isFacturier()
         && isNotBlocked()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['invoiced', 'invoiceId', 'invoicedAt', 'price', 'portType']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['invoiced', 'invoiceId', 'invoicedAt', 'price', 'portType'])))
+        ||
 
       // 💼 RÈGLE PRIORITAIRE : Encaisseur Central peut modifier les champs de gestion centrale
       // Sans vérifier le statut de livraison ni le verrouillage.
       // ⚠️ EXCEPTION : si la mise à jour ne touche QUE les champs de pointage (contrôle /
       // confirmation d'arrivée), elle doit en plus respecter isOwnControlChange() — sinon
       // n'importe quel Encaisseur Central pourrait annuler le pointage d'un collègue.
-      allow update: if isCentralCollector()
-        && (!touchesOnlyControlFields() || isOwnControlChange());
+        (((isCentralCollector() || (isChequeAnalyst() && isMyAgencyDocParcel(resource.data)))
+        && (!touchesOnlyControlFields() || isOwnControlChange())))
+        ||
 
       // 📅 RÈGLE : Chef d'agence peut corriger la date d'expédition (expeditionDate) et le jour d'opération (workDate)
-      allow update: if isChefAgence()
+        ((isChefAgence()
         && keepsDeliveredStatus()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['expeditionDate', 'workDate', 'createdAt', 'createdAtOriginal']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['expeditionDate', 'workDate', 'createdAt', 'createdAtOriginal'])
+        && isMyAgencyParcel()))
+        ||
 
-      // 🖐️ RÈGLE : Chef d'agence peut modifier price, portType, codAmount (édition rapide)
-      allow update: if isChefAgence()
+      // 🖐️ RÈGLE : Chef d'agence peut modifier price, portType, codAmount (édition rapide, onglet Caisse)
+      // 🔒 Seulement les colis de SON agence (origine, expéditeur, destination ou retour = sa ville, ou créés
+      // par lui) — avant : n'importe quel chef pouvait changer le prix / le COD d'un colis d'une autre ville.
+        ((isChefAgence()
         && keepsDeliveredStatus()
         && !isParcelLocked()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['price', 'portType', 'codAmount', 'codMixed', 'codCashAmount']);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['price', 'portType', 'codAmount', 'codMixed', 'codCashAmount'])
+        && isNotBlocked()
+        && (resource.data.get('originCity', '') == userCity()
+          || resource.data.get('destinationCity', '') == userCity()
+          || resource.data.get('returnToCity', '') == userCity()
+          || resource.data.get('sender', {}).get('city', '') == userCity()
+          || resource.data.get('agentId', '') == request.auth.uid)))
+        ||
+
+      // ✋ Chef d'exploitation / chef d'agence / Agent PRO : correction du PORT (onglet Soir), même colis
+      // chargé — agence de destination uniquement : prix et/ou type entre port dû / en compte expéditeur /
+      // en compte destinataire, rien d'encaissé, pas encore facturé, + trace historique.
+        ((isChefAgence()
+        && isNotBlocked()
+        && userCity() == resource.data.destinationCity
+        && resource.data.get('portType', '') in ['port_du', 'port_en_compte_expediteur', 'port_en_compte_destinataire']
+        && resource.data.get('portPayeMethod', null) in [null, '']
+        && !(resource.data.get('portStatus', null) in ['collected', 'received'])
+        && resource.data.get('invoiced', false) != true
+        && request.resource.data.price is number
+        && request.resource.data.price >= 0
+        && request.resource.data.get('portType', '') in ['port_du', 'port_en_compte_expediteur', 'port_en_compte_destinataire']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['price', 'portType', 'history'])))
+        ||
+
+      // ✋ Expédition marquée « Livré » par erreur → « En cours de livraison » / « Arrivé en agence »
+      // (onglet Soir). Agence de destination, rien d'encaissé (port dû ni COD), statut + assignation seulement.
+        ((isChefAgence()
+        && isNotBlocked()
+        && userCity() == resource.data.destinationCity
+        && resource.data.status == 'Livré'
+        && request.resource.data.status in ['En cours de livraison', 'Arrivé en agence']
+        && !(resource.data.get('portStatus', null) in ['collected', 'received'])
+        && resource.data.get('codCollectedAt', null) == null
+        && resource.data.get('codStatus', null) in [null, 'pending']
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['status', 'history', 'deliveredAt'].concat(deliveryAssignmentFields()))))
+        ||
 
       // 💰 RÈGLE : Chef d'agence peut collecter/décollecterports (Port dû et Port payé)
-      allow update: if isChefAgence()
+        ((isChefAgence()
         && keepsDeliveredStatus()
         && !isParcelLocked()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'portStatus', 'portCollectedBy', 'portCollectedById', 'portCollectedAt', 'portDuReceivedMethod',
           'portReceivedBy', 'portReceivedById', 'portReceivedAt'
-        ]);
+        ])))
+        ||
 
       // ✅ RÈGLE : Aide-agent peut modifier ses propres colis non validés et non verrouillés
-      allow update: if isAideAgent()
-        && isParcelCreator()
-        && resource.data.validatedByChef != true
-        && !isParcelLocked()
-        && keepsDeliveredStatus();
 
       // 🔒 VERROUILLAGE PERMANENT : Si colis a été chargé dans un camion (shipmentLoadedAt existe),
       // SEUL l'admin peut modifier, et ce pour TOUT le reste du parcours
@@ -452,29 +865,36 @@ service cloud.firestore {
       // ⚠️ Sans la garde ci-dessous, un colis déjà "Retourné" (status inchangé par cette
       // règle) laissait n'importe quel utilisateur signé écraser le pointage Encaisseur
       // Central d'un autre (aucune restriction de champs sur cette règle).
-      allow update: if signedIn()
+        (((signedIn()
         && request.resource.data.status == 'Retourné'
         && !isParcelLocked()
-        && (!touchesOnlyControlFields() || isOwnControlChange());
+        && (!touchesOnlyControlFields() || isOwnControlChange())) && isWorkAccount()
+        && returnKeepsMoney()))
+        ||
       // ⭐ RÈGLE : Réessayer livraison (Retourné → En livraison)
       // Permet de remettre un colis retourné en circulation
-      // 🔒 Note: déjà protégé car on ne peut pas avoir "Retourné" ET "En transit" simultanément
-      allow update: if signedIn()
+      // 🔒 Ni montant (COD, prix, port), ni client, ni encaissement modifiables par ce chemin
+        (((signedIn()
         && resource.data.status == 'Retourné'
-        && request.resource.data.status == 'En livraison';
-      allow update: if signedIn()
+        && request.resource.data.status == 'En livraison') && isWorkAccount()
+        && !request.resource.data.diff(resource.data).affectedKeys()
+              .hasAny(moneyIdentityKeys().concat(collectFieldKeys()).concat(['codAmount']))))
+        ||
+        (((signedIn()
         && keepsDeliveredStatus()
         && resource.data.status != 'LivrÃ©'
         && resource.data.status != 'Livr\u00c3\u00a9'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(parcelCorrectionFields())
-        && !isParcelLocked();
+        && !isParcelLocked()) && isWorkAccount()
+        && deliveryCityGuard()))
+        ||
       // ✏️ Correction complète du bon (modal "Modifier l'expédition" + confirmation après saisie)
       // - Agent : uniquement SES bons ; Chef d'agence / Agent PRO / Chef exploitation : tous.
       // - Jamais après chargement camion (sauf admin, règle globale) ; statut inchangé (hors liste).
       // - COD modifiable seulement tant qu'il n'est pas encaissé.
       // - Type de port réservé aux chefs, jamais pour sortir d'un "port_en_compte".
       // - Colis Livré / Retourné : réservé aux chefs.
-      allow update: if isAgentOrChef()
+        ((isAgentOrChef()
         && isNotBlocked()
         && !isParcelLocked()
         && (isChefAgence() || isParcelCreator())
@@ -490,31 +910,83 @@ service cloud.firestore {
               && (resource.data.get('portType', '') != 'port_en_compte'
                   || request.resource.data.get('portType', '') == 'port_en_compte'))
         )
-        && (isChefAgence() || (resource.data.status != 'Livré' && resource.data.status != 'Retourné'));
-      allow update: if signedIn()
+        && (isChefAgence() || (resource.data.status != 'Livré' && resource.data.status != 'Retourné'))
+        && deliveryCityGuard()))
+        ||
+      // 🔁 Agadir ⇄ Ait Melloul : colis arrivé par erreur dans l'agence voisine, colis en cours de
+      // livraison (assigné à un livreur), ou expédition locale (origine = destination) « Initialisé ».
+      // Chef d'agence / Agent PRO / Chef d'exploitation de la ville de destination actuelle uniquement,
+      // seule la ville du destinataire change (même si colis chargé). Statut final : « Arrivé en agence »
+      // (sans livreur) ou « En cours de livraison » chez un livreur de la NOUVELLE ville.
+      // Expédition déjà « Livré » SANS PORT DÛ NI COD ENCAISSÉ (le site annule d'abord la collecte faite
+      // ici) : elle reste « Livré », chez un livreur de la nouvelle ville ou sans livreur (en gare).
+      // Le port PAYÉ (encaissé au départ) ne bloque pas.
+        (((role() == 'chef_agence' || role() == 'agentpro' || role() == 'chef_exploitation')
+        && isNotBlocked()
+        && (
+          (
+            (resource.data.status in ['Arrivé en agence', 'En cours de livraison']
+              || (resource.data.status == 'Initialisé'
+                  && resource.data.get('originCity', '') == resource.data.destinationCity))
+            && (request.resource.data.status == 'Arrivé en agence'
+                || (request.resource.data.status == 'En cours de livraison'
+                    && request.resource.data.get('deliveryDriverId', null) is string
+                    && get(/databases/$(database)/documents/users/$(request.resource.data.deliveryDriverId)).data.city
+                       == request.resource.data.destinationCity))
+          )
+          || (
+            resource.data.status == 'Livré'
+            && request.resource.data.status == 'Livré'
+            && !(resource.data.get('portType', '') == 'port_du'
+                 && resource.data.get('portPayeMethod', null) in [null, '']
+                 && resource.data.get('portStatus', null) in ['collected', 'received'])
+            && resource.data.get('codCollectedAt', null) == null
+            && resource.data.get('codStatus', null) in [null, 'pending']
+            && (request.resource.data.get('deliveryDriverId', null) == null
+                || get(/databases/$(database)/documents/users/$(request.resource.data.deliveryDriverId)).data.city
+                   == request.resource.data.destinationCity)
+          )
+        )
+        && resource.data.destinationCity in ['Agadir', 'Ait Melloul']
+        && request.resource.data.destinationCity in ['Agadir', 'Ait Melloul']
+        && request.resource.data.destinationCity != resource.data.destinationCity
+        && userCity() == resource.data.destinationCity
+        && request.resource.data.receiver.city == request.resource.data.destinationCity
+        && request.resource.data.receiver.diff(resource.data.receiver).affectedKeys().hasOnly(['city'])
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'receiver', 'destinationCity', 'destinationArrivedAt', 'history',
+          'status', 'visibleInDestinationAgency'
+        ].concat(deliveryAssignmentFields()))))
+        ||
+        (((signedIn()
         && keepsDeliveredStatus()
         && request.auth.uid != resource.data.agentId
         && request.resource.data.validatedByChef == true
         && request.resource.data.validatedById == request.auth.uid
         && request.resource.data.agentId == request.auth.uid
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(aideAgentValidationFields());
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(aideAgentValidationFields())) && isWorkAccount()))
+        ||
       // Chargement camion : seuls les champs transport sont modifiÃ©s
-      allow update: if signedIn()
+        (((signedIn()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'chauffeurName', 'chauffeurPhone', 'status',
           'shipmentLoadedAt', 'visibleInDestinationAgency', 'history'
-        ]);
+        ])) && isWorkAccount()
+        && deliveryCityGuard()))
+        ||
       // ⭐ POINTAGE ARRIVAGE : autoriser sans vérifier keepsDeliveredStatus
       // (car le pointage peut se faire même si le colis a un statut particulier)
-      allow update: if signedIn()
+        (((signedIn()
         && isStaff()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status', 'visibleInDestinationAgency', 'destinationArrivedAt',
           'destinationAgentId', 'destinationAgentName', 'arrivedNbColis',
           'chefPointedAt', 'chefPointedBy', 'chefPointedById', 'chefPointedSource',
           'history'
-        ]);
+        ])) && isWorkAccount()
+        && deliveryCityGuard()))
+        ||
       // ⭐ VALIDATION ARRIVÉE RETOUR : validation arrivée colis retourné
       // Autorise mise à jour avec destinationArrivedAt (=validation retour)
       // ⚠️ 'destinationArrivedAt' et 'history' existent déjà sur quasi tout colis déjà arrivé —
@@ -522,28 +994,32 @@ service cloud.firestore {
       // utilisateur signé écraser le pointage d'un autre sur ces colis. Exclu explicitement.
       // (règle « validation arrivée retour » déplacée en tête du bloc, voir plus haut)
       // RÃ©ception agence : prise en charge et arrivage de colis en transit
-      allow update: if signedIn()
+        (((signedIn()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status', 'visibleInDestinationAgency', 'destinationArrivedAt',
           'destinationAgentId', 'destinationAgentName', 'arrivedNbColis',
           'chefPointedAt', 'chefPointedBy', 'chefPointedById', 'chefPointedSource',
           'history'
-        ]);
+        ])) && isWorkAccount()
+        && deliveryCityGuard()))
+        ||
       // ⭐ Staff : générer token de signature (agents, chauffeurs, etc.)
-      allow update: if signedIn()
+        (((signedIn()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'signatureToken',
           'signatureTokenCreatedAt'
-        ]);
+        ])) && isWorkAccount()))
+        ||
       // ⭐ Staff : générer token de signature de retour
-      allow update: if signedIn()
+        (((signedIn()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'returnSignatureToken',
           'returnSignatureTokenCreatedAt'
-        ]);
+        ])) && isWorkAccount()))
+        ||
       // ⭐ Staff : confirmer signature normale (Livré)
-      allow update: if signedIn()
+        (((signedIn()
         && request.resource.data.status == 'Livré'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status',
@@ -551,9 +1027,11 @@ service cloud.firestore {
           'signatureConfirmedAt',
           'signatureMethod',
           'history'
-        ]);
+        ])) && isWorkAccount()
+        && deliveryCityGuard()))
+        ||
       // ⭐ Staff : confirmer signature de retour (Retour finalisé)
-      allow update: if signedIn()
+        (((signedIn()
         && request.resource.data.status == 'Retour finalisé'
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status',
@@ -561,63 +1039,74 @@ service cloud.firestore {
           'returnSignatureConfirmedAt',
           'signatureMethod',
           'history'
-        ]);
+        ])) && isWorkAccount()))
+        ||
       // Pointeur-Encaisseur : rÃ©ception port dÃ» versÃ© par un livreur
-      allow update: if isPointeurEncaisseur()
+        ((isPointeurEncaisseur()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'portPointeurId', 'portPointeurName', 'portPointeurAt'
-        ]);
+        ])))
+        ||
       // Pointeur-Encaisseur : remise COD aprÃ¨s pointage (rÃ¨glement crÃ©Ã©)
-      allow update: if isPointeurEncaisseur()
+        ((isPointeurEncaisseur()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'codStatus', 'codRemisAt', 'codRemisBy'
-        ]);
+        ])))
+        ||
       // Pointeur-Encaisseur : remboursement RETOUR FOND sur colis retournÃ©
-      allow update: if isPointeurEncaisseur()
+        ((isPointeurEncaisseur()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'codRefunded', 'codRefundedAt', 'codRefundedBy', 'codRefundedById'
-        ]);
+        ])))
+        ||
       // Pointeur-Encaisseur : envoi COD au chef d'agence
-      allow update: if isPointeurEncaisseur()
+        ((isPointeurEncaisseur()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'codSentToChef', 'codSentToChefAt', 'codSentToChefBy', 'codSentToChefById'
-        ]);
+        ])))
+        ||
       // Chef d'agence : validation du rapport COD du pointeur
-      allow update: if isChefAgence()
+        ((isChefAgence()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'codValidatedByChef', 'codValidatedByChefAt', 'codValidatedByChefBy', 'codValidatedByChefById'
-        ]);
+        ])))
+        ||
       // Chef d'agence : envoi COD Ã  l'agence source (avec/sans validation)
-      allow update: if isChefAgence()
+        ((isChefAgence()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'codSentToSource', 'codSentToSourceAt', 'codSentToSourceBy', 'codSentToSourceById', 'codSentWithValidation'
-        ]);
+        ])))
+        ||
       // Agent/Chef d'agence : suivi COD (rÃ©ception, envoi, confirmation, rÃ¨glement)
       // Permet de mettre Ã  jour les champs de traÃ§age COD sans toucher aux donnÃ©es sensibles du bon.
-      allow update: if isAgentOrChef()
+        ((isAgentOrChef()
         && keepsDeliveredStatus()
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['codAmount', 'codMixed', 'codCashAmount'])
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(protectedParcelBonFields())
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(deliveryAssignmentFields())
-        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(aideAgentValidationFields());
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(aideAgentValidationFields())
+        && deliveryCityGuard()))
+        ||
       // Approbation demande modification client par chef_agence ou agent
-      allow update: if isAgentOrChef()
+        ((isAgentOrChef()
         && keepsDeliveredStatus()
         && request.resource.data.diff(resource.data).affectedKeys()
            .hasOnly([
              'receiver', 'serviceType', 'codPaymentType', 'codAmount', 'codMixed', 'codCashAmount', 'status',
              'modificationHistory', 'lastModificationRequestId',
              'lastModificationAt', 'lastModificationBy', 'lastModificationByRole'
-           ]);
+           ])
+        && deliveryCityGuard()))
+        ||
       // Retour camion : l'agence qui a physiquement le colis retournÃ© peut l'expÃ©dier
       // vers l'agence d'origine, sans toucher aux donnÃ©es sensibles du bon.
-      allow update: if signedIn()
+        (((signedIn()
         && keepsDeliveredStatus()
         && request.resource.data.status == 'Retour en transit'
         && (resource.data.status == 'RetournÃ©' || resource.data.status == 'RetournÃ©')
@@ -631,10 +1120,11 @@ service cloud.firestore {
           'destinationCity',
           'returnToCity',
           'arrivedNbColis'
-        ]);
+        ])) && isWorkAccount()))
+        ||
       // Retour direct depuis l'agence destination ou le livreur assignÃ©.
       // Le bon est inversÃ© pour repartir vers l'expÃ©diteur, sans modifier les champs sensibles hors retour.
-      allow update: if signedIn()
+        (((signedIn()
         && keepsDeliveredStatus()
         && request.resource.data.status == 'RetournÃ©'
         && resource.data.status != 'RetournÃ©'
@@ -674,13 +1164,14 @@ service cloud.firestore {
           'deliveryVehicleLabel',
           'deliveryAssignedAt',
           'deliveryAssignedBy'
-        ]);
+        ])) && isWorkAccount()))
+        ||
       // ⚠️ Ce bloc est volontairement très large (retours, corrections diverses par le staff).
       // Comme il ne restreint pas explicitement les champs 'controlled'/'deliveryControlled',
       // il laissait n'importe quel membre du staff écraser le pointage Encaisseur Central d'un
       // autre. Garde ajoutée : ne s'applique pas quand SEULS les champs de pointage changent
       // (ce cas passe exclusivement par la règle Encaisseur Central plus haut, avec ownership).
-      allow update: if isStaff() && keepsDeliveredStatus()
+        ((isStaff() && keepsDeliveredStatus()
         && (!touchesOnlyControlFields() || isOwnControlChange())
         && (
         isAdmin()
@@ -701,7 +1192,7 @@ service cloud.firestore {
           // Aide agent : modification de ses propres saisies non validÃ©es
           isAideAgent()
           && isParcelCreator()
-          && (resource.data.validatedByChef != true || resource.data.aideEditUnlocked == true)
+          && (resource.data.get('validatedByChef', false) != true || resource.data.get('aideEditUnlocked', false) == true)
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny(aideAgentValidationFields())
           && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['status', 'codAmount', 'codMixed', 'codCashAmount'])
         )
@@ -721,23 +1212,32 @@ service cloud.firestore {
             )
           )
         )
-      );
+      )
+        && deliveryCityGuard()))
+        ||
       // REGLE RETOUR COLIS
-      allow update: if signedIn() && request.resource.data.status == "Retourné"
-        && !touchesOnlyControlFields();
+        (((signedIn() && request.resource.data.status == "Retourné"
+        && !touchesOnlyControlFields()) && isWorkAccount()
+        && returnKeepsMoney()))
+      );
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Villes
     match /cities/{cityId} {
       allow read:  if true;
-      allow write: if isStaff();
+      // 🔒 Admin seul (avant : tout le personnel ; le site ne les modifie que depuis l'admin)
+      allow write: if isAdmin();
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ ParamÃ¨tres globaux
     match /settings/{settingId} {
       // adminSetup, workingDate, editPermissions, operationalDay lisibles publiquement
-      allow read:  if settingId == 'adminSetup' || settingId == 'workingDate' || settingId == 'editPermissions' || settingId == 'operationalDay' ? true : signedIn();
-      allow write: if settingId == 'tariffs' ? isAdmin() : isStaff();
+      allow read:  if settingId == 'adminSetup' || settingId == 'workingDate' || settingId == 'editPermissions' || settingId == 'operationalDay' || settingId == 'maintenance' ? true : signedIn();
+      // 🔒 Tarifs et permissions de modification : admin seul (avant : tout le personnel pouvait
+      // s'accorder des droits en écrivant editPermissions)
+      // 🔒 S7 : tous les réglages (date de travail, verrous d'opérations, adminSetup…) → admin seul ; avant, le
+      // personnel pouvait par exemple supprimer settings/adminSetup (création d'un admin rouverte).
+      allow write: if isAdmin();
       // CrÃ©ation du document adminSetup lors de la premiÃ¨re inscription admin
       allow create: if settingId == 'adminSetup'
         && !exists(/databases/$(database)/documents/settings/adminSetup);
@@ -776,11 +1276,34 @@ service cloud.firestore {
       // Par l'utilisateur lui-même OU par le staff
       allow create: if signedIn()
         && request.auth.uid == userId
-        && request.resource.data.role in ['client-expediteur', 'client-destinataire'];
+        && request.resource.data.role in ['client-expediteur', 'client-destinataire']
+        && request.resource.data.get('clientId', null) == null;
       // Staff peut créer des comptes portail pour les clients
       allow create: if isStaff()
         && request.resource.data.role in ['client-expediteur', 'client-destinataire'];
-      allow update: if isStaff();
+      // 🔒 Modification des fiches (avant : « allow update: if isStaff() » → un aide-agent pouvait se donner le rôle admin)
+      // Admin : tout. Directeur : tout sauf un compte admin, et jamais créer un admin.
+      allow update: if isAdmin();
+      allow update: if role() == 'directeur'
+        && resource.data.get('role', '') != 'admin'
+        && request.resource.data.get('role', '') != 'admin';
+      // Soi-même (personnel) : sa fiche, sans toucher aux champs d'autorisation
+      allow update: if isStaff() && request.auth.uid == userId
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(
+          ['role', 'city', 'blocked', 'blockedByChef', 'clientId', 'clientData', 'directorPermissions', 'permissions', 'code']);
+      // Chefs (agence / agent pro / exploitation) : leurs livreurs, aides-agents, pointeurs, chauffeurs —
+      // rôle inchangé, ville du chef, champs de gestion uniquement (nom, tél, matricule, secteur, ville, blocage)
+      allow update: if isChefAgence() && isNotBlocked()
+        && resource.data.get('role', '') in ['livreur', 'livreur-gare', 'chauffeur', 'aide_agent', 'pointeur_encaisseur']
+        && request.resource.data.get('role', '') == resource.data.get('role', '')
+        && (resource.data.get('city', '') == userCity() || request.resource.data.get('city', '') == userCity())
+        && (role() != 'agentpro' || (resource.data.get('city', '') == userCity() && request.resource.data.get('city', '') == userCity()))
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['name', 'tel', 'matricule', 'sectorId', 'city', 'blocked', 'blockedByChef', 'photoURL', 'updatedAt']);
+      // Personnel : comptes du portail client (rattachement à la fiche client), qui restent des comptes clients
+      allow update: if isStaff()
+        && resource.data.get('role', '') in ['client-expediteur', 'client-destinataire', 'client']
+        && request.resource.data.get('role', '') in ['client-expediteur', 'client-destinataire', 'client'];
       // Suppression : admin ou chef pour aide_agent/livreur/pointeur de sa ville
       allow delete: if isAdmin()
         || ((role() == 'chef_agence' || role() == 'agentpro')
@@ -838,8 +1361,15 @@ service cloud.firestore {
     // Ã¢â€â‚¬Ã¢â€â‚¬ Demandes de modification colis (client â†’ chef_agence)
     match /modificationRequests/{reqId} {
       allow read: if isStaff() || ownsClient(resource.data.clientId);
+      // 🔒 S9 : la demande doit viser une expédition de CE client (avant : n'importe quelle expédition, dont l'id
+      // est renvoyé par le suivi public — téléphone ou COD d'un autre modifiables sur simple validation du chef)
       allow create: if ownsClient(request.resource.data.clientId)
-        && request.resource.data.clientUid == request.auth.uid;
+        && request.resource.data.clientUid == request.auth.uid
+        && request.resource.data.get('parcelId', '') is string
+        && request.resource.data.get('parcelId', '') != ''
+        && exists(/databases/$(database)/documents/parcels/$(request.resource.data.parcelId))
+        && get(/databases/$(database)/documents/parcels/$(request.resource.data.parcelId)).data.get('clientId', '')
+             == request.resource.data.clientId;
       allow update: if isStaff();
       allow delete: if isStaff() || ownsClient(resource.data.clientId);
     }
@@ -870,15 +1400,21 @@ service cloud.firestore {
         ]);
     }
 
+    // 🔒 S7 — cloisonnement par ville : la règle par défaut ne donne PLUS la caisse à tout le personnel (exclue
+    // en fin de fichier). Admin / directeur : toutes les villes ; les autres : leur ville (ou leurs propres écritures).
     match /caisseEntries/{entryId} {
-      allow read: if isAdmin()
+      allow read: if isAdminOrDirecteur()
         || (isStaff() && isNotBlocked() && (
           resource.data.city == userCity()
           || resource.data.agentId == request.auth.uid
           || resource.data.cashierId == request.auth.uid
           || resource.data.sourceAgentId == request.auth.uid
         ));
-      allow create, update: if isStaff();
+      allow create: if isAdminOrDirecteur()
+        || (isStaff() && request.resource.data.get('city', '') == userCity());
+      allow update: if isAdminOrDirecteur()
+        || (isStaff() && resource.data.get('city', '') == userCity()
+            && request.resource.data.get('city', '') == userCity());
       // Protection: les versements livreurs ne peuvent Ãªtre supprimÃ©s que par leur crÃ©ateur ou un admin
       allow delete: if isAdmin()
         || isAdminOrDirecteur()
@@ -895,17 +1431,28 @@ service cloud.firestore {
         ));
     }
 
+    // 🔒 S7 — soldes de caisse : document = ville. Admin / directeur : toutes ; les autres : leur ville seulement
+    // (avant : tout le personnel lisait et modifiait les soldes de toutes les agences, remise à zéro comprise).
     match /agencyCashes/{cashId} {
-      allow read:  if isStaff();
-      allow write: if isStaff();
+      allow read:  if isAdminOrDirecteur() || (isStaff() && cashId == userCity());
+      allow write: if isAdminOrDirecteur() || (isStaff() && cashId == userCity());
     }
 
     match /caisseClotures/{id} {
-      allow read, write: if isStaff();
+      allow read:   if isAdminOrDirecteur() || (isStaff() && resource.data.get('city', '') == userCity());
+      allow create: if isAdminOrDirecteur() || (isStaff() && request.resource.data.get('city', '') == userCity());
+      allow update, delete: if isAdminOrDirecteur() || (isStaff() && resource.data.get('city', '') == userCity()
+        && request.resource.data.get('city', '') == userCity());
     }
 
     match /caissierTransactions/{id} {
-      allow read, write: if isStaff();
+      allow read: if isAdminOrDirecteur() || (isStaff() && (resource.data.get('city', '') == userCity()
+        || resource.data.get('agentId', '') == request.auth.uid || resource.data.get('caisserId', '') == request.auth.uid));
+      allow create: if isAdminOrDirecteur() || (isStaff() && request.resource.data.get('city', '') == userCity());
+      allow update: if isAdminOrDirecteur() || (isStaff() && resource.data.get('city', '') == userCity()
+        && request.resource.data.get('city', '') == userCity());
+      allow delete: if isAdminOrDirecteur() || (isStaff() && (resource.data.get('city', '') == userCity()
+        || resource.data.get('agentId', '') == request.auth.uid));
     }
 
     match /caissierRequests/{id} {
@@ -919,7 +1466,13 @@ service cloud.firestore {
     }
 
     match /agentRemises/{id} {
-      allow read, write: if isStaff();
+      allow read: if isAdminOrDirecteur() || (isStaff() && (resource.data.get('city', '') == userCity()
+        || resource.data.get('agentId', '') == request.auth.uid));
+      allow create: if isAdminOrDirecteur() || (isStaff() && request.resource.data.get('city', '') == userCity());
+      allow update: if isAdminOrDirecteur() || (isStaff() && resource.data.get('city', '') == userCity()
+        && request.resource.data.get('city', '') == userCity());
+      allow delete: if isAdminOrDirecteur() || (isStaff() && (resource.data.get('city', '') == userCity()
+        || resource.data.get('agentId', '') == request.auth.uid));
     }
 
     match /agentCashRecoveryRequests/{id} {
@@ -932,25 +1485,32 @@ service cloud.firestore {
       allow write: if isStaff();
     }
 
+    // 🔒 Demandes RETOUR FOND de l'admin à un agent : l'admin crée ; l'agent concerné lit / répond / clôt
     match /agentCodRequests/{id} {
-      allow read, write: if isStaff();
+      allow read: if isAdminOrDirecteur() || (isStaff() && (resource.data.get('agentId', '') == request.auth.uid
+        || resource.data.get('agentCity', '') == userCity()));
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (isStaff() && resource.data.get('agentId', '') == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['readByAgentAt', 'status', 'lastReplyAt', 'replies', 'resolvedAt', 'resolvedBy']));
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Port dÃ» chauffeurs (legacy Ã¢â‚¬â€ no longer used by UI)
     match /driverPortDuTransactions/{id} {
       allow read: if isStaff() || (signedIn() && request.auth.uid != null && resource.data.driverId == request.auth.uid);
-      allow create:        if role() == 'admin' || role() == 'agent'
+      allow create:        if role() == 'admin'
         || (signedIn()
           && request.resource.data.driverId == request.auth.uid
           && request.resource.data.type == 'versement'
           && request.resource.data.status == 'pending');
-      allow update, delete: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+      allow update, delete: if role() == 'admin' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
     }
 
     // -- Versements Livreur -> Chef d'agence (Port Du / COD, workflow de validation)
     match /driverVersements/{id} {
-      // Le livreur voit ses propres versements ; le staff voit ceux de sa ville
-      allow read: if isAdmin()
+      // Le livreur voit ses propres versements ; le staff voit ceux de sa ville ; admin / directeur : toutes
+      // (🔒 S7 : la règle par défaut ne donne plus ces versements à tout le personnel)
+      allow read: if isAdminOrDirecteur()
         || (isStaff() && isNotBlocked() && resource.data.city == userCity())
         || (signedIn() && resource.data.driverId == request.auth.uid);
       // Creation par le livreur uniquement, pour lui-meme, en statut 'pending'
@@ -966,7 +1526,7 @@ service cloud.firestore {
           && request.resource.data.status == 'pending')
         // OU validation / rejet par chef d'agence, agent (de la meme ville), directeur ou admin
         || role() == 'admin' || role() == 'directeur'
-        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation') || role() == 'agent') && resource.data.city == userCity());
+        || ((role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation')) && resource.data.city == userCity());
       // Suppression par le créateur (livreur) si status == 'pending' OU par admin
       allow delete: if isAdmin()
         || (signedIn()
@@ -1017,7 +1577,17 @@ service cloud.firestore {
     // Ã¢â€â‚¬Ã¢â€â‚¬ Transferts vers l'Admin
     match /adminTransfers/{id} {
       allow read:   if isStaff();
-      allow create: if role() == 'admin' || role() == 'agent' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation') || role() == 'caissier';
+      // 🔒 Création : « en attente » seulement, par soi-même, pour SA ville, montant > 0 — seul l'admin confirme
+      // (avant : un chef pouvait créer un versement directement « confirmé », de n'importe quel montant / ville)
+      allow create: if isAdmin()
+        || ((role() == 'chef_agence' || role() == 'agentpro' || role() == 'chef_exploitation' || role() == 'caissier')
+          && request.resource.data.get('status', '') == 'pending'
+          && request.resource.data.get('fromId', '') == request.auth.uid
+          && request.resource.data.get('city', '') == userCity()
+          && request.resource.data.get('amount', 0) is number
+          && request.resource.data.get('amount', 0) > 0
+          && request.resource.data.get('confirmedById', null) == null
+          && request.resource.data.get('confirmedAt', null) == null);
       // Modification par le créateur si status == 'pending'
       allow update: if (signedIn()
           && resource.data.fromId == request.auth.uid
@@ -1036,19 +1606,27 @@ service cloud.firestore {
     // Ã¢â€â‚¬Ã¢â€â‚¬ Signatures de livraison (accÃ¨s public pour le destinataire)
     // Supporte signatures normales ({parcelId}) ET signatures de retour ({parcelId}_return)
     match /deliverySignatures/{signatureId} {
+      function agencySignatureScope(data) {
+        return !signedIn() || !(role() in ['agentpro', 'chef_agence'])
+          || (userCity() != ''
+            && data.get('parcelId', '') != ''
+            && get(/databases/$(database)/documents/parcels/$(data.parcelId)).data.get('destinationCity', '') == userCity());
+      }
       // Lecture publique : le chauffeur et l'agent voient la signature en temps rÃ©el
       allow get: if true;
       allow list: if isStaff();
       // CrÃ©ation publique : uniquement si le token correspond Ã  celui stockÃ© dans le colis
       // Le signatureId peut être {parcelId} OU {parcelId}_return
-      allow create, update: if request.resource.data.token != null
+      allow create, update: if agencySignatureScope(request.resource.data)
+        && (request.method == 'create' || agencySignatureScope(resource.data))
+        && request.resource.data.token != null
         && request.resource.data.parcelId != null
         && exists(/databases/$(database)/documents/parcels/$(request.resource.data.parcelId))
         && (
           get(/databases/$(database)/documents/parcels/$(request.resource.data.parcelId)).data.signatureToken == request.resource.data.token
           || get(/databases/$(database)/documents/parcels/$(request.resource.data.parcelId)).data.returnSignatureToken == request.resource.data.token
         );
-      allow delete: if isStaff();
+      allow delete: if isStaff() && agencySignatureScope(resource.data);
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Remarques caissier
@@ -1058,7 +1636,8 @@ service cloud.firestore {
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ RÃ¨glements (Pointeur-Encaisseur)
     match /reglements/{reglementId} {
-      allow read: if isAdmin()
+      // 🔒 S7 : ville de l'agence / d'expédition ou ses propres règlements (pointeur) ; admin / directeur : tous
+      allow read: if isAdminOrDirecteur()
         || (isStaff() && isNotBlocked() && (
           resource.data.agencyCity == userCity()
           || resource.data.villeExpedition == userCity()
@@ -1097,7 +1676,7 @@ service cloud.firestore {
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Rapports RÃ¨glements
     match /reglementsRapports/{rapportId} {
-      allow read: if isAdmin()
+      allow read: if isAdminOrDirecteur()
         || (isStaff() && isNotBlocked() && (
           resource.data.agencyCity == userCity()
           || resource.data.pointeurId == request.auth.uid
@@ -1160,14 +1739,23 @@ service cloud.firestore {
     // (protÃ¨ge les collections non listÃ©es explicitement)
     // Encaisseur central : versements societe et paiements fournisseurs
     match /centralCodDeposits/{depositId} {
-      allow read: if isAdmin() || isCentralCollector() || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
-      allow create: if isAdmin() || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+      // 🔒 S7 : analyseur espèces ajouté explicitement (il lisait ces dépôts grâce à la règle par défaut)
+      allow read: if isAdmin() || isCentralCollector() || isChequeAnalyst() || role() == 'analyseur_espece' || role() == 'chef_agence' || (role() == 'agentpro' || role() == 'chef_exploitation');
+      // 🔒 Création par le chef lui-même, pour SA ville, montant > 0, statut initial « verse »
+      allow create: if isAdmin()
+        || ((role() == 'chef_agence' || role() == 'agentpro' || role() == 'chef_exploitation')
+          && request.resource.data.get('agentId', '') == request.auth.uid
+          && request.resource.data.get('city', '') == userCity()
+          && request.resource.data.get('status', '') == 'verse'
+          && request.resource.data.get('amount', 0) is number
+          && request.resource.data.get('amount', 0) > 0);
       allow update: if isAdmin() || isCentralCollector();
       allow delete: if isAdmin();
     }
 
     match /centralSupplierPayments/{paymentId} {
-      allow read, create, update: if isAdmin() || isCentralCollector();
+      allow read: if isAdmin() || isCentralCollector() || isChequeAnalyst() || role() == 'analyseur_espece';
+      allow create, update: if isAdmin() || isCentralCollector() || isChequeAnalyst();
       allow delete: if isAdmin();
     }
 
@@ -1199,7 +1787,9 @@ service cloud.firestore {
       // Lecture : Staff et livreurs
       allow read: if isStaff() || isDeliveryWorker();
       // Création : Staff et livreurs
-      allow create: if signedIn() && (isStaff() || isDeliveryWorker());
+      // 🔒 Toujours créée « en attente » (l'encaissement se fait ensuite par le chef de la ville)
+      allow create: if signedIn() && (isStaff() || isDeliveryWorker())
+        && request.resource.data.get('status', '') == 'pending';
       // Mise à jour : Admin, chef d'agence et agentpro de la même ville
       allow update: if isAdmin()
         || (isChefAgence() && resource.data.agencyCity == userCity());
@@ -1260,6 +1850,103 @@ service cloud.firestore {
       allow read: if isStaff();
       allow write: if false;
     }
+    // 🧾 Copie « facturier » (parcelsFacturier) : champs du Facturier seulement, écrite UNIQUEMENT par la
+    // Cloud Function syncParcelFacturier (Admin SDK). Lecture staff, comme parcelsLite.
+    match /parcelsFacturier/{parcelId} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+
+    // 📊 Gestion commerciale (bgexpress.web.app) : totaux tenus par la Cloud Function syncCommercialStats.
+    // Admin / directeur : toutes les agences ; chef d'agence : seulement sa ville (agence d'origine).
+    match /commercialClients/{id} {
+      allow read: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow write: if false;
+    }
+    match /commercialAgencies/{id} {
+      allow read: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow write: if false;
+    }
+    match /commercialDays/{id} {
+      allow read: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow write: if false;
+    }
+    match /commercialContrib/{id} {
+      allow read, write: if false;
+    }
+    // Contrats / tarifs négociés, devis, factures de recouvrement, relances, compteurs de numéros.
+    // Admin / directeur : tout ; chef d'agence : seulement les documents de SA ville (avant ET après écriture).
+    // 🔒 Compte bloqué (users.blocked) : plus aucun accès à la gestion commerciale, même hors de l'application.
+    function isCommercialAdmin() {
+      return isAdminOrDirecteur() && isNotBlocked();
+    }
+    function isCommercialChef() {
+      return role() == 'chef_agence' && isNotBlocked() && userCity() != '';
+    }
+    function isCommercialChefOf(city) {
+      return isCommercialChef() && city == userCity();
+    }
+    match /commercialContracts/{id} {
+      allow read, delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
+      allow update: if isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city));
+    }
+    match /commercialQuotes/{id} {
+      allow read, delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
+      allow update: if isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city));
+    }
+    match /commercialInvoices/{id} {
+      allow read: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
+      // Le numéro et l'auteur d'une facture ne changent jamais (numérotation continue)
+      allow update: if (isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city)))
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['number', 'createdAt', 'createdBy', 'createdById']);
+      // Suppression (demandée par l'utilisateur) : admin / directeur partout, chef d'agence dans sa ville
+      allow delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+    }
+    match /commercialReminders/{id} {
+      allow read, delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
+      allow update: if isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city));
+    }
+    // Achats (TVA déductible), employés et bulletins de paie : même découpage par ville.
+    match /commercialPurchases/{id} {
+      allow read, delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
+      allow update: if isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city));
+    }
+    match /commercialEmployees/{id} {
+      allow read, delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
+      allow update: if isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city));
+    }
+    match /commercialPayslips/{id} {
+      allow read, delete: if isCommercialAdmin() || isCommercialChefOf(resource.data.city);
+      allow create: if isCommercialAdmin() || isCommercialChefOf(request.resource.data.city);
+      allow update: if isCommercialAdmin() || (isCommercialChefOf(resource.data.city) && isCommercialChefOf(request.resource.data.city));
+    }
+    // Déclarations de TVA (société entière) : admin / directeur seulement
+    match /commercialTvaDeclarations/{id} {
+      allow read, write: if isCommercialAdmin();
+    }
+    // Paramètres (société, taux de paie) : lus par les 3 rôles, modifiés par admin / directeur
+    match /commercialSettings/{id} {
+      allow read: if isCommercialAdmin() || isCommercialChef();
+      allow write: if isCommercialAdmin();
+    }
+    // Compteurs de numérotation : id = {type}_{ville}_{année}
+    // Ne font qu'avancer de 1 (création à 1, puis n → n + 1) : impossible de remettre un compteur à zéro.
+    match /commercialCounters/{id} {
+      function canUseCounter() {
+        return isCommercialAdmin()
+          || (isCommercialChef() && id.split('_').size() == 3 && id.split('_')[1] == userCity());
+      }
+      allow read: if canUseCounter();
+      allow create: if canUseCounter() && request.resource.data.n == 1;
+      allow update: if canUseCounter() && request.resource.data.n == resource.data.n + 1;
+      allow delete: if false;
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // ARCHIVES COLIS (parcels_archive)
@@ -1269,10 +1956,10 @@ service cloud.firestore {
       allow read: if isStaff() || isCentralCollector();
       // Création : admin uniquement (archivage automatique)
       allow create: if isAdmin();
-      // Mise à jour : admin ou encaisseur central (pour restauration)
-      allow update: if isAdmin() || isCentralCollector();
-      // Suppression : admin ou encaisseur central (pour restauration)
-      allow delete: if isAdmin() || isCentralCollector();
+      // Mise à jour : admin ou encaisseur central (pour restauration) — analyseur chèques : chèques / traites seulement
+      allow update: if isAdmin() || isCentralCollector() || (isChequeAnalyst() && isMyAgencyDocParcel(resource.data));
+      // Suppression : admin ou encaisseur central (pour restauration) — analyseur chèques : chèques / traites seulement
+      allow delete: if isAdmin() || isCentralCollector() || (isChequeAnalyst() && isMyAgencyDocParcel(resource.data));
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -1332,11 +2019,83 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+    // 📦 Rapports Contrôle & Pointage enregistrés (suivi des envois de chèques vers la ville qui les reçoit)
+    match /controlReports/{id} {
+      allow read: if isCentralCollector() || isChequeAnalyst() || isAdminOrDirecteur();
+      allow create: if (isCentralCollector() || isChequeAnalyst() || isAdmin())
+        && request.resource.data.createdById == request.auth.uid;
+      // « Envoi reçu » : seule l'entrée de SA ville dans receivedBy, rien d'autre
+      allow update: if (isCentralCollector() || isChequeAnalyst())
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['receivedBy'])
+        && request.resource.data.receivedBy.diff(resource.data.get('receivedBy', {})).affectedKeys().hasOnly([userCity()]);
+      allow delete: if resource.data.createdById == request.auth.uid || isAdmin();
+    }
+
+    // 📦 Lots d'envoi des valeurs (onglet « Envoi des valeurs ») : un lot = un bordereau / un colis de valeurs.
+    match /valeursLots/{id} {
+      allow read: if isCentralCollector() || isChequeAnalyst() || isAdminOrDirecteur();
+      allow create: if (isCentralCollector() || isChequeAnalyst() || isAdmin())
+        && request.resource.data.createdById == request.auth.uid;
+      // Annulation du lot (son auteur ou l'admin), seulement tant qu'il n'est pas réceptionné : statut + trace
+      allow update: if (resource.data.createdById == request.auth.uid || isAdmin())
+        && resource.data.status == 'cree'
+        && request.resource.data.status == 'annule'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'cancelledAt', 'cancelledBy', 'cancelledById']);
+      // 📥 Réception par la ville DESTINATAIRE du lot (encaisseur central / analyseur chèques de cette ville, ou admin)
+      allow update: if (((isCentralCollector() || isChequeAnalyst()) && userCity() == resource.data.toCity) || isAdmin())
+        && resource.data.status == 'cree'
+        && request.resource.data.status in ['recu', 'recu_partiel']
+        && request.resource.data.receivedById == request.auth.uid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'receivedAt', 'receivedBy', 'receivedById', 'receivedIds', 'missingIds', 'receiveNote']);
+    }
+    // 🔒 Une fiche par expédition (id = id de l'expédition) : PAS de mise à jour → une expédition déjà dans un lot
+    // ne peut jamais entrer dans un 2e lot (la création échoue). Libérée seulement par l'annulation du lot.
+    match /valeursLotItems/{parcelId} {
+      allow read: if isCentralCollector() || isChequeAnalyst() || isAdminOrDirecteur();
+      allow create: if (isCentralCollector() || isChequeAnalyst() || isAdmin())
+        && request.resource.data.createdById == request.auth.uid;
+      allow delete: if resource.data.createdById == request.auth.uid || isAdmin();
+    }
+
+    // 💼 Versement EXCEPTIONNEL à l'admin (une seule fois) : montant imposé par l'admin pour une journée de collecte
+    // d'une agence (id = ville). Lecture : personnel ; création / suppression : admin ; le chef d'agence de la ville ne
+    // peut que le marquer « utilisé » au moment de son versement.
+    match /versementExceptions/{city} {
+      allow read: if isStaff();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || ((role() == 'chef_agence' || role() == 'agentpro') && userCity() == city
+        && resource.data.get('used', false) != true && request.resource.data.used == true
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['used', 'usedAt', 'usedBy', 'transferId']));
+    }
+
+    // 🤖 Rapports du Contrôleur : créés par la Cloud Function generateControlReport (Admin SDK), ADMIN seulement.
+    // L'admin ne peut modifier que le suivi des anomalies (Corrigé / Fausse alerte), ou supprimer un rapport.
+    match /controlAiReports/{id} {
+      allow read, delete: if isAdmin();
+      allow update: if isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['statusById']);
+    }
+
+    // 📝 Comptes clients (fiches d'ouverture de compte : CIN, RIB…) : chef d'agence / agent pro de la ville, admin.
+    match /clientAccounts/{id} {
+      allow read: if isAdmin() || (isChefAgence() && resource.data.city == userCity());
+      allow create: if isAdmin() || (isChefAgence() && request.resource.data.city == userCity());
+      allow update: if isAdmin() || (isChefAgence() && resource.data.city == userCity() && request.resource.data.city == userCity());
+      allow delete: if isAdmin();
+    }
+
     // Règle par défaut — la collection presence est exclue (lecture réservée Admin/Directeur ci-dessus)
     match /{coll}/{document=**} {
-      allow read:  if coll != 'presence' && isStaff();
-      // parcelsLite : écrit uniquement par la Cloud Function syncParcelLite (Admin SDK)
-      allow write: if coll != 'presence' && coll != 'parcelsLite' && isAdmin();
+      // Totaux commerciaux (commercial*) : accès défini plus haut uniquement (chef d'agence limité à sa ville)
+      allow read:  if coll != 'presence' && !coll.matches('commercial.*') && !coll.matches('valeursLot.*') && coll != 'controlAiReports'
+        // 🔒 S7 : collections cloisonnées par ville — accès défini plus haut uniquement
+        && !(coll in ['caisseEntries', 'agencyCashes', 'caisseClotures', 'caissierTransactions', 'agentRemises', 'agentCodRequests',
+          'driverVersements', 'reglements', 'reglementsRapports',
+          'valeursEnvois', 'caissierRequests', 'agentCashRecoveryRequests', 'invoices', 'deliverySheets',
+          'centralCodDeposits', 'centralSupplierPayments', 'return_funds_especes', 'return_funds_cheques',
+          'deliveryDelays', 'controlReports', 'backupImports', 'directorLogs', 'director_logs', 'stats', 'clientAccounts'])
+        && isStaff();
+      // parcelsLite / parcelsFacturier : écrits uniquement par les Cloud Functions (Admin SDK)
+      allow write: if coll != 'presence' && coll != 'parcelsLite' && coll != 'parcelsFacturier' && !coll.matches('commercial.*') && coll != 'controlAiReports' && isAdmin();
     }
   }
 }

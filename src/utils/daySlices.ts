@@ -34,7 +34,8 @@ export function opDayOf(d: Date): string {
   return ymdLocal(x)
 }
 
-const opStart = (ymd: string) => {
+/** Début (START_HOUR, heure locale) de la journée d'opération YYYY-MM-DD. */
+export const opStart = (ymd: string) => {
   const [y, m, d] = ymd.split('-').map(Number)
   return new Date(y, m - 1, d, OPERATIONAL_DAY_CONFIG.START_HOUR, OPERATIONAL_DAY_CONFIG.START_MINUTE, 0, 0)
 }

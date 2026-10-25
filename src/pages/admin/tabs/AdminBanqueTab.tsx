@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { auth } from '../../../firebase/config'
 import { confirmBankDeposit } from '../../../firebase/bankDeposits'
 import { Search, Trash2, ChevronDown, ChevronRight, Building2, Edit2 } from 'lucide-react'
@@ -290,9 +291,9 @@ export default function AdminBanqueTab({
                   ))}
                   {bankDatePreset === 'custom' && (
                     <div className="flex gap-2">
-                      <input type="date" value={bankDateFrom} onChange={e => setBankDateFrom(e.target.value)}
+                      <DateInput value={bankDateFrom} onChange={e => setBankDateFrom(e.target.value)}
                         className="border border-gray-200 rounded-lg px-2 py-1 text-xs focus:border-blue-500 focus:outline-none" />
-                      <input type="date" value={bankDateTo} onChange={e => setBankDateTo(e.target.value)}
+                      <DateInput value={bankDateTo} onChange={e => setBankDateTo(e.target.value)}
                         className="border border-gray-200 rounded-lg px-2 py-1 text-xs focus:border-blue-500 focus:outline-none" />
                     </div>
                   )}

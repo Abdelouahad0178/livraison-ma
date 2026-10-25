@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { useState, useMemo } from 'react'
 import { Package, Truck, User, MapPin, Calendar, RotateCcw, Send, Check, X, Search, Filter, Eye, Trash2, Edit2, BarChart3, Printer } from 'lucide-react'
 import { STATUS_COLORS } from '../../../firebase/constants'
@@ -419,16 +420,14 @@ export default function RetoursTab({
             <option value="Retour finalisé">Retour finalisé</option>
           </select>
 
-          <input
-            type="date"
+          <DateInput
             value={dateFrom}
             onChange={(e) => setDateFrom(e.target.value)}
             className="px-3 py-2 border rounded-lg text-sm"
             placeholder="Date début"
           />
 
-          <input
-            type="date"
+          <DateInput
             value={dateTo}
             onChange={(e) => setDateTo(e.target.value)}
             className="px-3 py-2 border rounded-lg text-sm"

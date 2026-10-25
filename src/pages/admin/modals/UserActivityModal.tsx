@@ -1,4 +1,5 @@
 import { X, MapPin } from 'lucide-react'
+import { isAgencyStaff } from '../../../utils/roles'
 import { CAISSE_CATEGORIES, STATUS_COLORS } from '../../../firebase/constants'
 import { fmt } from '../../../utils/formatNumber'
 
@@ -32,7 +33,7 @@ export default function UserActivityModal({
 }: UserActivityModalProps) {
   if (!userActivityModal) return null
 
-  const isAgent = userActivityModal.user.role === 'agent'
+  const isAgent = isAgencyStaff(userActivityModal.user.role)
   const isCashier = userActivityModal.user.role === 'caissier'
   const list = isAgent
     ? (userDetailTab === 'created' ? userActivityModal.created : userActivityModal.claimed)

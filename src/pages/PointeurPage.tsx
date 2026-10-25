@@ -1,3 +1,5 @@
+import DateInput from '../components/DateInput'
+import { ParcelParties } from '../components/ParcelParties'
 import { useState, useEffect, useRef } from 'react'
 import { signOut } from 'firebase/auth'
 import { auth, db } from '../firebase/config'
@@ -842,7 +844,7 @@ export default function PointeurPage() {
     <div className="min-h-screen bg-gray-50 overflow-x-hidden">
       {/* ── HEADER ── */}
       <header className="bg-white border-b border-gray-200 sticky top-0 z-20">
-        <div className="max-w-4xl mx-auto px-4 h-14 flex items-center justify-between">
+        <div className="max-w-4xl xl:max-w-none xl:w-[95%] mx-auto px-4 h-14 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center text-white font-bold text-sm">PE</div>
             <div>
@@ -857,7 +859,7 @@ export default function PointeurPage() {
         </div>
 
         {/* NAV TABS */}
-        <div className="max-w-4xl mx-auto px-4 flex gap-1 pb-0 overflow-x-auto">
+        <div className="max-w-4xl xl:max-w-none xl:w-[95%] mx-auto px-4 flex gap-1 pb-0 overflow-x-auto">
           {[
             { key: 'dashboard', label: 'Tableau de bord', icon: BarChart3 },
             { key: 'livreurs', label: 'Livreurs', icon: Package, badge: livreurPendingCount || 0 },
@@ -879,7 +881,7 @@ export default function PointeurPage() {
         </div>
       </header>
 
-      <div className="max-w-4xl mx-auto px-4 py-4 space-y-4">
+      <div className="max-w-4xl xl:max-w-none xl:w-[95%] mx-auto px-4 py-4 space-y-4">
 
         {/* ── DASHBOARD ── */}
         {tab === 'dashboard' && (
@@ -1137,10 +1139,10 @@ export default function PointeurPage() {
                 </div>
                 {datePreset === 'custom' && (
                   <div className="flex gap-2 items-center">
-                    <input type="date" value={dateFrom} onChange={e => setDateFrom(e.target.value)}
+                    <DateInput value={dateFrom} onChange={e => setDateFrom(e.target.value)}
                       className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-xs focus:outline-none focus:border-indigo-400" />
                     <span className="text-gray-400 text-xs">au</span>
-                    <input type="date" value={dateTo} onChange={e => setDateTo(e.target.value)}
+                    <DateInput value={dateTo} onChange={e => setDateTo(e.target.value)}
                       className="flex-1 border border-gray-200 rounded-lg px-2 py-2 text-xs focus:outline-none focus:border-indigo-400" />
                   </div>
                 )}
@@ -1408,7 +1410,7 @@ export default function PointeurPage() {
                             <p className="text-sm font-bold text-gray-800 font-mono">{p.trackingId}</p>
                             <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${mi.badge}`}>{mi.emoji} {mi.label}</span>
                           </div>
-                          <p className="text-xs text-gray-500 mt-0.5">{p.sender?.name} → {p.receiver?.name}</p>
+                          <ParcelParties parcel={p} className="mt-0.5" />
                           <p className="text-xs text-indigo-600 mt-0.5">🚴 {p.deliveryDriverName || p.codCollectedBy || '—'}</p>
                         </div>
                         <div className="text-right shrink-0">
@@ -1443,7 +1445,7 @@ export default function PointeurPage() {
                           <p className="text-sm font-bold text-gray-800 font-mono">{p.trackingId}</p>
                           <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-semibold">💵 Port dû espèces</span>
                         </div>
-                        <p className="text-xs text-gray-500 mt-0.5">{p.sender?.name} → {p.receiver?.name}</p>
+                        <ParcelParties parcel={p} className="mt-0.5" />
                         <p className="text-xs text-indigo-500 mt-0.5">🚴 {p.portCollectedBy || p.deliveryDriverName || '—'}</p>
                       </div>
                       <div className="text-right shrink-0">
@@ -2050,9 +2052,8 @@ export default function PointeurPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div>
                       <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date d'émission</label>
-                      <input
+                      <DateInput
                         ref={dateEmissionRef}
-                        type="date"
                         value={formModal.data.dateEmission}
                         onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, dateEmission: e.target.value } }))}
                         onKeyDown={e => handleFormKeyDown(e, 'dateEmission')}
@@ -2062,9 +2063,8 @@ export default function PointeurPage() {
                     {formModal.data.modeReglement === 'traite' && (
                       <div>
                         <label className="text-xs font-semibold text-gray-500 uppercase tracking-wider block mb-1">Date d'échéance</label>
-                        <input
+                        <DateInput
                           ref={dateEcheanceRef}
-                          type="date"
                           value={formModal.data.dateEcheance}
                           onChange={e => setFormModal((f: any) => ({ ...f, data: { ...f.data, dateEcheance: e.target.value } }))}
                           onKeyDown={e => handleFormKeyDown(e, 'dateEcheance')}

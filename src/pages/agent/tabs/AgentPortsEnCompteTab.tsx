@@ -1,3 +1,4 @@
+import DateInput from '../../../components/DateInput'
 import { useEffect, useMemo, useState } from 'react'
 import { Clock, Building2, User, Calendar, Filter, TrendingUp, TrendingDown, Wallet, CheckCircle, RefreshCw } from 'lucide-react'
 import { doc, updateDoc } from 'firebase/firestore'
@@ -7,6 +8,7 @@ import LoadProgress from '../../../components/LoadProgress'
 import { parcelDate } from '../../../utils/dateFilter'
 import { getCurrentOperationalDay } from '../../../config/operationalDay'
 import { normName, isBilledByAgency, isCompteExpediteurType, isPortEnCompteType } from '../../../utils/billingAgency'
+import { digitAwareIncludes } from '../../../utils/normText'
 
 // Normalisation pour la recherche : insensible à la casse, aux accents (COPÏMA = COPIMA) et aux espaces
 const norm = normName
@@ -178,7 +180,7 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
           p.sender?.nic, p.trackingId, p.clientName, p.sender?.name, p.receiver?.name,
           p.sender?.tel, p.receiver?.tel, p.portDeliveredBy, p.id, p.price,
         ]
-        if (!searchableFields.some(v => norm(v).includes(query))) return false
+        if (!searchableFields.some(v => digitAwareIncludes(norm(v), query))) return false
       }
 
       return true
@@ -367,8 +369,7 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
           {/* Date début */}
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1">📅 Date début</label>
-            <input
-              type="date"
+            <DateInput
               value={filterDateDebut}
               onChange={(e) => setFilterDateDebut(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"
@@ -378,8 +379,7 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
           {/* Date fin */}
           <div>
             <label className="block text-xs font-medium text-gray-700 mb-1">📅 Date fin</label>
-            <input
-              type="date"
+            <DateInput
               value={filterDateFin}
               onChange={(e) => setFilterDateFin(e.target.value)}
               className="w-full px-3 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-purple-500"

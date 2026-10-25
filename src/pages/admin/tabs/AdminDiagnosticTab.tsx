@@ -1,22 +1,26 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { BarChart3, AlertTriangle, CheckCircle } from 'lucide-react'
-import { getAllParcels } from '../../../firebase/parcels'
+import { collection, documentId, getDocs, limit, orderBy, query, startAfter } from 'firebase/firestore'
+import type { Query, QueryDocumentSnapshot, QuerySnapshot } from 'firebase/firestore'
+import { db } from '../../../firebase/db'
 import { CITIES } from '../../../firebase/constants'
+
+/** Taille d'un lot : le diagnostic lit les expéditions par paquets pour ne pas bloquer le navigateur. */
+const BATCH_SIZE = 1000
 
 export default function AdminDiagnosticTab() {
   const [loading, setLoading] = useState(false)
   const [results, setResults] = useState<any>(null)
+  const [progress, setProgress] = useState(0)
+  const stopRef = useRef(false)
 
   const runDiagnostic = async () => {
     setLoading(true)
     setResults(null)
+    setProgress(0)
+    stopRef.current = false
 
     try {
-      console.log('📊 Chargement de tous les colis...')
-      const parcels = await getAllParcels()
-      console.log(`✅ ${parcels.length} colis chargés`)
-
-      // Analyser
       const cityStats: Record<string, { origin: number, destination: number, sender: number, receiver: number, total: number }> = {}
       CITIES.forEach(city => {
         cityStats[city] = { origin: 0, destination: 0, sender: 0, receiver: 0, total: 0 }
@@ -29,6 +33,21 @@ export default function AdminDiagnosticTab() {
       let singleCity = 0  // Colis avec une seule ville
       let multiCity = 0   // Colis avec plusieurs villes différentes
       let zeroCities = 0  // Colis sans aucune ville
+      let totalParcels = 0
+      let interrupted = false
+      let cursor: QueryDocumentSnapshot | null = null
+
+      // 📦 Lecture par lots (ordre des identifiants : couvre aussi les expéditions archivées ou sans date)
+      for (;;) {
+        if (stopRef.current) { interrupted = true; break }
+        const q: Query = cursor
+          ? query(collection(db, 'parcels'), orderBy(documentId()), startAfter(cursor), limit(BATCH_SIZE))
+          : query(collection(db, 'parcels'), orderBy(documentId()), limit(BATCH_SIZE))
+        const snap: QuerySnapshot = await getDocs(q)
+        if (snap.empty) break
+        cursor = snap.docs[snap.docs.length - 1]
+        const parcels = snap.docs.map(d => ({ id: d.id, ...d.data() }))
+        totalParcels += parcels.length
 
       parcels.forEach((p: any) => {
         const originCity = p.originCity
@@ -85,11 +104,16 @@ export default function AdminDiagnosticTab() {
         })
       })
 
+        setProgress(totalParcels)
+        if (snap.docs.length < BATCH_SIZE) break
+      }
+
       // Calculer la somme
       const sumTotal = Object.values(cityStats).reduce((sum, stats) => sum + stats.total, 0)
 
       setResults({
-        totalParcels: parcels.length,
+        interrupted,
+        totalParcels,
         withCity,
         withoutCity,
         orphans,
@@ -128,7 +152,7 @@ export default function AdminDiagnosticTab() {
       {!results && (
         <div className="bg-white rounded-xl p-8 text-center shadow-sm border border-gray-100">
           <p className="text-gray-600 mb-4">
-            Cet outil va charger <strong>tous les colis</strong> et analyser leur répartition par ville.
+            Cet outil va lire <strong>toutes les expéditions</strong> par lots de {BATCH_SIZE} et analyser leur répartition par ville.
           </p>
           <button
             onClick={runDiagnostic}
@@ -137,6 +161,21 @@ export default function AdminDiagnosticTab() {
           >
             {loading ? '⏳ Analyse en cours...' : '🚀 Lancer le diagnostic'}
           </button>
+          {loading && (
+            <div className="mt-4 flex items-center justify-center gap-3">
+              <span className="text-sm text-purple-700 font-semibold tabular-nums">{progress.toLocaleString('fr-FR')} expéditions analysées…</span>
+              <button onClick={() => { stopRef.current = true }}
+                className="px-3 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm font-bold rounded-lg">
+                ⏹ Arrêter
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {results?.interrupted && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl p-3 text-sm text-amber-800 font-semibold">
+          ⏹ Diagnostic arrêté : résultats partiels sur {results.totalParcels.toLocaleString('fr-FR')} expéditions.
         </div>
       )}
 

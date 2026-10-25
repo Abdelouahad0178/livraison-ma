@@ -2,6 +2,10 @@ import React from 'react'
 import ReactDOM from 'react-dom/client'
 import App from './App'
 import './index.css'
+import { blockSwipeNavigation } from './utils/blockSwipeNavigation'
+
+// ↔️ Le balayage horizontal ne fait jamais « page précédente / suivante »
+blockSwipeNavigation()
 
 // When a new deploy changes chunk hashes the stale service worker may try to
 // load a chunk that no longer exists. Force a hard reload so the user gets the

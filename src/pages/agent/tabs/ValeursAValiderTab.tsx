@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react'
 import { Check, ChevronDown, ChevronUp, X } from 'lucide-react'
 import { auth } from '../../../firebase/config'
 import { fmtFixed as fmtAmt } from '../../../utils/formatNumber'
-import { rejectEnvoi, subscribeEnvois, validateEnvoi, type Envoi, type ValeurType } from '../../../firebase/valeursEnvois'
+import { ENVOI_GROUP_LABEL, rejectEnvoi, subscribeEnvois, validateEnvoi, VALEUR_KIND_LABEL, type Envoi, type ValeurType } from '../../../firebase/valeursEnvois'
 import { useAgentCtx } from '../AgentCtx'
 
 const TYPES: { key: ValeurType; label: string; emoji: string }[] = [
@@ -14,11 +14,13 @@ const BADGE: Record<string, string> = {
   envoye: 'bg-amber-100 text-amber-700', valide: 'bg-green-100 text-green-700',
   rejete: 'bg-red-100 text-red-700', annule: 'bg-gray-100 text-gray-500',
 }
-const LABEL: Record<string, string> = { envoye: 'À valider', valide: 'Validé', rejete: 'Rejeté', annule: 'Annulé' }
+const LABEL: Record<string, string> = { envoye: 'À confirmer', valide: 'Reçu', rejete: 'Refusé', annule: 'Annulé' }
 
 /**
  * ✅ Valeurs à valider : envois de valeurs / espèces transmis par le chef d'exploitation.
  * Le chef d'agence contrôle les montants puis VALIDE (écriture en caisse agence) ou REJETTE (motif).
+ * C'est le SEUL chemin par lequel l'argent des livreurs entre chez le chef d'agence
+ * (livreur → chef d'exploitation → chef d'agence).
  */
 export default function ValeursAValiderTab() {
   const { profile } = useAgentCtx()
@@ -46,7 +48,7 @@ export default function ValeursAValiderTab() {
 
   const handleValidate = async (e: Envoi) => {
     const detail = TYPES.map(t => `  ${t.emoji} ${t.label} : ${e.totals?.[t.key]?.n || 0} · ${fmtAmt(e.totals?.[t.key]?.amount || 0)} DH`).join('\n')
-    if (!window.confirm(`Valider l'envoi de ${e.createdByName} ?\n\n${detail}\n\nTOTAL : ${fmtAmt(e.totals?.total?.amount || 0)} DH\n\nLes espèces seront enregistrées en caisse agence.`)) return
+    if (!window.confirm(`Confirmer la réception du versement ${e.group ? ENVOI_GROUP_LABEL[e.group] : ''} de ${e.createdByName} ?${e.periodLabel ? `\n${e.periodLabel}` : ''}\n\n${detail}\n\nTOTAL : ${fmtAmt(e.totals?.total?.amount || 0)} DH\n\nLes espèces seront enregistrées en caisse agence.`)) return
     setMsg(null)
     setBusyId(e.id)
     try {
@@ -80,8 +82,8 @@ export default function ValeursAValiderTab() {
     <div className="mt-6 space-y-3">
       <div className="bg-white border border-gray-200 rounded-xl p-4 flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h2 className="font-bold text-gray-800">✅ Valeurs à valider — {city}</h2>
-          <p className="text-xs text-gray-500 mt-0.5">Envois de valeurs et d'espèces transmis par le chef d'exploitation.</p>
+          <h2 className="font-bold text-gray-800">✅ Versements du chef d'exploitation — {city}</h2>
+          <p className="text-xs text-gray-500 mt-0.5">Trois versements séparés (💵 Ports · 💵 COD espèces · 📋 COD chèques / traites), par jour, semaine ou période. Confirmez la réception : l'argent entre alors dans votre caisse.</p>
         </div>
         <select value={filter} onChange={e => setFilter(e.target.value as any)} className="border border-gray-200 rounded-lg px-3 py-1.5 text-sm">
           <option value="envoye">À valider</option>
@@ -102,7 +104,11 @@ export default function ValeursAValiderTab() {
             <div className="p-3 flex flex-wrap items-center gap-3">
               <button onClick={() => toggle(e.id)} className="flex-1 min-w-0 flex items-center gap-3 text-left">
                 <div className="min-w-0">
-                  <p className="font-semibold text-gray-900">{e.createdByName} <span className="text-xs font-normal text-gray-500">· {e.createdAt?.toDate ? e.createdAt.toDate().toLocaleString('fr-FR') : '—'}</span></p>
+                  <p className="font-semibold text-gray-900">
+                    {e.group ? ENVOI_GROUP_LABEL[e.group] : '📤 Envoi'} — {e.createdByName}
+                    <span className="text-xs font-normal text-gray-500"> · {e.createdAt?.toDate ? e.createdAt.toDate().toLocaleString('fr-FR') : '—'}</span>
+                  </p>
+                  {e.periodLabel && <p className="text-xs font-semibold text-violet-700">{e.periodLabel} · {new Set(e.items.map(i => i.parcelId)).size} expédition(s)</p>}
                   <p className="text-xs text-gray-500">
                     {TYPES.map(t => `${t.emoji} ${fmtAmt(e.totals?.[t.key]?.amount || 0)} DH (${e.totals?.[t.key]?.n || 0})`).join(' · ')}
                   </p>
@@ -118,11 +124,11 @@ export default function ValeursAValiderTab() {
                 <div className="flex gap-2 shrink-0">
                   <button disabled={busyId === e.id} onClick={() => handleValidate(e)}
                     className="inline-flex items-center gap-1 bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-xs font-bold px-3 py-2 rounded-lg">
-                    <Check className="w-3.5 h-3.5" /> {busyId === e.id ? '…' : 'Valider'}
+                    <Check className="w-3.5 h-3.5" /> {busyId === e.id ? '…' : 'Confirmer la réception'}
                   </button>
                   <button disabled={busyId === e.id} onClick={() => handleReject(e)}
                     className="inline-flex items-center gap-1 border border-red-200 bg-red-50 text-red-600 text-xs font-bold px-3 py-2 rounded-lg disabled:opacity-50">
-                    <X className="w-3.5 h-3.5" /> Rejeter
+                    <X className="w-3.5 h-3.5" /> Refuser
                   </button>
                 </div>
               )}
@@ -139,7 +145,7 @@ export default function ValeursAValiderTab() {
                     {e.items.map((i, k) => (
                       <tr key={i.parcelId + k} className="border-t border-gray-100">
                         <td className="px-3 py-1.5 font-mono font-semibold text-blue-600">{i.nic}</td>
-                        <td className="px-3 py-1.5">{i.kind === 'port_du' ? 'Port dû' : 'COD'}</td>
+                        <td className="px-3 py-1.5">{VALEUR_KIND_LABEL[i.kind] || i.kind}</td>
                         <td className="px-3 py-1.5">{TYPES.find(t => t.key === i.type)?.emoji} {TYPES.find(t => t.key === i.type)?.label}</td>
                         <td className="px-3 py-1.5 text-right">{fmtAmt(i.amount)} DH</td>
                       </tr>
