@@ -20,6 +20,7 @@ import { codSplitAmount } from './codParts'
 import { isCodMoneyBeforeStart, isPortDuMoneyBeforeStart, isPortPayeMoneyBeforeStart } from './moneyFlow'
 import { activeDays, recentCollectDays } from '../config/siteDelays'
 import { RETURN_STATUSES } from '../firebase/constants'
+import { linkedExploitationOf } from '../config/guichetHolders'
 
 // ── Dates ────────────────────────────────────────────────────────────────────
 
@@ -812,6 +813,23 @@ export interface CaisseViewInput {
    *  que les ports dus RÉELLEMENT entre les mains du chef d'agence (reçus, ou encaissés par lui-même). Absent
    *  (Chef d'exploitation) → tous les ports dus collectés, comme avant. */
   agencyHolderIds?: Set<string> | null
+  /** 👤 Chef d'exploitation (01/11/2026) : « Collectes par jour » ne compte que l'argent RÉELLEMENT collecté ou reçu par
+   *  CE compte — mêmes valeurs que son bloc « Versements au chef d'agence » (isCollectedByExploitation). Absent : toute
+   *  l'agence, comme avant (Caisse Agence, Admin). */
+  collectorId?: string | null
+}
+
+/**
+ * 👤 Argent RÉELLEMENT collecté ou reçu par le chef d'exploitation `uid` (01/11/2026) — même règle que les valeurs de son
+ * bloc « Versements au chef d'agence » (utils/exploitationEnvoi.envoiItemsOf) : port dû encaissé par lui ou reçu de
+ * l'encaisseur ; port payé ramassé au guichet seulement une fois REMIS à lui (ou encaissé par son compte chef d'agence
+ * relié) ; montant > 0 (une expédition à 0 DH n'apporte pas d'argent).
+ */
+export const isCollectedByExploitation = (p: any, kind: 'portDu' | 'portPaye', uid: string): boolean => {
+  if (!(safeParseAmount(p?.price) > 0)) return false
+  return kind === 'portDu'
+    ? p.portExpReceivedById === uid || p.portCollectedById === uid
+    : p.portPayeExpReceivedById === uid || linkedExploitationOf(p.portCollectedById) === uid
 }
 
 /** 💼 Port dû entre les mains du chef d'agence : reçu (envoi validé / réception du livreur / ancien « received »)
@@ -886,7 +904,7 @@ export const computeCaisseView = (input: CaisseViewInput) => {
     city, allDisplayParcels, datePreset, dateFrom = '', dateTo = '', operationalDay = null,
     driverFilter = 'all', statusFilter = 'all', searchResults = null, modifiedParcels = {},
     extraCollectedParcels = {}, depotIds, deliveryDelays = [], extraFilter = null, now = new Date(),
-    recentCollected = [], agencyHolderIds = null, driverNames = null,
+    recentCollected = [], agencyHolderIds = null, driverNames = null, collectorId = null,
   } = input
   const held = (p: any) => isPortDuHeldByAgency(p, agencyHolderIds)
   const searchMode = searchResults !== null
@@ -981,6 +999,8 @@ export const computeCaisseView = (input: CaisseViewInput) => {
   collectSource.forEach((p: any) => {
     const c = collecteContributionFor(p, city, agencyHolderIds)
     if (!c) return
+    // 👤 Chef d'exploitation : seulement ce qu'il a réellement collecté / reçu (= son versement au chef d'agence)
+    if (collectorId && !isCollectedByExploitation(p, c.kind, collectorId)) return
     if (c.kind === 'portDu' ? (driverFilter !== 'all' && !ofFilteredDriver(p)) : (driverFilter !== 'all' && driverFilter !== GARE_GROUP_ID)) return
     addJour(p, c)
   })
