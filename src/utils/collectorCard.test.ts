@@ -30,10 +30,10 @@ const view = (collectorId: string | null) => computeCaisseView({
 const day31 = (v: ReturnType<typeof view>) => v.collectesParJour.find(([k]) => k === '2026-10-31')![1]
 
 describe('« Collectes par jour » du chef d\'exploitation', () => {
-  it('sans compte (admin, Caisse Agence) : toute l\'agence, comme avant', () => {
+  it('sans compte (admin, Caisse Agence) : toute l\'agence — sans le 0 DH ni le port payé encore au guichet', () => {
     const d = day31(view(null))
-    expect(d.count).toBe(6)
-    expect(d.montant).toBe(55 + 100 + 0 + 55 + 25 + 25)
+    expect(d.parcels.map((p: any) => p.id).sort()).toEqual(['a', 'autre', 'b', 'remis'])
+    expect(d.montant).toBe(55 + 100 + 55 + 25)
   })
   it('chef d\'exploitation : seulement ce qu\'il a collecté / reçu (ni 0 DH, ni un autre compte, ni le guichet non remis)', () => {
     const d = day31(view(ZINEBE))

@@ -17,8 +17,15 @@ describe('copie allégée des versements — contribution d\'une expédition', (
   it('port payé ramassé au guichet : agence de DÉPART ; pas encore reçu tant que le chef d\'agence ne l\'a pas reçu', () => {
     const p = { ...base, portType: 'port_paye', destinationCity: 'Rabat', originCity: 'Agadir', status: 'Arrivé en agence',
       portStatus: 'collected', portCollectedAt: '2026-10-22T09:00:00.000Z', createdAt: '2026-10-22T09:00:00.000Z' }
-    expect(versementContributionOf(p, holders([]))).toEqual({ city: 'Agadir', dayKey: '2026-10-22', kind: 'portPaye', bucket: 'nonRecu', amount: 30 })
+    // 01/11/2026 : encore au guichet → pas collecté ; compté une fois SORTI du guichet, au jour de l'encaissement
+    expect(versementContributionOf(p, holders([]))).toBeNull()
+    const remis = { ...p, portPayeExpReceivedAt: '2026-10-23T18:00:00.000Z', portPayeExpReceivedById: 'exp' }
+    expect(versementContributionOf(remis, holders([]))).toEqual({ city: 'Agadir', dayKey: '2026-10-22', kind: 'portPaye', bucket: 'nonRecu', amount: 30 })
+    expect(versementContributionOf({ ...remis, portStatus: 'received' }, holders([]))?.bucket).toBe('aVerser')
     expect(versementContributionOf({ ...p, portStatus: 'received' }, holders([]))?.bucket).toBe('aVerser')
+  })
+  it('une expédition à 0 DH ne compte pas (01/11/2026)', () => {
+    expect(versementContributionOf({ ...base, price: 0, portStatus: 'collected', portCollectedAt: '2026-10-31T12:26:00.000Z' }, holders([]))).toBeNull()
   })
   it('ne compte pas : pas encaissé, argent d\'avant le 05/10 08:00 (heure du Maroc)', () => {
     expect(versementContributionOf({ ...base, portStatus: 'pending' }, holders([]))).toBeNull()

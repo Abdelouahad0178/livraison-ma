@@ -174,6 +174,12 @@ var DELAY_BOUNDS = {
 };
 var current = { collectDays: DELAY_BOUNDS.collectDays.code, activeDays: DELAY_BOUNDS.activeDays.code };
 
+// src/config/guichetHolders.ts
+var LINKED_EXPLOITATION_OF = {
+  sB9GAnS6IQZWdb3O0rVa9XJMg4q2: "cvRsdyLS9xacqg0jXCVlR0O2W0f2"
+};
+var linkedExploitationOf = (uid) => uid ? LINKED_EXPLOITATION_OF[uid] || null : null;
+
 // src/utils/agencyCaisseRules.ts
 var toDateSafe = (v) => {
   if (v === null || v === void 0 || v === "") return null;
@@ -206,14 +212,16 @@ var isPortPayeParcel = (p) => p.portType === "port_paye" && !p.portPayeMethod;
 var isRamasseGuichet = (p, city) => isPortPayeParcel(p) && p.originCity === city && !p.pickupDriverId && p.status !== "En cours de ramassage" && p.status !== "Annul\xE9" && safeParseAmount(p.price) > 0 && !isPortPayeMoneyBeforeStart(p);
 var isAdminTransferred = (p) => !!(p?.portAdminTransferred || p?.adminTransferred);
 var isPortDuHeldByAgency = (p, agencyHolderIds) => !agencyHolderIds || !!p?.portChefReceivedAt || p?.portStatus === "received" || !!p?.portCollectedById && agencyHolderIds.has(p.portCollectedById);
+var isGuichetPortPayeCollected = (p) => p?.portStatus === "received" || !!p?.portPayeExpReceivedAt || !!linkedExploitationOf(p?.portCollectedById);
 var collecteContributionFor = (p, city, agencyHolderIds) => {
   if (p?.portStatus !== "collected" && p?.portStatus !== "received") return null;
+  if (!(safeParseAmount(p.price) > 0)) return null;
   let kind;
   let when;
   if (isPortDuParcel(p) && !isPortDuMoneyBeforeStart(p) && p.destinationCity === city && !isPortCollectedBeforeReturn(p)) {
     kind = "portDu";
     when = toDateSafe(p.portCollectedAt) ?? toDateSafe(p.portReceivedAt);
-  } else if (isRamasseGuichet(p, city) && !isReturnedForGroup(p)) {
+  } else if (isRamasseGuichet(p, city) && !isReturnedForGroup(p) && isGuichetPortPayeCollected(p)) {
     kind = "portPaye";
     when = toDateSafe(p.portCollectedAt) ?? toDateSafe(p.portPayeExpReceivedAt) ?? (p.portStatus === "received" ? toDateSafe(p.portReceivedAt) : null);
   } else return null;
