@@ -3367,9 +3367,9 @@ export async function getParcelsByCreatedAtRange(
 // elle ne couvrait que les derniers jours du mois et le décompte divergeait du Facturier.
 // Comme le Facturier, les colis marqués isArchived (toujours dans 'parcels') sont inclus.
 // ⚡ Lot 4 (25/10/2026) : lu dans parcelsLite (tous les champs de l'onglet y sont : vérifié par
-// scripts/_check-pec-lite.mjs, 13 032 / 13 032 identiques) et, si une période est donnée, borné à
+// scripts/archive/_check-pec-lite.mjs, 13 032 / 13 032 identiques) et, si une période est donnée, borné à
 // [from − 2 j ; to + 2 j] sur createdAt (workDate n'est jamais à plus de 0,3 j de createdAt :
-// scripts/_check-pec-dates.mjs) ; l'onglet garde son filtre exact par journée d'opération (parcelDate).
+// scripts/archive/_check-pec-dates.mjs) ; l'onglet garde son filtre exact par journée d'opération (parcelDate).
 // Index (ville, portType, createdAt) ; s'il n'est pas encore prêt → repli sans borne de dates.
 export async function getAgencyPortEnCompteParcels(city: string, period?: { from?: Date | null; to?: Date | null }): Promise<any[]> {
   if (!city) return []

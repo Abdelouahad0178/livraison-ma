@@ -14,8 +14,7 @@
     "count-any": "grep -r ': any' src/ --include='*.ts' --include='*.tsx' | wc -l || echo 0",
     "find-any": "grep -r ': any' src/ --include='*.ts' --include='*.tsx'",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "cleanup-passage-clients": "tsx src/scripts/cleanupPassageClients.ts"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@sentry/react": "^10.55.0",
