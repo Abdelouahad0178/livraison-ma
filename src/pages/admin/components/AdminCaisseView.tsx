@@ -1,3 +1,4 @@
+import { opPeriodRange } from '../../../utils/dateFilter'
 import DateInput from '../../../components/DateInput'
 import { useState, useEffect, useMemo } from 'react'
 import { Building2, TrendingUp, Package, Users, Calendar, CheckCircle, Clock } from 'lucide-react'
@@ -99,8 +100,8 @@ export default function AdminCaisseView({ onClose }: Props) {
 
   // Appliquer le filtre de date
   const getDateRange = () => {
-    const today = new Date()
-    today.setHours(0, 0, 0, 0)
+    // 📅 (01/11/2026) Journées d'opération (8 h → 6 h), comme tout le site — avant : depuis minuit
+    const today = opPeriodRange('today').start as Date
 
     switch (datePreset) {
       case 'today':
@@ -117,10 +118,8 @@ export default function AdminCaisseView({ onClose }: Props) {
       }
       case 'custom': {
         if (dateFrom && dateTo) {
-          return {
-            start: new Date(dateFrom),
-            end: new Date(new Date(dateTo).setHours(23, 59, 59, 999))
-          }
+          const r = opPeriodRange('custom', dateFrom, dateTo)
+          return { start: r.start as Date, end: r.end as Date }
         }
         return null
       }

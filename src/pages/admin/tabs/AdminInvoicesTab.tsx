@@ -15,6 +15,7 @@ import {
 import { subscribeClients } from '../../../firebase/clients'
 import { CITIES } from '../../../firebase/constants'
 import { normIncludes } from '../../../utils/normText'
+import { opPeriodRange } from '../../../utils/dateFilter'
 
 const ADMIN_INVOICES_LIMIT = 500
 
@@ -388,10 +389,8 @@ function CreateInvoiceModal({ clients, onClose, uid, userName }: any) {
           const now = new Date()
 
           if (periodFilter === 'today') {
-            const startOfDay = new Date(now)
-            startOfDay.setHours(0, 0, 0, 0)
-            const endOfDay = new Date(now)
-            endOfDay.setHours(23, 59, 59, 999)
+            // 📅 (01/11/2026) Journée d'opération (8 h → 6 h), comme tout le site — avant : minuit → minuit
+            const { start: startOfDay, end: endOfDay } = opPeriodRange('today') as { start: Date; end: Date }
             filtered = parcels.filter((p: any) => {
               const date = p.createdAt?.toDate?.() || new Date(0)
               return date >= startOfDay && date <= endOfDay
@@ -413,9 +412,10 @@ function CreateInvoiceModal({ clients, onClose, uid, userName }: any) {
               return date >= startDate
             })
           } else if (periodFilter === 'custom' && dateFrom) {
-            // 📅 CORRECTION TIMEZONE: 00:00 → 23:59
-            const from = new Date(dateFrom + 'T00:00:00')
-            const to = dateTo ? new Date(dateTo + 'T23:59:59') : new Date()
+            // 📅 (01/11/2026) Du … au … en journées d'opération (8 h → 6 h), comme tout le site
+            const r = opPeriodRange('custom', dateFrom, dateTo || null)
+            const from = r.start as Date
+            const to = dateTo ? (r.end as Date) : new Date()
             filtered = parcels.filter((p: any) => {
               const date = p.createdAt?.toDate?.() || new Date(0)
               return date >= from && date <= to

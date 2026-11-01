@@ -1,4 +1,5 @@
 import React from 'react'
+import { opPeriodRange } from '../../../utils/dateFilter'
 import { createUserWithEmailAndPassword, signOut as fbSignOut } from 'firebase/auth'
 import { auth, authSecondary, db } from '../../../firebase/config'
 import { doc, setDoc, updateDoc, deleteDoc, getDoc } from 'firebase/firestore'
@@ -71,14 +72,8 @@ export const filterByDate = (list: any, preset: any, from: any, to: any, getDate
   return new Date(0)
 }) => {
   if (preset === 'all') return list
-  const now = new Date()
-  const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
-  let start: any = null, end: any = endOfToday
-  if      (preset === 'today')  { start = new Date(); start.setHours(0, 0, 0, 0) }
-  else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate() - 6); start.setHours(0, 0, 0, 0) }
-  else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
-  else if (preset === 'day')    { start = from ? new Date(from) : null; if (start) { start.setHours(0, 0, 0, 0); end = new Date(from + 'T23:59:59') } }
-  else if (preset === 'custom') { start = from ? new Date(from) : null; if (start) start.setHours(0, 0, 0, 0); end = to ? new Date(to + 'T23:59:59') : endOfToday }
+  // 📅 (01/11/2026) Journées d'opération (8 h → 6 h), comme tout le site — avant : minuit → minuit
+  const { start, end } = opPeriodRange(preset, from, to)
   return list.filter((p: any) => {
     const d = getDate(p)
     if (start && d < start) return false

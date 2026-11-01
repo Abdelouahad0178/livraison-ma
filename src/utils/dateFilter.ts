@@ -66,9 +66,32 @@ export const entryDate = (e: WithCreatedAt): Date => {
 
 // ── Main filter ───────────────────────────────────────────────────────────────
 
-// Filters a list by date preset.
-// end defaults to end-of-today (not "now") so that parcels whose createdAt is
-// set to noon via operationDate are always visible even before noon.
+/**
+ * 📅 Bornes d'une période en JOURNÉES D'OPÉRATION (8 h → 6 h le lendemain) — 01/11/2026 : « la date du jour est la journée
+ * d'opération pour tout le site ». Une seule définition pour toutes les pages (avant : une quinzaine de copies, dont une
+ * douzaine de minuit à minuit : Admin, Caissier, Directeur, encaisseur central…). start / end null = sans borne.
+ */
+export function opPeriodRange(
+  preset: string, from?: string | null, to?: string | null, operationalDay?: Date | null,
+): { start: Date | null; end: Date | null } {
+  const todayOp = getCurrentOperationalDay()
+  const ofDay = (d: Date) => getOperationalDayRange(d)
+  const ofKey = (k: string) => getOperationalDayRange(new Date(k + 'T12:00:00'))
+  const shift = (n: number) => { const d = new Date(todayOp); d.setDate(d.getDate() + n); return d }
+  switch (preset) {
+    case 'today': return ofDay(todayOp)
+    case 'yesterday': return ofDay(shift(-1))
+    case 'week': return { start: ofDay(shift(-6)).start, end: ofDay(todayOp).end }
+    case 'month': return { start: ofDay(new Date(todayOp.getFullYear(), todayOp.getMonth(), 1)).start, end: ofDay(todayOp).end }
+    case 'operational': return operationalDay ? ofDay(operationalDay) : { start: null, end: null }
+    case 'day': return from ? ofKey(from) : { start: null, end: null }
+    // 🗓️ Ex. 13/08 → 15/08 = du 13/08 8h00 jusqu'au 16/08 ~6h00 (fin de la journée d'opération du 15/08)
+    case 'custom': return { start: from ? ofKey(from).start : null, end: to ? ofKey(to).end : ofDay(todayOp).end }
+    default: return { start: null, end: null }
+  }
+}
+
+// Filters a list by date preset — périodes en journées d'opération (opPeriodRange).
 export const filterByDate = <T>(
   list: T[],
   preset: DateFilterPreset,
@@ -78,52 +101,7 @@ export const filterByDate = <T>(
   operationalDay?: Date,
 ): T[] => {
   if (preset === 'all') return list
-  const now = new Date()
-  const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
-  let start: Date | null = null
-  let end: Date = endOfToday
-  if (preset === 'today') {
-    // 🕐 Utiliser le jour opérationnel (8h → 6h lendemain) au lieu du jour calendaire
-    const opDay = getCurrentOperationalDay()
-    const range = getOperationalDayRange(opDay)
-    start = range.start
-    end = range.end
-  } else if (preset === 'week') {
-    // 🕐 Idem "today" : 7 derniers JOURS D'OPÉRATION, pas 7 jours calendaires — sinon un colis
-    // saisi entre minuit et 6h (workDate = la veille) sortait à tort de la fenêtre "7 jours".
-    const todayOp = getCurrentOperationalDay()
-    const weekAgoOp = new Date(todayOp); weekAgoOp.setDate(weekAgoOp.getDate() - 6)
-    start = getOperationalDayRange(weekAgoOp).start
-    end = getOperationalDayRange(todayOp).end
-  } else if (preset === 'month') {
-    const todayOp = getCurrentOperationalDay()
-    const firstOfMonth = new Date(todayOp.getFullYear(), todayOp.getMonth(), 1)
-    start = getOperationalDayRange(firstOfMonth).start
-    end = getOperationalDayRange(todayOp).end
-  } else if (preset === 'operational' && operationalDay) {
-    // 🗓️ Mode journée opérationnelle: 08:00 → 06:00 (lendemain)
-    const range = getOperationalDayRange(operationalDay)
-    start = range.start
-    end = range.end
-  } else if (preset === 'day') {
-    start = from ? new Date(from) : null
-    if (start) { start.setHours(0, 0, 0, 0); end = new Date(from + 'T23:59:59') }
-  } else if (preset === 'custom') {
-    // 🗓️ FILTRE PÉRIODE : basé sur la JOURNÉE D'OPÉRATION (8h → 6h lendemain), pas le jour
-    // calendaire. Ex: 13/08 → 15/08 = du 13/08 8h00 jusqu'au 16/08 ~6h00 (fin de la journée
-    // d'opération du 15/08). Sinon un colis saisi entre minuit et 8h le 16/08 (workDate = 15/08,
-    // donc dans la période) était exclu par une borne calendaire stricte à 15/08 23:59.
-    if (from) {
-      start = getOperationalDayRange(new Date(from + 'T12:00:00')).start
-    } else {
-      start = null
-    }
-    if (to) {
-      end = getOperationalDayRange(new Date(to + 'T12:00:00')).end
-    } else {
-      end = endOfToday
-    }
-  }
+  const { start, end } = opPeriodRange(preset, from, to, operationalDay)
   return list.filter(item => {
     const d = getDate(item)
     if (start && d < start) return false

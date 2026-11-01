@@ -5,6 +5,7 @@ import { collection, query, getDocs } from 'firebase/firestore'
 import { db } from '../../../firebase/config'
 import { CITIES, STATUSES, STATUS_COLORS } from '../../../firebase/constants'
 import { normIncludes } from '../../../utils/normText'
+import { opPeriodRange } from '../../../utils/dateFilter'
 
 interface Props {
   allParcels: any[]
@@ -77,10 +78,10 @@ export default function AdminStatsGlobalesTab({
   const filteredByDate = useMemo(() => {
     if (!Array.isArray(fullParcels)) return []
 
-    const now = new Date()
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate())
-    const weekAgo = new Date(today.getTime() - 7 * 24 * 60 * 60 * 1000)
-    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+    // 📅 (01/11/2026) Journées d'opération (8 h → 6 h), comme tout le site — avant : minuit → minuit
+    const today = opPeriodRange('today').start as Date
+    const weekAgo = opPeriodRange('week').start as Date
+    const monthStart = opPeriodRange('month').start as Date
 
     return fullParcels.filter((p: any) => {
       const pDate = parcelDate(p)
@@ -89,10 +90,8 @@ export default function AdminStatsGlobalesTab({
       if (datePreset === 'week') return pDate >= weekAgo
       if (datePreset === 'month') return pDate >= monthStart
       if (datePreset === 'custom' && dateFrom && dateTo) {
-        // 📅 CORRECTION TIMEZONE: 00:00 → 23:59
-        const from = new Date(dateFrom + 'T00:00:00')
-        const to = new Date(dateTo + 'T23:59:59')
-        return pDate >= from && pDate <= to
+        const r = opPeriodRange('custom', dateFrom, dateTo)
+        return pDate >= (r.start as Date) && pDate <= (r.end as Date)
       }
       return true // 'all'
     })

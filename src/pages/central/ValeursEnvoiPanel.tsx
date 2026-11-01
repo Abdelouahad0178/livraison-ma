@@ -11,22 +11,21 @@ import { subscribeValeursLots, createValeursLot, cancelValeursLot, freezeRow, lo
 import { LotFilterBar, applyLotFilters, lotFilterSince, EMPTY_LOT_FILTERS, type LotFilterState } from './LotFilters'
 import { LotDetails, LotToggle } from './LotDetails'
 import { VALUE_TYPES, bordereauHtml, fmtD, fmtDT, physicalDocs, sumRows, toValueRow, type ValueRow, type ValueType } from './valeursEnvoi'
+import { opPeriodRange } from '../../utils/dateFilter'
+import { getCurrentOperationalDay } from '../../config/operationalDay'
 
 const money = (n: number) => (Math.round((n || 0) * 100) / 100).toLocaleString('fr-MA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const ymd = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 
 type Preset = 'today' | 'yesterday' | 'week' | 'month' | 'custom'
+// 📅 (01/11/2026) Journées d'opération (8 h → 6 h), comme tout le site — avant : minuit → minuit
 function rangeOf(preset: Preset, from: string, to: string): { start: Date | null; end: Date | null; text: string } {
-  const now = new Date()
-  const day0 = (d: Date) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x }
-  const day1 = (d: Date) => { const x = new Date(d); x.setHours(23, 59, 59, 999); return x }
-  if (preset === 'today') return { start: day0(now), end: null, text: `pointées le ${now.toLocaleDateString('fr-FR')}` }
-  if (preset === 'yesterday') { const y = new Date(now); y.setDate(y.getDate() - 1); return { start: day0(y), end: day1(y), text: `pointées le ${y.toLocaleDateString('fr-FR')}` } }
-  if (preset === 'week') { const s = new Date(now); s.setDate(s.getDate() - 6); return { start: day0(s), end: null, text: `pointées du ${s.toLocaleDateString('fr-FR')} au ${now.toLocaleDateString('fr-FR')}` } }
-  if (preset === 'month') { const s = new Date(now.getFullYear(), now.getMonth(), 1); return { start: s, end: null, text: `pointées depuis le ${s.toLocaleDateString('fr-FR')}` } }
-  const s = from ? new Date(from + 'T00:00:00') : null
-  const e = to ? new Date(to + 'T23:59:59') : null
-  return { start: s, end: e, text: `pointées${s ? ` du ${s.toLocaleDateString('fr-FR')}` : ''}${e ? ` au ${e.toLocaleDateString('fr-FR')}` : ''}` }
+  const { start, end } = opPeriodRange(preset, from || null, to || null)
+  const d = (x: Date | null) => (x ? x.toLocaleDateString('fr-FR') : '')
+  if (preset === 'today' || preset === 'yesterday') return { start, end, text: `pointées le ${d(start)}` }
+  if (preset === 'week') return { start, end, text: `pointées du ${d(start)} au ${d(getCurrentOperationalDay())}` }
+  if (preset === 'month') return { start, end, text: `pointées depuis le ${d(start)}` }
+  return { start, end, text: `pointées${from ? ` du ${new Date(from + 'T12:00:00').toLocaleDateString('fr-FR')}` : ''}${to ? ` au ${new Date(to + 'T12:00:00').toLocaleDateString('fr-FR')}` : ''}` }
 }
 
 export function ValeursEnvoiPanel({ myCity, myUid, myName, staffCities, docOnly, ownOnly = false }: {

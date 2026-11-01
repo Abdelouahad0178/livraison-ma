@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { Wallet, Plus, Trash2, Clock, CheckCircle, XCircle, Calendar } from 'lucide-react'
+import { opPeriodRange } from '../../../utils/dateFilter'
 import {
   declareVersement,
   deleteVersement,
@@ -46,9 +47,9 @@ export default function VersementsTab({ profile }: any) {
       const vDate = v.createdAt.toDate()
 
       if (datePreset === 'today') {
-        const today = new Date()
-        today.setHours(0, 0, 0, 0)
-        if (vDate < today) return false
+        // 📅 (01/11/2026) Journée d'opération (8 h → 6 h), comme tout le site — avant : depuis minuit
+        const { start } = opPeriodRange('today')
+        if (start && vDate < start) return false
       } else if (datePreset === 'week') {
         const weekAgo = new Date()
         weekAgo.setDate(now.getDate() - 7)

@@ -118,6 +118,7 @@ import DriverPortDuModal from './admin/modals/DriverPortDuModal'
 import AdminEditParcelModal from './admin/modals/AdminEditParcelModal'
 import { fmt } from '../utils/formatNumber'
 import { codMoneyOnly, isPortDuMoneyBeforeStart } from '../utils/moneyFlow'
+import { filterByDate as sharedFilterByDate } from '../utils/dateFilter'
 
 const parcelDate = (p: any) => {
   // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire — voir
@@ -143,32 +144,10 @@ const caisseEntryDate = (e: any) => {
   if (e.createdAt) return new Date(e.createdAt)
   return new Date(0)
 }
-const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parcelDate, operationalDay?: Date) => {
-  if (preset === 'all') return list
-  const now = new Date()
-  let start: any = null, end: any = now
-  if      (preset === 'today')  { start = new Date(); start.setHours(0,0,0,0) }
-  else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate()-6); start.setHours(0,0,0,0) }
-  else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
-  else if (preset === 'custom') {
-    // 📅 CORRECTION TIMEZONE: 00:00 → 23:59 (pas minuit → minuit)
-    start = from ? new Date(from + 'T00:00:00') : null
-    end = to ? new Date(to + 'T23:59:59') : now
-  }
-  else if (preset === 'operational' && operationalDay) {
-    // 🗓️ Mode journée opérationnelle: 08:00 → 06:00 (lendemain)
-    const range = getOperationalDayRange(operationalDay)
-    start = range.start
-    end = range.end
-  }
-  if (!Array.isArray(list)) return []
-  return list.filter((p: any) => {
-    const d = getDate(p)
-    if (start && d < start) return false
-    if (end   && d > end)   return false
-    return true
-  })
-}
+// 📅 (01/11/2026) « Aujourd'hui », « 7 jours », « Ce mois », « Du … au » = JOURNÉES D'OPÉRATION (8 h → 6 h), comme tout le
+// site (avant : minuit → minuit sur cette page) — filtre commun utils/dateFilter (opPeriodRange).
+const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parcelDate, operationalDay?: Date): any =>
+  (Array.isArray(list) ? sharedFilterByDate<any>(list, preset, from, to, getDate, operationalDay) : [])
 
 const formatPeriod = (preset: any, from: any, to: any, operationalDay?: Date) => {
   const fmtDate = (value: any) => value ? new Date(value + 'T00:00:00').toLocaleDateString('fr-MA') : ''

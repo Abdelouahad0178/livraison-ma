@@ -38,6 +38,7 @@ import { useDebounce } from '../components/DebouncedSearchInput'
 import { subscribeAllParcelsWithDateFilter, loadMoreParcelsWithDateFilter } from '../firebase/parcels'
 import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
+import { opPeriodRange } from '../utils/dateFilter'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
 import { saveParcelsCodDocuments, changeCodValueType, type CodDocument } from '../firebase/central'
 import { ChequeEntryModal, ReceptionSheetModal, isDocParcel, hasDocData, docsOf, docAmountOf, groupOf } from './central/ChequeReception'
@@ -113,48 +114,17 @@ const inDateRange = (value: any, preset: any, from: any, to: any, operationalDay
   if (preset === 'all') return true
   const d = asDate(value)
   if (!d || Number.isNaN(d.getTime())) return false
-  const now = new Date()
-  let start: any = null
-  let end = new Date(now)
-  end.setHours(23, 59, 59, 999)
-  if (preset === 'today') {
-    start = new Date(now)
-    start.setHours(0, 0, 0, 0)
-  } else if (preset === 'week') {
-    start = new Date(now)
-    start.setDate(now.getDate() - 6)
-    start.setHours(0, 0, 0, 0)
-  } else if (preset === 'month') {
-    start = new Date(now.getFullYear(), now.getMonth(), 1)
-  } else if (preset === 'operational' && operationalDay) {
-    // 🗓️ Mode journée opérationnelle: 08:00 → 06:00 (lendemain)
-    const range = getOperationalDayRange(operationalDay)
-    start = range.start
-    end = range.end
-  } else if (preset === 'day' && from) {
-    start = new Date(from + 'T00:00:00')
-    end = new Date(from + 'T23:59:59')
-  } else if (preset === 'custom') {
-    start = from ? new Date(from + 'T00:00:00') : null
-    end = to ? new Date(to + 'T23:59:59') : end
-  }
+  // 📅 (01/11/2026) Journées d'opération (8 h → 6 h), comme tout le site — avant : minuit → minuit
+  const { start, end } = opPeriodRange(preset, from, to, operationalDay)
   return (!start || d >= start) && (!end || d <= end)
 }
 
-// Plage serveur correspondant à un preset (null = pas de borne → chargement paginé classique)
+// Plage serveur correspondant à un preset (null = pas de borne → chargement paginé classique) — journées d'opération
 const presetRange = (preset: any, from: any, to: any, operationalDay?: Date): { start: Date | null; end: Date | null } | null => {
   if (preset === 'all') return null
-  const now = new Date()
-  if (preset === 'today') { const s = new Date(now); s.setHours(0, 0, 0, 0); return { start: s, end: null } }
-  if (preset === 'week') { const s = new Date(now); s.setDate(now.getDate() - 6); s.setHours(0, 0, 0, 0); return { start: s, end: null } }
-  if (preset === 'month') return { start: new Date(now.getFullYear(), now.getMonth(), 1), end: null }
-  if (preset === 'operational' && operationalDay) { const r = getOperationalDayRange(operationalDay); return { start: r.start, end: r.end } }
-  if (preset === 'day' && from) return { start: new Date(from + 'T00:00:00'), end: new Date(from + 'T23:59:59') }
-  if (preset === 'custom') {
-    if (!from && !to) return null
-    return { start: from ? new Date(from + 'T00:00:00') : null, end: to ? new Date(to + 'T23:59:59') : null }
-  }
-  return null
+  if (preset === 'custom' && !from && !to) return null
+  const r = opPeriodRange(preset, from, to, operationalDay)
+  return r.start || r.end ? r : null
 }
 
 /**

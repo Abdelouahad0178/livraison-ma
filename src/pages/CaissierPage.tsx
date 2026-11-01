@@ -33,24 +33,14 @@ import {
 import { CAISSE_CATEGORIES, COD_PAYMENT_TYPES } from '../firebase/constants'
 import { fmt } from '../utils/formatNumber'
 import { normIncludes } from '../utils/normText'
+import { filterByDate as sharedFilterByDate } from '../utils/dateFilter'
 
 const entryDate = (e: any) => e.createdAt?.toDate ? e.createdAt.toDate() : new Date(e.createdAt || 0)
 
-const filterByDate = (list: any, preset: any, from: any, to: any) => {
-  if (preset === 'all') return list
-  const now = new Date()
-  let start: any = null, end: any = now
-  if      (preset === 'today')  { start = new Date(); start.setHours(0,0,0,0) }
-  else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate()-6); start.setHours(0,0,0,0) }
-  else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
-  else if (preset === 'custom') { start = from ? new Date(from) : null; end = to ? new Date(to+'T23:59:59') : now }
-  return list.filter((e: any) => {
-    const d = entryDate(e)
-    if (start && d < start) return false
-    if (end   && d > end)   return false
-    return true
-  })
-}
+// 📅 (01/11/2026) « Aujourd'hui », « 7 jours », « Ce mois », « Du … au » = JOURNÉES D'OPÉRATION (8 h → 6 h), comme tout le
+// site (avant : minuit → minuit sur cette page) — filtre commun utils/dateFilter (opPeriodRange).
+const filterByDate = (list: any, preset: any, from: any, to: any): any =>
+  (Array.isArray(list) ? sharedFilterByDate<any>(list, preset, from, to, entryDate) : [])
 
 const CASHIER_MANUAL_ENTREE_KEYS = ['autre_entree']
 const ENTREE_CATS = CAISSE_CATEGORIES.filter(c => CASHIER_MANUAL_ENTREE_KEYS.includes(c.key))

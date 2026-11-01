@@ -1356,11 +1356,11 @@ function getCurrentOperationalDayString() {
   const hour = casablancaTime.getHours()
   const minute = casablancaTime.getMinutes()
 
-  // Configuration : la journée change à 6h01
-  const START_HOUR = 6
-  const START_MINUTE = 1
-  const END_HOUR = 6
-  const END_MINUTE = 1
+  // Configuration : la journée change à 8 h (01/11/2026 : comme tout le site, src/config/operationalDay.ts — avant 6 h 01)
+  const START_HOUR = 8
+  const START_MINUTE = 0
+  const END_HOUR = 8
+  const END_MINUTE = 0
 
   // Convertir en minutes depuis minuit
   const currentMinutes = hour * 60 + minute
@@ -1381,7 +1381,7 @@ function getCurrentOperationalDayString() {
 }
 
 exports.updateOperationalDay = onSchedule({
-  schedule: '1 6 * * *',           // Chaque jour à 6h01
+  schedule: '1 8 * * *',           // Chaque jour à 8 h 01 (début de la journée d'opération, comme le site)
   timeZone: 'Africa/Casablanca',   // Fuseau horaire Maroc
   retryCount: 3,                   // Réessayer 3 fois en cas d'échec
   memory: '256MiB',

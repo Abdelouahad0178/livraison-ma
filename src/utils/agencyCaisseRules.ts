@@ -375,7 +375,8 @@ export interface CaisseDriverGroup {
 }
 
 const assignedTodayOf = (parcels: any[], now: Date) => {
-  const today = new Date(now); today.setHours(0, 0, 0, 0)
+  // 📅 (01/11/2026) « aujourd'hui » = journée d'opération (8 h → 6 h), comme tout le site — avant : depuis minuit
+  const today = getOperationalDayRange(getOperationalDayString(now) + 'T12:00:00').start
   return parcels.filter((p: any) => !p.deliveryAssignedAt || toAssignDate(p.deliveryAssignedAt) >= today)
 }
 const portsACollecterOf = (portDuParcels: any[], driverId: string) => portDuParcels.filter((p: any) => {

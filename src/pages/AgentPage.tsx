@@ -220,7 +220,8 @@ const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parc
     start = getOperationalDayRange(firstOfMonth).start
     end = getOperationalDayRange(todayOp).end
   }
-  else if (preset === 'day')    { start = from ? new Date(from) : null; if (start) { start.setHours(0,0,0,0); end = new Date(from+'T23:59:59') } }
+  // 📅 (01/11/2026) Un jour précis = sa journée d'opération (8 h → 6 h), comme tout le site
+  else if (preset === 'day')    { if (from) { const r = getOperationalDayRange(new Date(from + 'T12:00:00')); start = r.start; end = r.end } }
   else if (preset === 'operational' && operationalDay) {
     // 🗓️ JOUR D'OPÉRATION : 8H → 6H lendemain
     const range = getOperationalDayRange(operationalDay)
@@ -2553,8 +2554,8 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
     const today = new Date()
     const todayStr = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
     const thisMonth = todayStr.slice(0, 7)
-    const todayStart = new Date(today); todayStart.setHours(0, 0, 0, 0)
-    const todayEnd = new Date(today); todayEnd.setHours(23, 59, 59, 999)
+    // 📅 (01/11/2026) « Aujourd'hui » = journée d'opération (8 h → 6 h), comme tout le site
+    const { start: todayStart, end: todayEnd } = getOperationalDayRange(getCurrentOperationalDay())
     let todayCount = 0, deliveredCount = 0, codPending = 0
     const statusCounts = {}
     dashCityParcels.forEach(p => {

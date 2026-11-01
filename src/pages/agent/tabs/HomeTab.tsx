@@ -2,7 +2,7 @@ import { useMemo, useState, useEffect } from 'react'
 import { Plus, Package, MapPin, Wallet, MessageCircle, Printer, LayoutGrid, Truck, ArrowRight, TrendingUp, Clock, CheckCircle, Banknote, X, Building2 } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import { STATUSES, STATUS_COLORS } from '../../../firebase/constants'
-import { parcelDate, entryDate, filterByDate } from '../../../utils/dateFilter'
+import { parcelDate, entryDate, filterByDate, opPeriodRange } from '../../../utils/dateFilter'
 import { getEmptyParcelForm } from '../emptyParcelForm'
 import { HERO_STAT_CARD, HERO_CARD, HERO_BUTTON } from '../../../styles/heroTheme'
 import { subscribeEnCompteClientsByCity } from '../../../firebase/clients'
@@ -79,8 +79,8 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
   }, [parcels, datePreset, dateFrom, dateTo])
 
   const homeAgentStats = useMemo(() => {
-    const today = new Date(); today.setHours(0, 0, 0, 0)
-    const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
+    // 📅 (01/11/2026) Journée d'opération (8 h → 6 h), comme tout le site — avant : minuit → minuit
+    const { start: today, end: endOfToday } = opPeriodRange('today') as { start: Date; end: Date }
     const filtered = filterByDate(parcels, datePreset, dateFrom, dateTo)
     const myParcels = filtered.filter((p: any) => p.agentId === uid || p.destinationAgentId === uid)
 

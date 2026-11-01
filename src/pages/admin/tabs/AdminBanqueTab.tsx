@@ -5,26 +5,12 @@ import { Search, Trash2, ChevronDown, ChevronRight, Building2, Edit2 } from 'luc
 import { fmtFixed as fmtAmt } from '../../../utils/formatNumber'
 import { useState } from 'react'
 import { normIncludes } from '../../../utils/normText'
+import { filterByDate as sharedFilterByDate } from '../../../utils/dateFilter'
 
-const filterByDate = (list: any, preset: any, from: any, to: any, getDate: any) => {
-  if (preset === 'all') return list
-  const now = new Date()
-  let start: any = null, end = now
-  if      (preset === 'today')  { start = new Date(); start.setHours(0,0,0,0) }
-  else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate()-6); start.setHours(0,0,0,0) }
-  else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
-  else if (preset === 'custom') {
-    // 📅 CORRECTION TIMEZONE: 00:00 → 23:59
-    start = from ? new Date(from + 'T00:00:00') : null
-    end = to ? new Date(to + 'T23:59:59') : now
-  }
-  return list.filter((item: any) => {
-    const d = getDate(item)
-    if (start && d < start) return false
-    if (end && d > end) return false
-    return true
-  })
-}
+// 📅 (01/11/2026) « Aujourd'hui », « 7 jours », « Ce mois », « Du … au » = JOURNÉES D'OPÉRATION (8 h → 6 h), comme tout le
+// site (avant : minuit → minuit sur cette page) — filtre commun utils/dateFilter (opPeriodRange).
+const filterByDate = (list: any, preset: any, from: any, to: any, getDate: any): any =>
+  (Array.isArray(list) ? sharedFilterByDate<any>(list, preset, from, to, getDate) : [])
 
 export default function AdminBanqueTab({
   allBankDeposits, centralCodDeposits = [], centralSupplierPayments = [], bankCityFilter, setBankCityFilter,
