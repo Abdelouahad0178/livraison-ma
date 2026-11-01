@@ -12,8 +12,17 @@ import {
 } from './billingAgency'
 import { MONEY_START } from './moneyFlow'
 import { parcelDate } from './dateFilter'
+import { isGuichetPortPayeCollected, isRamasseGuichet } from './agencyCaisseRules'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
+
+/**
+ * 💵 Port payé « en caisse » (01/11/2026, demande de l'admin) : un port payé encaissé au GUICHET ne compte qu'une fois sorti
+ * du guichet (remis au chef d'exploitation, reçu par le chef d'agence — isGuichetPortPayeCollected, même règle que
+ * « Collectes par jour », Caisse Agence et Admin › Versements). Tant qu'il est au guichet, il reste dans « Reste à
+ * encaisser ». Port payé ramassé par un livreur de ramassage : inchangé.
+ */
+const portPayeInCaisse = (p: any, originCity: string) => !isRamasseGuichet(p, originCity) || isGuichetPortPayeCollected(p)
 
 // ── Totaux par agence (onglet Port par agence) ────────────────────────────────
 
@@ -101,7 +110,7 @@ export function computeAgencyPortStats(
       // 2️⃣ PORTS PAYÉS ENCAISSÉS : portType = 'port_paye', ville d'origine, portStatus = 'collected' (encaissé au guichet
       // « En gare » ou par le livreur de ramassage, puis remis au chef d'exploitation) ou 'received' (reçu par le chef
       // d'agence) — même règle que les ports dus collectés ci-dessus.
-      if (portType === 'port_paye' && !p.portPayeMethod && collected && price > 0 && originCity && stats[originCity]) {
+      if (portType === 'port_paye' && !p.portPayeMethod && collected && price > 0 && originCity && stats[originCity] && portPayeInCaisse(p, originCity)) {
         stats[originCity].portPaye += price
       }
     }
@@ -460,7 +469,7 @@ export function resteAEncaisserLines(parcels: any[], city: string): ResteLine[] 
     let encaisse = 0
     if (collected && price > 0) {
       if ((p.portType === 'port_du' || p.portType === 'port_du_cheque') && p.destinationCity === city) encaisse += price
-      if (p.portType === 'port_paye' && !p.portPayeMethod && p.originCity === city) encaisse += price
+      if (p.portType === 'port_paye' && !p.portPayeMethod && p.originCity === city && portPayeInCaisse(p, city)) encaisse += price
     }
     const reste = round2(attendu - encaisse)
     if (Math.abs(reste) < 0.005) continue

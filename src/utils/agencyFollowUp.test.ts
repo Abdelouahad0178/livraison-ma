@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   computeAgencyPortStats, cashPortTotal, followUpWindow, pendingEnvoiPortParcelIds, buildExploitationFollowUp,
-  buildChefAgenceFollowUp, transferNature, buildCaisseSituation, invoiceNumbersByParcel, buildEnCompteFollowUp, toMs,
+  buildChefAgenceFollowUp, transferNature, buildCaisseSituation, invoiceNumbersByParcel, buildEnCompteFollowUp, toMs, resteAEncaisserLines,
 } from './agencyFollowUp'
 import { MONEY_START } from './moneyFlow'
 
@@ -206,5 +206,30 @@ describe('4. ports en compte', () => {
     const s = computeAgencyPortStats(parcels, { viewMode: 'theoretical', cities: [CITY] })[0]
     expect(r.exp.total.amount).toBe(s.enCompteExp)
     expect(r.dest.total.amount).toBe(s.enCompteDest)
+  })
+})
+
+// 💵 01/11/2026 — Situation caisse : port payé du GUICHET compté « en caisse » seulement une fois sorti du guichet ;
+// tant qu'il y est, il reste dans « Reste à encaisser » (cas réel : 1219742, Agadir, 25 DH chez ENGAREAGA6017)
+describe('port payé du guichet : en caisse seulement une fois sorti du guichet', () => {
+  const guichet = {
+    id: 'g', originCity: CITY, destinationCity: 'Casablanca', portType: 'port_paye', price: 25, portStatus: 'collected',
+    status: 'Arrivé en agence', createdAt: '2026-10-31T12:00:00.000Z', portCollectedAt: '2026-10-31T12:00:00.000Z',
+    portCollectedById: 'nouredine', portGuichetHolderId: 'engare',
+  }
+  const stat = (list: any[], viewMode: 'theoretical' | 'physical') => computeAgencyPortStats(list, { viewMode, cities: [CITY] })[0]
+  it('encore au guichet : théorique 25, en caisse 0, reste à encaisser 25', () => {
+    expect(stat([guichet], 'theoretical').portPaye).toBe(25)
+    expect(stat([guichet], 'physical').portPaye).toBe(0)
+    expect(resteAEncaisserLines([guichet], CITY).map(l => l.reste)).toEqual([25])
+  })
+  it('remis au chef d\'exploitation ou reçu par le chef d\'agence : en caisse, plus de reste', () => {
+    for (const p of [{ ...guichet, portPayeExpReceivedAt: '2026-10-31T18:00:00.000Z', portPayeExpReceivedById: 'zinebe' }, { ...guichet, portStatus: 'received' }]) {
+      expect(stat([p], 'physical').portPaye).toBe(25)
+      expect(resteAEncaisserLines([p], CITY)).toEqual([])
+    }
+  })
+  it('port payé ramassé par un livreur de ramassage : inchangé (en caisse dès l\'encaissement)', () => {
+    expect(stat([{ ...guichet, pickupDriverId: 'liv' }], 'physical').portPaye).toBe(25)
   })
 })
