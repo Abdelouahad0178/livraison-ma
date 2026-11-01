@@ -33,6 +33,7 @@ import { Banknote, Building2, CheckCircle2, ClipboardCheck, Database, LogOut, Ma
 import ProfilePhotoUpload from '../components/ProfilePhotoUpload'
 import { useOperationalDaySelector } from '../hooks/useOperationalDay'
 import { getOperationalDayRange } from '../config/operationalDay'
+import { opPeriodRange } from '../utils/dateFilter'
 import { OperationalDaySelector } from '../components/OperationalDaySelector'
 import { normText, isDigitsOnly, numberStartsWith } from '../utils/normText'
 import { codHasType, isMixedCod, codPartsOf, codPartsBreakdown, codPartsLabel } from '../utils/codParts'
@@ -73,28 +74,8 @@ const inDateRange = (value: any, preset: any, from: any, to: any, operationalDay
   if (preset === 'all') return true
   const d = asDate(value)
   if (!d || Number.isNaN(d.getTime())) return false
-  const now = new Date()
-  let start: any = null
-  let end = new Date(now)
-  end.setHours(23, 59, 59, 999)
-  if (preset === 'today') {
-    start = new Date(now)
-    start.setHours(0, 0, 0, 0)
-  } else if (preset === 'week') {
-    start = new Date(now)
-    start.setDate(now.getDate() - 6)
-    start.setHours(0, 0, 0, 0)
-  } else if (preset === 'month') {
-    start = new Date(now.getFullYear(), now.getMonth(), 1)
-  } else if (preset === 'operational' && operationalDay) {
-    // 🗓️ Mode journée opérationnelle: 08:00 → 06:00 (lendemain)
-    const range = getOperationalDayRange(operationalDay)
-    start = range.start
-    end = range.end
-  } else if (preset === 'custom') {
-    start = from ? new Date(from + 'T00:00:00') : null
-    end = to ? new Date(to + 'T23:59:59') : end
-  }
+  // 📅 (01/11/2026) Journées d'opération (8 h → 6 h), comme tout le site — avant : minuit → minuit
+  const { start, end } = opPeriodRange(preset, from, to, operationalDay)
   return (!start || d >= start) && (!end || d <= end)
 }
 

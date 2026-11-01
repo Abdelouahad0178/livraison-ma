@@ -11,6 +11,15 @@ service firebase.storage {
       allow write: if request.auth != null && request.auth.uid == userId;
     }
 
+    // 💬 Listes PDF envoyées par WhatsApp (Admin › Reste à encaisser, 26/10/2026) : chaque compte dépose dans SON dossier,
+    // PDF de 10 Mo maximum. Le destinataire ouvre le fichier par son lien de téléchargement (jeton), sans compte.
+    match /shared-reports/{userId}/{fileName} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create: if request.auth != null && request.auth.uid == userId
+        && request.resource.contentType == 'application/pdf'
+        && request.resource.size < 10 * 1024 * 1024;
+    }
+
     // Par défaut: refuser tout accès
     match /{allPaths=**} {
       allow read, write: if false;

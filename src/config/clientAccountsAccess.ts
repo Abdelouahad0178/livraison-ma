@@ -1,5 +1,5 @@
-/** 📝 Comptes clients (fiche d'ouverture de compte) : comptes autorisés à voir l'onglet. */
-export const CLIENT_ACCOUNTS_EMAILS = ['noura@gmail.com']
+import { permissionsOf } from '../utils/userPermissions'
 
-export const canManageClientAccounts = (email?: string | null) =>
-  !!email && CLIENT_ACCOUNTS_EMAILS.includes(email.trim().toLowerCase())
+/** 📝 Comptes clients (fiche d'ouverture de compte) : droit coché par l'ADMIN dans la fiche employé (01/11/2026 — avant :
+ *  liste d'e-mails écrite ici). */
+export const canManageClientAccounts = (profile: any) => permissionsOf(profile).clientAccounts === true

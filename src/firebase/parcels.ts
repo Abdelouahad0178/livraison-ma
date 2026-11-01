@@ -9,7 +9,7 @@ import { db } from './db'
 import type { Parcel } from '../types'
 import {
   CITIES, STATUSES, COD_PAYMENT_TYPES, COD_STATUS, STATUS_COLORS, CAISSE_CATEGORIES, codPaymentTypeOf,
-  normalizeServiceType, codPaymentTypeForService, sanitizeParcelCodWrite, NON_COD_SERVICE_TYPES,
+  normalizeServiceType, codPaymentTypeForService, sanitizeParcelCodWrite, NON_COD_SERVICE_TYPES, RETURN_STATUSES,
 } from './constants'
 import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
 import { codPartView, isMixedCod } from '../utils/codParts'
@@ -29,7 +29,8 @@ import { normName, isVisibleInDestinationAgency } from '../utils/billingAgency'
 import { deliveryCityBlock, collectCityBlock } from '../utils/deliveryCity'
 import { auth } from './auth'
 import { daysBetween, shiftParcelDates } from '../utils/shiftParcelDates'
-import { guichetHolderForCity } from '../config/guichetHolders'
+import { guichetHolderOf } from '../config/agencySettings'
+import { activeDays } from '../config/siteDelays'
 import { portTypeChangeBlock } from '../utils/portTypeGuard'
 import { deliveryStatusChangeBlock } from '../utils/agencyDeliveryAccess'
 
@@ -216,6 +217,10 @@ export async function ensureFullParcels(list: any[]): Promise<any[]> {
 // Firestore — la requête « tous les clients de la ville » téléchargeait 2 à 5 Mo (Agadir : 7 750 docs).
 // knownCities (facultatif) : villes pour lesquelles knownClients est COMPLET (Nouvelle expédition : ville de
 // l'agence + villes de destination chargées) — pour une autre ville, recherche Firestore (comme sans liste).
+// ⚡ Destinataires CRÉÉS par ce poste pendant la session : la liste en mémoire (clientsLite) reçoit la nouvelle
+// fiche avec ~1 s de retard (copie par Cloud Function) ; sans ce registre, deux expéditions enchaînées pour un
+// nouveau destinataire créeraient deux fiches.
+const createdReceiverClients: any[] = []
 async function ensureReceiverClientForAgency(parcel: any, parcelId: any, knownClients?: any[] | null, knownCities?: string[] | null) {
   if (parcel.receiverClientId) {
     const receiver = parcel.receiver || {}
@@ -239,6 +244,7 @@ async function ensureReceiverClientForAgency(parcel: any, parcelId: any, knownCl
 
   let existing: any = null
   const useKnown = Array.isArray(knownClients) && knownClients.length > 0 && (!knownCities || knownCities.includes(city))
+  if (useKnown) knownClients = [...createdReceiverClients, ...knownClients!]
   if (tel) {
     if (useKnown) {
       existing = knownClients!.find((c: any) => c?.id && c.tel === tel && c.city === city) || null
@@ -307,6 +313,7 @@ async function ensureReceiverClientForAgency(parcel: any, parcelId: any, knownCl
     lastReceiverTrackingId: parcel.trackingId,
     lastReceiverSeenAt: serverTimestamp(),
   })
+  createdReceiverClients.push({ id: ref.id, name, tel, city, address: receiver.address || '' })
   return ref.id
 }
 export async function createParcel(
@@ -428,7 +435,7 @@ export async function createParcel(
     // 🏬 Port payé encaissé AU GUICHET : l'argent est chez la personne en gare de la ville (config/guichetHolders) —
     // il se reçoit dans SA carte. Ville sans détenteur : « En gare - <ville> » comme avant (23/10/2026).
     ...(() => {
-      const holder = (data.portType === 'port_paye' || !data.portType) && !data.pickupDriverId ? guichetHolderForCity(String(sender?.city || '')) : null
+      const holder = (data.portType === 'port_paye' || !data.portType) && !data.pickupDriverId ? guichetHolderOf(String(sender?.city || '')) : null
       return holder ? { portGuichetHolderId: holder.id, portGuichetHolderName: holder.name } : {}
     })(),
     clientId:             data.clientId   || null,
@@ -521,7 +528,10 @@ export const AUTO_DELIVERED_NOTE = 'Marqué livré automatiquement après collec
 /** 💰 Collecte (port dû / COD) possible seulement si l'expédition est livrée ou se livre à l'instant : on peut livrer sans
  *  collecter, mais jamais collecter sans livrer. La collecte fait passer « Livré » (markDeliveredAfterCollect). */
 export const COLLECT_ALLOWED_STATUSES = ['Livré', 'En cours de livraison', 'Arrivé en agence']
-export function assertCollectAllowedStatus(p: any) {
+/** ↩️ `what = 'port'` : le port dû d'une expédition RETOURNÉE s'encaisse aussi, à la ville de retour (demande du
+ *  26/10/2026 — la ville est contrôlée par assertCanCollectHere : destination = ville de retour). */
+export function assertCollectAllowedStatus(p: any, what: 'port' | 'cod' = 'cod') {
+  if (what === 'port' && p && (p.wasReturned || p.returnedAt || /^Retour/.test(p.status || ''))) return
   if (p && !COLLECT_ALLOWED_STATUSES.includes(p.status)) {
     throw new Error(`${p.senderNic || p.sender?.nic || p.trackingId || ''} : statut « ${p.status || '—'} » — collecte impossible (l'expédition doit être livrée ou en cours de livraison).`)
   }
@@ -584,6 +594,15 @@ export async function updateParcelStatus(parcelId: string, status: string, extra
   // 🔒 Transaction pour éviter race conditions sur circuit retour
   await runTransaction(db, async tx => {
     const parcelSnap = await tx.get(parcelRef)
+    // 📦 (01/11/2026) Quitter « Livré » (hors circuit retour) : la date de livraison est EFFACÉE dans la même écriture.
+    // Avant, elle restait (457 expéditions, dont 1248627) et bloquait l'assignation en lot ; un effacement demandé dans
+    // `extra` (ex. bouton « Livré ✓ ») était ignoré. Vérifié à l'émulateur : mêmes rôles autorisés / refusés qu'avant.
+    let clearDelivered = false
+    if (parcelSnap.exists()) {
+      const prev = parcelSnap.data() as any
+      clearDelivered = prev.status === 'Livré' && status !== 'Livré' && !!prev.deliveredAt
+        && !['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(status)
+    }
     if (parcelSnap.exists()) {
       const current = parcelSnap.data() as any
       const statusBlocked = deliveryStatusChangeBlock(statusActor, current, status)
@@ -617,6 +636,7 @@ export async function updateParcelStatus(parcelId: string, status: string, extra
     if (status === 'Livré') {
       patch.deliveredAt = extra.deliveredAt || new Date().toISOString()
     }
+    if (clearDelivered) patch.deliveredAt = deleteField()
 
     // Écriture Firestore immédiate — pas d'attente GPS
     tx.update(parcelRef, patch)
@@ -1014,7 +1034,6 @@ export async function markParcelAsReturned(parcel: any, extra: any = {}) {
 export async function cancelParcelReturn(parcel: any, by = ''): Promise<{ codRestored: boolean }> {
   const now = new Date().toISOString()
   const snap = parcel.preReturn
-  const RETURN_STATUSES = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
   let updates: Record<string, any>
   let codRestored = true
   if (snap) {
@@ -1851,7 +1870,7 @@ export function subscribeAgencyParcels(
 // précédente est confirmée PLEINE par le serveur, jusqu'à la dernière page incomplète.
 // - Les colis poussés hors d'une page par l'arrivée de nouveaux colis (effet du limit) sont
 //   conservés (dernière version connue) pour ne jamais créer de trou à la jonction de deux pages.
-// - Sans dateFrom : 45 derniers jours (durée maximale avant archivage automatique).
+// - Sans dateFrom : 45 derniers jours (durée maximale avant archivage automatique ; réglable, config/siteDelays.ts).
 // - meta.complete = toutes les pages sont confirmées par le serveur et la dernière est incomplète.
 export function subscribeAgencyParcelsFull(
   city: string,
@@ -1869,7 +1888,7 @@ export function subscribeAgencyParcelsFull(
   // Journée(s) en cours : parcelsLite aussi (Expéditions) ou expéditions COMPLÈTES (pages de caisse : liteLive=false,
   // temps réel exact là où se passe l'activité)
   const liteLive = opts.liteLive ?? lite
-  const start = opts.dateFrom ?? new Date(Date.now() - 45 * 24 * 60 * 60 * 1000)
+  const start = opts.dateFrom ?? new Date(Date.now() - activeDays() * 24 * 60 * 60 * 1000)
   const end = opts.dateTo ?? new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)
   // city = ALL_CITIES ('*') : TOUTES les villes (Admin « Expéditions » avec une période) — une seule requête par journée
   const allCities = city === ALL_CITIES
@@ -2796,9 +2815,14 @@ export async function searchParcels(
       const parcelsCol = lite && !isArchived ? collection(db, 'parcelsLite') : fullCol
 
       // Test 1: Recherche EXACTE par senderNic ou nic
-      groups.push({ isArchived, label: 'senderNic/nic', queries: [
+      // 🔠 (27/10/2026) Le N° EXP est enregistré en MAJUSCULES (ex. 1085840D) : « 1085840d » tapé en minuscule ne
+      // trouvait rien → on cherche aussi la version en majuscules.
+      // ⚡ (29/10/2026) Plus de requête sur le champ `nic` : il n'existe dans AUCUNE expédition (66 520 vérifiées,
+      // parcels + parcelsLite + archives) et aucun code ne l'écrit — 2 requêtes vides de moins par recherche.
+      const nicUpper = searchTerm.toUpperCase()
+      groups.push({ isArchived, label: 'senderNic', queries: [
         query(parcelsCol, where('senderNic', '==', searchTerm)),
-        query(parcelsCol, where('nic', '==', searchTerm)),
+        ...(nicUpper !== searchTerm ? [query(parcelsCol, where('senderNic', '==', nicUpper))] : []),
       ] })
 
       // Test 2: trackingId
@@ -2833,7 +2857,10 @@ export async function searchParcels(
 
       // Test 5: Nom (expéditeur ou destinataire) - seulement si contient des lettres
       const nameLower = searchTerm.toLowerCase().trim()
-      if (/[a-zA-Zà-ÿ]/.test(searchTerm)) {
+      // ⚡ (29/10/2026) Terme en forme de N° EXP (chiffres + une lettre, ex. 1085829D) : pas de recherche par nom
+      // (≈ 10 requêtes vides de plus, chacune évaluée aussi sur toutes les expéditions en mémoire du navigateur)
+      const looksLikeNic = /^\d{5,}[a-zA-Z]?$/.test(searchTerm.replace(/\s+/g, ''))
+      if (!looksLikeNic && /[a-zA-Zà-ÿ]/.test(searchTerm)) {
         // ⚠️ nameScope restreint à un seul champ : on n'interroge même pas l'autre, pour
         // que "expéditeur seul" n'affiche jamais un colis matché via le destinataire.
         const nameNorm = normName(searchTerm)
@@ -3332,20 +3359,37 @@ export async function getParcelsByCreatedAtRange(
   return out
 }
 
-// 💼 Ports en compte d'une agence (page Chef d'agence), SANS plafond ni fenêtre de dates :
+// 💼 Ports en compte d'une agence (page Chef d'agence), SANS plafond (fenêtre de dates facultative) :
 // - compte expéditeur (+ ancien type générique) expédiés DEPUIS la ville,
 // - compte destinataire (+ ancien type générique) livrés DANS la ville.
 // ⚠️ Ne PAS s'appuyer sur la liste temps réel de l'agence (plafonnée à 2000 colis par requête et
 // sans les colis archivés) : pour une agence très active (Casablanca ≈ 13 000 expéditions/mois),
 // elle ne couvrait que les derniers jours du mois et le décompte divergeait du Facturier.
 // Comme le Facturier, les colis marqués isArchived (toujours dans 'parcels') sont inclus.
-// Requêtes à égalité seule (== + in) : aucun index composite requis.
-export async function getAgencyPortEnCompteParcels(city: string): Promise<any[]> {
+// ⚡ Lot 4 (25/10/2026) : lu dans parcelsLite (tous les champs de l'onglet y sont : vérifié par
+// scripts/archive/_check-pec-lite.mjs, 13 032 / 13 032 identiques) et, si une période est donnée, borné à
+// [from − 2 j ; to + 2 j] sur createdAt (workDate n'est jamais à plus de 0,3 j de createdAt :
+// scripts/archive/_check-pec-dates.mjs) ; l'onglet garde son filtre exact par journée d'opération (parcelDate).
+// Index (ville, portType, createdAt) ; s'il n'est pas encore prêt → repli sans borne de dates.
+export async function getAgencyPortEnCompteParcels(city: string, period?: { from?: Date | null; to?: Date | null }): Promise<any[]> {
   if (!city) return []
-  const [snapOrig, snapDest] = await Promise.all([
-    getDocs(query(collection(db, 'parcels'), where('originCity', '==', city), where('portType', 'in', ['port_en_compte_expediteur', 'port_en_compte']))),
-    getDocs(query(collection(db, 'parcels'), where('destinationCity', '==', city), where('portType', 'in', ['port_en_compte_destinataire', 'port_en_compte']))),
+  const MARGIN = 2 * 86400000
+  const bounds = [
+    ...(period?.from ? [where('createdAt', '>=', Timestamp.fromMillis(period.from.getTime() - MARGIN))] : []),
+    ...(period?.to ? [where('createdAt', '<=', Timestamp.fromMillis(period.to.getTime() + MARGIN))] : []),
+  ]
+  const run = (withBounds: boolean) => Promise.all([
+    getDocs(query(collection(db, 'parcelsLite'), where('originCity', '==', city), where('portType', 'in', ['port_en_compte_expediteur', 'port_en_compte']), ...(withBounds ? bounds : []))),
+    getDocs(query(collection(db, 'parcelsLite'), where('destinationCity', '==', city), where('portType', 'in', ['port_en_compte_destinataire', 'port_en_compte']), ...(withBounds ? bounds : []))),
   ])
+  let snaps
+  try {
+    snaps = await run(bounds.length > 0)
+  } catch (err: any) {
+    if (err?.code !== 'failed-precondition' || !bounds.length) throw err
+    snaps = await run(false)
+  }
+  const [snapOrig, snapDest] = snaps
   const map = new Map<string, any>()
   ;[...snapOrig.docs, ...snapDest.docs].forEach(d => map.set(d.id, { id: d.id, ...d.data() }))
   return sortByCreatedDesc([...map.values()])

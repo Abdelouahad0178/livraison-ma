@@ -15,6 +15,7 @@ import {
   loadReturnedParcelOnTruck, validateReturnArrival, getMoreAgentParcels,
 } from '../../../firebase/firestore'
 import { realignDeliveryAfterDestinationChange } from '../../../firebase/delivery'
+import { isParcelDateLocked, parcelDateLockMessage } from '../../../utils/parcelDateLock'
 import { showToast } from '../../../utils/toast'
 import { isInReturnCircuit, updateParcel, buildParcelCorrectionPatch, describeParcelSaveError, ensureFullParcel, ensureFullParcels, markParcelAsReturned } from '../../../firebase/parcels'
 import { reservePrintWindow, releasePrintWindow } from '../../../utils/printWindow'
@@ -34,7 +35,7 @@ import {
   buildCodWriteFields, validateCodChoice, toggleCodService, codSelectionOf, COD_PART_EMOJI, COD_PART_LABEL,
 } from '../../../utils/codParts'
 import { useAgentCtx } from '../AgentCtx'
-import { agentProCanEditBon, agentProReadOnly } from '../../../utils/agentProAccess'
+import { agentProCanEditBon, agentProReadOnly, isFullParcelEditor } from '../../../utils/agentProAccess'
 import { agencyCanDeliver } from '../../../utils/agencyDeliveryAccess'
 import { canBulkAssignDelivery, canBulkAssignPickup, pickupAssignmentUpdates } from '../../../utils/parcelBulkSelection'
 import BulkDeliverySelection from '../components/BulkDeliverySelection'
@@ -53,6 +54,7 @@ import { formatOperationalDay } from '../../../config/operationalDay'
 import { normText, isDigitsOnly, numberStartsWith } from '../../../utils/normText'
 import { makeTableSearchMatcher } from '../../../utils/parcelSearch'
 import { agencyPortAmounts } from '../../../utils/billingAgency'
+import { neighborCityOf as agencyNeighborOf } from '../../../config/agencySettings'
 
 const normalizeSearch = (value: any) => normText(value).replace(/[^a-z0-9]/g, '')
 const matchesSearch = (values: any, query: any) => {
@@ -530,6 +532,15 @@ export default function ParcelsTab() {
       // pour ne pas affecter les filtres système
       const { updateParcel } = await import('../../../firebase/parcels')
       if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(newDate || '')) { alert('❌ Date invalide.'); return }
+      // 🔒 État RELU : arrivée à destination entre-temps → date verrouillée (utils/parcelDateLock, même règle serveur)
+      const { getDoc } = await import('firebase/firestore')
+      const freshSnap = await getDoc(doc(db, 'parcels', parcelId))
+      const fresh: any = freshSnap.exists() ? freshSnap.data() : null
+      if (fresh && isParcelDateLocked(fresh) && !isFullParcelEditor(profile)) {
+        alert(`🔒 ${parcelDateLockMessage(fresh)}`)
+        setEditingDateId(null); setEditingDateValue('')
+        return
+      }
       // expeditionDate = date affichée ; workDate = jour d'opération utilisé par les filtres de date
       // La date de CRÉATION suit aussi (même heure de la journée) pour que toutes les pages
       // (caisse, admin, impressions, filtres, requêtes serveur) restent cohérentes ; l'originale est conservée.
@@ -558,24 +569,31 @@ export default function ParcelsTab() {
   // 🔁 Agadir ⇄ Ait Melloul : colis arrivé par erreur dans l'agence voisine.
   // Clic sur la ville de destination = bascule directe vers l'autre ville, statut « Arrivé en agence ».
   // Réservé au chef d'agence / Agent PRO de la ville de destination actuelle (même règle dans firestore.rules).
-  const NEIGHBOR_CITIES: Record<string, string> = { 'Agadir': 'Ait Melloul', 'Ait Melloul': 'Agadir' }
   // deleteField() sur un champ absent ne compte pas comme modification pour firestore.rules
   const DELIVERY_ASSIGNMENT_RESET = Object.fromEntries([
     'deliveryDriverId', 'deliveryDriverName', 'deliverySectorId', 'deliverySectorCode', 'deliverySectorName',
     'deliveryVehicleId', 'deliveryVehicleLabel', 'deliveryAssignedAt', 'deliveryAssignedBy',
   ].map(k => [k, deleteField()]))
   const [togglingCityId, setTogglingCityId] = useState<string | null>(null)
-  const neighborCityOf = (parcel: any): string | null => NEIGHBOR_CITIES[parcel?.destinationCity] || null
+  // 🏢 Ville voisine : réglage Admin › Agences (settings/agencies), sinon Agadir ⇄ Ait Melloul (01/11/2026)
+  const neighborCityOf = (parcel: any): string | null => agencyNeighborOf(parcel?.destinationCity)
   // Expédition locale (Agadir → Agadir, Ait Melloul → Ait Melloul) : créée avec un livreur
   // (« En cours de livraison ») ou sans (« Initialisé »)
   const isLocalNotDelivered = (parcel: any) =>
     ['Initialisé', 'En cours de livraison'].includes(parcel.status) && parcel.originCity === parcel.destinationCity
+  // 27/10/2026 : comme à l'origine, TOUTE expédition dont la destination est ma ville (quelle que soit la ville de
+  // création) — la restriction « créée dans ma ville » de l'agent pro est retirée pour la bascule.
+  // 01/11/2026 : expédition déjà « Livré » aussi (comme la Collecte du soir du chef d'exploitation) tant que ni le port dû
+  // ni le COD n'ont été encaissés ici — elle reste « Livré ». Mêmes conditions que firestore.rules (neighborMoveCoreOk).
+  const isLivreMovable = (parcel: any) => parcel.status === 'Livré' && !parcel.isArchived
+    && !(parcel.portType === 'port_du' && !parcel.portPayeMethod && ['collected', 'received'].includes(parcel.portStatus))
+    && !parcel.codCollectedAt && (parcel.codStatus == null || parcel.codStatus === 'pending')
   const canToggleDestCity = (parcel: any) =>
-    agentProCanEditBon(profile, parcel) &&
     !!neighborCityOf(parcel)
-    && (parcel.status === 'Arrivé en agence' || parcel.status === 'En cours de livraison' || isLocalNotDelivered(parcel))
+    && (parcel.status === 'Arrivé en agence' || parcel.status === 'En cours de livraison' || isLocalNotDelivered(parcel) || isLivreMovable(parcel))
     && (profile?.role === 'chef_agence' || profile?.role === 'agentpro')
-    && profile?.city === parcel.destinationCity
+    // ✏️ Compte « modification totale » (zahra@gmail.com, 29/10/2026) : bascule dans les DEUX sens (Agadir ⇄ Ait Melloul)
+    && (profile?.city === parcel.destinationCity || isFullParcelEditor(profile))
   // Livreurs de la ville cible (même filtre que les livreurs d'agence)
   const driversOfCity = (city: string) => (drivers || []).filter((d: any) =>
     d.city === city && (d.role === 'livreur' || (d.role === 'chauffeur' && d.chauffeurType !== 'transport')))
@@ -596,7 +614,8 @@ export default function ParcelsTab() {
     setTogglingCityId(parcel.id)
     try {
       const now = new Date().toISOString()
-      const status = driver ? 'En cours de livraison' : 'Arrivé en agence'
+      // Expédition déjà livrée : elle RESTE « Livré » (seuls la ville et le livreur changent)
+      const status = parcel.status === 'Livré' ? 'Livré' : (driver ? 'En cours de livraison' : 'Arrivé en agence')
       // Ancien livreur retiré ; nouveau livreur de la ville cible si choisi
       const assignment = driver
         ? { ...DELIVERY_ASSIGNMENT_RESET, deliveryDriverId: driver.id, deliveryDriverName: driver.name || 'Livreur', deliveryAssignedAt: now, deliveryAssignedBy: profile?.name || '' }
@@ -632,11 +651,11 @@ export default function ParcelsTab() {
       window.dispatchEvent(new CustomEvent('parcelUpdated', {
         detail: { parcelId: parcel.id, updates, timestamp: now, source: 'database' },
       }))
-      showToast(`${parcel.trackingId || 'Expédition'} → ${target}${driver ? ` · livreur ${driver.name}` : ' (Arrivé en agence)'}`, 'success', 2500)
+      showToast(`${parcel.trackingId || 'Expédition'} → ${target}${driver ? ` · livreur ${driver.name}` : ` (${status === 'Livré' ? 'reste Livré, en gare' : 'Arrivé en agence'})`}`, 'success', 2500)
     } catch (err: any) {
       console.error('Erreur bascule ville:', err)
       showToast(err?.code === 'permission-denied'
-        ? `Bascule refusée : réservée au chef d'agence / Agent PRO de ${parcel.destinationCity}, expédition non livrée.`
+        ? `Bascule refusée : réservée au chef d'agence / Agent PRO de ${parcel.destinationCity} (expédition livrée : seulement si ni le port dû ni le COD n'ont été encaissés ici).`
         : `Erreur : ${err?.message || err}`, 'error')
     } finally {
       setTogglingCityId(null)
@@ -1754,8 +1773,11 @@ export default function ParcelsTab() {
             base mais ABSENTES de la liste affichée (hors période / filtres). Montrées à part, jamais comptées. */}
         {(() => {
           if (!search) return null
-          const shownIds = new Set((filteredParcels || []).map((p: any) => p.id))
-          const extra = (outOfPeriodResults || []).filter((p: any) => !shownIds.has(p.id))
+          // ⚡ Ensemble des expéditions affichées construit SEULEMENT s'il y a des résultats hors période à comparer
+          // (avant : ~17 000 identifiants recopiés à chaque chiffre tapé)
+          const outList = outOfPeriodResults || []
+          const shownIds = outList.length ? new Set((filteredParcels || []).map((p: any) => p.id)) : null
+          const extra = shownIds ? outList.filter((p: any) => !shownIds.has(p.id)) : []
           if (outOfPeriodSearching && !extra.length) {
             return (
               <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
@@ -3627,7 +3649,11 @@ export default function ParcelsTab() {
                             <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
                               {(() => {
                                 const isOriginAgency = parcel.originCity === profile?.city || parcel.sender?.city === profile?.city
-                                const canEditDate = (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && isOriginAgency && agentProCanEditBon(profile, parcel)
+                                const fullEditor = isFullParcelEditor(profile) // compte « modification totale » : toutes les dates
+                                const mayEditDate = fullEditor || ((profile?.role === 'chef_agence' || profile?.role === 'agentpro') && isOriginAgency && agentProCanEditBon(profile, parcel))
+                                // 🔒 Arrivée à destination (Arrivé en agence / En cours de livraison / Livré) : date verrouillée
+                                const dateLocked = mayEditDate && !fullEditor && isParcelDateLocked(parcel)
+                                const canEditDate = mayEditDate && !dateLocked
 
                                 // Utiliser expeditionDate si défini, sinon createdAt
                                 let currentDate: Date | null = null
@@ -3699,6 +3725,9 @@ export default function ParcelsTab() {
                                       >
                                         ✏️
                                       </button>
+                                    )}
+                                    {dateLocked && (
+                                      <span className="text-xs cursor-help" title={`Date verrouillée : l'expédition est « ${parcel.status} » à destination. Seul l'admin peut la changer.`}>🔒</span>
                                     )}
                                   </div>
                                 )
@@ -5819,10 +5848,11 @@ export default function ParcelsTab() {
               </div>
               <label className="block text-xs font-semibold text-gray-600">Nouveau livreur ({target})
                 <select value={cityMoveModal.driverId} onChange={e => setCityMoveModal({ ...cityMoveModal, driverId: e.target.value })} className={`${selectCls} mt-1`}>
-                  <option value="">— Sans livreur : en gare à {target} (Arrivé en agence) —</option>
+                  <option value="">— Sans livreur : en gare à {target}{parcel.status === 'Livré' ? '' : ' (Arrivé en agence)'} —</option>
                   {targetDrivers.map((d: any) => <option key={d.id} value={d.id}>{d.name || d.email || d.id}</option>)}
                 </select>
               </label>
+              {parcel.status === 'Livré' && <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg px-3 py-2">Expédition déjà livrée : elle reste « Livré » ; seuls la ville et le livreur changent.</p>}
               {targetDrivers.length === 0 && <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">Aucun livreur trouvé pour {target}.</p>}
               <div className="flex justify-end gap-2">
                 <button onClick={() => setCityMoveModal(null)} className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-100">Annuler</button>

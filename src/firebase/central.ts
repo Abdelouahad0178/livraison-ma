@@ -35,7 +35,7 @@ export async function createCentralCodDeposit({ parcelIds = [], parcels = [] as 
       : { solde: 0, soldeEspeces: 0, soldeCheques: 0, soldeVirement: 0 }
     const currentSolde = parseFloat(cash.solde || 0) || 0
     const currentEspeces = parseFloat(cash.soldeEspeces || 0) || 0
-    const nextSolde = Math.max(0, currentSolde - total)
+    const nextSolde = Math.max(0, currentSolde - total) // indicatif (solde gelé, non écrit)
     const nextEspeces = Math.max(0, currentEspeces - total)
     const nextCheques = parseFloat(cash.soldeCheques || 0) || 0
     const nextVirement = parseFloat(cash.soldeVirement || 0) || 0
@@ -63,8 +63,9 @@ export async function createCentralCodDeposit({ parcelIds = [], parcels = [] as 
       status: 'verse',
       note: note || '',
       cashBefore: currentSolde,
-      cashAfter: nextSolde,
-      cashShortage: Math.max(0, total - currentSolde),
+      cashAfter: currentSolde, // 🧊 solde gelé (25/10/2026) : inchangé par le versement
+      cashShortage: 0,
+      cashFrozen: true,
       createdAt: serverTimestamp(),
     })
 
@@ -82,15 +83,9 @@ export async function createCentralCodDeposit({ parcelIds = [], parcels = [] as 
       note: note || 'Versement société',
     }))
 
-    tx.set(cashRef, {
-      city,
-      solde: nextSolde,
-      soldeEspeces: nextEspeces,
-      soldeCheques: nextCheques,
-      soldeVirement: nextVirement,
-      lastUpdatedAt: serverTimestamp(),
-      lastUpdatedBy: agentName || 'Chef agence',
-    }, { merge: true })
+    // 🧊 Solde de caisse (agencyCashes) GELÉ depuis le 25/10/2026 (lot 3) : plus écrit ici — seul l'admin l'écrit
+    // (règles). cashBefore / cashAfter du versement gardent la valeur lue, à titre indicatif.
+    void nextSolde; void nextEspeces; void nextCheques; void nextVirement
 
     const patch = centralCodParcelPatch({ depositId: depositRef.id, now, agentName, agentId, city })
     ;(ids as string[]).forEach((id: string) => tx.update(doc(db, 'parcels', id), patch))

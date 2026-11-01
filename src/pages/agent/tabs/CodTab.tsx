@@ -9,6 +9,7 @@ import { fmt, fmtFixed as fmtAmt } from '../../../utils/formatNumber'
 import { isCodMoneyBeforeStart } from '../../../utils/moneyFlow'
 import { normText, isDigitsOnly, numberStartsWith } from '../../../utils/normText'
 import CodSuiviView from './CodSuiviView'
+import { loadedPeriodLabel } from '../../../utils/loadedPeriodLabel'
 import { codPartsOf, codHasType, codAmountOfType, codCashPartOf, isMixedCod, codPartsBreakdown, codServiceLabel, codPartsLabel } from '../../../utils/codParts'
 
 const DELAY_REASON_LABELS: Record<string, string> = {
@@ -134,6 +135,7 @@ export default function CodTab() {
     rapportValidating,
     receptionCodError,
     codDatePreset,   setCodDatePreset,
+    datePreset, dateFrom, dateTo, operationalDay, // période chargée par l'onglet Expéditions (source de cette liste)
     codDateFrom,     setCodDateFrom,
     codDateTo,       setCodDateTo,
     codSearch,       setCodSearch,
@@ -891,6 +893,14 @@ export default function CodTab() {
           onToChange={setCodDateTo}
           tone="amber"
         />
+        {/* 🏷️ Lot 2 (25/10/2026) : la liste vient des expéditions CHARGÉES par l'onglet Expéditions — « Tout » ne veut
+            pas dire tout l'historique tant que celui-ci n'est pas chargé (bouton plus bas) */}
+        {!allCodParcels && (
+          <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-1.5">
+            📅 Liste limitée aux expéditions de la période chargée dans Expéditions (<b>{loadedPeriodLabel(datePreset, dateFrom, dateTo, operationalDay)}</b>).
+            Pour tout l'historique : bouton « Charger tout l'historique » en bas de la liste.
+          </p>
+        )}
         <div className="relative">
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
           <input

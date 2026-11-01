@@ -176,6 +176,9 @@ function AppContent() {
           console.error('Erreur chargement date de travail:', err)
         })
 
+        // 🏢 Réglages des agences (villes, guichet, villes voisines — settings/agencies, Admin › Agences), suivis en direct
+        import('./config/agencySettings').then(m => m.startAgencySettingsSync()).catch(() => { /* valeurs du code */ })
+
         ;(async () => {
           const [{ doc, onSnapshot }, { db }, { subscribeOperationLocks }] = await Promise.all([
             import('firebase/firestore'),

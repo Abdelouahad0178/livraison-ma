@@ -1,11 +1,12 @@
 import { useMemo, useState, useEffect } from 'react'
 import { Plus, Package, MapPin, Wallet, MessageCircle, Printer, LayoutGrid, Truck, ArrowRight, TrendingUp, Clock, CheckCircle, Banknote, X, Building2 } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
-import { STATUSES, STATUS_COLORS } from '../../../firebase/constants'
-import { parcelDate, entryDate, filterByDate } from '../../../utils/dateFilter'
+import { STATUSES, STATUS_COLORS, CLOSED_STATUSES } from '../../../firebase/constants'
+import { parcelDate, entryDate, filterByDate, opPeriodRange } from '../../../utils/dateFilter'
 import { getEmptyParcelForm } from '../emptyParcelForm'
 import { HERO_STAT_CARD, HERO_CARD, HERO_BUTTON } from '../../../styles/heroTheme'
 import { subscribeEnCompteClientsByCity } from '../../../firebase/clients'
+import { loadedPeriodLabel } from '../../../utils/loadedPeriodLabel'
 
 // Fonction pour obtenir un formulaire vide avec la date de travail ACTUELLE
 // Formulaire vide : source unique partagée (voir agent/emptyParcelForm.ts)
@@ -20,7 +21,7 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
     profile, setTab: setTabCtx, setCreatedParcel, setForm,
     drivers, sectors, parcels, modRequests,
     agentEntries, caisseDatePreset, caisseDateFrom, caisseDateTo,
-    datePreset, dateFrom, dateTo,
+    datePreset, dateFrom, dateTo, operationalDay,
     accurateStats, uid,
   } = useAgentCtx()
 
@@ -43,28 +44,30 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
 
   // Charger les sociétés « en compte » de la ville (requête ciblée — avant : TOUS les clients
   // de toutes les villes, ~10 Mo, filtrés ici). Même liste, même ordre.
+  // ⚡ Lot 4 (25/10/2026) : écoute DÉSACTIVÉE — les sociétés « en compte » ne servent qu'au bloc « Liens rapides », caché
+  // ({false && …}). À réactiver avec ce bloc (EN_COMPTE_BLOCK_ENABLED).
+  const EN_COMPTE_BLOCK_ENABLED = false
   useEffect(() => {
-    if (profile?.role !== 'chef_agence' || !profile?.city) { setClients([]); return }
+    if (!EN_COMPTE_BLOCK_ENABLED || profile?.role !== 'chef_agence' || !profile?.city) { setClients([]); return }
     return subscribeEnCompteClientsByCity(profile.city, setClients, err => console.error('HomeTab clients en compte:', err))
   }, [profile?.role, profile?.city])
 
   const homeChefStats = useMemo(() => {
-    const today = new Date(); today.setHours(0, 0, 0, 0)
-    const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
     const filtered = filterByDate(parcels, datePreset, dateFrom, dateTo)
-    let todayCount = 0, enCours = 0, livres = 0, totalRetourFond = 0
+    // 🏷️ Lot 2 (25/10/2026) : tous les chiffres portent sur la PÉRIODE CHARGÉE (filtre d'Expéditions), et leur titre le dit
+    // (avant : « Aujourd'hui » = jour CALENDAIRE parmi la période chargée, donc toujours 0 au démarrage sur la veille ;
+    // « En cours » comptait aussi les annulées et les retours). Pas de chargement supplémentaire (consigne utilisateur).
+    const todayCount = parcels.length
+    let enCours = 0, livres = 0, totalRetourFond = 0
     const statusMap: Record<string, number> = {}
 
-    // Pour "En cours", on compte TOUS les colis en cours de l'agence, pas seulement ceux filtrés par date
     parcels.forEach((p: any) => {
-      if (!['Livré', 'Retourné'].includes(p.status)) enCours++
+      if (!CLOSED_STATUSES.includes(p.status)) enCours++
       if (p.codAmount > 0 && p.codStatus === 'pending') totalRetourFond += p.codAmount || 0
     })
 
-    // Pour les autres stats, on utilise les colis filtrés
+    // Répartition par statut : colis filtrés
     filtered.forEach((p: any) => {
-      const pDate = parcelDate(p)
-      if (pDate >= today && pDate <= endOfToday) todayCount++
       if (p.status === 'Livré') livres++
       statusMap[p.status] = (statusMap[p.status] || 0) + 1
     })
@@ -75,8 +78,8 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
   }, [parcels, datePreset, dateFrom, dateTo])
 
   const homeAgentStats = useMemo(() => {
-    const today = new Date(); today.setHours(0, 0, 0, 0)
-    const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
+    // 📅 (01/11/2026) Journée d'opération (8 h → 6 h), comme tout le site — avant : minuit → minuit
+    const { start: today, end: endOfToday } = opPeriodRange('today') as { start: Date; end: Date }
     const filtered = filterByDate(parcels, datePreset, dateFrom, dateTo)
     const myParcels = filtered.filter((p: any) => p.agentId === uid || p.destinationAgentId === uid)
 
@@ -105,6 +108,8 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
 
   if (isChef) {
     const { todayCount, enCours, livres, totalRetourFond, statusRows } = homeChefStats
+    // 🏷️ Période réellement chargée (filtre d'Expéditions), affichée sous chaque chiffre
+    const periodLabel = loadedPeriodLabel(datePreset, dateFrom, dateTo, operationalDay)
     const agencyDrivers  = drivers.filter((d: any) => d.city === profile?.city && d.role === 'chauffeur')
     const agencyLivreurs = drivers.filter((d: any) => d.city === profile?.city && (d.role === 'livreur' || (d.role === 'chauffeur' && d.chauffeurType !== 'transport')))
     const totalDrivers   = agencyDrivers.length + agencyLivreurs.length
@@ -126,10 +131,10 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
         {/* Stats agence - HERO AI STYLE */}
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
           {[
-            { label: "Aujourd'hui", value: todayCount, icon: Clock, iconBg: 'bg-blue-100', iconColor: 'text-blue-600' },
-            { label: 'En cours',    value: enCours,   icon: TrendingUp, iconBg: 'bg-orange-100', iconColor: 'text-orange-600' },
-            { label: 'Livrés',      value: livres,    icon: CheckCircle, iconBg: 'bg-green-100', iconColor: 'text-green-600' },
-            { label: 'RETOUR FOND (DH)', value: totalRetourFond.toLocaleString('fr-MA'), icon: Wallet, iconBg: 'bg-yellow-100', iconColor: 'text-yellow-700', small: true },
+            { label: 'Expéditions', value: todayCount, icon: Clock, iconBg: 'bg-blue-100', iconColor: 'text-blue-600' },
+            { label: 'En cours',    value: enCours,   icon: TrendingUp, iconBg: 'bg-orange-100', iconColor: 'text-orange-600', hint: 'non livrées, hors annulées et retours' },
+            { label: 'Livrées',     value: livres,    icon: CheckCircle, iconBg: 'bg-green-100', iconColor: 'text-green-600' },
+            { label: 'RETOUR FOND à encaisser (DH)', value: totalRetourFond.toLocaleString('fr-MA'), icon: Wallet, iconBg: 'bg-yellow-100', iconColor: 'text-yellow-700', small: true, hint: 'expéditions envoyées et reçues' },
           ].map(s => (
             <div key={s.label} className={HERO_STAT_CARD.container}>
               <div className={`${HERO_STAT_CARD.icon} ${s.iconBg}`}>
@@ -137,6 +142,7 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
               </div>
               <div className={s.small ? 'text-2xl font-bold text-gray-900 mb-1' : HERO_STAT_CARD.value}>{s.value}</div>
               <div className={HERO_STAT_CARD.label}>{s.label}</div>
+              <div className="text-[11px] text-gray-400 mt-0.5">{periodLabel}{s.hint ? ` · ${s.hint}` : ''}</div>
             </div>
           ))}
         </div>

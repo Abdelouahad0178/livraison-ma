@@ -1,9 +1,12 @@
 import { Building2, Download, ShieldCheck, Upload, MapPin } from 'lucide-react'
 import { BACKUP_COLLECTIONS } from '../../../firebase/backupCollections'
 import { fmt } from '../../../utils/formatNumber'
+import AgencySettingsCard from '../components/AgencySettingsCard'
 
 interface AdminAgenciesTabProps {
   agencyStats: any[]
+  users: any[]
+  adminName: string
   periodLabel: string
   exportRows: any
   downloadCsv: (name: string, rows: any[]) => void
@@ -18,6 +21,8 @@ interface AdminAgenciesTabProps {
 
 export default function AdminAgenciesTab({
   agencyStats,
+  users,
+  adminName,
   periodLabel,
   exportRows,
   downloadCsv,
@@ -42,6 +47,8 @@ export default function AdminAgenciesTab({
           <Download className="w-4 h-4" /> Export Excel
         </button>
       </div>
+
+      <AgencySettingsCard users={users} adminName={adminName} />
 
       <div className="bg-white rounded-2xl border border-blue-100 shadow-sm p-5">
         <div className="flex flex-col lg:flex-row lg:items-start gap-4">

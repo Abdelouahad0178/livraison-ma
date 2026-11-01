@@ -27,7 +27,8 @@ const { FieldValue } = admin.firestore
 
 const seen = new Map() // id → contribution (parcels prioritaire sur l'archive)
 for (const coll of ['parcels', 'parcels_archive']) {
-  const snap = await db.collection(coll).select('createdAt', 'senderNameNorm', 'sender', 'senderName', 'clientName', 'originCity', 'createdByCity', 'status', 'price', 'portType', 'codAmount', 'nbColis').get()
+  const snap = await db.collection(coll).select('createdAt', 'senderNameNorm', 'sender', 'senderName', 'clientName', 'originCity', 'createdByCity', 'status', 'price', 'portType', 'codAmount', 'nbColis',
+    'wasReturned', 'preReturn', 'returnToCity', 'receiver', 'destinationCity').get()
   let n = 0
   snap.docs.forEach(d => { if (!seen.has(d.id)) { const c = contributionOf(d.data()); if (c) { seen.set(d.id, c); n++ } } })
   console.log(`${coll} : ${snap.size} lues, ${n} retenues`)

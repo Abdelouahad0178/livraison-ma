@@ -437,7 +437,7 @@ exports.onParcelWrite = onDocumentWritten('parcels/{parcelId}', async (event) =>
 // - Sinon on RELIT le colis (et non l'instantané de l'événement) : les événements peuvent arriver
 //   dans le désordre ; relire garantit que la dernière exécution écrit l'état le plus récent.
 // Idempotent (set complet, pas de merge) : rejouer un événement réécrit la même projection.
-const { projectParcelLite, liteKey } = require('./parcelLite')
+const { projectParcelLite, liteKey, citiesLeft } = require('./parcelLite')
 // retry: true — la fonction relit toujours le colis à jour (idempotente) : un échec ponctuel ne doit plus
 // laisser une copie allégée en retard (les pages de caisse lisent parcelsLite pour les journées passées).
 exports.syncParcelLite = onDocumentWritten({ document: 'parcels/{parcelId}', retry: true }, async (event) => {
@@ -447,11 +447,42 @@ exports.syncParcelLite = onDocumentWritten({ document: 'parcels/{parcelId}', ret
   const after  = event.data?.after?.exists  ? event.data.after.data()  : null
   if (before && after && liteKey(projectParcelLite(before)) === liteKey(projectParcelLite(after))) return
   const fresh = await db.collection('parcels').doc(id).get()
+  // 🪦 (31/10/2026) Expédition SORTIE d'une ville (supprimée / archivée, ou départ / arrivée changés) : trace dans
+  // parcelsLiteGone. Le rattrapage des « Collectes par jour » (src/firebase/recentCollectedStore.ts) ne lit que les
+  // expéditions modifiées DE la ville : sans cette trace, une sortie faussait la vérification → relecture complète
+  // (≈ 11 Mo) après chaque archivage ou transfert Agadir ⇄ Ait Melloul. Effacée seule après 7 jours (TTL expireAt).
+  const left = citiesLeft(before, fresh.exists ? fresh.data() : null)
+  if (left.length) {
+    // Jamais bloquant : un échec ici ne doit pas retarder la copie allégée (au pire : relecture complète côté page)
+    try {
+      await db.collection('parcelsLiteGone').doc(id).set({
+        cities: FieldValue.arrayUnion(...left), at: FieldValue.serverTimestamp(),
+        expireAt: Timestamp.fromMillis(Date.now() + 7 * 864e5),
+      }, { merge: true })
+    } catch (err) { console.error('syncParcelLite — trace parcelsLiteGone impossible', id, err) }
+  }
   if (!fresh.exists) {
     await liteRef.delete()
     return
   }
   await liteRef.set({ ...projectParcelLite(fresh.data()), liteUpdatedAt: FieldValue.serverTimestamp() })
+})
+
+// ── 👥 Version allégée des clients : clients/{id} → clientsLite/{id} — voir functions/clientLite.js ──
+// Même modèle que syncParcelLite (rien si la projection n'a pas changé, sinon relecture et remplacement complet).
+const { projectClientLite } = require('./clientLite')
+exports.syncClientLite = onDocumentWritten({ document: 'clients/{clientId}', retry: true }, async (event) => {
+  const id = event.params.clientId
+  const liteRef = db.collection('clientsLite').doc(id)
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after  = event.data?.after?.exists  ? event.data.after.data()  : null
+  if (before && after && liteKey(projectClientLite(before)) === liteKey(projectClientLite(after))) return
+  const fresh = await db.collection('clients').doc(id).get()
+  if (!fresh.exists) {
+    await liteRef.delete()
+    return
+  }
+  await liteRef.set({ ...projectClientLite(fresh.data()), liteUpdatedAt: FieldValue.serverTimestamp() })
 })
 
 // ── 🧾 Copie « facturier » (parcelsFacturier) — voir functions/parcelFacturier.js ──
@@ -491,9 +522,52 @@ exports.syncCommercialStats = onDocumentWritten({ document: 'parcels/{parcelId}'
   await syncCommercial(db, FieldValue, id, fresh.data())
 })
 
+// ── 💼 Copie allégée des versements (Admin › Versements) — voir functions/versement.js ──
+// Rien à faire si la contribution de l'expédition n'a pas changé ; sinon relecture du colis à jour puis différence
+// appliquée en transaction (idempotent → retry sûr). Expédition supprimée (ou sortie vers les archives) : retirée,
+// comme dans Caisse Agence (qui ne lit que les expéditions actives).
+const { syncVersement, versementOf, holdersByCity } = require('./versement')
+exports.syncVersementStats = onDocumentWritten({ document: 'parcels/{parcelId}', retry: true }, async (event) => {
+  const id = event.params.parcelId
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after  = event.data?.after?.exists  ? event.data.after.data()  : null
+  const holders = await holdersByCity(db)
+  const b = versementOf(before, holders), a = versementOf(after, holders)
+  if (!b && !a) return
+  if (b && a && JSON.stringify(b) === JSON.stringify(a)) return
+  const fresh = await db.collection('parcels').doc(id).get()
+  await syncVersement(db, FieldValue, id, fresh.exists ? fresh.data() : null, holders)
+})
+
+// ── 📤 Copie allégée de l'argent détenu par le chef d'exploitation — voir functions/envoiContrib.js ──
+const { envoiContribOf, envoiKey, syncEnvoi } = require('./envoiContrib')
+exports.syncEnvoiContrib = onDocumentWritten({ document: 'parcels/{parcelId}', retry: true }, async (event) => {
+  const id = event.params.parcelId
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after  = event.data?.after?.exists  ? event.data.after.data()  : null
+  const b = envoiContribOf(id, before), a = envoiContribOf(id, after)
+  if (!b && !a) return
+  if (b && a && envoiKey(b) === envoiKey(a)) return
+  const fresh = await db.collection('parcels').doc(id).get()
+  await syncEnvoi(db, FieldValue, id, fresh.exists ? fresh.data() : null)
+})
+
 // ── 🤖 Rapport du Contrôleur (Admin › 🤖 Rapports, à la demande, admin seulement) — voir functions/controlReport.js ──
 exports.generateControlReport = require('./controlReport').generateControlReport
 
+// ── 🔑 Droit « modification totale » → jeton de connexion (lu par firestore.rules) — voir functions/userClaims.js ──
+const { syncFullEditClaim } = require('./userClaims')
+exports.syncUserClaims = onDocumentWritten({ document: 'users/{uid}', retry: true }, async (event) => {
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after = event.data?.after?.exists ? event.data.after.data() : null
+  const was = !!before?.permissions?.fullParcelEdit, now = !!after?.permissions?.fullParcelEdit
+  if (was === now && before) return
+  await syncFullEditClaim(require('firebase-admin/auth').getAuth(), event.params.uid, after)
+})
+
+// ── 🩺 Contrôle quotidien de la santé des données (lecture seule, 5 h + sur demande) — voir functions/healthCheck.js ──
+exports.scheduledHealthCheck = require('./healthCheck').scheduledHealthCheck
+exports.runHealthCheckNow = require('./healthCheck').runHealthCheckNow
 // ── Rebuild all stats from existing parcels (callable — admin only) ────────
 // Call once after first deploy to bootstrap stats from historical data.
 exports.rebuildStats = onCall({
@@ -599,256 +673,8 @@ exports.rebuildStats = onCall({
 // 🤖 IA de saisie (extractParcelData) : supprimée le 18/10/2026 à la demande de l'admin (le Contrôleur IA,
 // functions/controlReport.js, garde sa propre configuration).
 
-// ── Vider la base de données (sauf users) ─────────────────────────────────
-exports.clearDatabase = onCall({ maxInstances: 1 }, async (request) => {
-  // Vérifier que l'utilisateur est admin
-  if (!request.auth || !request.auth.uid) {
-    throw new Error('Non authentifié')
-  }
-
-  const userDoc = await db.collection('users').doc(request.auth.uid).get()
-  if (!userDoc.exists || userDoc.data().role !== 'admin') {
-    throw new Error('Permission refusée - Admin uniquement')
-  }
-
-  const collectionsToDelete = [
-    'parcels', 'parcels_archive', 'clients', 'deliverySignatures', 'lostParcels', 'portalAccounts',
-    'vehicles', 'sectors', 'tariffs', 'agencies', 'cod_requests', 'cod_reglements',
-    'caisse_transactions', 'caisse_admin_transactions', 'port_du_transactions',
-    'central_collector_transactions', 'notes', 'agent_notes', 'expeditions',
-    'backup_parcels', 'backup_clients', 'backup_users', 'activity_logs',
-    'director_logs', 'operation_locks', 'modification_requests', 'client_messages',
-    'caisse_clotures', 'caissier_remarks', 'central_cash', 'bank_deposits'
-  ]
-
-  const results = {}
-  let totalDeleted = 0
-
-  for (const collectionName of collectionsToDelete) {
-    try {
-      const collectionRef = db.collection(collectionName)
-      let deletedCount = 0
-      const batchSize = 500
-
-      let hasMore = true
-      while (hasMore) {
-        const snapshot = await collectionRef.limit(batchSize).get()
-
-        if (snapshot.size === 0) {
-          hasMore = false
-          break
-        }
-
-        const batch = db.batch()
-        snapshot.docs.forEach(doc => batch.delete(doc.ref))
-        await batch.commit()
-
-        deletedCount += snapshot.size
-        hasMore = snapshot.size === batchSize
-      }
-
-      results[collectionName] = deletedCount
-      totalDeleted += deletedCount
-      console.log(`✅ ${collectionName}: ${deletedCount} documents supprimés`)
-    } catch (error) {
-      results[collectionName] = { error: error.message }
-      console.error(`❌ Erreur ${collectionName}:`, error.message)
-    }
-  }
-
-  console.log(`✅ Total: ${totalDeleted} documents supprimés`)
-  return { success: true, totalDeleted, results }
-})
-
-// ── Supprimer tous les arrivages ─────────────────────────────────────────
-exports.deleteAllArrivages = onCall({ maxInstances: 1 }, async (request) => {
-  if (!request.auth || !request.auth.uid) {
-    throw new Error('Non authentifié')
-  }
-
-  const userDoc = await db.collection('users').doc(request.auth.uid).get()
-  if (!userDoc.exists || userDoc.data().role !== 'admin') {
-    throw new Error('Permission refusée - Admin uniquement')
-  }
-
-  try {
-    const collectionRef = db.collection('arrivages')
-    let deletedCount = 0
-    const batchSize = 500
-
-    let hasMore = true
-    while (hasMore) {
-      const snapshot = await collectionRef.limit(batchSize).get()
-
-      if (snapshot.size === 0) {
-        hasMore = false
-        break
-      }
-
-      const batch = db.batch()
-      snapshot.docs.forEach(doc => batch.delete(doc.ref))
-      await batch.commit()
-
-      deletedCount += snapshot.size
-      hasMore = snapshot.size === batchSize
-    }
-
-    console.log(`✅ arrivages: ${deletedCount} documents supprimés`)
-    return { success: true, deletedCount }
-  } catch (error) {
-    console.error('❌ Erreur:', error)
-    throw new Error(`Erreur lors de la suppression: ${error.message}`)
-  }
-})
-
-// ── Générer des données de test ───────────────────────────────────────────
-exports.generateTestData = onCall({ maxInstances: 1, timeoutSeconds: 540 }, async (request) => {
-  const count = request.data?.count || 1000
-  const batchSize = 500
-
-  if (!request.auth || !request.auth.uid) {
-    throw new Error('Non authentifié')
-  }
-
-  const userDoc = await db.collection('users').doc(request.auth.uid).get()
-  if (!userDoc.exists || userDoc.data().role !== 'admin') {
-    throw new Error('Permission refusée - Admin uniquement')
-  }
-
-  const cities = ['Casablanca', 'Rabat', 'Marrakech', 'Fès', 'Tanger', 'Agadir', 'Meknès', 'Oujda', 'Kénitra', 'Tétouan']
-  const statuses = ['Initialisé', 'En transit', 'Arrivé en agence', 'En cours de livraison', 'Livré', 'Retourné', 'Retour en transit', 'Retour arrivé']
-  const serviceTypes = ['simple', 'especes', 'cheque', 'traite', 'retour_bl']
-  const portTypes = ['port_paye', 'port_du']
-
-  const firstNames = ['Ahmed', 'Mohammed', 'Fatima', 'Khadija', 'Hassan', 'Youssef', 'Aicha', 'Omar', 'Salma', 'Karim', 'Laila', 'Rachid', 'Nadia', 'Samir', 'Zineb']
-  const lastNames = ['Alami', 'Benali', 'El Amrani', 'Benjelloun', 'Cherkaoui', 'El Fassi', 'Idrissi', 'Tahiri', 'Ziani', 'Khalil']
-
-  const getRandomItem = (arr) => arr[Math.floor(Math.random() * arr.length)]
-  const getRandomPhone = () => `06${Math.floor(10000000 + Math.random() * 90000000)}`
-  const getRandomAddress = (city) => `${Math.floor(1 + Math.random() * 999)} Rue ${getRandomItem(['Mohamed V', 'Hassan II', 'de la Liberté', 'Principale', 'du Commerce'])}, ${city}`
-  const getRandomDate = (daysAgo) => {
-    const date = new Date()
-    date.setDate(date.getDate() - Math.floor(Math.random() * daysAgo))
-    date.setHours(Math.floor(Math.random() * 24), Math.floor(Math.random() * 60), 0, 0)
-    return Timestamp.fromDate(date)
-  }
-
-  let created = 0
-  const startTime = Date.now()
-
-  try {
-    for (let i = 0; i < count; i += batchSize) {
-      const batch = db.batch()
-      const currentBatchSize = Math.min(batchSize, count - i)
-
-      for (let j = 0; j < currentBatchSize; j++) {
-        const trackingId = `BG${Date.now()}${Math.floor(1000 + Math.random() * 9000)}`
-        const originCity = getRandomItem(cities)
-        let destinationCity = getRandomItem(cities)
-        while (destinationCity === originCity) destinationCity = getRandomItem(cities)
-
-        const serviceType = getRandomItem(serviceTypes)
-        const portType = getRandomItem(portTypes)
-        const status = getRandomItem(statuses)
-        const weight = Math.floor(1 + Math.random() * 50)
-        const nbColis = Math.floor(1 + Math.random() * 5)
-        const codAmount = serviceType === 'especes' ? Math.floor(100 + Math.random() * 5000) : 0
-        const portPrice = Math.floor(30 + Math.random() * 200)
-        const price = Math.floor(50 + Math.random() * 500)
-
-        const createdAt = getRandomDate(90)
-
-        const parcelData = {
-          trackingId,
-          status,
-          originCity,
-          destinationCity,
-          sender: {
-            name: `${getRandomItem(firstNames)} ${getRandomItem(lastNames)}`,
-            tel: getRandomPhone(),
-            city: originCity,
-            address: getRandomAddress(originCity)
-          },
-          receiver: {
-            name: `${getRandomItem(firstNames)} ${getRandomItem(lastNames)}`,
-            tel: getRandomPhone(),
-            city: destinationCity,
-            address: getRandomAddress(destinationCity)
-          },
-          weight,
-          nbColis,
-          serviceType,
-          portType,
-          portPrice,
-          portStatus: portType === 'port_paye' ? 'collected' : 'pending',
-          price,
-          codAmount,
-          codStatus: codAmount > 0 ? (status === 'Livré' ? 'collected' : 'pending') : null,
-          natureOfGoods: getRandomItem(['Documents', 'Vêtements', 'Électronique', 'Colis divers', 'Pièces auto']),
-          createdAt,
-          agentId: request.auth.uid,
-          agentName: userDoc.data().name || 'Admin',
-          agentRole: 'admin',
-          customerMode: 'particulier',
-          history: [{
-            status: 'Initialisé',
-            timestamp: createdAt.toDate().toISOString(),
-            note: 'Colis créé - Données de test'
-          }]
-        }
-
-        // Ajouter des détails selon le statut
-        if (['En transit', 'Arrivé en agence', 'En cours de livraison', 'Livré', 'Retourné'].includes(status)) {
-          parcelData.chauffeurName = `${getRandomItem(firstNames)} ${getRandomItem(lastNames)}`
-          parcelData.chauffeurPhone = getRandomPhone()
-          parcelData.shipmentLoadedAt = getRandomDate(80).toDate().toISOString()
-        }
-
-        if (['Arrivé en agence', 'En cours de livraison', 'Livré', 'Retourné'].includes(status)) {
-          parcelData.visibleInDestinationAgency = true
-          parcelData.destinationArrivedAt = getRandomDate(70).toDate().toISOString()
-        }
-
-        if (['En cours de livraison', 'Livré'].includes(status)) {
-          parcelData.deliveryDriverId = 'test-driver-' + Math.floor(Math.random() * 5)
-          parcelData.deliveryDriverName = `${getRandomItem(firstNames)} ${getRandomItem(lastNames)}`
-        }
-
-        if (status === 'Livré') {
-          parcelData.deliveredAt = getRandomDate(60).toDate().toISOString()
-          if (codAmount > 0) {
-            parcelData.codStatus = 'collected'
-            parcelData.codPaymentType = getRandomItem(['especes', 'cheque'])
-          }
-        }
-
-        if (status === 'Retourné' || status.includes('Retour')) {
-          parcelData.returnReason = getRandomItem(['Refus client', 'Adresse introuvable', 'Client absent', 'Numéro erroné'])
-          parcelData.returnedAt = getRandomDate(50).toDate().toISOString()
-        }
-
-        const docRef = db.collection('parcels').doc()
-        batch.set(docRef, parcelData)
-      }
-
-      await batch.commit()
-      created += currentBatchSize
-      console.log(`✅ ${created}/${count} colis créés...`)
-    }
-
-    const duration = ((Date.now() - startTime) / 1000).toFixed(2)
-    console.log(`✅ Génération terminée: ${created} colis en ${duration}s`)
-
-    return {
-      success: true,
-      created,
-      duration: `${duration}s`
-    }
-  } catch (error) {
-    console.error('❌ Erreur génération:', error)
-    throw new Error(`Erreur après ${created} colis: ${error.message}`)
-  }
-})
+// 🧹 Outils d'essai « vider la base », « supprimer tous les arrivages », « données de test » (clearDatabase,
+// deleteAllArrivages, generateTestData) : RETIRÉS du serveur le 01/11/2026 (lot E, accord de l'admin) — dans l'historique git.
 
 // ── Archivage automatique des vieux colis ────────────────────────────────
 // ⛔ DÉSACTIVÉ TEMPORAIREMENT - Archivage manuel uniquement
@@ -1131,7 +957,10 @@ async function runWeeklyArchiving() {
   console.log('🗄️  Démarrage archivage automatique...')
 
   const DAYS_THRESHOLD = 30       // Livrés SANS COD : archivés après 30 jours
-  const DAYS_FORCE = 45           // Tous les autres (même avec COD) : archivés après 45 jours
+  // Tous les autres (même avec COD) : archivés après 45 jours — réglable par l'admin (settings/agencies.delays.activeDays,
+  // = jours chargés par « Tout » ; 45 à 90, jamais moins : src/config/siteDelays.ts)
+  const setDays = Math.round(Number((await db.doc('settings/agencies').get()).data()?.delays?.activeDays))
+  const DAYS_FORCE = Number.isFinite(setDays) ? Math.min(90, Math.max(45, setDays)) : 45
   const BATCH_SIZE = 500  // = limite d'un WriteBatch Firestore
   // Borne de temps (au lieu d'un nombre fixe d'itérations) : la fonction dispose de 540s.
   // L'ancien plafond de 200×100 colis était épuisé par des colis déjà archivés / non archivables
@@ -1282,11 +1111,11 @@ function getCurrentOperationalDayString() {
   const hour = casablancaTime.getHours()
   const minute = casablancaTime.getMinutes()
 
-  // Configuration : la journée change à 6h01
-  const START_HOUR = 6
-  const START_MINUTE = 1
-  const END_HOUR = 6
-  const END_MINUTE = 1
+  // Configuration : la journée change à 8 h (01/11/2026 : comme tout le site, src/config/operationalDay.ts — avant 6 h 01)
+  const START_HOUR = 8
+  const START_MINUTE = 0
+  const END_HOUR = 8
+  const END_MINUTE = 0
 
   // Convertir en minutes depuis minuit
   const currentMinutes = hour * 60 + minute
@@ -1307,7 +1136,7 @@ function getCurrentOperationalDayString() {
 }
 
 exports.updateOperationalDay = onSchedule({
-  schedule: '1 6 * * *',           // Chaque jour à 6h01
+  schedule: '1 8 * * *',           // Chaque jour à 8 h 01 (début de la journée d'opération, comme le site)
   timeZone: 'Africa/Casablanca',   // Fuseau horaire Maroc
   retryCount: 3,                   // Réessayer 3 fois en cas d'échec
   memory: '256MiB',

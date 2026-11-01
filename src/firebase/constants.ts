@@ -113,6 +113,14 @@ export const RETURN_STATUSES = [
   'Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé',
 ]
 
+// ↩️🏁 Listes UNIQUES pour tout le site (01/11/2026, diagnostic de souplesse — lot D) : ne plus recopier ces listes
+// dans les pages. Copies serveur (CommonJS) : functions/commercial.js, functions/healthCheck.js — vérifiées par
+// src/utils/statusLists.test.ts.
+/** Expédition dans le circuit retour. */
+export const isReturnStatus = (s?: string | null): boolean => !!s && RETURN_STATUSES.includes(s)
+/** Expédition terminée (plus rien à faire à l'aller) : livrée, annulée ou dans le circuit retour. */
+export const CLOSED_STATUSES = ['Livré', ...RETURN_STATUSES, 'Annulé']
+
 export const COD_PAYMENT_TYPES = [
   { key: 'especes',       label: 'Espèces',          emoji: '💵', bg: 'bg-green-100',  text: 'text-green-700',  darkBg: 'bg-green-900/40',  darkText: 'text-green-300'  },
   { key: 'cheque',        label: 'Chèque',           emoji: '📋', bg: 'bg-blue-100',   text: 'text-blue-700',   darkBg: 'bg-blue-900/40',   darkText: 'text-blue-300'   },

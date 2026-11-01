@@ -88,7 +88,7 @@ export default function DriverGarePage() {
   const handSignatureLastPos = useRef<any>(null)
   const uid = auth.currentUser?.uid
 
-  // Scanner de code-barres
+  // Scanner de code-barres — ❌ DÉSACTIVÉ le 29/10/2026 (douchette abandonnée) : il avalait les chiffres tapés vite
   useBarcodeScanner({
     onScan: (code: string) => {
       const found = parcels.find(p =>
@@ -96,7 +96,8 @@ export default function DriverGarePage() {
         p.receiver?.tel?.includes(code)
       )
       if (found) handleOpenSignature(found)
-    }
+    },
+    enabled: false,
   })
 
   useEffect(() => {

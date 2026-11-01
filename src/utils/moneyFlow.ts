@@ -14,7 +14,9 @@ export const VIA_EXPLOITATION_MSG =
 // dans AUCUN solde de caisse ni de COD. Les expéditions restent intactes et visibles partout ;
 // seul leur argent d'avant la date est ignoré dans les calculs. Un encaissement fait à partir de la
 // date compte normalement, même pour une expédition créée avant.
-export const MONEY_START = new Date(2026, 9, 5, 8, 0, 0)
+// ⏰ Heure du MAROC explicite (+01:00) : même instant que l'ancien `new Date(2026, 9, 5, 8, 0, 0)` sur les postes au Maroc,
+// et désormais aussi sur le serveur (heure UTC) — copie allégée versementDays calculée par une Cloud Function (30/10/2026).
+export const MONEY_START = new Date('2026-10-05T08:00:00+01:00')
 
 const toTime = (v: any): number | null => {
   if (v === null || v === undefined || v === '') return null

@@ -1,7 +1,8 @@
-import { caisseCodAmountOfType, isRamasseGuichet, isAdminTransferred, isPortDuHeldByAgency } from './agencyCaisseRules'
+import { caisseCodAmountOfType, isRamasseGuichet, isAdminTransferred, isPortDuHeldByAgency, isReturnPortDu, isPortCollectedBeforeReturn } from './agencyCaisseRules'
 import { isMixedCod } from './codParts'
 import { isCodMoneyBeforeStart, isPortDuMoneyBeforeStart } from './moneyFlow'
 import { opDayKeyOf } from './versementPeriod'
+import { isReturnStatus } from '../firebase/constants'
 
 /**
  * 📅 Bilan d'une journée / période — module UNIQUE pour le chef d'exploitation et le chef d'agence.
@@ -23,8 +24,7 @@ export interface Bilan {
   encaisse: { ports: Enc; codEspeces: Enc; codDocs: Enc }
 }
 
-const RETURNED = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
-const isReturned = (p: any) => !!(p.returnedAt || p.wasReturned || RETURNED.includes(p.status))
+const isReturned = (p: any) => !!(p.returnedAt || p.wasReturned || isReturnStatus(p.status))
 const amt = (v: any) => { const n = typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(n) ? n : 0 }
 const r2 = (n: number) => Math.round(n * 100) / 100
 const line = (): Line => ({ total: 0, encaisse: 0, docs: 0, reste: 0, n: 0, items: { total: [], encaisse: [], docs: [], reste: [] } })
@@ -61,7 +61,8 @@ export function computeBilan(input: {
     if (!p?.id || seen.has(p.id)) continue
     seen.add(p.id)
     if (fromKey && !inP(expKeyOf(p))) continue // filets larges de la caisse : seulement les expéditions de la période
-    if (isReturned(p)) continue
+    // ↩️ Expédition retournée : seul son port dû compte, à la ville de retour (encaissable là-bas)
+    if (isReturned(p) && !isReturnPortDu(p)) continue
     const price = amt(p.price)
     if (p.portType === 'port_du' && !p.portPayeMethod && p.destinationCity === city && price > 0) {
       const done = p.portStatus === 'collected' || p.portStatus === 'received'
@@ -99,7 +100,8 @@ export function computeBilan(input: {
     const price = amt(p.price)
     // — Ports dus (destination) et ports payés ramassés au guichet (origine)
     let portKind: 'port_du' | 'port_paye' | null = null
-    if (p.portType === 'port_du' && !p.portPayeMethod && p.destinationCity === city && (p.portStatus === 'collected' || p.portStatus === 'received') && !isPortDuMoneyBeforeStart(p)) portKind = 'port_du'
+    if (p.portType === 'port_du' && !p.portPayeMethod && p.destinationCity === city && (p.portStatus === 'collected' || p.portStatus === 'received') && !isPortDuMoneyBeforeStart(p)
+      && !isPortCollectedBeforeReturn(p)) portKind = 'port_du'
     else if (isRamasseGuichet(p, city) && !isReturned(p) && (p.portStatus === 'collected' || p.portStatus === 'received')) portKind = 'port_paye'
     if (portKind && price > 0) {
       const recvWhen = portKind === 'port_du' ? p.portExpReceivedAt : p.portPayeExpReceivedAt

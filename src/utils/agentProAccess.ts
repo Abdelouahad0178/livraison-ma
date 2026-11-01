@@ -1,7 +1,15 @@
-type Profile = { role?: string; realRole?: string; city?: string } | null | undefined
+import { permissionsOf } from './userPermissions'
+
+type Profile = { role?: string; realRole?: string; city?: string; uid?: string; permissions?: any } | null | undefined
 type Parcel = Record<string, any> | null | undefined
 
-export const isRestrictedAgentPro = (profile: Profile) => (profile?.realRole || profile?.role) === 'agentpro'
+// ✏️ Comptes autorisés à modifier TOUTES les données de TOUTES les expéditions, comme l'admin (demande du 26/10/2026) :
+// droit « Modification totale » coché par l'admin dans la fiche employé (01/11/2026 — avant : uid de zahra écrit ici).
+// Côté règles Firestore : claim `fullEdit` du jeton (Cloud Function syncUserClaims).
+export const isFullParcelEditor = (profile: Profile) => permissionsOf(profile).fullParcelEdit === true
+
+export const isRestrictedAgentPro = (profile: Profile) =>
+  (profile?.realRole || profile?.role) === 'agentpro' && !isFullParcelEditor(profile)
 const city = (value: unknown) => typeof value === 'string' && value ? value : ''
 export const parcelCreationCity = (parcel: Parcel): string => city(parcel?.createdByCity)
   || city(parcel?.preReturn?.originCity) || city(parcel?.originCity) || city(parcel?.sender?.city)

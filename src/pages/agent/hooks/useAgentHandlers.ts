@@ -1,4 +1,5 @@
 import React from 'react'
+import { opPeriodRange } from '../../../utils/dateFilter'
 import { createUserWithEmailAndPassword, signOut as fbSignOut } from 'firebase/auth'
 import { auth, authSecondary, db } from '../../../firebase/config'
 import { doc, setDoc, updateDoc, deleteDoc, getDoc } from 'firebase/firestore'
@@ -6,7 +7,7 @@ import {
   assignDriver, assignDriversBulk, assignDeliveryDriver,
   remitCod, cancelCodRemise, collectCodAtSource, collectCodAtDestination, collectPortDu,
   createCaisseEntry, deleteCaisseEntry, deleteAgentCashierHistory,
-  adjustAgencyCash, directTransferAgentToCashierAtomic,
+  directTransferAgentToCashierAtomic,
   createAgentCashRecoveryRequest,
   settleCodToSender, batchSettleCods, fetchAllAgentCodParcels, fetchAllAgencyCodParcels,
   markCodSentToSource, confirmCodReceivedBySource,
@@ -31,7 +32,7 @@ import {
 } from '../../../firebase/clients'
 import { createBankDeposit } from '../../../firebase/bankDeposits'
 import { createParticularPortalAccount } from '../../../firebase/portalAccounts'
-import { getGareDriverForCity } from '../../../firebase/delivery'
+import { getGareDriverForCity, assignDeliveryAndStart } from '../../../firebase/delivery'
 // ⚡ Impressions (agentPrintUtils, ~57 Ko) chargées au premier clic « Imprimer », pas au démarrage de la page
 const printUtils = () => import('../../../utils/agentPrintUtils')
 import { printAgentTicket } from '../../../utils/printAgentTicket'
@@ -42,7 +43,7 @@ import { buildCodWriteFields, validateCodChoice, codCashPartOf, codDocPartOf, is
 import { buildParcelCorrectionPatch, describeParcelSaveError, ensureFullParcel, ensureFullParcels, markDeliveredAfterCollect, findParcelByNic } from '../../../firebase/parcels'
 import { chefCancelLinkedPortDu, chefReceiveCod } from '../../../firebase/chefPortReception'
 import { showToast } from '../../../utils/toast'
-import { agentProCanEditBon } from '../../../utils/agentProAccess'
+import { agentProCanEditBon, isFullParcelEditor } from '../../../utils/agentProAccess'
 import { agencyCanDeliver, deliveryStatusChangeBlock } from '../../../utils/agencyDeliveryAccess'
 import { canBulkLoadTransport, canBulkAssignDelivery } from '../../../utils/parcelBulkSelection'
 import { blockDirectChefReception } from '../../../utils/moneyFlow'
@@ -71,14 +72,8 @@ export const filterByDate = (list: any, preset: any, from: any, to: any, getDate
   return new Date(0)
 }) => {
   if (preset === 'all') return list
-  const now = new Date()
-  const endOfToday = new Date(); endOfToday.setHours(23, 59, 59, 999)
-  let start: any = null, end: any = endOfToday
-  if      (preset === 'today')  { start = new Date(); start.setHours(0, 0, 0, 0) }
-  else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate() - 6); start.setHours(0, 0, 0, 0) }
-  else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
-  else if (preset === 'day')    { start = from ? new Date(from) : null; if (start) { start.setHours(0, 0, 0, 0); end = new Date(from + 'T23:59:59') } }
-  else if (preset === 'custom') { start = from ? new Date(from) : null; if (start) start.setHours(0, 0, 0, 0); end = to ? new Date(to + 'T23:59:59') : endOfToday }
+  // 📅 (01/11/2026) Journées d'opération (8 h → 6 h), comme tout le site — avant : minuit → minuit
+  const { start, end } = opPeriodRange(preset, from, to)
   return list.filter((p: any) => {
     const d = getDate(p)
     if (start && d < start) return false
@@ -106,6 +101,19 @@ export const isCash = (parcel: any) => {
   const pt = codPaymentTypeOf(parcel) || 'especes'
   return !['cheque', 'traite', 'bon_livraison', 'retour_bl'].includes(pt) || isMixedCod(parcel)
 }
+
+/**
+ * Sortie de caisse d'un RETOUR FOND réglé à l'expéditeur (part ESPÈCES), calculée sur l'expédition RELUE dans la
+ * transaction du règlement (settleCodToSender / batchSettleCods) — mêmes champs qu'avant. null : rien en espèces.
+ */
+export const codSettleCashOut = (uid: string, name: string, city: string) => (parcel: any) => isCash(parcel) ? {
+  type: 'sortie', category: 'cod_regle_expediteur',
+  amount: codCashPartOf(parcel),
+  description: `RETOUR FOND espèces réglé expéditeur — ${parcel.trackingId} (${parcel.sender?.name || ''})`,
+  reference: parcel.trackingId,
+  agentId: uid, agentName: name, city,
+  cashierId: uid, cashierName: name,
+} : null
 
 /**
  * Le RETOUR FOND comporte-t-il une VALEUR DOCUMENT (chèque / traite / BL) à faire suivre
@@ -227,48 +235,45 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
         nbParcels: selectedParcels.length
       })
 
-      // Assigner chaque colis au livreur
-      for (const parcel of selectedParcels) {
-        console.log('📦 Assignation colis:', parcel.trackingId, 'au livreur ID:', bulkAssignDriverId)
-
-        // ⚡ OPTIMISTIC UPDATE : Mettre à jour l'UI IMMÉDIATEMENT
-        updateParcelLocal(parcel.id, {
-          deliveryDriverId: bulkAssignDriverId,
-          deliveryDriverName: driver?.name || 'Livreur',
-          deliverySectorId: sector?.id || '',
-          deliverySectorCode: sector?.code || '',
-          deliverySectorName: sector?.name || '',
-          deliveryAssignedBy: profile?.name || 'Chef agence',
-          deliveryAssignedAt: new Date().toISOString(),
-          status: 'En cours de livraison',
-        })
-
-        await assignDeliveryDriver(
-          parcel.id,
-          bulkAssignDriverId,
-          driver?.name || 'Livreur', // ✅ CORRECTION : nom du livreur
-          {
-            deliverySectorId: sector?.id || '',
-            deliverySectorCode: sector?.code || '',
-            deliverySectorName: sector?.name || '',
-            deliveryAssignedBy: profile?.name || 'Chef agence',
-          }
-        )
-
-        console.log('✅ assignDeliveryDriver terminé pour', parcel.trackingId)
-
-        // ✅ Mettre à jour le statut du colis
-        await updateParcelStatus(parcel.id, 'En cours de livraison', {
-          note: `Assigné au livreur ${driver?.name || 'Livreur'}${sector ? ` (Secteur: ${sector.name})` : ''}`
-        })
-
-        console.log('✅ updateParcelStatus terminé pour', parcel.trackingId)
+      // 🔒 Lot 3 (25/10/2026) : UNE écriture par expédition (assignation + « En cours de livraison », assignDeliveryAndStart),
+      // 8 en parallèle ; un échec n'arrête pas les autres, son affichage optimiste est annulé et il est listé.
+      // Avant : deux écritures successives par expédition, la boucle s'arrêtait au premier échec (état mélangé, sans liste).
+      const driverName = driver?.name || 'Livreur'
+      const extra = {
+        deliverySectorId: sector?.id || '', deliverySectorCode: sector?.code || '', deliverySectorName: sector?.name || '',
+        deliveryAssignedBy: profile?.name || 'Chef agence',
       }
+      const note = `Assigné au livreur ${driverName}${sector ? ` (Secteur: ${sector.name})` : ''}`
+      const failed: { parcel: any; err: string }[] = []
+      const queue = [...selectedParcels]
+      const worker = async () => {
+        while (queue.length) {
+          const parcel = queue.shift()
+          const before = {
+            deliveryDriverId: parcel.deliveryDriverId ?? null, deliveryDriverName: parcel.deliveryDriverName ?? null,
+            deliverySectorId: parcel.deliverySectorId ?? null, deliverySectorCode: parcel.deliverySectorCode ?? '',
+            deliverySectorName: parcel.deliverySectorName ?? '', deliveryAssignedBy: parcel.deliveryAssignedBy ?? null,
+            deliveryAssignedAt: parcel.deliveryAssignedAt ?? null, status: parcel.status,
+          }
+          // ⚡ Affichage immédiat
+          updateParcelLocal(parcel.id, { deliveryDriverId: bulkAssignDriverId, deliveryDriverName: driverName, ...extra, deliveryAssignedAt: new Date().toISOString(), status: 'En cours de livraison' })
+          try {
+            await assignDeliveryAndStart(parcel.id, bulkAssignDriverId, driverName, extra, note, profile)
+          } catch (e: any) {
+            updateParcelLocal(parcel.id, before) // annule l'affichage optimiste
+            failed.push({ parcel, err: e?.code === 'permission-denied' ? 'refusé (droits)' : (e?.message || String(e)) })
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: Math.min(8, selectedParcels.length) }, worker))
 
-      // ✅ Vider la sélection après assignation pour feedback visuel
-      setBulkAssignSelectedIds([])
-      setBulkAssignDriverId('')
-      setBulkAssignSectorId('')
+      // ✅ Vider la sélection (en gardant les échecs sélectionnés pour réessayer)
+      setBulkAssignSelectedIds(failed.map(f => f.parcel.id))
+      if (!failed.length) { setBulkAssignDriverId(''); setBulkAssignSectorId('') }
+      if (failed.length) {
+        setBulkAssignError(`${selectedParcels.length - failed.length} assignée(s), ${failed.length} en échec (restées sélectionnées) : `
+          + failed.slice(0, 6).map(f => `${f.parcel.senderNic || f.parcel.trackingId} — ${f.err}`).join(' ; ') + (failed.length > 6 ? ' …' : ''))
+      }
 
       // ✅ Si on est sur le filtre "unassigned", petit délai pour laisser Firestore se mettre à jour
       const { driverFilter } = s.current
@@ -594,14 +599,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
       }, 0)
 
       await deleteCaisseEntries(agentOperations.map((e: any) => e.id))
-
-      if (agencyCashDelta !== 0 && profile?.city) {
-        await adjustAgencyCash(profile.city, {
-          soldeDelta:    agencyCashDelta,
-          especesDelta:  agencyCashDelta,
-          lastUpdatedBy: profile?.name || 'Agent',
-        })
-      }
+      // 🧊 Solde de caisse (agencyCashes) GELÉ depuis le 25/10/2026 (lot 3) : plus ajusté ici (seul l'admin l'écrit)
+      void agencyCashDelta
 
       setAgentOpsDelete({ loading: false, message: `${agentOperations.length} operation(s) supprimee(s) pour cet agent.`, error: '' })
     } catch (err: any) {
@@ -666,17 +665,8 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const name = profile?.name || 'Agent'
     setCodSettling(parcel.id)
     try {
-      await settleCodToSender(parcel.id, name, uid || '')
-      if (isCash(parcel)) {
-        await createCaisseEntry({
-          type: 'sortie', category: 'cod_regle_expediteur',
-          amount: codCashPartOf(parcel),
-          description: `RETOUR FOND espèces réglé expéditeur — ${parcel.trackingId} (${parcel.sender?.name || ''})`,
-          reference: parcel.trackingId,
-          agentId: uid || '', agentName: name, city: profile?.city || '',
-          cashierId: uid || '', cashierName: name,
-        })
-      }
+      // 🔒 Lot 3 (25/10/2026) : règlement + sortie de caisse (part espèces) en UNE transaction, sur l'expédition RELUE
+      await settleCodToSender(parcel.id, name, uid || '', codSettleCashOut(uid || '', name, profile?.city || ''))
       patchAllCod(parcel.id, { codSenderPaid: true, codSenderPaidAt: new Date().toISOString() })
     } finally {
       setCodSettling(null)
@@ -745,25 +735,19 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
     const ids  = parcels.map((p: any) => p.id)
     setBatchSettling(true)
     try {
-      await batchSettleCods(ids, name, uid || '')
-      const espacesParcels = parcels.filter((p: any) => isCash(p))
-      if (espacesParcels.length > 0) {
-        await Promise.all(espacesParcels.map((parcel: any) =>
-          createCaisseEntry({
-            type: 'sortie', category: 'cod_regle_expediteur',
-            amount: codCashPartOf(parcel),
-            description: `RETOUR FOND espèces réglé expéditeur — ${parcel.trackingId} (${parcel.sender?.name || ''})`,
-            reference: parcel.trackingId,
-            agentId: uid || '', agentName: name, city: profile?.city || '',
-            cashierId: uid || '', cashierName: name,
-          })
-        ))
-      }
+      // 🔒 Lot 3 (25/10/2026) : par lots, chaque lot en UNE transaction (règlement + sorties de caisse) ; les expéditions
+      // déjà réglées entre-temps sont ignorées et signalées (avant : sorties en Promise.all, succès partiel silencieux)
+      const { settled, skipped } = await batchSettleCods(ids, name, uid || '', codSettleCashOut(uid || '', name, profile?.city || ''))
+      const done = new Set(settled)
       const { setAllCodParcels } = s.current
       setAllCodParcels((prev: any) => prev
-        ? prev.map((p: any) => ids.includes(p.id) ? { ...p, codSenderPaid: true, codSenderPaidAt: new Date().toISOString() } : p)
+        ? prev.map((p: any) => done.has(p.id) ? { ...p, codSenderPaid: true, codSenderPaidAt: new Date().toISOString() } : p)
         : prev
       )
+      if (skipped.length) {
+        const nics = parcels.filter((p: any) => skipped.includes(p.id)).map((p: any) => p.senderNic || p.trackingId)
+        showToast(`${settled.length} RETOUR FOND réglé(s). ${skipped.length} déjà réglé(s) ou introuvable(s), ignoré(s) : ${nics.slice(0, 8).join(', ')}${nics.length > 8 ? '…' : ''}`, 'error', 9000)
+      }
     } finally {
       setBatchSettling(false)
     }
@@ -1653,7 +1637,9 @@ export function useAgentHandlers(s: React.MutableRefObject<Record<string, any>>)
 
       const { createParcel } = await import('../../../firebase/firestore')
       // 🔒 Agent pro : il ne saisit que les expéditions de SA ville (règle Firestore identique)
-      const senderCity = profile?.role === 'agentpro' ? (profile?.city || '') : form.senderCity
+      // ✏️ Compte « modification totale » (zahra@gmail.com, 29/10/2026) : TOUTES les villes (ville choisie dans la saisie)
+      const senderCity = profile?.role === 'agentpro' && !isFullParcelEditor(profile)
+        ? (profile?.city || '') : (form.senderCity || profile?.city || '')
       const parcel = await createParcel({
         sender:        { name: form.senderName, nic: form.senderNic, address: form.senderAddress, tel: form.senderTel, city: senderCity },
         receiver:      { name: form.receiverName, address: form.receiverAddress, tel: form.receiverTel, city: form.receiverCity },

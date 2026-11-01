@@ -413,7 +413,11 @@ ${rows.map(r => `<tr>${cols.map(c => `<td${c.includes('DH') ? ' class="r"' : ''}
                         {p.codDocMismatch === true && (
                           <span className="block mt-0.5 rounded bg-amber-100 border border-amber-300 px-1 text-[10px] font-bold text-amber-800"
                             title={`Signalé par ${p.codDocMismatchBy || '—'}${p.codDocMismatchNote ? ` : ${p.codDocMismatchNote}` : ''} — à corriger : « Modifier l'expédition » → + Espèces`}>
-                            ⚠️ Chèque reçu {Number(p.codDocMismatchReceived || 0).toLocaleString('fr-MA')} DH · reste {Number(p.codDocMismatchCash || 0).toLocaleString('fr-MA')} DH en espèces{isMixedCod(p) ? ' (✓ corrigé en mixte)' : ''}
+                            ⚠️ {Array.isArray(p.codDocMismatchGroupNics) && p.codDocMismatchGroupNics.length > 1 ? 'Chèque groupé' : 'Chèque'} reçu {Number(p.codDocMismatchReceived || 0).toLocaleString('fr-MA')} DH · reste {Number(p.codDocMismatchCash || 0).toLocaleString('fr-MA')} DH en espèces{isMixedCod(p) ? ' (✓ corrigé en mixte)' : ''}
+                            {/* 🔗 Chèque groupé : montants du GROUPE entier, à répartir entre ses expéditions */}
+                            {Array.isArray(p.codDocMismatchGroupNics) && p.codDocMismatchGroupNics.length > 1 && (
+                              <span className="block font-semibold text-amber-700">pour {p.codDocMismatchGroupNics.length} expéditions : {p.codDocMismatchGroupNics.join(', ')}</span>
+                            )}
                           </span>
                         )}
                       </td>

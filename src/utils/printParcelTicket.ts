@@ -2,11 +2,26 @@
  * Utilitaire pour imprimer/afficher le bon d'expédition (Bon de Ramassage)
  */
 import { isMixedCod, codPartsDetailLabel } from './codParts'
+import { fitA4Script } from './printFitA4'
 
-export function printParcelTicket(parcel: any, targetWindow?: Window | null) {
+export async function printParcelTicket(parcel: any, targetWindow?: Window | null) {
   if (!parcel) {
     console.error('Pas de colis fourni pour l\'impression')
     return
+  }
+
+  // QR de suivi généré ici (qrcode.react, comme printAgentTicket) : l'ancien script en ligne
+  // (qrcode@1.5.3/build/qrcode.min.js) n'existe pas → le QR n'apparaissait jamais.
+  let qrSvgStr = ''
+  try {
+    const [{ createElement }, { renderToStaticMarkup }, { QRCodeSVG }] = await Promise.all([
+      import('react'), import('react-dom/server'), import('qrcode.react'),
+    ])
+    qrSvgStr = renderToStaticMarkup(createElement(QRCodeSVG, {
+      value: `https://arelanc.web.app/track?id=${parcel.trackingId || ''}`, size: 64, level: 'M', includeMargin: false,
+    }))
+  } catch (err) {
+    console.error('Erreur QR:', err)
   }
 
   // Types de service (défini localement car utilisé dans HTML généré)
@@ -69,7 +84,7 @@ export function printParcelTicket(parcel: any, targetWindow?: Window | null) {
 
   // Génère le contenu d'un exemplaire du bon (id suffixé pour permettre 2 copies sur la même page)
   const renderTicket = (suffix: string) => `
-  <div class="ticket">
+  <div class="ticket copy">
     <!-- Header -->
     <div class="header">
       <img src="${logoUrl}" alt="BG Express" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
@@ -182,7 +197,7 @@ export function printParcelTicket(parcel: any, targetWindow?: Window | null) {
     <div class="barcode-section">
       <svg id="barcode${suffix}"></svg>
       <div class="qr-section">
-        <svg id="qrcode${suffix}"></svg>
+        ${qrSvgStr}
         <div class="qr-label">Suivi en ligne</div>
       </div>
     </div>
@@ -205,7 +220,7 @@ export function printParcelTicket(parcel: any, targetWindow?: Window | null) {
   <style>
     @page {
       size: A4 portrait;
-      margin: 8mm;
+      margin: 5mm;
     }
 
     @media print {
@@ -218,7 +233,11 @@ export function printParcelTicket(parcel: any, targetWindow?: Window | null) {
       }
       #ticket-print {
         width: 100% !important;
+        gap: 1mm !important;
       }
+      /* Exemplaires agrandis à ≈ 95 % de la feuille : zoom calculé par fitA4Script (utils/printFitA4) */
+      .ticket { display: flex; flex-direction: column; }
+      .ticket > .signatures { flex: 1; }
     }
 
     body {
@@ -543,7 +562,6 @@ export function printParcelTicket(parcel: any, targetWindow?: Window | null) {
 
   <!-- Charger les librairies de génération de codes-barres -->
   <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.3/build/qrcode.min.js"></script>
 
   <script>
     ['1', '2'].forEach(function (suffix) {
@@ -555,21 +573,9 @@ export function printParcelTicket(parcel: any, targetWindow?: Window | null) {
         fontSize: 10,
         margin: 0
       });
-
-      // Générer le QR code
-      QRCode.toCanvas(document.getElementById('qrcode' + suffix),
-        "https://arelanc.web.app/track?id=${parcel.trackingId || ''}",
-        {
-          width: 64,
-          margin: 0,
-          errorCorrectionLevel: 'M'
-        },
-        function (error) {
-          if (error) console.error('Erreur QR:', error);
-        }
-      );
     });
   </script>
+  <script>${fitA4Script(false)}</script>
 </body>
 </html>
   `.trim()

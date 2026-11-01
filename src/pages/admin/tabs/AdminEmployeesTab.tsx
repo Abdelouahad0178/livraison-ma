@@ -212,6 +212,7 @@ export default function AdminEmployeesTab({
                         code: u.code || '',
                         tel: u.tel || '',
                         directorPermissions: u.directorPermissions || [],
+                        permissions: u.permissions || {},
                         cin: u.cin || '',
                         cnss: u.cnss || '',
                         assurance: u.assurance || '',

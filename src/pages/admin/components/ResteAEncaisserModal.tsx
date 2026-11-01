@@ -1,9 +1,14 @@
 // 🧾 Admin › Port par agence › Suivi de l'agence › « Reste à encaisser » : les expéditions qui composent ce montant,
 // filtrables par livreur et par type de port, cochables, imprimables.
 import { useMemo, useState } from 'react'
-import { Printer, Search, X } from 'lucide-react'
+import { MessageCircle, Printer, Search, Users, X } from 'lucide-react'
 import type { ResteLine } from '../../../utils/agencyFollowUp'
 import { printResteAEncaisser } from '../../../utils/printAgencyFollowUp'
+import type { ShareResteOpts } from '../../../utils/shareResteWhatsApp'
+import { doc, getDoc } from 'firebase/firestore'
+import { db } from '../../../firebase/config'
+import WhatsAppSendDialog from './WhatsAppSendDialog'
+import BulkWhatsAppDialog from './BulkWhatsAppDialog'
 
 const dh = (n: number) => `${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString('fr-MA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} DH`
 const fmtD = (v: any) => { const d = v?.toDate ? v.toDate() : v ? new Date(v) : null; return d && !Number.isNaN(d.getTime()) ? d.toLocaleDateString('fr-FR') : '' }
@@ -51,6 +56,24 @@ export default function ResteAEncaisserModal({ city, periodText, lines, total, o
     const what = [driver !== 'all' ? `livreur : ${driver}` : '', kind !== 'all' ? (kindLabels[kind] || kind).replace(/^\S+ /, '') : ''].filter(Boolean).join(' · ')
     printResteAEncaisser({ city, periodText: `${periodText}${what ? ` — ${what}` : ''}`, lines: chosen, kindLabels, subject, focus })
   }
+  // 💬 Même liste (cochée, filtrée) envoyée par WhatsApp : PDF déposé en ligne, lien dans le message — par numéro
+  // (application Windows / WhatsApp Web) ou QR code. Un livreur filtré → bandeau + signatures, son téléphone proposé.
+  const [wa, setWa] = useState<{ opts: ShareResteOpts; phone: string } | null>(null)
+  const [bulkOpen, setBulkOpen] = useState(false)
+  const sendWhatsApp = async () => {
+    if (!chosen.length) { alert('Cochez au moins une expédition.'); return }
+    const what = kind !== 'all' ? (kindLabels[kind] || kind).replace(/^\S+ /, '') : ''
+    const opts: ShareResteOpts = { city, periodText: `${periodText}${what ? ` — ${what}` : ''}`, lines: chosen, kindLabels, subject, focus, driver: driver !== 'all' ? driver : undefined }
+    setWa({ opts, phone: '' })
+    const driverId = driver !== 'all' ? chosen.find(l => l.p.deliveryDriverId)?.p.deliveryDriverId : null
+    if (driverId) {
+      try {
+        const snap = await getDoc(doc(db, 'users', driverId))
+        const tel = snap.exists() ? String(snap.data().tel || snap.data().phone || '') : ''
+        if (tel) setWa(cur => (cur && cur.opts === opts ? { ...cur, phone: tel } : cur))
+      } catch { /* numéro à saisir */ }
+    }
+  }
 
   const sel = 'px-3 py-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700'
   return (
@@ -64,6 +87,16 @@ export default function ResteAEncaisserModal({ city, periodText, lines, total, o
           <div className="flex items-center gap-2">
             <button onClick={print} disabled={!chosen.length} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-amber-600 hover:bg-amber-700 disabled:opacity-50 text-white text-sm font-semibold">
               <Printer className="w-4 h-4" /> Imprimer ({chosen.length})
+            </button>
+            <button onClick={sendWhatsApp} disabled={!chosen.length}
+              title="Envoyer la liste cochée par WhatsApp (numéro, application Windows, WhatsApp Web ou QR code)"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-green-600 hover:bg-green-700 disabled:opacity-50 text-white text-sm font-semibold">
+              <MessageCircle className="w-4 h-4" /> WhatsApp ({chosen.length})
+            </button>
+            <button onClick={() => setBulkOpen(true)} disabled={!chosen.length}
+              title="Un PDF par livreur (tous ou chacun), envoyés par WhatsApp à chaque livreur ou à un seul numéro"
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-emerald-700 hover:bg-emerald-800 disabled:opacity-50 text-white text-sm font-semibold">
+              <Users className="w-4 h-4" /> WhatsApp par livreur
             </button>
             <button onClick={onClose} className="p-2 rounded-lg hover:bg-slate-100 text-slate-500"><X className="w-4 h-4" /></button>
           </div>
@@ -128,6 +161,13 @@ export default function ResteAEncaisserModal({ city, periodText, lines, total, o
         </div>
         {lines.some(l => l.reste < 0) && <p className="px-5 py-2 text-[11px] text-slate-500 border-t">Lignes en italique : port encaissé par l'agence sans être attendu dans la période (ex. expédition d'une autre période) — elles diminuent le reste.</p>}
       </div>
+      {wa && <div onClick={e => e.stopPropagation()}><WhatsAppSendDialog opts={wa.opts} defaultPhone={wa.phone} onClose={() => setWa(null)} /></div>}
+      {bulkOpen && (
+        <div onClick={e => e.stopPropagation()}>
+          <BulkWhatsAppDialog lines={chosen} onClose={() => setBulkOpen(false)}
+            base={{ city, periodText: `${periodText}${kind !== 'all' ? ` — ${(kindLabels[kind] || kind).replace(/^\S+ /, '')}` : ''}`, kindLabels, subject, focus }} />
+        </div>
+      )}
     </div>
   )
 }

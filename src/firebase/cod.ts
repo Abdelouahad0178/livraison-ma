@@ -8,7 +8,9 @@ import { assertCanCollectHere } from './parcels'
 import { bumpPresence } from '../services/presenceCounters'
 import { COD_STATUS, COD_PAYMENT_TYPES, STATUSES, sanitizeParcelCodWrite } from './constants'
 import { findOrCreateClientForReceiver } from './clients'
+import { caisseEntryDoc, newCaisseEntryRef } from './caisse'
 import { codMoneyOnly, entriesFromStart, moneyFromStart } from '../utils/moneyFlow'
+import { activeDays } from '../config/siteDelays'
 
 type DynamicData = Record<string, any>
 type FirestoreRow = DynamicData & { id: string }
@@ -173,7 +175,13 @@ export async function cancelCodRemise(parcelId: string, cancelledBy: string, can
   })
 }
 
-export async function settleCodToSender(parcelId: string, settledBy: string, settledById: string): Promise<void> {
+/**
+ * Règlement du COD à l'expéditeur. `cashOut(expédition relue)` → sortie de caisse à écrire (ou null) DANS LA MÊME
+ * transaction (lot 3 du diagnostic de la page chef d'agence, 25/10/2026) : avant, la sortie de caisse était écrite
+ * après, séparément — si elle échouait, le COD restait marqué réglé sans sortie de caisse.
+ */
+export async function settleCodToSender(parcelId: string, settledBy: string, settledById: string,
+  cashOut?: (parcel: FirestoreRow) => Record<string, unknown> | null): Promise<void> {
   await runTransaction(db, async tx => {
     const ref = doc(db, 'parcels', parcelId)
     const snap = await tx.get(ref)
@@ -188,6 +196,8 @@ export async function settleCodToSender(parcelId: string, settledBy: string, set
       codSenderPaidBy:   settledBy,
       codSenderPaidById: settledById,
     })
+    const entry = cashOut?.({ id: snap.id, ...data } as FirestoreRow)
+    if (entry) tx.set(newCaisseEntryRef(), caisseEntryDoc(entry))
   })
 }
 
@@ -241,17 +251,32 @@ export async function confirmCodReceivedBySource(parcelId: string, confirmedBy: 
     } : {}),
   })
 }
-export async function batchSettleCods(parcelIds: string[], settledBy: string, settledById: string): Promise<void> {
+/**
+ * Règlement groupé. Par lots de 200, chaque lot en UNE transaction : expéditions relues, celles déjà réglées ignorées
+ * (renvoyées dans `skipped`), règlement + sortie de caisse (`cashOut`) écrits ensemble — lot 3 (25/10/2026) ; avant, les
+ * sorties de caisse étaient écrites ensuite en Promise.all (succès partiel possible, sans liste des échecs).
+ */
+export async function batchSettleCods(parcelIds: string[], settledBy: string, settledById: string,
+  cashOut?: (parcel: FirestoreRow) => Record<string, unknown> | null): Promise<{ settled: string[]; skipped: string[] }> {
   const now = new Date().toISOString()
-  const chunks: string[][] = []
-  for (let i = 0; i < parcelIds.length; i += 500) chunks.push(parcelIds.slice(i, i + 500))
-  for (const chunk of chunks) {
-    const batch = writeBatch(db)
-    chunk.forEach(id => batch.update(doc(db, 'parcels', id), {
-      codSenderPaid: true, codSenderPaidAt: now, codSenderPaidBy: settledBy, codSenderPaidById: settledById,
-    }))
-    await batch.commit()
+  const settled: string[] = [], skipped: string[] = []
+  for (let i = 0; i < parcelIds.length; i += 200) {
+    const chunk = parcelIds.slice(i, i + 200)
+    const res = await runTransaction(db, async tx => {
+      const snaps = await Promise.all(chunk.map(id => tx.get(doc(db, 'parcels', id))))
+      const ok: string[] = [], ko: string[] = []
+      snaps.forEach(snap => {
+        if (!snap.exists() || snap.data().codSenderPaid === true) { ko.push(snap.id); return }
+        tx.update(snap.ref, { codSenderPaid: true, codSenderPaidAt: now, codSenderPaidBy: settledBy, codSenderPaidById: settledById })
+        const entry = cashOut?.({ id: snap.id, ...snap.data() } as FirestoreRow)
+        if (entry) tx.set(newCaisseEntryRef(), caisseEntryDoc(entry))
+        ok.push(snap.id)
+      })
+      return { ok, ko }
+    })
+    settled.push(...res.ok); skipped.push(...res.ko)
   }
+  return { settled, skipped }
 }
 
 // Récupère tous les colis RETOUR FOND liés à un agent (source OU destination) — historique complet
@@ -280,7 +305,7 @@ export async function fetchAllAgentCodParcels(agentId: string) {
 export async function fetchAllAgencyCodParcels(city: string, onProgress?: (scanned: number) => void) {
   const PAGE = 2000
   const MIN_PER_FIELD = 3000
-  const cutoffMs = Date.now() - 45 * 24 * 60 * 60 * 1000
+  const cutoffMs = Date.now() - activeDays() * 24 * 60 * 60 * 1000 // 45 j, réglable (config/siteDelays.ts)
   const all = new Map<string, FirestoreRow>()
   let scanned = 0
   for (const field of ['originCity', 'destinationCity'] as const) {

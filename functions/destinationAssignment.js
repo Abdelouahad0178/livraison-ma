@@ -7,11 +7,15 @@ function canRealign(data) {
   return status !== 'Livré' && !/Retour|Retourn/.test(status) && !portCashed && !codCashed
 }
 
-function planAssignmentReset(parcel, driver, gare, now) {
+// 🏢 Villes voisines : réglage Admin › Agences (settings/agencies.neighbors), sinon Agadir ⇄ Ait Melloul (01/11/2026)
+const CODE_NEIGHBORS = { Agadir: 'Ait Melloul', 'Ait Melloul': 'Agadir' }
+const areNeighbors = (a, b, neighbors = CODE_NEIGHBORS) => !!a && !!b && (neighbors[a] === b || neighbors[b] === a)
+
+function planAssignmentReset(parcel, driver, gare, now, neighbors = CODE_NEIGHBORS) {
   if (!canRealign(parcel) || !parcel.destinationCity || !parcel.deliveryDriverId) return null
   const isGare = driver?.role === 'livreur-gare' || /^En gare/i.test(parcel.deliveryDriverName || '')
   const driverCity = driver?.city || (isGare ? String(parcel.deliveryDriverName || '').replace(/^En gare - /i, '') : '')
-  const sharedPair = [driverCity, parcel.destinationCity].sort().join('|') === 'Agadir|Ait Melloul'
+  const sharedPair = areNeighbors(driverCity, parcel.destinationCity, neighbors)
   if (driverCity === parcel.destinationCity || (!isGare && sharedPair)) return null
   const patch = {
     deliveryDriverId: isGare && gare ? gare.id : null,
@@ -34,12 +38,14 @@ function createDestinationAssignmentHandler(db, FieldValue) {
     const driver = (await db.doc(`users/${after.deliveryDriverId}`).get()).data() || {}
     const gareSnapshot = await db.collection('users').where('role', '==', 'livreur-gare').where('city', '==', after.destinationCity).limit(1).get()
     const gare = gareSnapshot.empty ? null : { id: gareSnapshot.docs[0].id }
+    const settings = (await db.doc('settings/agencies').get()).data() || {}
+    const neighbors = settings.neighbors && typeof settings.neighbors === 'object' ? settings.neighbors : CODE_NEIGHBORS
     await db.runTransaction(async transaction => {
       const current = (await transaction.get(event.data.after.ref)).data()
       // A newer routing/driver choice by the destination must take precedence.
       if (!current || current.destinationCity !== after.destinationCity || current.deliveryDriverId !== after.deliveryDriverId) return
       const now = new Date().toISOString()
-      const patch = planAssignmentReset(current, driver, gare, now)
+      const patch = planAssignmentReset(current, driver, gare, now, neighbors)
       if (!patch) return
       transaction.update(event.data.after.ref, {
         ...patch,

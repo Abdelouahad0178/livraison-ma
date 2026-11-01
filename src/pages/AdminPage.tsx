@@ -38,6 +38,7 @@ import {
 } from '../firebase/firestore'
 import { deleteParcel, getRealParcelsStats, subscribeAgencyParcelsFull, subscribeAgencyParcels, getMoreAgencyParcels } from '../firebase/parcels'
 import { ALL_CITIES } from '../utils/liteDayCache'
+import { subscribeAgencySettings } from '../config/agencySettings'
 import AdminDriverSection from './admin/components/AdminDriverSection'
 
 // 🏙️ Filtre ville sans période (« Tout ») : borne basse « depuis toujours » des requêtes par ville
@@ -63,7 +64,7 @@ import { shouldTriggerSearch } from '../utils/searchUtils'
 import {
   CAISSE_CATEGORIES, CITIES, STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS,
   DIRECTOR_PERMISSIONS, DEFAULT_TARIFF_CONFIG, calculateTariff, normalizeTariffConfig,
-  codCollectedLabel, REGLEMENT_MODES, REGLEMENT_STATUSES,
+  codCollectedLabel, REGLEMENT_MODES, REGLEMENT_STATUSES, isReturnStatus,
 } from '../firebase/constants'
 import {
   LayoutDashboard, LogOut, Package, Clock, CheckCircle,
@@ -101,6 +102,7 @@ const AdminTariffsTab = lazy(() => import('./admin/tabs/AdminTariffsTab'))
 const AdminExportsTab = lazy(() => import('./admin/tabs/AdminExportsTab'))
 const AdminArchivageTab = lazy(() => import('./admin/tabs/AdminArchivageTab'))
 const AdminControleurTab = lazy(() => import('./admin/tabs/AdminControleurTab'))
+const AdminEnGareTab = lazy(() => import('./admin/tabs/AdminEnGareTab'))
 const AdminPortAgenciesTab = lazy(() => import('./admin/tabs/AdminPortAgenciesTab'))
 const AdminCodAgenciesTab = lazy(() => import('./admin/tabs/AdminCodAgenciesTab'))
 const AdminLostParcelsTab = lazy(() => import('./admin/tabs/AdminLostParcelsTab'))
@@ -117,6 +119,7 @@ import DriverPortDuModal from './admin/modals/DriverPortDuModal'
 import AdminEditParcelModal from './admin/modals/AdminEditParcelModal'
 import { fmt } from '../utils/formatNumber'
 import { codMoneyOnly, isPortDuMoneyBeforeStart } from '../utils/moneyFlow'
+import { filterByDate as sharedFilterByDate } from '../utils/dateFilter'
 
 const parcelDate = (p: any) => {
   // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire — voir
@@ -142,32 +145,10 @@ const caisseEntryDate = (e: any) => {
   if (e.createdAt) return new Date(e.createdAt)
   return new Date(0)
 }
-const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parcelDate, operationalDay?: Date) => {
-  if (preset === 'all') return list
-  const now = new Date()
-  let start: any = null, end: any = now
-  if      (preset === 'today')  { start = new Date(); start.setHours(0,0,0,0) }
-  else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate()-6); start.setHours(0,0,0,0) }
-  else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
-  else if (preset === 'custom') {
-    // 📅 CORRECTION TIMEZONE: 00:00 → 23:59 (pas minuit → minuit)
-    start = from ? new Date(from + 'T00:00:00') : null
-    end = to ? new Date(to + 'T23:59:59') : now
-  }
-  else if (preset === 'operational' && operationalDay) {
-    // 🗓️ Mode journée opérationnelle: 08:00 → 06:00 (lendemain)
-    const range = getOperationalDayRange(operationalDay)
-    start = range.start
-    end = range.end
-  }
-  if (!Array.isArray(list)) return []
-  return list.filter((p: any) => {
-    const d = getDate(p)
-    if (start && d < start) return false
-    if (end   && d > end)   return false
-    return true
-  })
-}
+// 📅 (01/11/2026) « Aujourd'hui », « 7 jours », « Ce mois », « Du … au » = JOURNÉES D'OPÉRATION (8 h → 6 h), comme tout le
+// site (avant : minuit → minuit sur cette page) — filtre commun utils/dateFilter (opPeriodRange).
+const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parcelDate, operationalDay?: Date): any =>
+  (Array.isArray(list) ? sharedFilterByDate<any>(list, preset, from, to, getDate, operationalDay) : [])
 
 const formatPeriod = (preset: any, from: any, to: any, operationalDay?: Date) => {
   const fmtDate = (value: any) => value ? new Date(value + 'T00:00:00').toLocaleDateString('fr-MA') : ''
@@ -665,12 +646,9 @@ export default function AdminPage() {
       adminFilteredPage,
     })
 
-    if (isSearchActive) {
-      // Mode recherche : on utilise searchParcels - GARDER liveParcels/moreParcels pour éviter l'affichage à 0
-      console.warn(`❌ BLOQUÉ: Mode recherche actif - pas de rechargement`)
-      setLoading(false)
-      return () => {}
-    }
+    // ⚡ (29/10/2026) La recherche ne coupe PLUS le chargement de la période : avant, taper un N° EXP arrêtait
+    // l'écoute, et vider le champ RELISAIT toute la période (« Ce mois » : 31 à 135 Mo, plusieurs secondes bloquées).
+    // La liste chargée reste donc la même (et à jour) pendant et après la recherche.
 
     // ⚡ Si rechargement automatique désactivé → ne rien charger
     if (!autoReloadEnabled) {
@@ -840,7 +818,7 @@ export default function AdminPage() {
 
       return () => unsubParcels()
     }
-  }, [isSearchActive, autoReloadEnabled, loadPreset, dateFrom, dateTo, operationalDayFormatted, cityFilter, filteredPageForQuery])
+  }, [autoReloadEnabled, loadPreset, dateFrom, dateTo, operationalDayFormatted, cityFilter, filteredPageForQuery])
 
   // 🔄 Écouter les mises à jour de prix depuis d'autres pages (ex: Facturier)
   useEffect(() => {
@@ -1316,15 +1294,33 @@ export default function AdminPage() {
     const pDate = (p: any) => p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt || 0)
     const eDate = (e: any) => e.createdAt?.toDate ? e.createdAt.toDate() : new Date(e.createdAt || 0)
     const periodEntries = filterByDate(caisseEntries, adminDatePreset, adminDateFrom, adminDateTo, eDate, operationalDay)
-    if (!Array.isArray(periodEntries)) return []
+    if (!Array.isArray(periodParcels) || !Array.isArray(periodEntries)) return []
+    // ⚡ Calculé seulement quand l'onglet Activité est affiché (seul utilisateur de ces chiffres)
+    if (mainTab !== 'activity') return []
+    // ⚡ (29/10/2026) Expéditions rangées UNE fois par utilisateur (agent, agent destination, chauffeur, livreur) :
+    // avant, 4 parcours des ~18 000 expéditions de la période PAR utilisateur (≈ 7 s par recherche sur « Ce mois »).
+    // Mêmes listes, même ordre (ordre de periodParcels conservé dans chaque groupe).
+    const EMPTY: any[] = []
+    const groupBy = (key: string) => {
+      const m = new Map<any, any[]>()
+      for (const p of periodParcels) {
+        const k = p?.[key]
+        if (k === undefined || k === null) continue
+        const list = m.get(k)
+        if (list) list.push(p); else m.set(k, [p])
+      }
+      return m
+    }
+    const byAgent = groupBy('agentId'), byDestAgent = groupBy('destinationAgentId')
+    const byChauffeur = groupBy('chauffeurId'), byDriver = groupBy('deliveryDriverId')
     return users
       .filter((u: any) => isAgencyStaff(u.role) || ['chauffeur','livreur','caissier'].includes(u.role))
       .filter((u: any) => matchesActivityRole(activityRoleFilter, u.role))
       .map((u: any) => {
-        const created    = periodParcels.filter((p: any) => p.agentId === u.id && (u.role === 'aide_agent' || p.agentRole !== 'aide_agent'))
-        const claimed    = periodParcels.filter((p: any) => p.destinationAgentId === u.id)
-        const transports = periodParcels.filter((p: any) => p.chauffeurId === u.id)
-        const deliveries = periodParcels.filter((p: any) => p.deliveryDriverId === u.id)
+        const created    = (byAgent.get(u.id) || EMPTY).filter((p: any) => u.role === 'aide_agent' || p.agentRole !== 'aide_agent')
+        const claimed    = byDestAgent.get(u.id) || EMPTY
+        const transports = byChauffeur.get(u.id) || EMPTY
+        const deliveries = byDriver.get(u.id) || EMPTY
         const myParcels  = [...new Map([...created, ...claimed, ...transports, ...deliveries].map((p: any) => [p.id, p])).values()]
         const myEntries  = periodEntries.filter((e: any) => e.cashierId === u.id || e.agentId === u.id)
         // Agent fields
@@ -1364,7 +1360,11 @@ export default function AdminPage() {
         }
       })
       .sort((a, b) => (b.parcels.length || 0) - (a.parcels.length || 0))
-  }, [periodParcels, caisseEntries, driverPortDuTxs, users, activityRoleFilter, adminDatePreset, adminDateFrom, adminDateTo])
+  }, [periodParcels, caisseEntries, driverPortDuTxs, users, activityRoleFilter, adminDatePreset, adminDateFrom, adminDateTo, mainTab])
+
+  // 🏢 Réglages des agences (Admin › Agences) : la liste des villes peut changer en direct
+  const [agencySettingsVersion, setAgencySettingsVersion] = useState(0)
+  useEffect(() => subscribeAgencySettings(() => setAgencySettingsVersion(v => v + 1)), [])
 
   const agencyStats = useMemo(() => {
     if (!Array.isArray(periodParcels) || !Array.isArray(users)) return []
@@ -1379,7 +1379,7 @@ export default function AdminPage() {
     const manager   = users.find((u: any) => u.city === city && (u.role === 'chef_agence' || u.role === 'admin'))
     const codPending = cityParcels.filter((p: any) => parseFloat(p.codAmount) > 0 && (!p.codStatus || p.codStatus === 'pending')).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0)
     return { city, incoming, outgoing, active, delivered, returned, agents, manager, codPending }
-  })}, [periodParcels, users])
+  })}, [periodParcels, users, agencySettingsVersion])
 
   const delayedAlerts = useMemo(() => {
     if (!Array.isArray(periodParcels)) return []
@@ -1466,6 +1466,8 @@ export default function AdminPage() {
     debounceMs: ADMIN_SEARCH_CONFIG.debounceMs,
     limit: ADMIN_SEARCH_CONFIG.limit,
     shouldSearch: shouldTriggerSearch, // 7 chiffres / 3 lettres avant toute recherche
+    // ⚡ N° EXP / code (lettres-chiffres, 5 caractères ou plus) : `filtered` ci-dessous n'utilise jamais Fuse pour ces termes
+    skipQuery: (q: string) => /^[0-9A-Z]+$/.test(q.trim().toUpperCase()) && q.trim().length >= 5,
   })
 
   // ⏎ Entrée dans la zone de recherche : recherche immédiate (N° EXP de moins de 7 chiffres)
@@ -1483,6 +1485,31 @@ export default function AdminPage() {
 
   // 🗄️ Inclure les archives dans la recherche
   const [includeArchived, setIncludeArchived] = useState(false)
+
+  // 🔄 En QUITTANT l'onglet Expéditions (ex. retour à l'Accueil), ses filtres reviennent à l'état normal : au retour,
+  // « Tout » et les 50 expéditions les plus récentes (demande du 25/10/2026). Les filtres propres aux autres onglets
+  // (COD / Port par agence, Utilisateurs…) ne sont pas touchés.
+  const prevMainTabRef = useRef(mainTab)
+  useEffect(() => {
+    const prev = prevMainTabRef.current
+    prevMainTabRef.current = mainTab
+    if (prev !== 'expeditions' || mainTab === 'expeditions') return
+    setAdminDatePreset('all')
+    setDateFromInput('')
+    setDateToInput('')
+    setOperationalDayRaw(getCurrentOperationalDay())
+    setCityFilter('Toutes')
+    setDriverFilter('Tous')
+    setStatusFilter([])
+    setServiceTypeFilter([])
+    setPortTypeFilter([])
+    setSearch('')
+    setSearchScope('all')
+    setIncludeArchived(false)
+    setServerSearchResults(null)
+    setIsSearchActive(false)
+    setDisplayLimit(DISPLAY_LIMIT)
+  }, [mainTab]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ⚡ Détecter si recherche active - MAIS sans charger 2000 colis
   // On garde isSearchActive pour la logique, mais loadLimit reste à 500
@@ -1591,8 +1618,7 @@ export default function AdminPage() {
       if (statusFilter.length > 0) {
         // Logique : "Retourné" inclut tous les statuts du circuit retour
         if (statusFilter.includes('Retourné')) {
-          const returnStatuses = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
-          if (returnStatuses.includes(p.status)) return true
+          if (isReturnStatus(p.status)) return true
         }
         // Match exact pour les autres statuts
         if (!statusFilter.includes(p.status)) return false
@@ -1892,7 +1918,7 @@ export default function AdminPage() {
               </button>
               <span className="text-gray-200 font-light">/</span>
               <span className="text-sm font-bold text-blue-600">
-                {{ expeditions:'Expéditions', doublons:'Doublons', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', exports:'Exports', caisse:'Caisse', versements:'Versements Admin', invoices:'Facturation', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires', controleur:'Rapports du Contrôleur', cod_agencies:'COD par agence', port_agencies:'Port par agence', archivage:'Archives', clients:'Clients', banque:'Banque RETOUR FOND', permissions:'Permissions' }[mainTab] || mainTab}
+                {{ expeditions:'Expéditions', doublons:'Doublons', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', exports:'Exports', caisse:'Caisse', versements:'Versements Admin', invoices:'Facturation', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires', controleur:'Rapports du Contrôleur', en_gare:'En gare', cod_agencies:'COD par agence', port_agencies:'Port par agence', archivage:'Archives', clients:'Clients', banque:'Banque RETOUR FOND', permissions:'Permissions' }[mainTab] || mainTab}
               </span>
             </div>
           )}
@@ -1909,8 +1935,8 @@ export default function AdminPage() {
                 { key: 'doublons',    label: '⚠️ Doublons',         icon: AlertTriangle },
                 { key: 'cod_agencies', label: '💰 COD par agence',   icon: Wallet    },
                 { key: 'port_agencies', label: '📮 Port par agence', icon: Building2 },
-                { key: 'controleur',  label: '🤖 Rapports du Contrôleur', icon: AlertTriangle },
-                { key: 'archivage',   label: '🗄️ Archives',          icon: Archive   },
+                { key: 'en_gare',     label: '🏬 En gare',           icon: Package   },
+                { key: 'controleur',  label: '🤖 Rapports du Contrôleur', icon: AlertTriangle },                { key: 'archivage',   label: '🗄️ Archives',          icon: Archive   },
                 { key: 'users',       label: 'Utilisateurs',         icon: Users     },
                 { key: 'activity',    label: 'Activité',             icon: BarChart2 },
                 { key: 'agencies',    label: 'Agences',              icon: Building2 },
@@ -2115,6 +2141,8 @@ export default function AdminPage() {
           <Suspense fallback={<div className="mt-4 h-72 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
             <AdminAgenciesTab
               agencyStats={agencyStats}
+              users={users}
+              adminName={auth.currentUser?.displayName || auth.currentUser?.email || 'Admin'}
               periodLabel={periodLabel}
               exportRows={exportRows}
               downloadCsv={downloadCsv}
@@ -2467,13 +2495,19 @@ export default function AdminPage() {
           </Suspense>
         )}
 
+        {/* TAB: 🏬 EN GARE (ce qui reste en gare dans chaque ville) */}
+        {mainTab === 'en_gare' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminEnGareTab />
+          </Suspense>
+        )}
+
         {/* TAB: 🤖 RAPPORTS DU CONTRÔLEUR */}
         {mainTab === 'controleur' && (
           <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
             <AdminControleurTab />
           </Suspense>
         )}
-
         {/* TAB: ARCHIVAGE */}
         {mainTab === 'archivage' && (
           <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>

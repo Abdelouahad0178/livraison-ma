@@ -255,16 +255,10 @@ export async function validerRapport(rapportId: any, chefId: any, chefName: any,
       }))
     }
 
-    // 5. Mettre à jour le solde de l'agence
-    tx.set(cashRef, {
-      city,
-      solde:        (parseFloat(cash.solde        || 0) || 0) + totalMontant,
-      soldeEspeces: (parseFloat(cash.soldeEspeces || 0) || 0) + totalEspeces,
-      soldeCheques: (parseFloat(cash.soldeCheques || 0) || 0) + totalCheques + totalTraites,
-      soldeVirement:(parseFloat(cash.soldeVirement|| 0) || 0),
-      lastUpdatedAt: serverTimestamp(),
-      lastUpdatedBy: chefName,
-    }, { merge: true })
+    // 5. 🧊 Solde de caisse (agencyCashes) GELÉ depuis le 25/10/2026 (lot 3, choix de l'utilisateur) : plus mis à jour ici.
+    // Il n'était plus tenu (remis à 0 par l'admin le 09/10, 5 958 opérations sur 6 935 ne le modifiaient pas) et les pages
+    // de caisse calculent leurs montants à partir des expéditions ; seul l'admin l'écrit désormais (règles).
+    void cash; void totalMontant
   })
 }
 export async function rejeterRapport(rapportId: any, chefId: any, chefName: any, chefNotes = '') {

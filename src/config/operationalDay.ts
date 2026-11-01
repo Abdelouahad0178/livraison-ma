@@ -69,8 +69,7 @@ export const OPERATIONAL_DAY_CONFIG = {
 // appel, ~0,13 ms × chaque expédition → plusieurs secondes de calcul sur les pages de caisse). Même résultat :
 // une Date locale portant l'heure murale de Casablanca, à la seconde près (comme l'ancien aller-retour en texte).
 let casaFormatter: Intl.DateTimeFormat | null = null
-function toCasablancaWallClock(sourceDate: Date): Date {
-  if (Number.isNaN(sourceDate.getTime())) return new Date(Number.NaN)
+function casaWallClockExact(sourceDate: Date): Date {
   casaFormatter ??= new Intl.DateTimeFormat('en-US', {
     timeZone: 'Africa/Casablanca', hourCycle: 'h23',
     year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric',
@@ -78,6 +77,28 @@ function toCasablancaWallClock(sourceDate: Date): Date {
   const v: Record<string, number> = {}
   for (const part of casaFormatter.formatToParts(sourceDate)) if (part.type !== 'literal') v[part.type] = Number(part.value)
   return new Date(v.year, v.month - 1, v.day, v.hour === 24 ? 0 : v.hour, v.minute, v.second)
+}
+// ⚡ (26/10/2026) formatToParts reste coûteux (~0,5 s par calcul de la page Chef d'exploitation : des dizaines de
+// milliers de dates). L'ÉCART entre l'heure de Casablanca et l'heure du poste ne change qu'aux changements d'heure,
+// toujours à une heure pile → calculé UNE fois par heure puis réutilisé. Même résultat (à la seconde, comme avant).
+const HOUR_MS = 3600000
+const casaOffsetByHour = new Map<number, number>()
+function toCasablancaWallClock(sourceDate: Date): Date {
+  const t = sourceDate.getTime()
+  if (Number.isNaN(t)) return new Date(Number.NaN)
+  const tSec = t - (((t % 1000) + 1000) % 1000)
+  const hour = Math.floor(tSec / HOUR_MS)
+  let delta = casaOffsetByHour.get(hour)
+  if (delta === undefined) {
+    const start = hour * HOUR_MS
+    delta = casaWallClockExact(new Date(start)).getTime() - start
+    // L'écart doit être le même en fin d'heure (sinon : changement d'heure du poste au milieu → calcul exact)
+    const end = start + HOUR_MS - 1000
+    if (casaWallClockExact(new Date(end)).getTime() - end !== delta) return casaWallClockExact(sourceDate)
+    if (casaOffsetByHour.size > 20000) casaOffsetByHour.clear()
+    casaOffsetByHour.set(hour, delta)
+  }
+  return new Date(tSec + delta)
 }
 
 /** Ancienne conversion (référence des tests d'équivalence uniquement). */

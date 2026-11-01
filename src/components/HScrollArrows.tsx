@@ -32,24 +32,40 @@ export default function HScrollArrows({ children, className = '' }: { children: 
     const el = scrollRef.current
     if (!el) return
     const r = el.getBoundingClientRect()
-    setRect({ left: r.left, right: window.innerWidth - r.right })
+    const left = r.left, right = window.innerWidth - r.right
+    // Même position : pas de nouvel objet → pas de nouveau rendu
+    setRect(prev => (prev && prev.left === left && prev.right === right ? prev : { left, right }))
   }
 
+  // ⚡ (29/10/2026) Écoutes posées UNE fois (avant : recréées à chaque rendu, `children` changeant toujours) et
+  // recalculs regroupés en un seul par image (requestAnimationFrame) : la saisie dans la recherche modifiait le
+  // tableau des dizaines de fois, et chaque modification relisait la mise en page. Même affichage des flèches.
   useEffect(() => {
-    updateArrows()
-    updateRect()
     const el = scrollRef.current
     if (!el) return
+    let raf = 0
+    let observedChild: Element | null = null
+    const run = () => {
+      raf = 0
+      // Tableau remplacé : on observe le nouveau
+      if (el.firstElementChild !== observedChild) {
+        if (observedChild) ro.unobserve(observedChild)
+        observedChild = el.firstElementChild
+        if (observedChild) ro.observe(observedChild)
+      }
+      updateArrows(); updateRect()
+    }
+    const schedule = () => { if (!raf) raf = requestAnimationFrame(run) }
 
     // ⚠️ ResizeObserver sur `el` seul ne détecte QUE les changements de largeur du conteneur
     // (fixe, 100% du parent) — jamais ceux de son CONTENU (le tableau qui grandit quand les
     // données arrivent). On observe donc aussi le premier enfant (le tableau) pour détecter
     // les changements de scrollWidth, et un MutationObserver en filet de sécurité pour les cas
     // où seul le nombre de colonnes/texte change sans changer la hauteur/largeur observée.
-    const ro = new ResizeObserver(() => { updateArrows(); updateRect() })
+    const ro = new ResizeObserver(schedule)
     ro.observe(el)
-    if (el.firstElementChild) ro.observe(el.firstElementChild)
-    const mo = new MutationObserver(() => { updateArrows(); updateRect() })
+    run()
+    const mo = new MutationObserver(schedule)
     mo.observe(el, { childList: true, subtree: true, characterData: true })
 
     // 👀 Les flèches restent affichées tant qu'une partie du tableau est visible à l'écran
@@ -59,8 +75,8 @@ export default function HScrollArrows({ children, className = '' }: { children: 
     }, { threshold: 0 })
     io.observe(el)
 
-    const onScrollOrResize = () => { updateArrows(); updateRect() }
-    el.addEventListener('scroll', updateArrows, { passive: true })
+    const onScrollOrResize = schedule
+    el.addEventListener('scroll', schedule, { passive: true })
     window.addEventListener('scroll', onScrollOrResize, { passive: true, capture: true })
     window.addEventListener('resize', onScrollOrResize)
 
@@ -71,13 +87,14 @@ export default function HScrollArrows({ children, className = '' }: { children: 
       ro.disconnect()
       mo.disconnect()
       io.disconnect()
+      if (raf) cancelAnimationFrame(raf)
       clearTimeout(t1)
       clearTimeout(t2)
-      el.removeEventListener('scroll', updateArrows)
+      el.removeEventListener('scroll', schedule)
       window.removeEventListener('scroll', onScrollOrResize, true)
       window.removeEventListener('resize', onScrollOrResize)
     }
-  }, [children])
+  }, [])
 
   const scrollBy = (dir: 1 | -1) => {
     const el = scrollRef.current

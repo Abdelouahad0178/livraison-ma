@@ -1,7 +1,7 @@
 import DateInput from '../../../components/DateInput'
 import { useState, useMemo } from 'react'
 import { Package, Truck, User, MapPin, Calendar, RotateCcw, Send, Check, X, Search, Filter, Eye, Trash2, Edit2, BarChart3, Printer } from 'lucide-react'
-import { STATUS_COLORS } from '../../../firebase/constants'
+import { STATUS_COLORS, isReturnStatus as isReturnStatusOf } from '../../../firebase/constants'
 import { printRetoursToLoad, printRetoursReceived, printRetoursHistory } from '../../../utils/printRetours'
 import { isInReturnCircuit } from '../../../firebase/parcels'
 import { normIncludes } from '../../../utils/normText'
@@ -61,7 +61,7 @@ export default function RetoursTab({
     // Historique : TOUS les colis retournés (historique complet)
     const history = allParcels.filter((p: any) => {
       // Tous les statuts de retour OU colis marqué comme retourné
-      const isReturnStatus = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(p.status)
+      const isReturnStatus = isReturnStatusOf(p.status)
       const hasReturnFlag = p.wasReturned === true || !!p.returnedAt
 
       if (!isReturnStatus && !hasReturnFlag) return false

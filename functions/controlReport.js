@@ -77,7 +77,7 @@ exports.generateControlReport = onCall({
 
   // ── 1. Lecture ──
   const winStart = new Date(from - 10 * DAY) // allégé : situations ouvertes depuis 10 jours au plus avant la période
-  const [usersSnap, recentSnap, pointedSnap, envoisSnap, lotsSnap] = await Promise.all([
+  const [usersSnap, recentSnap, pointedSnap, envoisSnap, lotsSnap, agenciesSnap] = await Promise.all([
     db.collection('users').select('name', 'role', 'city').get(),
     db.collection('parcels').where('createdAt', '>=', winStart).select(...FIELDS).get(),
     db.collection('parcels').where('controlled', '==', true)
@@ -85,7 +85,9 @@ exports.generateControlReport = onCall({
       .orderBy('controlledAt', 'desc').select(...FIELDS).get(),
     db.collection('valeursEnvois').where('createdAt', '>=', winStart).get(),
     db.collection('valeursLots').where('createdAt', '>=', new Date(from - 30 * DAY).toISOString()).get(),
+    db.doc('settings/agencies').get(),
   ])
+  const cities = agenciesSnap.data()?.cities
   const users = new Map(usersSnap.docs.map(d => [d.id, d.data()]))
   const byId = new Map()
   for (const d of [...recentSnap.docs, ...pointedSnap.docs]) byId.set(d.id, { id: d.id, ...d.data(), _createTime: d.createTime.toMillis() })
@@ -98,7 +100,7 @@ exports.generateControlReport = onCall({
   const lots = lotsSnap.docs.map(d => ({ id: d.id, ...d.data() }))
 
   // ── 2. Règles ──
-  const anomalies = runRules({ parcels: [...byId.values()], lots, envoiItemKeys, users, from, to, now, city })
+  const anomalies = runRules({ parcels: [...byId.values()], lots, envoiItemKeys, users, from, to, now, city, cities })
   const stats = summarize(anomalies)
 
   // ── 3. Rapport rédigé par Claude (à partir des anomalies seulement) ──

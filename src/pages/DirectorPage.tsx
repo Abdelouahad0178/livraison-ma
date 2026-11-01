@@ -44,6 +44,7 @@ import { normIncludes } from '../utils/normText'
 import { shouldTriggerSearch } from '../utils/searchUtils'
 import { searchParcels } from '../firebase/parcels'
 import { codMoneyOnly } from '../utils/moneyFlow'
+import { filterByDate as sharedFilterByDate, opPeriodRange } from '../utils/dateFilter'
 
 const parcelDate = (p: any) => {
   // 🗓️ workDate = journée d'opération (8h → 6h le lendemain), prioritaire — voir
@@ -58,21 +59,10 @@ const caisseEntryDate = (e: any) => {
   if (e.createdAt) return new Date(e.createdAt)
   return new Date(0)
 }
-const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parcelDate) => {
-  if (preset === 'all') return list
-  const now = new Date()
-  let start: any = null, end: any = now
-  if      (preset === 'today')  { start = new Date(); start.setHours(0,0,0,0) }
-  else if (preset === 'week')   { start = new Date(); start.setDate(now.getDate()-6); start.setHours(0,0,0,0) }
-  else if (preset === 'month')  { start = new Date(now.getFullYear(), now.getMonth(), 1) }
-  else if (preset === 'custom') { start = from ? new Date(from) : null; end = to ? new Date(to+'T23:59:59') : now }
-  return list.filter((p: any) => {
-    const d = getDate(p)
-    if (start && d < start) return false
-    if (end   && d > end)   return false
-    return true
-  })
-}
+// 📅 (01/11/2026) « Aujourd'hui », « 7 jours », « Ce mois », « Du … au » = JOURNÉES D'OPÉRATION (8 h → 6 h), comme tout le
+// site (avant : minuit → minuit sur cette page) — filtre commun utils/dateFilter (opPeriodRange).
+const filterByDate = (list: any, preset: any, from: any, to: any, getDate = parcelDate): any =>
+  (Array.isArray(list) ? sharedFilterByDate<any>(list, preset, from, to, getDate) : [])
 
 const currentSalaryMonth = () => new Date().toISOString().slice(0, 7)
 
@@ -464,12 +454,8 @@ export default function DirectorPage() {
   // ---- Computed — Users (sans admin ni directeur)
   const nonAdminUsers = useMemo(() => users.filter(u => u.role !== 'admin' && u.role !== 'directeur'), [users])
   const filteredUsers = useMemo(() => {
-    const now = new Date()
-    let uStart: any = null, uEnd: any = now
-    if      (usersDatePreset === 'today')  { uStart = new Date(); uStart.setHours(0,0,0,0) }
-    else if (usersDatePreset === 'week')   { uStart = new Date(); uStart.setDate(now.getDate()-6); uStart.setHours(0,0,0,0) }
-    else if (usersDatePreset === 'month')  { uStart = new Date(now.getFullYear(), now.getMonth(), 1) }
-    else if (usersDatePreset === 'custom') { uStart = usersDateFrom ? new Date(usersDateFrom) : null; uEnd = usersDateTo ? new Date(usersDateTo+'T23:59:59') : now }
+    // 📅 (01/11/2026) Journées d'opération (8 h → 6 h), comme tout le site — avant : minuit → minuit
+    const { start: uStart, end: uEnd } = opPeriodRange(usersDatePreset, usersDateFrom, usersDateTo)
     return nonAdminUsers.filter(u => {
       const roleOk   = roleFilter === 'Tous' || u.role === roleFilter
       const searchOk = !userSearch || [u.name, u.email, u.city, u.code, u.cin, u.cnss, u.tel]

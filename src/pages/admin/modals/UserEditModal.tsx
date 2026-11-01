@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { X, ChevronDown, Save, FileText, KeyRound, Copy, RefreshCw } from 'lucide-react'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { auth } from '../../../firebase/config'
+import { PERMISSION_LABELS } from '../../../utils/userPermissions'
 
 /** Génère un mot de passe lisible (sans caractères ambigus). */
 function generatePassword(len = 10) {
@@ -241,6 +242,40 @@ export default function UserEditModal({
                   </div>
                 </div>
               )}
+
+              {/* 🔑 Droits particuliers (01/11/2026) : cochés ici par l'admin, au lieu d'e-mails écrits dans le code */}
+              <div className="border border-indigo-100 bg-indigo-50/40 rounded-xl p-3">
+                <p className="text-xs font-semibold text-indigo-800 uppercase tracking-wider mb-2">🔑 Droits particuliers</p>
+                <div className="space-y-2">
+                  {(['fullParcelEdit', 'clientAccounts'] as const).map(k => {
+                    const on = !!userEdit.permissions?.[k]
+                    const l = PERMISSION_LABELS[k]
+                    return (
+                      <label key={k} className="flex items-start gap-2 cursor-pointer">
+                        <input type="checkbox" checked={on} className="mt-0.5 w-4 h-4 accent-indigo-600"
+                          onChange={() => setUserEdit((m: any) => ({ ...m, permissions: { ...(m.permissions || {}), [k]: !on } }))} />
+                        <span className="text-sm"><b>{l.emoji} {l.label}</b><span className="block text-xs text-gray-500">{l.desc}</span></span>
+                      </label>
+                    )
+                  })}
+                  <div>
+                    <p className="text-sm"><b>{PERMISSION_LABELS.livraisonStatsCities.emoji} {PERMISSION_LABELS.livraisonStatsCities.label}</b>
+                      <span className="block text-xs text-gray-500">{PERMISSION_LABELS.livraisonStatsCities.desc}</span></p>
+                    <div className="mt-1 flex flex-wrap gap-1.5">
+                      {CITIES.map(c => {
+                        const list: string[] = userEdit.permissions?.livraisonStatsCities || []
+                        const on = list.includes(c)
+                        return (
+                          <button type="button" key={c}
+                            onClick={() => setUserEdit((m: any) => { const cur: string[] = m.permissions?.livraisonStatsCities || []; return { ...m, permissions: { ...(m.permissions || {}), livraisonStatsCities: on ? cur.filter(x => x !== c) : [...cur, c] } } })}
+                            className={`px-2.5 py-1 rounded-full text-xs font-semibold border ${on ? 'bg-indigo-600 border-indigo-600 text-white' : 'bg-white border-gray-200 text-gray-600'}`}>{c}</button>
+                        )
+                      })}
+                    </div>
+                  </div>
+                  {userEdit.permissions?.fullParcelEdit && <p className="text-[11px] text-indigo-700">ℹ️ « Modification totale » prend effet à la prochaine connexion de la personne (ou dans l'heure).</p>}
+                </div>
+              </div>
 
               {/* Section */}
               {userEdit.id === auth.currentUser?.uid && (
