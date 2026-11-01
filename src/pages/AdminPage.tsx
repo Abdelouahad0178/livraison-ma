@@ -38,6 +38,7 @@ import {
 } from '../firebase/firestore'
 import { deleteParcel, getRealParcelsStats, subscribeAgencyParcelsFull, subscribeAgencyParcels, getMoreAgencyParcels } from '../firebase/parcels'
 import { ALL_CITIES } from '../utils/liteDayCache'
+import { subscribeAgencySettings } from '../config/agencySettings'
 import AdminDriverSection from './admin/components/AdminDriverSection'
 
 // 🏙️ Filtre ville sans période (« Tout ») : borne basse « depuis toujours » des requêtes par ville
@@ -1361,6 +1362,10 @@ export default function AdminPage() {
       .sort((a, b) => (b.parcels.length || 0) - (a.parcels.length || 0))
   }, [periodParcels, caisseEntries, driverPortDuTxs, users, activityRoleFilter, adminDatePreset, adminDateFrom, adminDateTo, mainTab])
 
+  // 🏢 Réglages des agences (Admin › Agences) : la liste des villes peut changer en direct
+  const [agencySettingsVersion, setAgencySettingsVersion] = useState(0)
+  useEffect(() => subscribeAgencySettings(() => setAgencySettingsVersion(v => v + 1)), [])
+
   const agencyStats = useMemo(() => {
     if (!Array.isArray(periodParcels) || !Array.isArray(users)) return []
     return CITIES.map(city => {
@@ -1374,7 +1379,7 @@ export default function AdminPage() {
     const manager   = users.find((u: any) => u.city === city && (u.role === 'chef_agence' || u.role === 'admin'))
     const codPending = cityParcels.filter((p: any) => parseFloat(p.codAmount) > 0 && (!p.codStatus || p.codStatus === 'pending')).reduce((s: number,p: any) => s+(parseFloat(p.codAmount)||0), 0)
     return { city, incoming, outgoing, active, delivered, returned, agents, manager, codPending }
-  })}, [periodParcels, users])
+  })}, [periodParcels, users, agencySettingsVersion])
 
   const delayedAlerts = useMemo(() => {
     if (!Array.isArray(periodParcels)) return []
@@ -2137,6 +2142,8 @@ export default function AdminPage() {
           <Suspense fallback={<div className="mt-4 h-72 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
             <AdminAgenciesTab
               agencyStats={agencyStats}
+              users={users}
+              adminName={auth.currentUser?.displayName || auth.currentUser?.email || 'Admin'}
               periodLabel={periodLabel}
               exportRows={exportRows}
               downloadCsv={downloadCsv}

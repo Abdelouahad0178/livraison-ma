@@ -14,6 +14,11 @@ describe('delivery ownership after destination correction', () => {
     expect(planAssignmentReset(parcel, { city: 'Rabat' }, null, 'now')).toBeNull()
     expect(planAssignmentReset({ ...parcel, destinationCity: 'Agadir' }, { city: 'Ait Melloul' }, null, 'now')).toBeNull()
   })
+  it('villes voisines réglées par l\'admin (settings/agencies) au lieu de la paire du code', () => {
+    const neighbors = { Rabat: 'Casablanca', Casablanca: 'Rabat' }
+    expect(planAssignmentReset(parcel, { city: 'Casablanca' }, null, 'now', neighbors)).toBeNull()
+    expect(planAssignmentReset({ ...parcel, destinationCity: 'Agadir' }, { city: 'Ait Melloul' }, null, 'now', neighbors)).toMatchObject({ deliveryDriverId: null })
+  })
   it('preserves delivered shipments, returns and collected money', () => {
     for (const extra of [{ status: 'Livré' }, { status: 'Retourné' }, { codAmount: 100, codStatus: 'collected' }, { portType: 'port_du', portStatus: 'collected' }]) {
       expect(planAssignmentReset({ ...parcel, ...extra }, { city: 'Casablanca' }, null, 'now')).toBeNull()

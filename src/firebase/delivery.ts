@@ -11,6 +11,7 @@ import { daysAgoTimestamp } from './firestoreUtils'
 import { isCodMoneyBeforeStart } from '../utils/moneyFlow'
 import { isParcelVisibleInDestinationAgency, isInReturnCircuit } from './parcels'
 import { deliveryStatusChangeBlock } from '../utils/agencyDeliveryAccess'
+import { areNeighborCities } from '../config/agencySettings'
 
 // 🚉 Livreur-gare d'une ville (assignation auto « Livraison en gare »). Même requête qu'avant,
 // mise en cache 5 min par ville (et préchargée par le formulaire) : évite un aller-retour serveur
@@ -341,7 +342,8 @@ export async function realignDeliveryAfterDestinationChange(parcelId: string, by
   const drv: any = (await getDoc(doc(db, 'users', p.deliveryDriverId))).data() || {}
   const isGare = drv.role === 'livreur-gare' || /^En gare/i.test(p.deliveryDriverName || '')
   const drvCity = String(drv.city || (isGare ? String(p.deliveryDriverName || '').replace(/^En gare - /i, '') : ''))
-  const sharedPair = (a: string, b: string) => [a, b].sort().join('|') === 'Agadir|Ait Melloul'
+  // 🏢 Villes voisines : réglage Admin › Agences, sinon Agadir ⇄ Ait Melloul (01/11/2026)
+  const sharedPair = (a: string, b: string) => areNeighborCities(a, b)
   if (drvCity === dest || (!isGare && sharedPair(drvCity, dest))) return null
   const portCashed = (p.portType === 'port_du' || p.portType === 'port_du_cheque') && (p.portStatus === 'collected' || p.portStatus === 'received')
   const codCashed = (parseFloat(String(p.codAmount ?? '').replace(',', '.')) || 0) > 0 && !!p.codStatus && p.codStatus !== 'pending'

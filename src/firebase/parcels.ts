@@ -29,7 +29,7 @@ import { normName, isVisibleInDestinationAgency } from '../utils/billingAgency'
 import { deliveryCityBlock, collectCityBlock } from '../utils/deliveryCity'
 import { auth } from './auth'
 import { daysBetween, shiftParcelDates } from '../utils/shiftParcelDates'
-import { guichetHolderForCity } from '../config/guichetHolders'
+import { guichetHolderOf } from '../config/agencySettings'
 import { portTypeChangeBlock } from '../utils/portTypeGuard'
 import { deliveryStatusChangeBlock } from '../utils/agencyDeliveryAccess'
 
@@ -434,7 +434,7 @@ export async function createParcel(
     // 🏬 Port payé encaissé AU GUICHET : l'argent est chez la personne en gare de la ville (config/guichetHolders) —
     // il se reçoit dans SA carte. Ville sans détenteur : « En gare - <ville> » comme avant (23/10/2026).
     ...(() => {
-      const holder = (data.portType === 'port_paye' || !data.portType) && !data.pickupDriverId ? guichetHolderForCity(String(sender?.city || '')) : null
+      const holder = (data.portType === 'port_paye' || !data.portType) && !data.pickupDriverId ? guichetHolderOf(String(sender?.city || '')) : null
       return holder ? { portGuichetHolderId: holder.id, portGuichetHolderName: holder.name } : {}
     })(),
     clientId:             data.clientId   || null,

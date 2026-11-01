@@ -7,7 +7,7 @@
  */
 'use strict'
 
-const CITIES = ['Casablanca', 'Rabat', 'Agadir', 'Marrakech', 'Guelmim', 'Ait Melloul']
+const CODE_CITIES = ['Casablanca', 'Rabat', 'Agadir', 'Marrakech', 'Guelmim', 'Ait Melloul']
 /** Début du vrai calcul de l'argent (05/10/2026 08:00, heure du Maroc) — avant : période d'essais. */
 const MONEY_START = Date.parse('2026-10-05T07:00:00Z')
 const H = 3600e3
@@ -73,7 +73,9 @@ function build(rule, p, fields) {
  *              from: ms, to: ms, now: ms, city?: string }
  */
 function runRules(ctx) {
+  // cities : liste réglée par l'admin (settings/agencies, lue par controlReport.js), sinon celle du code
   const { parcels = [], lots = [], envoiItemKeys = new Set(), users = new Map(), from, to, now = Date.now(), city } = ctx
+  const CITIES = Array.isArray(ctx.cities) && ctx.cities.length ? ctx.cities : CODE_CITIES
   const out = []
   currentUsers = users
   const userOf = id => (id && users.get(id)) || null
@@ -271,4 +273,4 @@ function summarize(anomalies) {
   }
 }
 
-module.exports = { RULES, CITIES, MONEY_START, runRules, summarize, opDay }
+module.exports = { RULES, CITIES: CODE_CITIES, MONEY_START, runRules, summarize, opDay }

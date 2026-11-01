@@ -54,6 +54,7 @@ import { formatOperationalDay } from '../../../config/operationalDay'
 import { normText, isDigitsOnly, numberStartsWith } from '../../../utils/normText'
 import { makeTableSearchMatcher } from '../../../utils/parcelSearch'
 import { agencyPortAmounts } from '../../../utils/billingAgency'
+import { neighborCityOf as agencyNeighborOf } from '../../../config/agencySettings'
 
 const normalizeSearch = (value: any) => normText(value).replace(/[^a-z0-9]/g, '')
 const matchesSearch = (values: any, query: any) => {
@@ -568,14 +569,14 @@ export default function ParcelsTab() {
   // 🔁 Agadir ⇄ Ait Melloul : colis arrivé par erreur dans l'agence voisine.
   // Clic sur la ville de destination = bascule directe vers l'autre ville, statut « Arrivé en agence ».
   // Réservé au chef d'agence / Agent PRO de la ville de destination actuelle (même règle dans firestore.rules).
-  const NEIGHBOR_CITIES: Record<string, string> = { 'Agadir': 'Ait Melloul', 'Ait Melloul': 'Agadir' }
   // deleteField() sur un champ absent ne compte pas comme modification pour firestore.rules
   const DELIVERY_ASSIGNMENT_RESET = Object.fromEntries([
     'deliveryDriverId', 'deliveryDriverName', 'deliverySectorId', 'deliverySectorCode', 'deliverySectorName',
     'deliveryVehicleId', 'deliveryVehicleLabel', 'deliveryAssignedAt', 'deliveryAssignedBy',
   ].map(k => [k, deleteField()]))
   const [togglingCityId, setTogglingCityId] = useState<string | null>(null)
-  const neighborCityOf = (parcel: any): string | null => NEIGHBOR_CITIES[parcel?.destinationCity] || null
+  // 🏢 Ville voisine : réglage Admin › Agences (settings/agencies), sinon Agadir ⇄ Ait Melloul (01/11/2026)
+  const neighborCityOf = (parcel: any): string | null => agencyNeighborOf(parcel?.destinationCity)
   // Expédition locale (Agadir → Agadir, Ait Melloul → Ait Melloul) : créée avec un livreur
   // (« En cours de livraison ») ou sans (« Initialisé »)
   const isLocalNotDelivered = (parcel: any) =>

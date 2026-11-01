@@ -128,6 +128,15 @@ service cloud.firestore {
       return signedIn() && userDoc().city is string ? userDoc().city : '';
     }
 
+    // 🏢 Ville voisine (bascule entre agences voisines) : réglage Admin › Agences (settings/agencies.neighbors),
+    // sinon Agadir ⇄ Ait Melloul (01/11/2026). Même calcul côté site : src/config/agencySettings.ts.
+    function neighborCityOf(city) {
+      let path = /databases/$(database)/documents/settings/agencies;
+      let byCode = {'Agadir': 'Ait Melloul', 'Ait Melloul': 'Agadir'};
+      let n = exists(path) ? get(path).data.get('neighbors', byCode) : byCode;
+      return n.get(city, '');
+    }
+
     function isAdminOrSameCity(city) {
       return isAdmin() || userCity() == city;
     }
@@ -1020,9 +1029,9 @@ service cloud.firestore {
                    == request.resource.data.destinationCity)
           )
         )
-        && resource.data.destinationCity in ['Agadir', 'Ait Melloul']
-        && request.resource.data.destinationCity in ['Agadir', 'Ait Melloul']
         && request.resource.data.destinationCity != resource.data.destinationCity
+        && request.resource.data.destinationCity != ''
+        && neighborCityOf(resource.data.destinationCity) == request.resource.data.destinationCity
         && userCity() == resource.data.destinationCity
         && request.resource.data.receiver.city == request.resource.data.destinationCity
         && request.resource.data.receiver.diff(resource.data.receiver).affectedKeys().hasOnly(['city'])
@@ -1309,8 +1318,8 @@ service cloud.firestore {
       // seule la ville du destinataire change. Statut final : « Arrivé en agence » (sans livreur) ou « En cours de
       // livraison » chez un livreur de la NOUVELLE ville. Identique à la règle d'origine.
       allow update: if request.resource.data.get('destinationCity', '') != resource.data.get('destinationCity', '')
-        && resource.data.get('destinationCity', '') in ['Agadir', 'Ait Melloul']
-        && request.resource.data.get('destinationCity', '') in ['Agadir', 'Ait Melloul']
+        && request.resource.data.get('destinationCity', '') != ''
+        && neighborCityOf(resource.data.get('destinationCity', '')) == request.resource.data.get('destinationCity', '')
         && (role() == 'chef_agence' || role() == 'agentpro' || role() == 'chef_exploitation')
         && isNotBlocked()
         && userCity() == resource.data.destinationCity

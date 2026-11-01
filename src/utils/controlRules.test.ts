@@ -40,6 +40,10 @@ describe('Contrôleur — règles', () => {
   it('7. ville hors liste', () => {
     expect(rulesOf([{ id: 'f', receiver: { city: 'taroudante' }, destinationCity: 'Ait Melloul', createdAt: iso(3) }])).toContain('ville_incoherente')
     expect(rulesOf([{ id: 'f', receiver: { city: 'Ait Melloul' }, destinationCity: 'Ait Melloul', createdAt: iso(3) }])).not.toContain('ville_incoherente')
+    // ville ajoutée par l'admin (settings/agencies) : n'est plus « hors liste »
+    const tiznit = [{ id: 'f', receiver: { city: 'Tiznit' }, destinationCity: 'Tiznit', createdAt: iso(3) }]
+    expect(rulesOf(tiznit)).toContain('ville_incoherente')
+    expect(rulesOf(tiznit, [], { cities: ['Agadir', 'Tiznit'] })).not.toContain('ville_incoherente')
   })
   it('8. saisie datée d\'une autre journée', () => {
     expect(rulesOf([{ id: 'g', createdAt: '2026-10-14T11:00:00Z', _createTime: Date.parse('2026-10-16T10:00:00Z') }])).toContain('saisie_autre_jour')
