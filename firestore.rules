@@ -2225,6 +2225,12 @@ service cloud.firestore {
       allow read, delete: if isAdmin();
       allow update: if isAdmin() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['statusById']);
     }
+    // 🩺 Contrôle quotidien de la santé des données (01/11/2026) : écrit UNIQUEMENT par les Cloud Functions
+    // scheduledHealthCheck / runHealthCheckNow (Admin SDK) ; lu dans Admin › Rapports du Contrôleur.
+    match /healthChecks/{id} {
+      allow read: if isAdmin();
+      allow write: if false;
+    }
 
     // 📝 Comptes clients (fiches d'ouverture de compte : CIN, RIB…) : chef d'agence / agent pro de la ville, admin.
     match /clientAccounts/{id} {
@@ -2237,7 +2243,7 @@ service cloud.firestore {
     // Règle par défaut — la collection presence est exclue (lecture réservée Admin/Directeur ci-dessus)
     match /{coll}/{document=**} {
       // Totaux commerciaux (commercial*) : accès défini plus haut uniquement (chef d'agence limité à sa ville)
-      allow read:  if coll != 'presence' && !coll.matches('commercial.*') && !coll.matches('valeursLot.*') && coll != 'controlAiReports'
+      allow read:  if coll != 'presence' && !coll.matches('commercial.*') && !coll.matches('valeursLot.*') && coll != 'controlAiReports' && coll != 'healthChecks'
         // 🔒 S7 : collections cloisonnées par ville — accès défini plus haut uniquement
         && !(coll in ['caisseEntries', 'agencyCashes', 'caisseClotures', 'caissierTransactions', 'agentRemises', 'agentCodRequests',
           'driverVersements', 'reglements', 'reglementsRapports',
@@ -2246,7 +2252,7 @@ service cloud.firestore {
           'deliveryDelays', 'controlReports', 'backupImports', 'directorLogs', 'director_logs', 'stats', 'clientAccounts'])
         && isStaff();
       // parcelsLite / parcelsFacturier : écrits uniquement par les Cloud Functions (Admin SDK)
-      allow write: if coll != 'presence' && coll != 'parcelsLite' && coll != 'parcelsFacturier' && !coll.matches('commercial.*') && coll != 'controlAiReports' && isAdmin();
+      allow write: if coll != 'presence' && coll != 'parcelsLite' && coll != 'parcelsFacturier' && !coll.matches('commercial.*') && coll != 'controlAiReports' && coll != 'healthChecks' && isAdmin();
     }
   }
 }

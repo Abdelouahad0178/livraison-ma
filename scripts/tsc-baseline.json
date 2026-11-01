@@ -1,0 +1,4 @@
+{
+  "errors": 53,
+  "note": "Erreurs TypeScript anciennes au 01/11/2026 : la mise en ligne est refusée s'il y en a PLUS (scripts/predeploy-check.mjs). Baisser ce nombre quand on en corrige."
+}

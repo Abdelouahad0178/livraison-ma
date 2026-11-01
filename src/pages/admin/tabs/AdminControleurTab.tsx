@@ -8,6 +8,7 @@ import { Bot, Loader2, Printer, Trash2, Search, X } from 'lucide-react'
 import { db } from '../../../firebase/config'
 import app from '../../../firebase/appCore'
 import { CITIES } from '../../../firebase/constants'
+import HealthCheckCard from '../components/HealthCheckCard'
 
 /** Libellés des règles — mêmes clés que functions/controlRules.js (RULES). */
 export const CONTROL_RULES: Record<string, { label: string; who: string }> = {
@@ -89,6 +90,7 @@ export default function AdminControleurTab() {
 
   return (
     <div className="mt-4 space-y-4">
+      <HealthCheckCard />
       <section className="rounded-2xl border border-indigo-200 bg-gradient-to-r from-indigo-50 to-violet-50 p-5">
         <div className="flex items-start gap-3 mb-3">
           <div className="p-2 rounded-xl bg-indigo-600 text-white"><Bot className="w-5 h-5" /></div>

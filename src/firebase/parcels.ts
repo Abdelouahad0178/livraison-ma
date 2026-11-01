@@ -593,6 +593,15 @@ export async function updateParcelStatus(parcelId: string, status: string, extra
   // 🔒 Transaction pour éviter race conditions sur circuit retour
   await runTransaction(db, async tx => {
     const parcelSnap = await tx.get(parcelRef)
+    // 📦 (01/11/2026) Quitter « Livré » (hors circuit retour) : la date de livraison est EFFACÉE dans la même écriture.
+    // Avant, elle restait (457 expéditions, dont 1248627) et bloquait l'assignation en lot ; un effacement demandé dans
+    // `extra` (ex. bouton « Livré ✓ ») était ignoré. Vérifié à l'émulateur : mêmes rôles autorisés / refusés qu'avant.
+    let clearDelivered = false
+    if (parcelSnap.exists()) {
+      const prev = parcelSnap.data() as any
+      clearDelivered = prev.status === 'Livré' && status !== 'Livré' && !!prev.deliveredAt
+        && !['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé'].includes(status)
+    }
     if (parcelSnap.exists()) {
       const current = parcelSnap.data() as any
       const statusBlocked = deliveryStatusChangeBlock(statusActor, current, status)
@@ -626,6 +635,7 @@ export async function updateParcelStatus(parcelId: string, status: string, extra
     if (status === 'Livré') {
       patch.deliveredAt = extra.deliveredAt || new Date().toISOString()
     }
+    if (clearDelivered) patch.deliveredAt = deleteField()
 
     // Écriture Firestore immédiate — pas d'attente GPS
     tx.update(parcelRef, patch)

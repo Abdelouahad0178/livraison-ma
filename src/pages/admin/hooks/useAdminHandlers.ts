@@ -13,6 +13,7 @@ import {
   createCaisseRequest, completeRhSalaryCaisseRequest,
 } from '../../../firebase/firestore'
 import { portTypeChangeFields } from '../../../firebase/parcels'
+import { adminResetDeliveryMoney } from '../../../firebase/adminCorrections'
 import { realignDeliveryAfterDestinationChange } from '../../../firebase/delivery'
 import { normalizeServiceType, codPaymentTypeForService, NON_COD_SERVICE_TYPES } from '../../../firebase/constants'
 import { buildCodWriteFields, validateCodChoice, isMixedCod, codDocPartOf, codCashPartOf, codEditResult, mixedSplitLockReason } from '../../../utils/codParts'
@@ -561,31 +562,14 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
         return
       }
 
-      // Réinitialiser les champs incohérents si le colis n'est plus "Livré"
-      if (status !== 'Livré') {
-        const reset: Record<string, any> = {}
-        if (parcel.portStatus === 'collected') {
-          reset.portStatus      = 'pending'
-          reset.portCollectedBy  = null
-          reset.portCollectedById = null
-          reset.portCollectedAt  = null
-        }
-        if (parcel.signatureConfirmedAt) {
-          reset.signatureConfirmedAt = null
-          reset.signatureToken       = null
-        }
-        if (parcel.codStatus === 'collected' && !parcel.codSentToSource && !parcel.codSenderPaid) {
-          reset.codStatus       = 'pending'
-          reset.codCollectedAt  = null
-          reset.codCollectedBy  = null
-        }
-        if (Object.keys(reset).length > 0) await updateParcel(parcel.id, reset)
-      }
+      // Réinitialiser l'argent encaissé à la livraison si le colis n'est plus "Livré" — PROPREMENT (01/11/2026) : collecte,
+      // réceptions et ligne de caisse en une opération ; refusé si l'argent est déjà dans un versement (voir adminCorrections)
+      if (status !== 'Livré') await adminResetDeliveryMoney(parcel.id)
 
       await updateParcelStatus(parcel.id, status, extra)
       setStatusModal(null)
-    } catch {
-      setStatusModal((m: any) => ({ ...m, loading: false, error: 'Erreur lors de la mise à jour.' }))
+    } catch (err: any) {
+      setStatusModal((m: any) => ({ ...m, loading: false, error: err?.message || 'Erreur lors de la mise à jour.' }))
     }
   }
 

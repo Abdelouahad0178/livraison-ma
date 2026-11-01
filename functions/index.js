@@ -554,6 +554,10 @@ exports.syncEnvoiContrib = onDocumentWritten({ document: 'parcels/{parcelId}', r
 
 // ── 🤖 Rapport du Contrôleur (Admin › 🤖 Rapports, à la demande, admin seulement) — voir functions/controlReport.js ──
 exports.generateControlReport = require('./controlReport').generateControlReport
+
+// ── 🩺 Contrôle quotidien de la santé des données (lecture seule, 5 h + sur demande) — voir functions/healthCheck.js ──
+exports.scheduledHealthCheck = require('./healthCheck').scheduledHealthCheck
+exports.runHealthCheckNow = require('./healthCheck').runHealthCheckNow
 // ── Rebuild all stats from existing parcels (callable — admin only) ────────
 // Call once after first deploy to bootstrap stats from historical data.
 exports.rebuildStats = onCall({

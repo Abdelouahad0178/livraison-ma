@@ -38,7 +38,7 @@ describe.each(['chef_agence', 'agentpro'])('%s reported 98-shipment case', role 
     expect(screen.getByLabelText('pickup-count')).toHaveTextContent(/^17$/)
     for (const p of outgoing) expect(screen.getByRole('checkbox', { name: p.id })).toBeChecked()
     for (const p of incoming) expect(screen.getByRole('checkbox', { name: p.id })).not.toBeChecked()
-  })
+  }, 20000) // ⏱️ 1er rendu de 115 cases : dépassait parfois 5 s quand toute la suite tourne en parallèle (test instable)
   it('requires an explicit switch for destination delivery and clears selection on every switch', () => {
     render(<Harness role={role} />)
     fireEvent.click(screen.getByRole('button', { name: 'Sélectionner les initialisées (17)' }))
