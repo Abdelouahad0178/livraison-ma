@@ -10,6 +10,7 @@ import { COD_STATUS, COD_PAYMENT_TYPES, STATUSES, sanitizeParcelCodWrite } from 
 import { findOrCreateClientForReceiver } from './clients'
 import { caisseEntryDoc, newCaisseEntryRef } from './caisse'
 import { codMoneyOnly, entriesFromStart, moneyFromStart } from '../utils/moneyFlow'
+import { activeDays } from '../config/siteDelays'
 
 type DynamicData = Record<string, any>
 type FirestoreRow = DynamicData & { id: string }
@@ -304,7 +305,7 @@ export async function fetchAllAgentCodParcels(agentId: string) {
 export async function fetchAllAgencyCodParcels(city: string, onProgress?: (scanned: number) => void) {
   const PAGE = 2000
   const MIN_PER_FIELD = 3000
-  const cutoffMs = Date.now() - 45 * 24 * 60 * 60 * 1000
+  const cutoffMs = Date.now() - activeDays() * 24 * 60 * 60 * 1000 // 45 j, réglable (config/siteDelays.ts)
   const all = new Map<string, FirestoreRow>()
   let scanned = 0
   for (const field of ['originCity', 'destinationCity'] as const) {

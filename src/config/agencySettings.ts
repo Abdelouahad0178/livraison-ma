@@ -11,12 +11,15 @@ import { doc, onSnapshot } from 'firebase/firestore'
 import { db } from '../firebase/db'
 import { CITIES } from '../firebase/constants'
 import { GUICHET_HOLDERS } from './guichetHolders'
+import { applySiteDelays, type SiteDelays } from './siteDelays'
 
 export interface GuichetHolder { id: string; name: string }
 export interface AgencySettings {
   cities?: string[]
   guichet?: Record<string, GuichetHolder | null>
   neighbors?: Record<string, string>
+  /** Durées réglables (lot C3) : voir config/siteDelays.ts */
+  delays?: SiteDelays
   updatedAt?: string
   updatedBy?: string
 }
@@ -35,6 +38,7 @@ export function applyAgencySettings(s: AgencySettings | null | undefined) {
     ? current.cities.filter(c => typeof c === 'string' && c.trim())
     : CODE_CITIES
   CITIES.splice(0, CITIES.length, ...list)
+  applySiteDelays(current.delays)
   listeners.forEach(l => l(current))
 }
 

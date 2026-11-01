@@ -6,6 +6,7 @@ import { CITIES } from '../../../firebase/constants'
 import {
   subscribeAgencySettings, guichetHolderOf, neighborCityOf, type GuichetHolder,
 } from '../../../config/agencySettings'
+import { DELAY_BOUNDS, activeDays, recentCollectDays } from '../../../config/siteDelays'
 
 /**
  * 🏢 Réglages des agences (01/11/2026, lot C1) : l'admin change lui-même la liste des villes, la personne qui tient
@@ -18,7 +19,10 @@ const ROLE_LABELS: Record<string, string> = {
   livreur: 'Livreur', 'livreur-gare': 'Livreur gare', pointeur_encaisseur: 'Pointeur', caissier: 'Caissier',
 }
 
-interface Draft { cities: string[]; guichet: Record<string, GuichetHolder | null>; neighbors: Record<string, string> }
+interface Draft {
+  cities: string[]; guichet: Record<string, GuichetHolder | null>; neighbors: Record<string, string>
+  delays: { collectDays: number; activeDays: number }
+}
 
 const draftFromCurrent = (): Draft => {
   const cities = [...CITIES]
@@ -29,8 +33,11 @@ const draftFromCurrent = (): Draft => {
     const n = neighborCityOf(c)
     if (n) neighbors[c] = n
   })
-  return { cities, guichet, neighbors }
+  return { cities, guichet, neighbors, delays: { collectDays: recentCollectDays(), activeDays: activeDays() } }
 }
+
+const clampDays = (v: number, b: { min: number; max: number; code: number }) =>
+  Number.isFinite(v) ? Math.min(b.max, Math.max(b.min, Math.round(v))) : b.code
 
 /** Ville voisine dans les deux sens : A ⇄ B (l'ancienne voisine de A et celle de B sont libérées). */
 function setNeighbor(neighbors: Record<string, string>, city: string, other: string): Record<string, string> {
@@ -80,7 +87,7 @@ export default function AgencySettingsCard({ users, adminName }: { users: any[];
     change(d => {
       const guichet = { ...d.guichet }
       delete guichet[city]
-      return { cities: d.cities.filter(c => c !== city), guichet, neighbors: setNeighbor(d.neighbors, city, '') }
+      return { ...d, cities: d.cities.filter(c => c !== city), guichet, neighbors: setNeighbor(d.neighbors, city, '') }
     })
   }
 
@@ -106,8 +113,12 @@ export default function AgencySettingsCard({ users, adminName }: { users: any[];
       draft.cities.forEach(c => { guichet[c] = draft.guichet[c] || null })
       const neighbors: Record<string, string> = {}
       Object.entries(draft.neighbors).forEach(([a, b]) => { if (draft.cities.includes(a) && draft.cities.includes(b)) neighbors[a] = b })
+      const delays = {
+        collectDays: clampDays(draft.delays.collectDays, DELAY_BOUNDS.collectDays),
+        activeDays: clampDays(draft.delays.activeDays, DELAY_BOUNDS.activeDays),
+      }
       await setDoc(doc(db, 'settings', 'agencies'), {
-        cities: draft.cities, guichet, neighbors, updatedAt: new Date().toISOString(), updatedBy: adminName,
+        cities: draft.cities, guichet, neighbors, delays, updatedAt: new Date().toISOString(), updatedBy: adminName,
       })
       setDirty(false)
       setMessage({ type: 'success', text: 'Réglages enregistrés : tout le site les applique tout de suite.' })
@@ -210,6 +221,33 @@ export default function AgencySettingsCard({ users, adminName }: { users: any[];
           <Plus className="w-4 h-4" /> Ajouter
         </button>
         <span className="text-xs text-gray-400">Nouvelle ville : pensez aussi à son tarif (Admin › Tarifs).</span>
+      </div>
+
+      <div className="mt-5 pt-4 border-t border-gray-100">
+        <h4 className="font-bold text-gray-800 text-sm">⏱️ Durées</h4>
+        <div className="mt-2 grid grid-cols-1 md:grid-cols-2 gap-3">
+          {([
+            ['collectDays', 'Collectes par jour', 'Nombre de journées des cartes « Collectes par jour » et « Valeurs (COD) collectées par jour » (Caisse Agence, Collecte du soir).'],
+            ['activeDays', '« Tout » et archivage', "Jours chargés par le filtre « Tout » ; c'est aussi l'âge auquel toute expédition est archivée automatiquement. Plus de jours = pages plus lentes."],
+          ] as const).map(([key, label, help]) => {
+            const b = DELAY_BOUNDS[key]
+            return (
+              <label key={key} className="block bg-gray-50 rounded-xl p-3">
+                <span className="flex items-center justify-between gap-2">
+                  <span className="text-sm font-semibold text-gray-700">{label}</span>
+                  <span className="flex items-center gap-1.5">
+                    <input type="number" min={b.min} max={b.max} value={draft.delays[key]}
+                      onChange={e => { const v = Number(e.target.value); change(d => ({ ...d, delays: { ...d.delays, [key]: v } })) }}
+                      onBlur={() => change(d => ({ ...d, delays: { ...d.delays, [key]: clampDays(d.delays[key], b) } }))}
+                      className="w-20 border border-gray-200 rounded-lg px-2 py-1 text-sm text-right bg-white" />
+                    <span className="text-xs text-gray-500">jours</span>
+                  </span>
+                </span>
+                <span className="block text-xs text-gray-400 mt-1">{help} De {b.min} à {b.max} jours (avant : {b.code}).</span>
+              </label>
+            )
+          })}
+        </div>
       </div>
 
       {message && (

@@ -1205,7 +1205,10 @@ async function runWeeklyArchiving() {
   console.log('🗄️  Démarrage archivage automatique...')
 
   const DAYS_THRESHOLD = 30       // Livrés SANS COD : archivés après 30 jours
-  const DAYS_FORCE = 45           // Tous les autres (même avec COD) : archivés après 45 jours
+  // Tous les autres (même avec COD) : archivés après 45 jours — réglable par l'admin (settings/agencies.delays.activeDays,
+  // = jours chargés par « Tout » ; 45 à 90, jamais moins : src/config/siteDelays.ts)
+  const setDays = Math.round(Number((await db.doc('settings/agencies').get()).data()?.delays?.activeDays))
+  const DAYS_FORCE = Number.isFinite(setDays) ? Math.min(90, Math.max(45, setDays)) : 45
   const BATCH_SIZE = 500  // = limite d'un WriteBatch Firestore
   // Borne de temps (au lieu d'un nombre fixe d'itérations) : la fonction dispose de 540s.
   // L'ancien plafond de 200×100 colis était épuisé par des colis déjà archivés / non archivables

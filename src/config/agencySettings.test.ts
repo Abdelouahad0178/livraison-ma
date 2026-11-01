@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 vi.mock('../firebase/db', () => ({ db: {} }))
 import { CITIES } from '../firebase/constants'
 import { applyAgencySettings, guichetHolderOf, neighborCityOf, areNeighborCities, CODE_CITIES } from './agencySettings'
+import { activeDays, recentCollectDays } from './siteDelays'
 
 // 🏢 01/11/2026 — réglages des agences (Admin › Agences) : sans document, les valeurs du code s'appliquent
 afterEach(() => applyAgencySettings(null))
@@ -32,5 +33,14 @@ describe('réglages des agences', () => {
   it('liste de villes vide ou invalide → liste du code', () => {
     applyAgencySettings({ cities: [] })
     expect(CITIES).toEqual(CODE_CITIES)
+  })
+  it('durées : code 14 / 45, réglées dans les bornes (7–31, 45–90)', () => {
+    expect([recentCollectDays(), activeDays()]).toEqual([14, 45])
+    applyAgencySettings({ delays: { collectDays: 21, activeDays: 60 } })
+    expect([recentCollectDays(), activeDays()]).toEqual([21, 60])
+    applyAgencySettings({ delays: { collectDays: 100, activeDays: 10 } })
+    expect([recentCollectDays(), activeDays()]).toEqual([31, 45])
+    applyAgencySettings({ delays: { collectDays: null as any } })
+    expect([recentCollectDays(), activeDays()]).toEqual([14, 45])
   })
 })

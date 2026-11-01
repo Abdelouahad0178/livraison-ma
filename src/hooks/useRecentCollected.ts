@@ -3,9 +3,7 @@ import { opDayOf, opStart } from '../utils/daySlices'
 import { MONEY_START } from '../utils/moneyFlow'
 import { subscribeRecentCollected, type RecentCollectedState } from '../firebase/recentCollectedStore'
 import { createdOutsidePeriod, hasOutsideRanges } from '../utils/recentCollected'
-
-/** Fenêtre des cartes « Collectes par jour » / « Valeurs (COD) collectées par jour » : 14 journées d'opération. */
-export const RECENT_COLLECT_DAYS = 14
+import { recentCollectDays } from '../config/siteDelays'
 
 const EMPTY: RecentCollectedState = { docs: [], ready: false }
 
@@ -51,7 +49,8 @@ export function useRecentCollected(city: string | undefined | null, loadedFrom: 
     if (!go || !idle || !needed || !city) return
     const today = opDayOf(new Date())
     const [y, m, d] = today.split('-').map(Number)
-    const first = new Date(y, m - 1, d - (RECENT_COLLECT_DAYS - 1))
+    // Fenêtre des cartes « Collectes par jour » : 14 journées (réglable, Admin › Agences › Réglages)
+    const first = new Date(y, m - 1, d - (recentCollectDays() - 1))
     const since14 = opStart(`${first.getFullYear()}-${String(first.getMonth() + 1).padStart(2, '0')}-${String(first.getDate()).padStart(2, '0')}`)
     // 💼 Depuis le début du circuit de l'argent (MONEY_START) : une journée non versée de plus de 14 jours reste
     // visible et versable.

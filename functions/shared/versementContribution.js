@@ -160,6 +160,13 @@ var beforeStart = (v) => {
 var isPortDuMoneyBeforeStart = (p) => p?.portType === "port_du" && (p.portStatus === "collected" || p.portStatus === "received") && beforeStart(p.portCollectedAt ?? createdOf(p));
 var isPortPayeMoneyBeforeStart = (p) => p?.portType === "port_paye" && beforeStart(createdOf(p));
 
+// src/config/siteDelays.ts
+var DELAY_BOUNDS = {
+  collectDays: { min: 7, max: 31, code: 14 },
+  activeDays: { min: 45, max: 90, code: 45 }
+};
+var current = { collectDays: DELAY_BOUNDS.collectDays.code, activeDays: DELAY_BOUNDS.activeDays.code };
+
 // src/utils/agencyCaisseRules.ts
 var toDateSafe = (v) => {
   if (v === null || v === void 0 || v === "") return null;

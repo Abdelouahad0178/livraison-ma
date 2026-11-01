@@ -47,6 +47,17 @@ describe('Admin › Agences › Réglages', () => {
     expect(data.guichet.Tiznit).toBeNull()
     expect(data.neighbors).toEqual({ Casablanca: 'Rabat', Rabat: 'Casablanca', Agadir: 'Ait Melloul', 'Ait Melloul': 'Agadir' })
     expect(data.updatedBy).toBe('admin')
+    expect(data.delays).toEqual({ collectDays: 14, activeDays: 45 })
+  })
+
+  it('durées : ramenées dans les bornes (« Tout » jamais sous 45 jours)', async () => {
+    render(<AgencySettingsCard users={users} adminName="admin" />)
+    const [collect, active] = screen.getAllByRole('spinbutton')
+    fireEvent.change(collect, { target: { value: '21' } })
+    fireEvent.change(active, { target: { value: '30' } })
+    fireEvent.click(screen.getByText('Enregistrer'))
+    await waitFor(() => expect(mocks.write).toHaveBeenCalledOnce())
+    expect(mocks.write.mock.calls[0][1].delays).toEqual({ collectDays: 21, activeDays: 45 })
   })
 
   it('changer de voisine libère l\'ancienne paire', async () => {

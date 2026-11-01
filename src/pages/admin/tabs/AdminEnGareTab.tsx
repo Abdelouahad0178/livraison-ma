@@ -11,6 +11,7 @@ import { caisseCodAmountOfType, caisseDefaultOperationalDay, computeCaisseView, 
 import { isBilledByAgency } from '../../../utils/billingAgency'
 import { useAgencyCaisseData } from '../../exploitation/useAgencyCaisseData'
 import { useDepotIds } from '../../exploitation/useDepotIds'
+import { activeDays } from '../../../config/siteDelays'
 
 const dh = (n: number) => `${(Math.round((Number(n) || 0) * 100) / 100).toLocaleString('fr-MA', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} DH`
 const esc = (v: unknown) => String(v ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
@@ -147,7 +148,7 @@ export default function AdminEnGareTab() {
     : p.status === 'Livré' ? 'Livrée au guichet'
     : p.status === 'En cours de livraison' ? `En gare (${p.deliveryDriverName || 'compte en gare'})`
     : p.status === 'Arrivé en agence' ? 'En gare' : p.status || 'En gare')
-  const periodTxt = preset === 'all' ? 'tout (45 jours)' : preset === 'today' ? "aujourd'hui" : `journée du ${opDay ? fmtD(opDay) : '…'}${preset === 'veille' ? ' (veille travaillée)' : ''}`
+  const periodTxt = preset === 'all' ? `tout (${activeDays()} jours)` : preset === 'today' ? "aujourd'hui" : `journée du ${opDay ? fmtD(opDay) : '…'}${preset === 'veille' ? ' (veille travaillée)' : ''}`
 
   const print = () => {
     const w = window.open('', '_blank')
@@ -207,7 +208,7 @@ export default function AdminEnGareTab() {
             <option value="all">Toutes les villes</option>
             {cities.map(c => <option key={c} value={c}>{c}</option>)}
           </select>
-          {([['veille', `Veille travaillée (${fmtD(veilleDay).slice(0, 5)})`], ['today', "Aujourd'hui"], ['day', 'Journée…'], ['all', 'Tout (45 j)']] as [Preset, string][]).map(([k, l]) => (
+          {([['veille', `Veille travaillée (${fmtD(veilleDay).slice(0, 5)})`], ['today', "Aujourd'hui"], ['day', 'Journée…'], ['all', `Tout (${activeDays()} j)`]] as [Preset, string][]).map(([k, l]) => (
             <button key={k} onClick={() => setPreset(k)} className={chip(preset === k)}>{l}</button>
           ))}
           {preset === 'day' && <input type="date" value={dayInput} onChange={e => setDayInput(e.target.value)} max={ymd(now)} className={sel} />}

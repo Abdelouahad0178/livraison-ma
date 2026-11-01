@@ -30,6 +30,7 @@ import { deliveryCityBlock, collectCityBlock } from '../utils/deliveryCity'
 import { auth } from './auth'
 import { daysBetween, shiftParcelDates } from '../utils/shiftParcelDates'
 import { guichetHolderOf } from '../config/agencySettings'
+import { activeDays } from '../config/siteDelays'
 import { portTypeChangeBlock } from '../utils/portTypeGuard'
 import { deliveryStatusChangeBlock } from '../utils/agencyDeliveryAccess'
 
@@ -1870,7 +1871,7 @@ export function subscribeAgencyParcels(
 // précédente est confirmée PLEINE par le serveur, jusqu'à la dernière page incomplète.
 // - Les colis poussés hors d'une page par l'arrivée de nouveaux colis (effet du limit) sont
 //   conservés (dernière version connue) pour ne jamais créer de trou à la jonction de deux pages.
-// - Sans dateFrom : 45 derniers jours (durée maximale avant archivage automatique).
+// - Sans dateFrom : 45 derniers jours (durée maximale avant archivage automatique ; réglable, config/siteDelays.ts).
 // - meta.complete = toutes les pages sont confirmées par le serveur et la dernière est incomplète.
 export function subscribeAgencyParcelsFull(
   city: string,
@@ -1888,7 +1889,7 @@ export function subscribeAgencyParcelsFull(
   // Journée(s) en cours : parcelsLite aussi (Expéditions) ou expéditions COMPLÈTES (pages de caisse : liteLive=false,
   // temps réel exact là où se passe l'activité)
   const liteLive = opts.liteLive ?? lite
-  const start = opts.dateFrom ?? new Date(Date.now() - 45 * 24 * 60 * 60 * 1000)
+  const start = opts.dateFrom ?? new Date(Date.now() - activeDays() * 24 * 60 * 60 * 1000)
   const end = opts.dateTo ?? new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)
   // city = ALL_CITIES ('*') : TOUTES les villes (Admin « Expéditions » avec une période) — une seule requête par journée
   const allCities = city === ALL_CITIES

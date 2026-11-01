@@ -18,6 +18,7 @@
 import { getCurrentOperationalDay, getOperationalDayRange, getOperationalDayString, formatOperationalDay, previousWorkedOperationalDays } from '../config/operationalDay'
 import { codSplitAmount } from './codParts'
 import { isCodMoneyBeforeStart, isPortDuMoneyBeforeStart, isPortPayeMoneyBeforeStart } from './moneyFlow'
+import { activeDays, recentCollectDays } from '../config/siteDelays'
 
 // ── Dates ────────────────────────────────────────────────────────────────────
 
@@ -174,8 +175,8 @@ export const makePassesDateFilter = (
   }
 }
 
-/** Jours chargés pour les filtres larges (durée maximale avant archivage automatique). */
-export const CAISSE_WIDE_DAYS = 45
+/** Jours chargés pour les filtres larges (durée maximale avant archivage automatique) : 45, réglable (config/siteDelays.ts). */
+export const caisseWideDays = () => activeDays()
 
 /**
  * Bornes Firestore (createdAt) à charger pour un filtre — SUR-ENSEMBLE de ce que le filtre de date
@@ -188,7 +189,7 @@ export const firestoreBoundsFor = (
   operationalDay?: Date | null,
 ): { from: Date | null; to: Date | null } => {
   const todayOp = getCurrentOperationalDay()
-  const wideStartOp = new Date(todayOp); wideStartOp.setDate(wideStartOp.getDate() - CAISSE_WIDE_DAYS)
+  const wideStartOp = new Date(todayOp); wideStartOp.setDate(wideStartOp.getDate() - caisseWideDays())
   const wideFrom = getOperationalDayRange(wideStartOp).start
   const opEnd = (ymd: string) => getOperationalDayRange(new Date(ymd + 'T12:00:00')).end
   if (datePreset === 'custom' && (dateFrom || dateTo)) {
@@ -994,7 +995,7 @@ export const computeCaisseView = (input: CaisseViewInput) => {
     return (!periodBounds.start || d >= periodBounds.start) && d <= periodBounds.end
   }
   const collectesParJour = [...parJour.entries()].sort((a, b) => b[0].localeCompare(a[0]))
-    .filter(([k, d], i) => i < 14 || inChosenPeriod(k) || (!!agencyHolderIds && ((d.aVerser || 0) > 0 || (d.nonRecu || 0) > 0)))
+    .filter(([k, d], i) => i < recentCollectDays() || inChosenPeriod(k) || (!!agencyHolderIds && ((d.aVerser || 0) > 0 || (d.nonRecu || 0) > 0)))
   // ⏳ Ports dus collectés, pas encore reçus par le chef d'agence (toutes journées chargées)
   const nonRecuTotal = agencyHolderIds
     ? sumPrice(collectSource.filter(p => isCollectedPortDuForCaisse(p, city) && notTransferred(p) && !held(p)))
@@ -1005,7 +1006,7 @@ export const computeCaisseView = (input: CaisseViewInput) => {
   // période) ; filtres de l'exploitation conservés (type de service, origine, port, recherche).
   // Règle « COD collecté » partagée avec la page admin « Contre Remboursement » (groupCodCollectesParJour).
   const codCollectesParJour = groupCodCollectesParJour(collectSource, city, (p: any) =>
-    (!extraFilter || extraFilter(p)) && (driverFilter === 'all' || ofFilteredDriver(p))).filter(([k], i) => i < 14 || inChosenPeriod(k))
+    (!extraFilter || extraFilter(p)) && (driverFilter === 'all' || ofFilteredDriver(p))).filter(([k], i) => i < recentCollectDays() || inChosenPeriod(k))
 
   return {
     passesDateFilter, dataSource, stats, soldeCaisseGlobal, soldeLivreur, portsCollectesForPrint,

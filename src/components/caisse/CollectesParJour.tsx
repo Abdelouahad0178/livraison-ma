@@ -4,6 +4,7 @@ import { Calendar, ChevronDown, Printer } from 'lucide-react'
 import { printCodCollectes, printPortsCollectes } from '../../utils/agentPrintUtils'
 import { getOperationalDayString } from '../../config/operationalDay'
 import { caisseCodAmountOfType, toDateSafe, type CodCollecteJour, type CollecteJour } from '../../utils/agencyCaisseRules'
+import { recentCollectDays } from '../../config/siteDelays'
 
 export type { CollecteJour }
 
@@ -70,12 +71,12 @@ export default function CollectesParJour({ collectesParJour, profile, showVersem
           <span className="flex items-center gap-2 min-w-0">
             <Calendar className="w-5 h-5 text-green-600 shrink-0" />
             <span className="min-w-0">
-              <span className="block text-lg font-bold text-gray-900">Collectes par jour (14 derniers jours)</span>
+              <span className="block text-lg font-bold text-gray-900">Collectes par jour ({recentCollectDays()} derniers jours)</span>
               {loadingRecent && <span className="block text-xs font-semibold text-amber-700">⏳ Chargement des collectes des derniers jours… (versements disponibles dans quelques secondes)</span>}
               {!open && (
                 <span className="block text-xs text-gray-600">
                   Aujourd'hui : <b className="text-green-700">{todayData?.count || 0}</b> · {(todayData?.montant || 0).toFixed(0)} DH
-                  {' '}— 14 jours : {collectesParJour.reduce((s, [, d]) => s + d.count, 0)} colis · {collectesParJour.reduce((s, [, d]) => s + d.montant, 0).toFixed(0)} DH
+                  {' '}— {recentCollectDays()} jours : {collectesParJour.reduce((s, [, d]) => s + d.count, 0)} colis · {collectesParJour.reduce((s, [, d]) => s + d.montant, 0).toFixed(0)} DH
                   {selectedRange && (() => {
                     const sel = collectesParJour.filter(([k]) => isSel(k))
                     return <> — <b className="text-violet-700">📌 Filtre : {sel.reduce((s, [, d]) => s + d.count, 0)} colis · {sel.reduce((s, [, d]) => s + d.montant, 0).toFixed(0)} DH</b></>
@@ -271,7 +272,7 @@ const COD_TYPES = [
  * 💰 Valeurs (COD) collectées par journée d'opération (14 dernières) — cartes cliquables + détail imprimable,
  * montants par type comme Caisse Agence. Données = computeCaisseView().codCollectesParJour.
  */
-export function CodCollectesParJour({ codCollectesParJour, profile, periodLabel = '14 derniers jours', periodShort = '14 jours', selectedRange = null }: Readonly<{
+export function CodCollectesParJour({ codCollectesParJour, profile, periodLabel = `${recentCollectDays()} derniers jours`, periodShort = `${recentCollectDays()} jours`, selectedRange = null }: Readonly<{
   codCollectesParJour: [string, CodCollecteJour][]
   profile: any
   /** 📌 Même sélection que les collectes des ports (date / période du filtre de la page) : journées mises en évidence */
