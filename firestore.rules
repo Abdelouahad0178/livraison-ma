@@ -677,9 +677,49 @@ service cloud.firestore {
           || isAdmin();
       }
       // Chaque chemin d'écriture applique à la fois les responsabilités d'agence et les gardes d'argent.
+      // 🔁 Passage dans l'AGENCE VOISINE (Admin › Agences › Réglages ; sans réglage : Agadir ⇄ Ait Melloul) — conditions
+      // UNIQUES (01/11/2026), le rôle et la garde d'argent sont vérifiés par l'appelant. Colis arrivé par erreur, en cours de
+      // livraison, local « Initialisé », ou déjà « Livré » sans port dû ni COD encaissé (le site annule d'abord la collecte
+      // faite ici). Compte de la ville de destination ACTUELLE (quelle que soit la ville de création) ; seule la ville du
+      // destinataire change. Statut final : « Arrivé en agence » (sans livreur), « En cours de livraison » chez un livreur de
+      // la NOUVELLE ville, ou « Livré » (reste livrée, chez un livreur de la nouvelle ville ou en gare).
+      // ⚡ 1er test quasi gratuit : la ville de destination change.
+      function neighborMoveCoreOk() {
+        return request.resource.data.get('destinationCity', '') != resource.data.get('destinationCity', '')
+          && request.resource.data.get('destinationCity', '') != ''
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'receiver', 'destinationCity', 'destinationArrivedAt', 'history',
+            'status', 'visibleInDestinationAgency'
+          ].concat(deliveryAssignmentFields()))
+          && request.resource.data.receiver.city == request.resource.data.destinationCity
+          && request.resource.data.receiver.diff(resource.data.receiver).affectedKeys().hasOnly(['city'])
+          && (
+            ((resource.data.status in ['Arrivé en agence', 'En cours de livraison']
+                || (resource.data.status == 'Initialisé'
+                    && resource.data.get('originCity', '') == resource.data.destinationCity))
+              && (request.resource.data.status == 'Arrivé en agence'
+                  || (request.resource.data.status == 'En cours de livraison'
+                      && request.resource.data.get('deliveryDriverId', null) is string
+                      && get(/databases/$(database)/documents/users/$(request.resource.data.deliveryDriverId)).data.city
+                         == request.resource.data.destinationCity)))
+            || (resource.data.status == 'Livré'
+              && request.resource.data.status == 'Livré'
+              && !(resource.data.get('portType', '') == 'port_du'
+                   && resource.data.get('portPayeMethod', null) in [null, '']
+                   && resource.data.get('portStatus', null) in ['collected', 'received'])
+              && resource.data.get('codCollectedAt', null) == null
+              && resource.data.get('codStatus', null) in [null, 'pending']
+              && (request.resource.data.get('deliveryDriverId', null) == null
+                  || get(/databases/$(database)/documents/users/$(request.resource.data.deliveryDriverId)).data.city
+                     == request.resource.data.destinationCity))
+          )
+          && neighborCityOf(resource.data.get('destinationCity', '')) == request.resource.data.get('destinationCity', '')
+          && userCity() == resource.data.destinationCity
+          && isNotBlocked();
+      }
       function parcelWriteGuardsOk() {
         return parcelDateLockedOk() && (role() == 'agentpro'
-          ? agentProParcelUpdateOk() && agentProBonSafetyOk() && moneyInvariantsOk()
+          ? (neighborMoveCoreOk() || (agentProParcelUpdateOk() && agentProBonSafetyOk())) && moneyInvariantsOk()
           : (role() != 'chef_agence'
               || (request.resource.data.get('createdByCity', null) == resource.data.get('createdByCity', null)
                 && parcelCreationCity(request.resource.data) == parcelCreationCity(resource.data)
@@ -995,50 +1035,9 @@ service cloud.firestore {
         && (isChefAgence() || (resource.data.status != 'Livré' && resource.data.status != 'Retourné'))
         && deliveryCityGuard()))
         ||
-      // 🔁 Agadir ⇄ Ait Melloul : colis arrivé par erreur dans l'agence voisine, colis en cours de
-      // livraison (assigné à un livreur), ou expédition locale (origine = destination) « Initialisé ».
-      // Chef d'agence / Agent PRO / Chef d'exploitation de la ville de destination actuelle uniquement,
-      // seule la ville du destinataire change (même si colis chargé). Statut final : « Arrivé en agence »
-      // (sans livreur) ou « En cours de livraison » chez un livreur de la NOUVELLE ville.
-      // Expédition déjà « Livré » SANS PORT DÛ NI COD ENCAISSÉ (le site annule d'abord la collecte faite
-      // ici) : elle reste « Livré », chez un livreur de la nouvelle ville ou sans livreur (en gare).
-      // Le port PAYÉ (encaissé au départ) ne bloque pas.
-        (((role() == 'chef_agence' || role() == 'agentpro' || role() == 'chef_exploitation')
-        && isNotBlocked()
-        && (
-          (
-            (resource.data.status in ['Arrivé en agence', 'En cours de livraison']
-              || (resource.data.status == 'Initialisé'
-                  && resource.data.get('originCity', '') == resource.data.destinationCity))
-            && (request.resource.data.status == 'Arrivé en agence'
-                || (request.resource.data.status == 'En cours de livraison'
-                    && request.resource.data.get('deliveryDriverId', null) is string
-                    && get(/databases/$(database)/documents/users/$(request.resource.data.deliveryDriverId)).data.city
-                       == request.resource.data.destinationCity))
-          )
-          || (
-            resource.data.status == 'Livré'
-            && request.resource.data.status == 'Livré'
-            && !(resource.data.get('portType', '') == 'port_du'
-                 && resource.data.get('portPayeMethod', null) in [null, '']
-                 && resource.data.get('portStatus', null) in ['collected', 'received'])
-            && resource.data.get('codCollectedAt', null) == null
-            && resource.data.get('codStatus', null) in [null, 'pending']
-            && (request.resource.data.get('deliveryDriverId', null) == null
-                || get(/databases/$(database)/documents/users/$(request.resource.data.deliveryDriverId)).data.city
-                   == request.resource.data.destinationCity)
-          )
-        )
-        && request.resource.data.destinationCity != resource.data.destinationCity
-        && request.resource.data.destinationCity != ''
-        && neighborCityOf(resource.data.destinationCity) == request.resource.data.destinationCity
-        && userCity() == resource.data.destinationCity
-        && request.resource.data.receiver.city == request.resource.data.destinationCity
-        && request.resource.data.receiver.diff(resource.data.receiver).affectedKeys().hasOnly(['city'])
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'receiver', 'destinationCity', 'destinationArrivedAt', 'history',
-          'status', 'visibleInDestinationAgency'
-        ].concat(deliveryAssignmentFields()))))
+      // 🔁 Agence voisine (conditions communes : neighborMoveCoreOk) — chef d'agence / agent pro / chef d'exploitation.
+        ((role() == 'chef_agence' || role() == 'agentpro' || role() == 'chef_exploitation')
+        && neighborMoveCoreOk())
         ||
         (((signedIn()
         && keepsDeliveredStatus()
@@ -1312,31 +1311,12 @@ service cloud.firestore {
       // 01/11/2026 : droit coché par l'admin dans la fiche employé → claim fullEdit du jeton (Cloud Function syncUserClaims).
       allow update: if request.auth.token.get('fullEdit', false) == true || request.auth.uid == 'OyaKKswnpseVgqtmMzdEB8RXjt92';
 
-      // 🔁 Agadir ⇄ Ait Melloul (règle du 09/10/2026, RÉTABLIE le 27/10/2026 — supprimée lors du regroupement des règles) :
-      // colis arrivé par erreur dans l'agence voisine, en cours de livraison, ou local « Initialisé ». Chef d'agence /
-      // Agent PRO / Chef d'exploitation de la ville de destination ACTUELLE (quelle que soit la ville de création) ;
-      // seule la ville du destinataire change. Statut final : « Arrivé en agence » (sans livreur) ou « En cours de
-      // livraison » chez un livreur de la NOUVELLE ville. Identique à la règle d'origine.
+      // 🔁 Agence voisine — règle de secours (rétablie le 27/10/2026) : mêmes conditions communes (neighborMoveCoreOk,
+      // « Livré » compris depuis le 01/11/2026) et garde d'argent ; évaluée seulement si la grande règle a refusé.
       allow update: if request.resource.data.get('destinationCity', '') != resource.data.get('destinationCity', '')
-        && request.resource.data.get('destinationCity', '') != ''
-        && neighborCityOf(resource.data.get('destinationCity', '')) == request.resource.data.get('destinationCity', '')
         && (role() == 'chef_agence' || role() == 'agentpro' || role() == 'chef_exploitation')
-        && isNotBlocked()
-        && userCity() == resource.data.destinationCity
-        && (resource.data.status in ['Arrivé en agence', 'En cours de livraison']
-            || (resource.data.status == 'Initialisé'
-                && resource.data.get('originCity', '') == resource.data.destinationCity))
-        && (request.resource.data.status == 'Arrivé en agence'
-            || (request.resource.data.status == 'En cours de livraison'
-                && request.resource.data.get('deliveryDriverId', null) is string
-                && get(/databases/$(database)/documents/users/$(request.resource.data.deliveryDriverId)).data.city
-                   == request.resource.data.destinationCity))
-        && request.resource.data.receiver.city == request.resource.data.destinationCity
-        && request.resource.data.receiver.diff(resource.data.receiver).affectedKeys().hasOnly(['city'])
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'receiver', 'destinationCity', 'destinationArrivedAt', 'history',
-          'status', 'visibleInDestinationAgency'
-        ].concat(deliveryAssignmentFields()));
+        && neighborMoveCoreOk()
+        && moneyInvariantsOk();
     }
 
     // Ã¢â€â‚¬Ã¢â€â‚¬ Villes

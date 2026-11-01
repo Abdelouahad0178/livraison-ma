@@ -583,9 +583,14 @@ export default function ParcelsTab() {
     ['Initialisé', 'En cours de livraison'].includes(parcel.status) && parcel.originCity === parcel.destinationCity
   // 27/10/2026 : comme à l'origine, TOUTE expédition dont la destination est ma ville (quelle que soit la ville de
   // création) — la restriction « créée dans ma ville » de l'agent pro est retirée pour la bascule.
+  // 01/11/2026 : expédition déjà « Livré » aussi (comme la Collecte du soir du chef d'exploitation) tant que ni le port dû
+  // ni le COD n'ont été encaissés ici — elle reste « Livré ». Mêmes conditions que firestore.rules (neighborMoveCoreOk).
+  const isLivreMovable = (parcel: any) => parcel.status === 'Livré' && !parcel.isArchived
+    && !(parcel.portType === 'port_du' && !parcel.portPayeMethod && ['collected', 'received'].includes(parcel.portStatus))
+    && !parcel.codCollectedAt && (parcel.codStatus == null || parcel.codStatus === 'pending')
   const canToggleDestCity = (parcel: any) =>
     !!neighborCityOf(parcel)
-    && (parcel.status === 'Arrivé en agence' || parcel.status === 'En cours de livraison' || isLocalNotDelivered(parcel))
+    && (parcel.status === 'Arrivé en agence' || parcel.status === 'En cours de livraison' || isLocalNotDelivered(parcel) || isLivreMovable(parcel))
     && (profile?.role === 'chef_agence' || profile?.role === 'agentpro')
     // ✏️ Compte « modification totale » (zahra@gmail.com, 29/10/2026) : bascule dans les DEUX sens (Agadir ⇄ Ait Melloul)
     && (profile?.city === parcel.destinationCity || isFullParcelEditor(profile))
@@ -609,7 +614,8 @@ export default function ParcelsTab() {
     setTogglingCityId(parcel.id)
     try {
       const now = new Date().toISOString()
-      const status = driver ? 'En cours de livraison' : 'Arrivé en agence'
+      // Expédition déjà livrée : elle RESTE « Livré » (seuls la ville et le livreur changent)
+      const status = parcel.status === 'Livré' ? 'Livré' : (driver ? 'En cours de livraison' : 'Arrivé en agence')
       // Ancien livreur retiré ; nouveau livreur de la ville cible si choisi
       const assignment = driver
         ? { ...DELIVERY_ASSIGNMENT_RESET, deliveryDriverId: driver.id, deliveryDriverName: driver.name || 'Livreur', deliveryAssignedAt: now, deliveryAssignedBy: profile?.name || '' }
@@ -645,11 +651,11 @@ export default function ParcelsTab() {
       window.dispatchEvent(new CustomEvent('parcelUpdated', {
         detail: { parcelId: parcel.id, updates, timestamp: now, source: 'database' },
       }))
-      showToast(`${parcel.trackingId || 'Expédition'} → ${target}${driver ? ` · livreur ${driver.name}` : ' (Arrivé en agence)'}`, 'success', 2500)
+      showToast(`${parcel.trackingId || 'Expédition'} → ${target}${driver ? ` · livreur ${driver.name}` : ` (${status === 'Livré' ? 'reste Livré, en gare' : 'Arrivé en agence'})`}`, 'success', 2500)
     } catch (err: any) {
       console.error('Erreur bascule ville:', err)
       showToast(err?.code === 'permission-denied'
-        ? `Bascule refusée : réservée au chef d'agence / Agent PRO de ${parcel.destinationCity}, expédition non livrée.`
+        ? `Bascule refusée : réservée au chef d'agence / Agent PRO de ${parcel.destinationCity} (expédition livrée : seulement si ni le port dû ni le COD n'ont été encaissés ici).`
         : `Erreur : ${err?.message || err}`, 'error')
     } finally {
       setTogglingCityId(null)
@@ -5842,10 +5848,11 @@ export default function ParcelsTab() {
               </div>
               <label className="block text-xs font-semibold text-gray-600">Nouveau livreur ({target})
                 <select value={cityMoveModal.driverId} onChange={e => setCityMoveModal({ ...cityMoveModal, driverId: e.target.value })} className={`${selectCls} mt-1`}>
-                  <option value="">— Sans livreur : en gare à {target} (Arrivé en agence) —</option>
+                  <option value="">— Sans livreur : en gare à {target}{parcel.status === 'Livré' ? '' : ' (Arrivé en agence)'} —</option>
                   {targetDrivers.map((d: any) => <option key={d.id} value={d.id}>{d.name || d.email || d.id}</option>)}
                 </select>
               </label>
+              {parcel.status === 'Livré' && <p className="text-xs text-emerald-700 bg-emerald-50 rounded-lg px-3 py-2">Expédition déjà livrée : elle reste « Livré » ; seuls la ville et le livreur changent.</p>}
               {targetDrivers.length === 0 && <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">Aucun livreur trouvé pour {target}.</p>}
               <div className="flex justify-end gap-2">
                 <button onClick={() => setCityMoveModal(null)} className="px-4 py-2 rounded-xl text-sm font-semibold text-gray-600 hover:bg-gray-100">Annuler</button>
