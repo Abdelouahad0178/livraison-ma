@@ -3709,7 +3709,7 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
       )}
 
       {/* ── COMPTES CLIENTS (fiche d'ouverture de compte) ── */}
-      {tab === 'comptes' && canManageClientAccounts(auth.currentUser?.email || profile?.email) && (
+      {tab === 'comptes' && canManageClientAccounts(profile) && (
         <Suspense fallback={null}>
           <ClientAccountsTab profile={profile} />
         </Suspense>

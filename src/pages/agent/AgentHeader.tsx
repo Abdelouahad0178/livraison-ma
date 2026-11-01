@@ -64,9 +64,9 @@ export default function AgentHeader({
   }).length
   // 🌸 Quatre fleurs pour certains comptes (components/FloralTheme)
   const floral = isFloralUser(auth.currentUser?.email || profile?.email)
-  const clientAccounts = canManageClientAccounts(auth.currentUser?.email || profile?.email)
+  const clientAccounts = canManageClientAccounts(profile)
   // 🚚 Cartes « Livraison du jour » de l'admin (COD espèces + Ports), limitées aux villes du compte
-  const statsCities = livraisonStatsCitiesFor(auth.currentUser?.email || profile?.email)
+  const statsCities = livraisonStatsCitiesFor(profile)
   return (
     <header className="bg-white border-b border-gray-100 shadow-sm sticky top-0 z-10">
       <div className="max-w-7xl xl:max-w-none xl:w-[95%] mx-auto px-4">

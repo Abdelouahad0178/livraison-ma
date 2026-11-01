@@ -14,6 +14,7 @@ import {
 } from '../../../firebase/firestore'
 import { portTypeChangeFields } from '../../../firebase/parcels'
 import { adminResetDeliveryMoney } from '../../../firebase/adminCorrections'
+import { cleanPermissions } from '../../../utils/userPermissions'
 import { realignDeliveryAfterDestinationChange } from '../../../firebase/delivery'
 import { normalizeServiceType, codPaymentTypeForService, NON_COD_SERVICE_TYPES } from '../../../firebase/constants'
 import { buildCodWriteFields, validateCodChoice, isMixedCod, codDocPartOf, codCashPartOf, codEditResult, mixedSplitLockReason } from '../../../utils/codParts'
@@ -874,6 +875,8 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
       dateNaissance: data.dateNaissance || '', salaire: data.salaire || '',
       adresse: data.adresse || '', situationFamiliale: data.situationFamiliale || '',
       contactUrgence: data.contactUrgence || '', noteRH: data.noteRH || '',
+      // 🔑 Droits particuliers (01/11/2026) : seulement si la fiche a été ouverte avec ses droits (sinon : inchangés)
+      ...(data.permissions !== undefined ? { permissions: cleanPermissions(data.permissions) } : {}),
     } as any)
     setUserEdit(null)
   }

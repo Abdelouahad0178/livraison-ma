@@ -555,6 +555,16 @@ exports.syncEnvoiContrib = onDocumentWritten({ document: 'parcels/{parcelId}', r
 // ── 🤖 Rapport du Contrôleur (Admin › 🤖 Rapports, à la demande, admin seulement) — voir functions/controlReport.js ──
 exports.generateControlReport = require('./controlReport').generateControlReport
 
+// ── 🔑 Droit « modification totale » → jeton de connexion (lu par firestore.rules) — voir functions/userClaims.js ──
+const { syncFullEditClaim } = require('./userClaims')
+exports.syncUserClaims = onDocumentWritten({ document: 'users/{uid}', retry: true }, async (event) => {
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after = event.data?.after?.exists ? event.data.after.data() : null
+  const was = !!before?.permissions?.fullParcelEdit, now = !!after?.permissions?.fullParcelEdit
+  if (was === now && before) return
+  await syncFullEditClaim(require('firebase-admin/auth').getAuth(), event.params.uid, after)
+})
+
 // ── 🩺 Contrôle quotidien de la santé des données (lecture seule, 5 h + sur demande) — voir functions/healthCheck.js ──
 exports.scheduledHealthCheck = require('./healthCheck').scheduledHealthCheck
 exports.runHealthCheckNow = require('./healthCheck').runHealthCheckNow

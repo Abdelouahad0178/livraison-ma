@@ -25,8 +25,9 @@ service cloud.firestore {
 
     // 🔒 Agent pro qui crée une expédition d'une autre ville que la sienne (compte sans fiche users : non concerné)
     function isAgentProOtherCity(data) {
-      // ✏️ Compte « modification totale » (zahra@gmail.com, 29/10/2026) : saisie pour TOUTES les villes
-      return request.auth.uid != 'OyaKKswnpseVgqtmMzdEB8RXjt92'
+      // ✏️ Droit « modification totale » (fiche employé, claim fullEdit du jeton — 01/11/2026) : saisie pour TOUTES les villes.
+      // L'uid de zahra reste le temps que son jeton reçoive le claim (à retirer après le 08/11/2026).
+      return request.auth.token.get('fullEdit', false) != true && request.auth.uid != 'OyaKKswnpseVgqtmMzdEB8RXjt92'
         && exists(/databases/$(database)/documents/users/$(request.auth.uid))
         && userDoc().get('role', '') == 'agentpro'
         && (userDoc().get('city', '') == ''
@@ -1299,7 +1300,8 @@ service cloud.firestore {
       // ✏️ Compte « modification totale » (demande du 26/10/2026) : zahra@gmail.com (agent pro, Agadir) modifie TOUTES
       // les données de TOUTES les expéditions, comme l'admin. Les autres agents pro restent inchangés.
       // Même liste côté site : utils/agentProAccess.ts (FULL_PARCEL_EDITOR_UIDS).
-      allow update: if request.auth.uid == 'OyaKKswnpseVgqtmMzdEB8RXjt92';
+      // 01/11/2026 : droit coché par l'admin dans la fiche employé → claim fullEdit du jeton (Cloud Function syncUserClaims).
+      allow update: if request.auth.token.get('fullEdit', false) == true || request.auth.uid == 'OyaKKswnpseVgqtmMzdEB8RXjt92';
 
       // 🔁 Agadir ⇄ Ait Melloul (règle du 09/10/2026, RÉTABLIE le 27/10/2026 — supprimée lors du regroupement des règles) :
       // colis arrivé par erreur dans l'agence voisine, en cours de livraison, ou local « Initialisé ». Chef d'agence /
@@ -1392,7 +1394,9 @@ service cloud.firestore {
       allow update: if isAdmin();
       allow update: if role() == 'directeur'
         && resource.data.get('role', '') != 'admin'
-        && request.resource.data.get('role', '') != 'admin';
+        && request.resource.data.get('role', '') != 'admin'
+        // 🔑 Droits particuliers (permissions) : l'admin SEUL (01/11/2026)
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny(['permissions']);
       // Soi-même (personnel) : sa fiche, sans toucher aux champs d'autorisation
       allow update: if isStaff() && request.auth.uid == userId
         && !request.resource.data.diff(resource.data).affectedKeys().hasAny(

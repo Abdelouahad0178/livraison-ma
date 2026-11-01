@@ -1,18 +1,11 @@
-/**
- * 🚚 Cartes « Livraison du jour » (COD espèces + Ports) de l'en-tête Admin, aussi affichées à certains chefs d'agence,
- * limitées à leurs villes.
- */
-export const LIVRAISON_STATS_ACCESS: Record<string, string[]> = {
-  'noura@gmail.com': ['Agadir', 'Ait Melloul'],
-  // Chefs d'agence : leur ville seulement
-  'noura2@gmail.com': ['Ait Melloul'],
-  'bouzndag@gmail.com': ['Marrakech'],
-  'said@gmail.com': ['Casablanca'],
-  // Chefs d'exploitation : leur ville seulement
-  'zinebechef@gmail.com': ['Agadir'],
-  'elkerdaouichef@gmail.com': ['Ait Melloul'],
-  'madanichef@gmail.com': ['Marrakech'],
-}
+import { permissionsOf } from '../utils/userPermissions'
 
-export const livraisonStatsCitiesFor = (email?: string | null): string[] | null =>
-  (email && LIVRAISON_STATS_ACCESS[email.trim().toLowerCase()]) || null
+/**
+ * 🚚 Cartes « Livraison du jour » (COD espèces + Ports) de l'en-tête Admin, aussi affichées à certains chefs d'agence /
+ * chefs d'exploitation, limitées à leurs villes. Depuis le 01/11/2026 : villes cochées par l'ADMIN dans la fiche employé
+ * (permissions.livraisonStatsCities — avant : liste d'e-mails écrite ici).
+ */
+export const livraisonStatsCitiesFor = (profile: any): string[] | null => {
+  const cities = permissionsOf(profile).livraisonStatsCities
+  return cities && cities.length ? cities : null
+}
