@@ -69,4 +69,15 @@ function canon(v) {
 }
 const liteKey = (lite) => JSON.stringify(canon(lite))
 
-module.exports = { LITE_EXCLUDED_FIELDS, projectParcelLite, liteKey }
+/**
+ * 🪦 Villes QUITTÉES par une expédition (31/10/2026) : villes de départ / d'arrivée d'avant qui ne sont plus ni le
+ * départ ni l'arrivée de la version actuelle (`now` = null : expédition supprimée / archivée → toutes ses villes).
+ */
+const CITY_FIELDS = ['originCity', 'destinationCity']
+function citiesLeft(before, now) {
+  if (!before) return []
+  return [...new Set(CITY_FIELDS.map(f => before[f]).filter(Boolean))]
+    .filter(c => !now || !CITY_FIELDS.some(f => now[f] === c))
+}
+
+module.exports = { LITE_EXCLUDED_FIELDS, projectParcelLite, liteKey, citiesLeft }

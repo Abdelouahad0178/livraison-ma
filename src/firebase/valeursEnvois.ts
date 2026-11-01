@@ -49,6 +49,21 @@ export interface Envoi {
   periodTo?: string | null
   caisseEntryIds?: string[]
   validationErrors?: string[]
+  /** ⏳ Validation commencée (30/10/2026) : l'envoi ne peut plus être annulé ; « Reprendre » termine une validation interrompue */
+  validationStartedAt?: any
+  validationStartedBy?: string
+}
+
+/** Progression d'une validation (valeurs traitées / total). */
+export type ValidateProgress = (done: number, total: number) => void
+
+/** Exécute `fn` sur chaque élément, `n` à la fois (ordre des résultats conservé). */
+async function pool<T, R>(items: T[], n: number, fn: (it: T) => Promise<R>): Promise<R[]> {
+  const out: R[] = new Array(items.length)
+  let next = 0
+  const worker = async () => { while (next < items.length) { const i = next++; out[i] = await fn(items[i]) } }
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, worker))
+  return out
 }
 
 export const computeTotals = (items: EnvoiItem[]) => {
@@ -92,6 +107,9 @@ export async function cancelEnvoi(id: string) {
 
 export async function rejectEnvoi(id: string, reason: string, by: { id: string; name: string }) {
   if (!reason.trim()) throw new Error('Le motif du rejet est obligatoire.')
+  // ⏳ Validation déjà commencée : une partie de l'argent est en caisse — il faut la TERMINER (« Reprendre »), pas rejeter
+  const cur = await getDoc(doc(db, 'valeursEnvois', id))
+  if ((cur.data() as any)?.validationStartedAt) throw new Error('La validation de cet envoi a déjà commencé : cliquez « Reprendre la validation » pour la terminer.')
   await updateDoc(doc(db, 'valeursEnvois', id), {
     status: 'rejete', rejectReason: reason.trim(), validatedById: by.id, validatedByName: by.name, validatedAt: serverTimestamp(),
   })
@@ -117,21 +135,25 @@ async function validatePorts(
     suffix: 'port' | 'pp'; legacyPrefix: string; label: string; category: string; countInCaisse: (it: EnvoiItem) => boolean
     receivedElsewhere: (p: any) => boolean; alreadyMarked: (p: any) => boolean; fields: Record<string, unknown>
     by: { id: string; name: string; city: string }
+    tick?: () => void
   },
 ) {
   const toMark: { it: EnvoiItem; ref: any }[] = []
   let total = 0, n = 0
-  for (const it of items) {
-    try {
-      const r = await readEnvoiParcel(it.parcelId)
-      if (!r) { errors.push(`${it.nic} : colis introuvable`); continue }
-      if (opts.receivedElsewhere(r.data)) continue // déjà en caisse par une réception directe du chef d'agence
-      if (opts.countInCaisse(it)) { total += it.amount; n++ }
-      if (!opts.alreadyMarked(r.data)) toMark.push({ it, ref: r.ref })
-    } catch (e: any) {
-      errors.push(`${it.nic} : ${e?.message || e}`)
-    }
+  // ⚡ (30/10/2026) Lectures en parallèle (25 à la fois) : avant, une par une — 537 ports = plusieurs minutes, et une
+  // page fermée entre-temps laissait l'envoi à moitié validé. Mêmes règles, même ordre.
+  const reads = await pool(items, 25, async it => {
+    try { return { it, r: await readEnvoiParcel(it.parcelId), err: null as any } } catch (e: any) { return { it, r: null, err: e } }
+  })
+  for (const { it, r, err } of reads) {
+    if (err) { errors.push(`${it.nic} : ${err?.message || err}`); continue }
+    if (!r) { errors.push(`${it.nic} : colis introuvable`); continue }
+    if (opts.receivedElsewhere(r.data)) continue // déjà en caisse par une réception directe du chef d'agence
+    if (opts.countInCaisse(it)) { total += it.amount; n++ }
+    if (!opts.alreadyMarked(r.data)) toMark.push({ it, ref: r.ref })
   }
+  // Valeurs déjà marquées (validation reprise) : comptées tout de suite dans la progression
+  for (let i = 0; i < items.length - toMark.length; i++) opts.tick?.()
   // Ancien envoi déjà partiellement validé avant ce correctif (entrée à identifiant aléatoire) : ne pas la recréer
   const legacy = (envoi.caisseEntryIds || []).some(id => id.startsWith(opts.legacyPrefix) && !id.includes(`envoi_${envoi.id}_`))
   if (total > 0 && !legacy) {
@@ -150,9 +172,10 @@ async function validatePorts(
       return // pas de marquage sans écriture de caisse : tout sera repris au prochain essai
     }
   }
-  for (const { it, ref } of toMark) {
+  await pool(toMark, 20, async ({ it, ref }) => {
     try { await updateDoc(ref, opts.fields as any) } catch (e: any) { errors.push(`${it.nic} : ${e?.message || e}`) }
-  }
+    opts.tick?.()
+  })
 }
 
 /**
@@ -163,18 +186,26 @@ async function validatePorts(
  * identifiant fixe → aucun doublon en cas de nouvel essai, de double clic ou de validation sur deux appareils.
  * L'envoi n'est marqué « validé » que si tout est passé, sinon il reste « envoyé » avec la liste des erreurs.
  */
-export async function validateEnvoi(envoi: Envoi, by: { id: string; name: string; city: string }) {
+export async function validateEnvoi(envoi: Envoi, by: { id: string; name: string; city: string }, onProgress?: ValidateProgress) {
   const envoiSnap = await getDoc(doc(db, 'valeursEnvois', envoi.id))
   const status = envoiSnap.exists() ? (envoiSnap.data() as any).status : null
   if (status !== 'envoye') throw new Error(`Envoi déjà traité (statut : ${status || 'introuvable'}). Actualisez la page.`)
   const errors: string[] = []
   const caisseEntryIds: string[] = [...(envoi.caisseEntryIds || [])]
   const now = new Date().toISOString()
+  // ⏳ Validation commencée : l'envoi ne peut plus être annulé par le chef d'exploitation (règles Firestore)
+  if (!(envoiSnap.data() as any)?.validationStartedAt) {
+    await updateDoc(doc(db, 'valeursEnvois', envoi.id), { validationStartedAt: serverTimestamp(), validationStartedBy: by.name })
+  }
+  const totalItems = envoi.items.length
+  let done = 0
+  const tick = (k = 1) => { done += k; onProgress?.(Math.min(done, totalItems), totalItems) }
+  onProgress?.(0, totalItems)
 
-  // 1) COD : une transaction par expédition (toutes ses parts : espèces + chèque/traite d'un COD mixte)
+  // 1) COD : une transaction par expédition (toutes ses parts : espèces + chèque/traite d'un COD mixte) — 8 à la fois
   const codByParcel = new Map<string, EnvoiItem[]>()
   envoi.items.filter(i => i.kind === 'cod').forEach(i => codByParcel.set(i.parcelId, [...(codByParcel.get(i.parcelId) || []), i]))
-  for (const [parcelId, its] of codByParcel) {
+  await pool([...codByParcel.entries()], 8, async ([parcelId, its]) => {
     try {
       const entryId = await runTransaction(db, async tx => {
         const ref = doc(db, 'parcels', parcelId)
@@ -208,12 +239,13 @@ export async function validateEnvoi(envoi: Envoi, by: { id: string; name: string
     } catch (e: any) {
       errors.push(`${its[0].nic} : ${e?.message || e}`)
     }
-  }
+    tick(its.length)
+  })
 
   // 2) Ports dus : seuls les ESPÈCES entrent en caisse (un port dû chèque suit le circuit des chèques) ;
   //    chaque port dû de l'envoi (espèces et chèque) passe « reçu par le chef d'agence »
   await validatePorts(envoi, envoi.items.filter(i => i.kind === 'port_du'), errors, caisseEntryIds, {
-    suffix: 'port', legacyPrefix: 'port:', label: 'Ports dus espèces', category: 'port_du', by,
+    suffix: 'port', legacyPrefix: 'port:', label: 'Ports dus espèces', category: 'port_du', by, tick: () => tick(),
     countInCaisse: it => (it.type || 'especes') === 'especes',
     receivedElsewhere: p => !!p.portChefReceivedAt && p.valeursEnvoiId !== envoi.id,
     alreadyMarked: p => !!p.portChefReceivedAt,
@@ -222,7 +254,7 @@ export async function validateEnvoi(envoi: Envoi, by: { id: string; name: string
 
   // 3) Ports payés ramassés au guichet : écriture de caisse globale, puis chaque expédition passe « reçu »
   await validatePorts(envoi, envoi.items.filter(i => i.kind === 'port_paye'), errors, caisseEntryIds, {
-    suffix: 'pp', legacyPrefix: 'pp:', label: 'Ports payés à ramasser', category: 'port_paye', by,
+    suffix: 'pp', legacyPrefix: 'pp:', label: 'Ports payés à ramasser', category: 'port_paye', by, tick: () => tick(),
     countInCaisse: () => true,
     receivedElsewhere: p => p.portStatus === 'received' && p.valeursEnvoiId !== envoi.id,
     alreadyMarked: p => p.portStatus === 'received',

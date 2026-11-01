@@ -437,7 +437,7 @@ exports.onParcelWrite = onDocumentWritten('parcels/{parcelId}', async (event) =>
 // - Sinon on RELIT le colis (et non l'instantané de l'événement) : les événements peuvent arriver
 //   dans le désordre ; relire garantit que la dernière exécution écrit l'état le plus récent.
 // Idempotent (set complet, pas de merge) : rejouer un événement réécrit la même projection.
-const { projectParcelLite, liteKey } = require('./parcelLite')
+const { projectParcelLite, liteKey, citiesLeft } = require('./parcelLite')
 // retry: true — la fonction relit toujours le colis à jour (idempotente) : un échec ponctuel ne doit plus
 // laisser une copie allégée en retard (les pages de caisse lisent parcelsLite pour les journées passées).
 exports.syncParcelLite = onDocumentWritten({ document: 'parcels/{parcelId}', retry: true }, async (event) => {
@@ -447,11 +447,42 @@ exports.syncParcelLite = onDocumentWritten({ document: 'parcels/{parcelId}', ret
   const after  = event.data?.after?.exists  ? event.data.after.data()  : null
   if (before && after && liteKey(projectParcelLite(before)) === liteKey(projectParcelLite(after))) return
   const fresh = await db.collection('parcels').doc(id).get()
+  // 🪦 (31/10/2026) Expédition SORTIE d'une ville (supprimée / archivée, ou départ / arrivée changés) : trace dans
+  // parcelsLiteGone. Le rattrapage des « Collectes par jour » (src/firebase/recentCollectedStore.ts) ne lit que les
+  // expéditions modifiées DE la ville : sans cette trace, une sortie faussait la vérification → relecture complète
+  // (≈ 11 Mo) après chaque archivage ou transfert Agadir ⇄ Ait Melloul. Effacée seule après 7 jours (TTL expireAt).
+  const left = citiesLeft(before, fresh.exists ? fresh.data() : null)
+  if (left.length) {
+    // Jamais bloquant : un échec ici ne doit pas retarder la copie allégée (au pire : relecture complète côté page)
+    try {
+      await db.collection('parcelsLiteGone').doc(id).set({
+        cities: FieldValue.arrayUnion(...left), at: FieldValue.serverTimestamp(),
+        expireAt: Timestamp.fromMillis(Date.now() + 7 * 864e5),
+      }, { merge: true })
+    } catch (err) { console.error('syncParcelLite — trace parcelsLiteGone impossible', id, err) }
+  }
   if (!fresh.exists) {
     await liteRef.delete()
     return
   }
   await liteRef.set({ ...projectParcelLite(fresh.data()), liteUpdatedAt: FieldValue.serverTimestamp() })
+})
+
+// ── 👥 Version allégée des clients : clients/{id} → clientsLite/{id} — voir functions/clientLite.js ──
+// Même modèle que syncParcelLite (rien si la projection n'a pas changé, sinon relecture et remplacement complet).
+const { projectClientLite } = require('./clientLite')
+exports.syncClientLite = onDocumentWritten({ document: 'clients/{clientId}', retry: true }, async (event) => {
+  const id = event.params.clientId
+  const liteRef = db.collection('clientsLite').doc(id)
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after  = event.data?.after?.exists  ? event.data.after.data()  : null
+  if (before && after && liteKey(projectClientLite(before)) === liteKey(projectClientLite(after))) return
+  const fresh = await db.collection('clients').doc(id).get()
+  if (!fresh.exists) {
+    await liteRef.delete()
+    return
+  }
+  await liteRef.set({ ...projectClientLite(fresh.data()), liteUpdatedAt: FieldValue.serverTimestamp() })
 })
 
 // ── 🧾 Copie « facturier » (parcelsFacturier) — voir functions/parcelFacturier.js ──
@@ -491,9 +522,38 @@ exports.syncCommercialStats = onDocumentWritten({ document: 'parcels/{parcelId}'
   await syncCommercial(db, FieldValue, id, fresh.data())
 })
 
+// ── 💼 Copie allégée des versements (Admin › Versements) — voir functions/versement.js ──
+// Rien à faire si la contribution de l'expédition n'a pas changé ; sinon relecture du colis à jour puis différence
+// appliquée en transaction (idempotent → retry sûr). Expédition supprimée (ou sortie vers les archives) : retirée,
+// comme dans Caisse Agence (qui ne lit que les expéditions actives).
+const { syncVersement, versementOf, holdersByCity } = require('./versement')
+exports.syncVersementStats = onDocumentWritten({ document: 'parcels/{parcelId}', retry: true }, async (event) => {
+  const id = event.params.parcelId
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after  = event.data?.after?.exists  ? event.data.after.data()  : null
+  const holders = await holdersByCity(db)
+  const b = versementOf(before, holders), a = versementOf(after, holders)
+  if (!b && !a) return
+  if (b && a && JSON.stringify(b) === JSON.stringify(a)) return
+  const fresh = await db.collection('parcels').doc(id).get()
+  await syncVersement(db, FieldValue, id, fresh.exists ? fresh.data() : null, holders)
+})
+
+// ── 📤 Copie allégée de l'argent détenu par le chef d'exploitation — voir functions/envoiContrib.js ──
+const { envoiContribOf, envoiKey, syncEnvoi } = require('./envoiContrib')
+exports.syncEnvoiContrib = onDocumentWritten({ document: 'parcels/{parcelId}', retry: true }, async (event) => {
+  const id = event.params.parcelId
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after  = event.data?.after?.exists  ? event.data.after.data()  : null
+  const b = envoiContribOf(id, before), a = envoiContribOf(id, after)
+  if (!b && !a) return
+  if (b && a && envoiKey(b) === envoiKey(a)) return
+  const fresh = await db.collection('parcels').doc(id).get()
+  await syncEnvoi(db, FieldValue, id, fresh.exists ? fresh.data() : null)
+})
+
 // ── 🤖 Rapport du Contrôleur (Admin › 🤖 Rapports, à la demande, admin seulement) — voir functions/controlReport.js ──
 exports.generateControlReport = require('./controlReport').generateControlReport
-
 // ── Rebuild all stats from existing parcels (callable — admin only) ────────
 // Call once after first deploy to bootstrap stats from historical data.
 exports.rebuildStats = onCall({

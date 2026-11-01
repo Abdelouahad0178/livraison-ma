@@ -1310,7 +1310,15 @@ export async function createAdminTransferFromAgent(data: any) {
   const first = codParcelIds.slice(0, MAX_FIRST)
   const nicOf = (id: string, p: any) => p?.senderNic || p?.trackingId || id
   const missing: string[] = []
+  // ⭐ Versement EXCEPTIONNEL autorisé par l'admin (data.exceptionCity) : l'exception est RELUE, refusée si déjà utilisée,
+  // et marquée « utilisée » dans la MÊME transaction que le versement (lot 3, 25/10/2026 ; avant : marquée ensuite,
+  // séparément — un échec laissait un versement fait avec une exception encore réutilisable).
+  const exceptionRef = data.exceptionCity ? doc(db, 'versementExceptions', data.exceptionCity) : null
   await runTransaction(db, async tx => {
+    if (exceptionRef) {
+      const ex = await tx.get(exceptionRef)
+      if (!ex.exists() || ex.data()?.used === true) throw new Error("L'exception de versement n'est plus disponible (déjà utilisée ou retirée par l'admin).")
+    }
     const snaps = await Promise.all(first.map((id: string) => tx.get(doc(db, 'parcels', id))))
     // Déjà versé pour CETTE nature (une expédition peut avoir son port versé et son COD versé séparément)
     const already = snaps.filter(s => s.exists() && s.data()?.[transferredFlag])
@@ -1339,6 +1347,7 @@ export async function createAdminTransferFromAgent(data: any) {
       createdAt: serverTimestamp(),
     })
     snaps.forEach(s => { if (s.exists()) tx.update(s.ref, markFields) })
+    if (exceptionRef) tx.update(exceptionRef, { used: true, usedAt: now, usedBy: data.fromName || '', transferId: transferRef.id })
   })
 
   // Lots suivants (versements de plus de MAX_FIRST expéditions) : chacun relu et revérifié
@@ -1510,14 +1519,102 @@ export async function confirmAdminTransfer(id: any, confirmedBy: any, confirmedB
   })
 }
 
+/** Champs « versé à l'admin » posés sur les expéditions par createAdminTransferFromAgent, selon la nature du versement. */
+const TRANSFER_MARK_FIELDS = {
+  port: ['portAdminTransferred', 'portAdminTransferId', 'portAdminTransferAt', 'portAdminTransferBy', 'portAdminTransferById'],
+  cod: ['adminTransferred', 'adminTransferId', 'adminTransferAt', 'adminTransferBy', 'adminTransferById'],
+} as const
+
+/**
+ * ❌ Refus d'un versement par l'admin. 30/10/2026 (demande de l'admin) : les expéditions du versement redeviennent
+ * « à verser » chez le chef d'agence — leurs marques « versé » sont retirées, SEULEMENT si elles appartiennent encore à
+ * CE versement (…TransferId === id). Le statut et le 1er lot d'expéditions changent dans la même opération ; un
+ * versement déjà refusé ne peut pas être refusé deux fois. L'écriture de caisse reste (un versement refusé n'est jamais
+ * déduit : utils/agencyFollowUp). Anciens versements sans nature (`kind`) : statut seulement, comme avant.
+ */
 export async function rejectAdminTransfer(id: any, rejectedBy: any, rejectedById: any, reason: string) {
-  return updateDoc(doc(db, 'adminTransfers', id), {
-    status: 'rejected',
-    rejectedBy,
-    rejectedById,
-    rejectionReason: reason,
-    rejectedAt: serverTimestamp(),
+  const transferRef = doc(db, 'adminTransfers', id)
+  const first = await getDoc(transferRef)
+  if (!first.exists()) throw new Error('Versement introuvable.')
+  const t: any = first.data()
+  const kind: 'port' | 'cod' | null = t.kind === 'port' || t.kind === 'cod' ? t.kind : null
+  const fields = kind ? TRANSFER_MARK_FIELDS[kind] : []
+  const idField = kind === 'port' ? 'portAdminTransferId' : 'adminTransferId'
+  const ids: string[] = kind ? (t.codParcelIds || []).filter(Boolean) : []
+  const unmark = Object.fromEntries(fields.map(f => [f, deleteField()]))
+  const CHUNK = 400
+  let released = 0
+  for (let i = 0; i === 0 || i < ids.length; i += CHUNK) {
+    const chunk = ids.slice(i, i + CHUNK)
+    await runTransaction(db, async tx => {
+      const snaps = await Promise.all(chunk.map(pid => tx.get(doc(db, 'parcels', pid))))
+      if (i === 0) {
+        const cur = await tx.get(transferRef)
+        if (cur.data()?.status === 'rejected') throw new Error('Ce versement est déjà refusé.')
+        tx.update(transferRef, {
+          status: 'rejected', rejectedBy, rejectedById, rejectionReason: reason, rejectedAt: serverTimestamp(),
+          ...(kind ? { releasedParcelCount: 0 } : {}),
+        })
+      }
+      snaps.forEach(s => { if (s.exists() && s.data()?.[idField] === id) { tx.update(s.ref, unmark); released++ } })
+    })
+  }
+  if (kind) await updateDoc(transferRef, { releasedParcelCount: released })
+  return released
+}
+
+/**
+ * ✅ Validation par l'admin avec le montant RÉELLEMENT REÇU (30/10/2026). Le montant envoyé par le chef d'agence est
+ * conservé (`amountSent`), `amount` devient le montant reçu ; la différence (amountSent − amount) est un ÉCART À
+ * RÉGULARISER suivi chez le chef d'agence et chez l'admin (utils/versementEcarts). L'écriture de caisse du versement
+ * prend le montant reçu. Avant : l'admin modifiait le montant puis validait — l'original était écrasé et l'écart perdu.
+ */
+export async function confirmAdminTransferWithAmount(id: string, received: number, confirmedBy: string, confirmedById: string) {
+  const r = Math.round((Number(received) || 0) * 100) / 100
+  if (!(r > 0)) throw new Error('Le montant reçu doit être supérieur à 0.')
+  return runTransaction(db, async tx => {
+    const ref = doc(db, 'adminTransfers', id)
+    const s = await tx.get(ref)
+    if (!s.exists()) throw new Error('Versement introuvable.')
+    const t: any = s.data()
+    if (t.status !== 'pending') throw new Error('Ce versement a déjà été traité.')
+    const sent = Math.round((Number(t.amountSent ?? t.amount) || 0) * 100) / 100
+    if (r > sent + 0.001) throw new Error(`Le montant reçu (${r}) dépasse le montant envoyé (${sent}).`)
+    tx.update(ref, {
+      status: 'confirmed', confirmedBy: confirmedBy || 'Admin', confirmedById: confirmedById || '', confirmedAt: serverTimestamp(),
+      amount: r, amountSent: sent,
+    })
+    if (t.caisseEntryId && Math.abs(r - (Number(t.amount) || 0)) > 0.001) {
+      tx.update(doc(db, 'caisseEntries', t.caisseEntryId), { amount: r, updatedAt: serverTimestamp() })
+    }
   })
+}
+
+/**
+ * 💼 Versement de RÉGULARISATION d'un écart (chef d'agence → admin) : sans expédition, en attente de validation par
+ * l'admin ; une fois validé, il diminue l'écart à régulariser de l'agence. Même écriture de caisse que les autres versements.
+ */
+export async function createRegularisationTransfer(data: { fromId: string; fromName: string; city: string; amount: number; note?: string }) {
+  const amount = Math.round((Number(data.amount) || 0) * 100) / 100
+  if (!data.city || !(amount > 0)) throw new Error('Montant invalide.')
+  const entryRef = doc(collection(db, 'caisseEntries'))
+  const transferRef = doc(collection(db, 'adminTransfers'))
+  const batch = writeBatch(db)
+  batch.set(entryRef, {
+    type: 'sortie', category: 'remise_admin', amount,
+    description: `Régularisation d'écart de versement${data.note ? ` — ${data.note}` : ''}`,
+    reference: '', city: data.city, agentId: data.fromId || null, agentName: data.fromName || null,
+    cashierId: null, cashierName: '', sourceAgentId: null, sourceAgentName: '', staffId: null, staffName: null,
+    note: data.note || '', createdAt: serverTimestamp(),
+  })
+  batch.set(transferRef, {
+    fromRole: 'agent', fromId: data.fromId, fromName: data.fromName, city: data.city, amount,
+    note: `Régularisation d'écart${data.note ? ` — ${data.note}` : ''}`, caisseEntryId: entryRef.id,
+    kind: 'regul', codParcelIds: [], codParcelCount: 0,
+    status: 'pending', confirmedBy: null, confirmedById: null, confirmedAt: null, createdAt: serverTimestamp(),
+  })
+  await batch.commit()
+  return transferRef.id
 }
 
 // Modification d'un transfert admin (seulement si status === 'pending')
@@ -1594,10 +1691,12 @@ export async function updateAdminTransfer(id: string, data: any, updaterId: stri
     }
 
     // Mettre à jour le transfert
+    // 💼 (30/10/2026) Montant modifié : le montant ENVOYÉ d'origine est gardé (amountSent) — l'écart reste suivi
     tx.update(transferRef, {
       type,
       paymentType,
       amount,
+      ...(Math.abs(oldAmount - amount) > 0.001 && transfer.amountSent == null ? { amountSent: oldAmount } : {}),
       note: data.note || '',
       updatedAt: serverTimestamp(),
     })
@@ -1607,6 +1706,31 @@ export async function updateAdminTransfer(id: string, data: any, updaterId: stri
 // Suppression d'un transfert admin (seulement si status === 'pending')
 export async function deleteAdminTransfer(id: string, deleterId: string) {
   if (!id) throw new Error('Transfert invalide.')
+
+  // 💼 (30/10/2026) Versement de chef d'agence (nature port / COD / régularisation) : il n'a JAMAIS débité agencyCashes
+  // (createAdminTransferFromAgent / createRegularisationTransfer) → on ne la touche pas ; ses expéditions redeviennent
+  // « à verser » (marques retirées si elles appartiennent encore à CE versement), puis écriture de caisse et versement supprimés.
+  const pre = await getDoc(doc(db, 'adminTransfers', id))
+  const pk = pre.exists() ? (pre.data() as any).kind : null
+  if (pk === 'port' || pk === 'cod' || pk === 'regul') {
+    const t: any = pre.data()
+    const fields = pk === 'regul' ? [] : TRANSFER_MARK_FIELDS[pk as 'port' | 'cod']
+    const idField = pk === 'port' ? 'portAdminTransferId' : 'adminTransferId'
+    const ids: string[] = pk === 'regul' ? [] : (t.codParcelIds || []).filter(Boolean)
+    const unmark = Object.fromEntries(fields.map(f => [f, deleteField()]))
+    for (let i = 0; i < ids.length; i += 400) {
+      const chunk = ids.slice(i, i + 400)
+      await runTransaction(db, async tx => {
+        const snaps = await Promise.all(chunk.map(pid => tx.get(doc(db, 'parcels', pid))))
+        snaps.forEach(s => { if (s.exists() && s.data()?.[idField] === id) tx.update(s.ref, unmark) })
+      })
+    }
+    const b = writeBatch(db)
+    if (t.caisseEntryId) b.delete(doc(db, 'caisseEntries', t.caisseEntryId))
+    b.delete(doc(db, 'adminTransfers', id))
+    await b.commit()
+    return
+  }
 
   return runTransaction(db, async tx => {
     const transferRef = doc(db, 'adminTransfers', id)
@@ -1676,6 +1800,8 @@ export async function createAdminTransferDirect(data: any, creatorId: string, cr
     amount,
     paymentType,
     type,
+    // 💼 (30/10/2026) Argent d'un écart reçu directement par l'admin : compte comme régularisation de l'agence
+    ...(data.kind === 'regul' ? { kind: 'regul', codParcelIds: [], codParcelCount: 0 } : {}),
     status: data.status || 'pending', // pending, confirmed, rejected
     reference: data.reference || '',
     note: data.note || '',

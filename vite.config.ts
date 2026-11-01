@@ -5,6 +5,8 @@ import tailwindcss from '@tailwindcss/vite'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
+  // 🏷️ Date de la version du site (affichée dans Admin › En gare : voir sur un téléphone si la dernière version tourne)
+  define: { __BUILD_TIME__: JSON.stringify(new Date().toISOString()) },
   test: {
     globals: true,
     exclude: ['**/node_modules/**', '**/dist/**', 'e2e/**'],

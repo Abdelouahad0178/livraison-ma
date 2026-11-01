@@ -1,7 +1,7 @@
 import DateInput from '../components/DateInput'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { signOut } from 'firebase/auth'
-import { doc, onSnapshot, updateDoc, getDoc, getDocs, collection, query as fbQuery, where, orderBy, limit as fbLimit } from 'firebase/firestore'
+import { doc, onSnapshot, getDoc, getDocs, collection, query as fbQuery, where, orderBy, limit as fbLimit, writeBatch } from 'firebase/firestore'
 import { auth, db } from '../firebase/config'
 import { loadExcel } from '../utils/loadExcel'
 import {
@@ -998,18 +998,24 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     }
     // ⚠️ Signalement « le reste payé en espèces » (chèque reçu < attendu) : visible par l'admin (Contrôle COD → filtre
     // « Chèque + espèces signalé ») ; le COD n'est PAS modifié ici — l'admin le corrige en « chèque + espèces »
+    // 🔗 (27/10/2026) Chèque GROUPÉ + reste en espèces : le MÊME signalement (montants du chèque groupé, N° EXP du groupe)
+    // sur chaque expédition du chèque — l'admin répartit les espèces entre elles en corrigeant les COD.
     let signal: Record<string, any> = {}
-    if (cashRest && !isGroup) {
+    const signalIds: string[] = cashRest ? (isGroup ? members!.map((m: any) => m.id) : [p.id]) : []
+    if (cashRest) {
       signal = {
         codDocMismatch: true, codDocMismatchCash: cashRest.cash, codDocMismatchExpected: cashRest.expected,
         codDocMismatchReceived: cashRest.received, codDocMismatchNote: cashRest.note || '',
         codDocMismatchAt: new Date().toISOString(), codDocMismatchBy: name, codDocMismatchById: uid,
+        ...(isGroup ? { codDocMismatchGroupNics: members!.map(nicOfP) } : {}),
       }
-      await updateDoc(doc(db, 'parcels', p.id), signal)
+      const batch = writeBatch(db)
+      signalIds.forEach(id => batch.update(doc(db, 'parcels', id), signal))
+      await batch.commit()
     }
     setControlOverrides(prev => {
       const next = { ...prev }
-      Object.entries(saved).forEach(([id, d]) => { next[id] = { ...(next[id] || {}), codDocuments: d, ...(id === p.id ? signal : {}) } })
+      Object.entries(saved).forEach(([id, d]) => { next[id] = { ...(next[id] || {}), codDocuments: d, ...(signalIds.includes(id) ? signal : {}) } })
       return next
     })
     setChequeModal(null)
@@ -2425,7 +2431,7 @@ Continuer ?`)) return
                           {p.codDocMismatch === true && !isMixedCod(p) && (
                             <div className="mt-0.5"><span className="inline-block rounded-full bg-amber-100 border border-amber-300 px-1.5 py-0.5 text-[10px] font-black text-amber-800"
                               title={`Signalé par ${p.codDocMismatchBy || '—'}${p.codDocMismatchNote ? ` : ${p.codDocMismatchNote}` : ''} — en attente de correction par l'admin`}>
-                              ⚠️ Signalé : chèque {money(p.codDocMismatchReceived)} DH + {money(p.codDocMismatchCash)} DH espèces
+                              ⚠️ Signalé : chèque{Array.isArray(p.codDocMismatchGroupNics) && p.codDocMismatchGroupNics.length > 1 ? ' groupé' : ''} {money(p.codDocMismatchReceived)} DH + {money(p.codDocMismatchCash)} DH espèces
                             </span></div>
                           )}</td>
                           <td className="px-3 py-2.5">

@@ -1,6 +1,7 @@
 import React from 'react'
 import { ALL_SERVICE_TYPES } from '../firebase/constants'
 import { isMixedCod, codPartsDetailLabel } from './codParts'
+import { fitA4Script } from './printFitA4'
 
 /**
  * 🖨️ Bon de ramassage d'une expédition (2 exemplaires sur une feuille A4, code-barres + QR de suivi) — le MÊME
@@ -59,7 +60,7 @@ export async function printAgentTicket(parcel: any): Promise<void> {
   }).join('')
 
   const renderCopy = () => `
-<div style="border:1px solid #d1d5db;max-width:148mm;margin:0 auto">
+<div class="copy" style="border:1px solid #d1d5db;margin:0 auto">
   <div style="display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid #d1d5db;padding:8px 10px">
     <img src="${logoUrl}" style="height:36px;object-fit:contain" onerror="this.style.display='none'">
     <div style="text-align:center;flex:1">
@@ -124,7 +125,7 @@ export async function printAgentTicket(parcel: any): Promise<void> {
       <div style="font-size:7pt;color:#9ca3af">Suivi en ligne</div>
     </div>
   </div>
-  <table style="border-top:1px solid #d1d5db;font-size:8pt;color:#9ca3af">
+  <table class="grow" style="border-top:1px solid #d1d5db;font-size:8pt;color:#9ca3af">
     <tr>
       <td style="width:50%;border-right:1px solid #e5e7eb">Cachet et Signature expéditeur</td>
       <td style="width:50%">Cachet et Signature destinataire</td>
@@ -138,19 +139,28 @@ export async function printAgentTicket(parcel: any): Promise<void> {
 <meta charset="UTF-8">
 <title>Bon-Ramassage-${parcel.trackingId}</title>
 <style>
-  @page { size: A4 portrait; margin: 6mm; }
+  @page { size: A4 portrait; margin: 5mm; }
   * { box-sizing:border-box; -webkit-print-color-adjust:exact !important; print-color-adjust:exact !important; }
   body { font-family:Arial,sans-serif; font-size:10pt; margin:0; padding:0; }
   table { border-collapse:collapse; width:100%; }
   td { vertical-align:top; padding:6px 10px; }
-  .cut-line { max-width:148mm; margin:0 auto; text-align:center; color:#9ca3af; font-size:8pt; border-top:1px dashed #9ca3af; padding-top:2px; }
+  .copy { width:148mm; max-width:100%; }
+  .cut-line { width:148mm; max-width:100%; margin:0 auto; text-align:center; color:#9ca3af; font-size:8pt; border-top:1px dashed #9ca3af; padding-top:2px; }
+  /* 🖨️ Sur papier : chaque exemplaire est agrandi (zoom calculé au chargement, voir le script) au maximum qui tient
+     dans la largeur utile (198 mm) ET dans une demi-page (138 mm), puis étiré à cette demi-page (zone de cachet /
+     signature agrandie) → les 2 exemplaires couvrent ≈ 95 % de la feuille A4, sans déborder sur une 2e page. */
+  @media print {
+    .copy { max-width:none; display:flex; flex-direction:column; }
+    .copy > .grow { flex:1; }
+    .cut-line { max-width:none; margin:1mm auto; }
+  }
 </style>
 </head>
 <body>
 ${renderCopy()}
 <div class="cut-line">✂ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ✂</div>
 ${renderCopy()}
-<script>window.onload = function() { window.print(); };<\/script>
+<script>${fitA4Script(true)}<\/script>
 </body>
 </html>`
 

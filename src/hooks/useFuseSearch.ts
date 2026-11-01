@@ -54,6 +54,9 @@ export interface FuseSearchConfig<T> {
 
   /** Ne lancer la recherche que si le terme est jugé complet (ex. 7 chiffres) — sinon terme vide */
   shouldSearch?: (query: string) => boolean
+
+  /** ⚡ Termes dont l'appelant n'utilise JAMAIS les résultats (ex. N° EXP à l'Admin) : ni index ni recherche (résultats vides) */
+  skipQuery?: (query: string) => boolean
 }
 
 export interface FuseSearchResult<T> {
@@ -93,6 +96,7 @@ export function useFuseSearch<T>({
   limit,
   initialSearch = '',
   shouldSearch,
+  skipQuery,
 }: FuseSearchConfig<T>): FuseSearchResult<T> {
   const [search, setSearch] = useState(initialSearch)
   const [debouncedSearch, setDebouncedSearch] = useState(initialSearch)
@@ -118,9 +122,15 @@ export function useFuseSearch<T>({
     return () => clearTimeout(timer)
   }, [search, debounceMs])
 
+  // ⚡ (29/10/2026) L'index n'est construit QUE si une recherche textuelle va l'utiliser : avant, il était reconstruit
+  // à chaque arrivée d'expéditions (~18 000 sur « Ce mois »), même sans recherche ou pour un N° EXP.
+  const activeQuery = debouncedSearch.trim()
+  const skipped = !!activeQuery && !!skipQuery && skipQuery(activeQuery)
+  const needsIndex = !!activeQuery && !skipped && !/^\d+$/.test(activeQuery)
+
   // 📊 Index Fuse.js optimisé
   const fuseIndex = useMemo(() => {
-    if (!Array.isArray(items) || items.length === 0) return null
+    if (!needsIndex || !Array.isArray(items) || items.length === 0) return null
 
     // Configuration optimale pour recherche de colis
     return new Fuse(items, {
@@ -140,7 +150,7 @@ export function useFuseSearch<T>({
       distance: 100, // Distance max pour fuzzy match
       shouldSort: true, // Tri par pertinence automatique
     })
-  }, [items, keys, threshold, useExtendedSearch])
+  }, [items, keys, threshold, useExtendedSearch, needsIndex])
 
   // 🎯 Recherche intelligente avec scoring + cache
   const { detailedResults, results } = useMemo(() => {
@@ -153,8 +163,14 @@ export function useFuseSearch<T>({
       }
     }
 
+    // Terme ignoré par l'appelant (résultats jamais utilisés) : aucun calcul
+    if (skipped) return { detailedResults: [], results: [] }
+
+    // Recherche numérique : sans index Fuse (voir plus bas)
+    const numericQuery = /^\d+$/.test(debouncedSearch.trim())
+
     // Pas d'index = retour direct
-    if (!fuseIndex) {
+    if (!fuseIndex && !numericQuery) {
       return {
         detailedResults: [],
         results: [],
@@ -193,7 +209,7 @@ export function useFuseSearch<T>({
         .filter(r => paths.some(path => numberStartsWith(valueAt(r.item, path), query))) as FuseResult<T>[]
     } else {
       // 📝 Recherche textuelle standard
-      searchResults = fuseIndex.search(query)
+      searchResults = fuseIndex!.search(query)
     }
 
     // 💾 SAUVEGARDER DANS CACHE
@@ -214,7 +230,7 @@ export function useFuseSearch<T>({
       detailedResults: limitedResults,
       results: limitedResults.map(r => r.item),
     }
-  }, [debouncedSearch, fuseIndex, items, limit, keys])
+  }, [debouncedSearch, fuseIndex, items, limit, keys, skipped])
 
   // 🔄 Reset function
   const reset = () => {

@@ -1,1044 +1,474 @@
-import DateInput from '../../../components/DateInput'
-import { CheckCircle, XCircle, Clock, Banknote, AlertTriangle, Eye, Search, X, Plus, Edit, Trash2 } from 'lucide-react'
+// 💼 Admin › Versements (refonte du 30/10/2026) — UNE page simple pour tout l'argent versé à l'admin.
+// Circuit : livreur → chef d'exploitation → chef d'agence → ADMIN.
+//  • Soldes : chez les chefs d'agence (à verser), pas encore reçu (chez les chefs d'exploitation), écarts à régulariser,
+//    à valider, validé ce mois — mêmes calculs que l'onglet Versements du chef d'agence ;
+//  • Onglets : À valider · Par agence · Historique · Écarts.
+// Flux corrigé :
+//  • valider = saisir le MONTANT REÇU (l'envoyé est gardé, l'écart suivi) ; refuser = expéditions de nouveau « à verser » ;
+//  • un versement de chef d'agence ne se modifie plus (montant, statut) : seulement sa note ; supprimer = refus définitif
+//    (expéditions de nouveau « à verser ») ;
+//  • « Versement reçu directement » : argent remis en main propre (ex. régularisation d'un écart), enregistré validé.
+import { Fragment, useEffect, useMemo, useState } from 'react'
+import { collection, documentId, getDocs, onSnapshot, orderBy, query, where } from 'firebase/firestore'
+import { MONEY_START } from '../../../utils/moneyFlow'
+import { CheckCircle, Clock, Eye, Pencil, Plus, Search, Trash2, Wallet, X, XCircle } from 'lucide-react'
+import { db } from '../../../firebase/config'
+import { CITIES } from '../../../firebase/constants'
+import { confirmAdminTransferWithAmount } from '../../../firebase/caisse'
 import { fmt } from '../../../utils/formatNumber'
-import { useState, useMemo } from 'react'
-import { filterByDate } from '../../../utils/dateFilter'
-import type { DateFilterPreset } from '../../../types'
-import { deleteAllDriverVersements } from '../../../firebase/firestore'
-import { normIncludes } from '../../../utils/normText'
+import { printVersementParcels } from '../../../utils/agentPrintUtils'
+import { summarizeEcarts, transferEcart, transferSent } from '../../../utils/versementEcarts'
 
-const PAYMENT_TYPES: Record<string, { label: string; emoji: string; color: string }> = {
-  especes: { label: 'Espèces', emoji: '💵', color: 'green' },
-  cheque: { label: 'Chèque', emoji: '📝', color: 'blue' },
-  virement: { label: 'Virement', emoji: '🏦', color: 'purple' },
+/** Reste d'une agence (copie allégée versementDays) : à verser, pas encore reçu (dont au guichet), journées à verser. */
+interface Reste { amount: number; nonRecu: number; nonRecuGuichet: number; days: number; updatedAt: number; ready: boolean }
+
+const dateOf = (t: any): Date => t?.createdAt?.toDate?.() || new Date(t?.createdAt || 0)
+const fmtDT = (d: Date) => `${d.toLocaleDateString('fr-FR')} ${d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}`
+const num = (v: any) => parseFloat(v) || 0
+/** Versement d'un chef d'agence (créé depuis Caisse Agence) : non modifiable sauf la note. */
+const isAgencyTransfer = (t: any) => ['port', 'cod', 'regul'].includes(t?.kind) && t?.fromRole !== 'admin'
+/** Versement d'avant le début du vrai calcul (05/10/2026 08:00) */
+const isOld = (t: any) => dateOf(t) < MONEY_START
+const STATUS_BORDER: Record<string, string> = { pending: 'border-l-amber-400', confirmed: 'border-l-emerald-500', rejected: 'border-l-red-500' }
+const NATURE = (t: any): { label: string; cls: string } =>
+  t.kind === 'port' ? { label: '📮 Ports collectés', cls: 'bg-orange-100 text-orange-800' }
+  : t.kind === 'cod' ? { label: '💰 COD', cls: 'bg-emerald-100 text-emerald-800' }
+  : t.kind === 'regul' ? { label: '⚖️ Régularisation', cls: 'bg-violet-100 text-violet-800' }
+  : t.fromRole === 'admin' ? { label: '✍️ Reçu directement', cls: 'bg-slate-100 text-slate-700' }
+  : { label: '📦 Ancien versement', cls: 'bg-gray-100 text-gray-700' }
+const STATUS: Record<string, { label: string; cls: string }> = {
+  pending: { label: '⏳ À valider', cls: 'bg-amber-100 text-amber-800' },
+  confirmed: { label: '✅ Validé', cls: 'bg-emerald-100 text-emerald-800' },
+  rejected: { label: '❌ Refusé', cls: 'bg-red-100 text-red-800' },
 }
-
-// Type de versement (Port Dû / COD) — les anciens versements sans champ `type` sont traités comme Port Dû
-const TYPE_META: Record<string, { label: string; emoji: string; cls: string }> = {
-  port_du: { label: 'Port Dû', emoji: '📮', cls: 'bg-orange-100 text-orange-700' },
-  cod: { label: 'COD', emoji: '💰', cls: 'bg-green-100 text-green-700' },
-  ports_payes: { label: 'Ports Payés', emoji: '💵', cls: 'bg-blue-100 text-blue-700' },
-  compte_expediteur: { label: 'Compte Expéditeur', emoji: '💼', cls: 'bg-purple-100 text-purple-700' },
-  compte_destinataire: { label: 'Compte Destinataire', emoji: '🖐️', cls: 'bg-teal-100 text-teal-700' },
-}
-
-const transferType = (t: any): string => (t.type === 'cod' ? 'cod' : 'port_du')
-
-const transferDate = (t: any): Date => t.createdAt?.toDate?.() || new Date(t.createdAt || 0)
+type Tab = 'valider' | 'agences' | 'historique' | 'ecarts'
 
 export default function AdminVersementsTab({
-  adminTransfers,
-  confirmAdminTransfer,
-  rejectAdminTransfer,
-  createAdminTransferDirect,
-  updateAdminTransfer,
-  deleteAdminTransfer,
-  auth,
+  adminTransfers = [], confirmAdminTransfer, rejectAdminTransfer, createAdminTransferDirect, updateAdminTransfer, deleteAdminTransfer, auth,
 }: any) {
-  const [confirmModal, setConfirmModal] = useState<any>(null)
-  const [rejectModal, setRejectModal] = useState<any>(null)
-  const [rejectReason, setRejectReason] = useState('')
-  const [statusFilter, setStatusFilter] = useState('all') // all, pending, confirmed, rejected
-  const [cityFilter, setCityFilter] = useState('all')
-  const [paymentFilter, setPaymentFilter] = useState('all') // all, especes, cheque, virement
-  const [typeFilter, setTypeFilter] = useState('all') // all, port_du, cod, ports_payes, etc.
-  const [fromRoleFilter, setFromRoleFilter] = useState('all') // all, agent (livreur), chef_agence
-  const [datePreset, setDatePreset] = useState<DateFilterPreset>('all')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
-  const [search, setSearch] = useState('')
+  const me = { name: auth?.currentUser?.displayName || 'Admin', id: auth?.currentUser?.uid || '' }
+  const [tab, setTab] = useState<Tab>('valider')
+  // Historique : filtres
+  const [city, setCity] = useState('all')
+  const [status, setStatus] = useState('all')
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [q, setQ] = useState('')
+  // Fenêtres
+  const [validate, setValidate] = useState<any>(null)
+  const [received, setReceived] = useState('')
+  const [reject, setReject] = useState<any>(null)
+  const [reason, setReason] = useState('')
+  const [noteEdit, setNoteEdit] = useState<any>(null)
+  const [del, setDel] = useState<any>(null)
+  const [direct, setDirect] = useState<any>(null)
+  const [busy, setBusy] = useState(false)
 
-  // États pour les modaux CRUD
-  const [createModal, setCreateModal] = useState(false)
-  const [editModal, setEditModal] = useState<any>(null)
-  const [deleteConfirmModal, setDeleteConfirmModal] = useState<any>(null)
-  const [deleteAllModal, setDeleteAllModal] = useState(false)
-  const [deleteAllLoading, setDeleteAllLoading] = useState(false)
-  const [formData, setFormData] = useState({
-    city: '',
-    fromName: '',
-    fromRole: 'agent',
-    amount: '',
-    paymentType: 'especes',
-    type: 'port_du',
-    status: 'pending',
-    reference: '',
-    note: '',
+  // 💼 Reste à verser par agence — COPIE ALLÉGÉE (30/10/2026) : versementDays = totaux par journée et par agence tenus
+  // par le serveur (Cloud Function syncVersementStats, MÊME règle que les pages : collecteContributionFor). Une centaine
+  // de petits documents en temps réel, au lieu des collectes de chaque ville (avant : 30 s et ~80 Mo, puis à la demande).
+  const [days, setDays] = useState<any[] | null>(null)
+  useEffect(() => onSnapshot(collection(db, 'versementDays'),
+    s => setDays(s.docs.map(d => d.data())), e => { console.error('Versements — copie allégée', e); setDays([]) }), [])
+  const reste = useMemo(() => {
+    const m: Record<string, Reste> = {}
+    for (const d of days || []) {
+      const r = m[d.city] || (m[d.city] = { amount: 0, nonRecu: 0, nonRecuGuichet: 0, days: 0, updatedAt: 0, ready: true })
+      r.amount = Math.round((r.amount + num(d.aVerser)) * 100) / 100
+      r.nonRecu = Math.round((r.nonRecu + num(d.nonRecu)) * 100) / 100
+      r.nonRecuGuichet = Math.round((r.nonRecuGuichet + num(d.nonRecu_portPaye)) * 100) / 100
+      if (num(d.aVerser) > 0.009) r.days++
+      r.updatedAt = Math.max(r.updatedAt, d.updatedAt?.toMillis?.() || 0)
+    }
+    return m
+  }, [days])
+
+  // 📋 TOUT l'historique (30/10/2026) : la liste reçue de la page Admin écarte les versements d'avant le 05/10 08:00
+  // (début du vrai calcul) — 5 versements invisibles, dont un en attente depuis le 03/10. Ici : lecture complète ;
+  // les anciens sont marqués « avant le 05/10 ».
+  const [raw, setRaw] = useState<any[] | null>(null)
+  useEffect(() => onSnapshot(query(collection(db, 'adminTransfers'), orderBy('createdAt', 'desc')),
+    s => setRaw(s.docs.map(d => ({ id: d.id, ...d.data() }))), e => console.error('Versements admin', e)), [])
+  const all = useMemo(() => [...(raw ?? adminTransfers ?? [])].sort((a, b) => dateOf(b).getTime() - dateOf(a).getTime()), [raw, adminTransfers])
+  const pending = useMemo(() => all.filter(t => t.status === 'pending').sort((a, b) => dateOf(a).getTime() - dateOf(b).getTime()), [all])
+  const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
+  const monthName = monthStart.toLocaleDateString('fr-FR', { month: 'long' })
+  const sum = (l: any[]) => l.reduce((s, t) => s + num(t.amount), 0)
+  const cities = (CITIES as string[])
+  const byCity = cities.map(c => {
+    const mine = all.filter(t => t.city === c)
+    return {
+      city: c, reste: reste[c], ecart: summarizeEcarts(mine),
+      pending: mine.filter(t => t.status === 'pending'),
+      month: mine.filter(t => t.status === 'confirmed' && dateOf(t) >= monthStart),
+      last: mine.find(t => t.status !== 'rejected'),
+    }
+  }).filter(r => r.pending.length || r.month.length || r.last || r.ecart.reste > 0 || (r.reste && (r.reste.amount > 0 || r.reste.nonRecu > 0)))
+  const ready = days !== null
+  const T = {
+    aVerser: cities.reduce((s, c) => s + (reste[c]?.amount || 0), 0),
+    nonRecu: cities.reduce((s, c) => s + (reste[c]?.nonRecu || 0), 0),
+    nonRecuGuichet: cities.reduce((s, c) => s + (reste[c]?.nonRecuGuichet || 0), 0),
+    ecart: byCity.reduce((s, r) => s + r.ecart.reste, 0),
+    month: sum(all.filter(t => t.status === 'confirmed' && dateOf(t) >= monthStart)),
+  }
+
+  const hist = all.filter(t => {
+    if (city !== 'all' && t.city !== city) return false
+    if (status !== 'all' && t.status !== status) return false
+    const d = dateOf(t)
+    if (from && d < new Date(`${from}T00:00:00`)) return false
+    if (to && d > new Date(`${to}T23:59:59`)) return false
+    const n = q.trim().toLowerCase()
+    if (n && ![t.fromName, t.note, t.city].some(v => String(v || '').toLowerCase().includes(n))) return false
+    return true
   })
 
-  // Liste des villes présentes dans les versements
-  const cities = useMemo(
-    () =>
-      Array.from(new Set(adminTransfers.map((t: any) => t.city).filter(Boolean))).sort() as string[],
-    [adminTransfers]
+  // ── Actions ─────────────────────────────────────────────────────────────────────────────────────────────────
+  const run = async (fn: () => Promise<any>, ok: string) => {
+    setBusy(true)
+    try { await fn(); alert(ok); return true } catch (e: any) { alert(`❌ ${e?.message || e}`); return false } finally { setBusy(false) }
+  }
+  const doValidate = async () => {
+    const sent = transferSent(validate)
+    const r = received === '' ? sent : Number(received)
+    if (!(r > 0) || r > sent + 0.001) { alert(`❌ Montant reçu invalide (entre 0 et ${fmt(sent)} DH).`); return }
+    const ecart = Math.round((sent - r) * 100) / 100
+    if (ecart > 0.009 && !confirm(`Valider ${fmt(r)} DH reçus sur ${fmt(sent)} DH envoyés ?\nÉcart de ${fmt(ecart)} DH à régulariser par ${validate.city}.`)) return
+    const ok = await run(() => (ecart > 0.009 ? confirmAdminTransferWithAmount(validate.id, r, me.name, me.id) : confirmAdminTransfer(validate.id, me.name, me.id)),
+      ecart > 0.009 ? `✅ Validé : ${fmt(r)} DH reçus — écart ${fmt(ecart)} DH à régulariser` : '✅ Versement validé')
+    if (ok) setValidate(null)
+  }
+  const doReject = async () => {
+    if (!reason.trim()) { alert('❌ Indiquez le motif du refus'); return }
+    let released = 0
+    const ok = await run(async () => { released = await rejectAdminTransfer(reject.id, me.name, me.id, reason.trim()) }, '✅ Versement refusé')
+    if (ok) { setReject(null); setReason(''); if (released) alert(`${released} expédition(s) de nouveau « à verser » chez le chef d'agence`) }
+  }
+  const doNote = async () => {
+    const t = noteEdit.t
+    const ok = await run(() => updateAdminTransfer(t.id, { amount: t.amount, paymentType: t.paymentType || 'especes', type: t.type, note: noteEdit.note }, me.id), '✅ Note enregistrée')
+    if (ok) setNoteEdit(null)
+  }
+  const doDelete = async () => {
+    const ok = await run(() => deleteAdminTransfer(del.id, me.id), '✅ Versement supprimé')
+    if (ok) setDel(null)
+  }
+  const doDirect = async () => {
+    const d = direct
+    if (!d.city || !d.fromName || !(num(d.amount) > 0)) { alert('❌ Agence, nom et montant sont obligatoires'); return }
+    const ok = await run(() => createAdminTransferDirect({
+      city: d.city, fromName: d.fromName, fromRole: 'admin', amount: d.amount, paymentType: d.paymentType, type: 'port_du',
+      status: 'confirmed', reference: d.reference, note: d.regul ? `Régularisation d'écart reçue directement${d.note ? ` — ${d.note}` : ''}` : d.note,
+      ...(d.regul ? { kind: 'regul' } : {}),
+    }, me.id, me.name), '✅ Versement enregistré')
+    if (ok) setDirect(null)
+  }
+  const showParcels = async (t: any) => {
+    const ids: string[] = (t.codParcelIds || []).filter(Boolean)
+    if (!ids.length) { alert('Aucune expédition dans ce versement'); return }
+    const parcels: any[] = []
+    for (let i = 0; i < ids.length; i += 30) {
+      const s = await getDocs(query(collection(db, 'parcels'), where(documentId(), 'in', ids.slice(i, i + 30))))
+      s.forEach(d => parcels.push({ id: d.id, ...d.data() }))
+    }
+    printVersementParcels(parcels, t, { name: t.fromName, city: t.city })
+  }
+
+  // ── Affichage ───────────────────────────────────────────────────────────────────────────────────────────────
+  const card = 'bg-white rounded-2xl border border-slate-100 shadow-sm'
+  const chip = (on: boolean) => `px-3 py-1.5 rounded-full text-xs font-bold border ${on ? 'bg-teal-600 border-teal-600 text-white' : 'bg-white border-slate-200 text-slate-600 hover:bg-teal-50'}`
+  const sel = 'px-3 py-2 rounded-xl border border-slate-300 bg-white text-sm font-semibold text-slate-700'
+  const Amount = ({ t }: { t: any }) => (
+    <div className="text-right">
+      <div className="font-black tabular-nums text-slate-800">{fmt(num(t.amount))} DH</div>
+      {transferEcart(t) > 0 && <div className="text-[11px] font-semibold text-red-700">envoyé {fmt(transferSent(t))} · écart {fmt(transferEcart(t))}</div>}
+      {t.status === 'pending' && t.amountSent != null && Math.abs(transferSent(t) - num(t.amount)) > 0.009 && <div className="text-[11px] text-slate-500">envoyé {fmt(transferSent(t))}</div>}
+    </div>
+  )
+  const Actions = ({ t }: { t: any }) => (
+    <div className="flex flex-wrap justify-end gap-1.5">
+      {(t.codParcelIds || []).length > 0 && <button onClick={() => showParcels(t)} title="Imprimer les expéditions" className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700"><Eye className="w-4 h-4" /></button>}
+      {t.status === 'pending' && <>
+        <button onClick={() => { setReceived(''); setValidate(t) }} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold"><CheckCircle className="w-4 h-4" /> Valider</button>
+        <button onClick={() => { setReason(''); setReject(t) }} className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-bold"><XCircle className="w-4 h-4" /> Refuser</button>
+      </>}
+      <button onClick={() => setNoteEdit({ t, note: t.note || '' })} title="Modifier la note" className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700"><Pencil className="w-4 h-4" /></button>
+      <button onClick={() => setDel(t)} title="Supprimer" className="p-1.5 rounded-lg bg-red-50 hover:bg-red-100 text-red-600"><Trash2 className="w-4 h-4" /></button>
+    </div>
+  )
+  const Tile = ({ cls, title, value, sub }: { cls: string; title: string; value: string; sub?: string }) => (
+    <div className={`rounded-2xl border p-4 ${cls}`}><p className="text-xs font-bold">{title}</p><p className="mt-1 text-2xl font-black tabular-nums">{value}</p>{sub && <p className="text-xs opacity-80">{sub}</p>}</div>
   )
 
-  // Base filtrée (ville + paiement + type + fromRole + période + recherche) — les totaux reflètent ces filtres
-  const baseFiltered = useMemo(() => {
-    let list = adminTransfers
-    if (cityFilter !== 'all') list = list.filter((t: any) => t.city === cityFilter)
-    if (paymentFilter !== 'all') list = list.filter((t: any) => (t.paymentType || 'especes') === paymentFilter)
-    if (typeFilter !== 'all') list = list.filter((t: any) => transferType(t) === typeFilter)
-    if (fromRoleFilter !== 'all') list = list.filter((t: any) => (t.fromRole || 'agent') === fromRoleFilter)
-    if (search.trim()) {
-      const q = search.toLowerCase()
-      list = list.filter((t: any) => normIncludes(t.fromName || '', q))
-    }
-    list = filterByDate(list, datePreset, dateFrom, dateTo, transferDate)
-    return list
-  }, [adminTransfers, cityFilter, paymentFilter, typeFilter, fromRoleFilter, search, datePreset, dateFrom, dateTo])
-
-  const filtered = baseFiltered.filter((t: any) => {
-    if (statusFilter === 'all') return true
-    return t.status === statusFilter
-  })
-
-  // Totaux (count + montant) par statut + total général
-  const totals = useMemo(() => {
-    const calc = (list: any[]) => ({
-      count: list.length,
-      amount: list.reduce((sum: number, t: any) => sum + (parseFloat(t.amount) || 0), 0),
-      portDu: list.reduce((sum: number, t: any) => sum + (transferType(t) === 'port_du' ? parseFloat(t.amount) || 0 : 0), 0),
-      cod: list.reduce((sum: number, t: any) => sum + (transferType(t) === 'cod' ? parseFloat(t.amount) || 0 : 0), 0),
-    })
-    return {
-      pending: calc(baseFiltered.filter((t: any) => t.status === 'pending')),
-      confirmed: calc(baseFiltered.filter((t: any) => t.status === 'confirmed')),
-      rejected: calc(baseFiltered.filter((t: any) => t.status === 'rejected')),
-      total: calc(baseFiltered),
-    }
-  }, [baseFiltered])
-
-  const handleConfirm = async () => {
-    if (!confirmModal) return
-    try {
-      await confirmAdminTransfer(
-        confirmModal.id,
-        auth.currentUser?.displayName || 'Admin',
-        auth.currentUser?.uid
-      )
-      setConfirmModal(null)
-      alert('✅ Versement validé avec succès!')
-    } catch (err: any) {
-      alert(`❌ Erreur: ${err.message}`)
-    }
-  }
-
-  const handleReject = async () => {
-    if (!rejectModal || !rejectReason.trim()) {
-      alert('❌ Veuillez indiquer un motif de rejet')
-      return
-    }
-    try {
-      await rejectAdminTransfer(
-        rejectModal.id,
-        auth.currentUser?.displayName || 'Admin',
-        auth.currentUser?.uid,
-        rejectReason
-      )
-      setRejectModal(null)
-      setRejectReason('')
-      alert('✅ Versement rejeté')
-    } catch (err: any) {
-      alert(`❌ Erreur: ${err.message}`)
-    }
-  }
-
-  // ══════════════════════════════════════════════════════════════════════════
-  // Fonctions CRUD
-  // ══════════════════════════════════════════════════════════════════════════
-
-  const openCreateModal = () => {
-    setFormData({
-      city: '',
-      fromName: '',
-      fromRole: 'agent',
-      amount: '',
-      paymentType: 'especes',
-      type: 'port_du',
-      status: 'pending',
-      reference: '',
-      note: '',
-    })
-    setCreateModal(true)
-  }
-
-  const openEditModal = (transfer: any) => {
-    setFormData({
-      city: transfer.city || '',
-      fromName: transfer.fromName || '',
-      fromRole: transfer.fromRole || 'agent',
-      amount: String(transfer.amount || ''),
-      paymentType: transfer.paymentType || 'especes',
-      type: transferType(transfer),
-      status: transfer.status || 'pending',
-      reference: transfer.reference || '',
-      note: transfer.note || '',
-    })
-    setEditModal(transfer)
-  }
-
-  const handleCreateSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!formData.city || !formData.fromName || !formData.amount) {
-      alert('❌ Veuillez remplir tous les champs obligatoires (Ville, De, Montant)')
-      return
-    }
-    try {
-      await createAdminTransferDirect(
-        formData,
-        auth.currentUser?.uid || '',
-        auth.currentUser?.displayName || 'Admin'
-      )
-      setCreateModal(false)
-      alert('✅ Versement créé avec succès!')
-    } catch (err: any) {
-      alert(`❌ Erreur: ${err.message}`)
-    }
-  }
-
-  const handleEditSubmit = async (e: React.FormEvent) => {
-    e.preventDefault()
-    if (!editModal || !formData.city || !formData.fromName || !formData.amount) {
-      alert('❌ Veuillez remplir tous les champs obligatoires')
-      return
-    }
-    try {
-      await updateAdminTransfer(editModal.id, formData)
-      setEditModal(null)
-      alert('✅ Versement modifié avec succès!')
-    } catch (err: any) {
-      alert(`❌ Erreur: ${err.message}`)
-    }
-  }
-
-  const handleDelete = async () => {
-    if (!deleteConfirmModal) return
-    try {
-      await deleteAdminTransfer(deleteConfirmModal.id)
-      setDeleteConfirmModal(null)
-      alert('✅ Versement supprimé avec succès!')
-    } catch (err: any) {
-      alert(`❌ Erreur: ${err.message}`)
-    }
-  }
-
-  const handleDeleteAllVersements = async () => {
-    setDeleteAllLoading(true)
-    try {
-      await deleteAllDriverVersements()
-      setDeleteAllModal(false)
-      alert('✅ Tous les versements ont été supprimés!')
-    } catch (err: any) {
-      alert(`❌ Erreur: ${err.message}`)
-    } finally {
-      setDeleteAllLoading(false)
-    }
-  }
-
   return (
-    <div className="space-y-6">
-      {/* Header Stats */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        <div className="bg-gradient-to-br from-orange-50 to-orange-100 border border-orange-200 rounded-2xl p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-orange-500 rounded-xl flex items-center justify-center shrink-0">
-              <Clock className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-orange-600">En attente</p>
-              <p className="text-2xl font-black text-orange-700">{totals.pending.count}</p>
-              <p className="text-xs font-bold text-orange-500">{fmt(totals.pending.amount)} DH</p>
-            </div>
-          </div>
-          <div className="mt-3 pt-2 border-t border-orange-200 flex flex-wrap justify-between gap-1 text-[11px] font-semibold text-orange-600">
-            <span>📮 Port Dû: {fmt(totals.pending.portDu)} DH</span>
-            <span>💰 COD: {fmt(totals.pending.cod)} DH</span>
-          </div>
-        </div>
-        <div className="bg-gradient-to-br from-green-50 to-green-100 border border-green-200 rounded-2xl p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-green-500 rounded-xl flex items-center justify-center shrink-0">
-              <CheckCircle className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-green-600">Validés</p>
-              <p className="text-2xl font-black text-green-700">{totals.confirmed.count}</p>
-              <p className="text-xs font-bold text-green-500">{fmt(totals.confirmed.amount)} DH</p>
-            </div>
-          </div>
-          <div className="mt-3 pt-2 border-t border-green-200 flex flex-wrap justify-between gap-1 text-[11px] font-semibold text-green-600">
-            <span>📮 Port Dû: {fmt(totals.confirmed.portDu)} DH</span>
-            <span>💰 COD: {fmt(totals.confirmed.cod)} DH</span>
-          </div>
-        </div>
-        <div className="bg-gradient-to-br from-red-50 to-red-100 border border-red-200 rounded-2xl p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-red-500 rounded-xl flex items-center justify-center shrink-0">
-              <XCircle className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-red-600">Rejetés</p>
-              <p className="text-2xl font-black text-red-700">{totals.rejected.count}</p>
-              <p className="text-xs font-bold text-red-500">{fmt(totals.rejected.amount)} DH</p>
-            </div>
-          </div>
-          <div className="mt-3 pt-2 border-t border-red-200 flex flex-wrap justify-between gap-1 text-[11px] font-semibold text-red-600">
-            <span>📮 Port Dû: {fmt(totals.rejected.portDu)} DH</span>
-            <span>💰 COD: {fmt(totals.rejected.cod)} DH</span>
-          </div>
-        </div>
-        <div className="bg-gradient-to-br from-blue-50 to-blue-100 border border-blue-200 rounded-2xl p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-12 h-12 bg-blue-500 rounded-xl flex items-center justify-center shrink-0">
-              <Banknote className="w-6 h-6 text-white" />
-            </div>
-            <div>
-              <p className="text-xs font-semibold text-blue-600">Total général</p>
-              <p className="text-2xl font-black text-blue-700">{totals.total.count}</p>
-              <p className="text-xs font-bold text-blue-500">{fmt(totals.total.amount)} DH</p>
-            </div>
-          </div>
-          <div className="mt-3 pt-2 border-t border-blue-200 flex flex-wrap justify-between gap-1 text-[11px] font-semibold text-blue-600">
-            <span>📮 Port Dû: {fmt(totals.total.portDu)} DH</span>
-            <span>💰 COD: {fmt(totals.total.cod)} DH</span>
-          </div>
-        </div>
+    <div className="mt-4 space-y-4">
+
+      {/* 🧪 Page en essai (30/10/2026) */}
+      <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-2.5 text-sm text-amber-800 flex items-center gap-2">
+        <span className="text-lg">🧪</span>
+        <p><b>Page en essai</b> — les chiffres et les fonctions de cette page sont en cours de vérification.</p>
       </div>
 
-      {/* Boutons actions */}
-      <div className="flex justify-end gap-3">
-        <button
-          onClick={() => setDeleteAllModal(true)}
-          className="flex items-center gap-2 bg-gradient-to-r from-red-600 to-red-700 hover:from-red-700 hover:to-red-800 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all transform hover:scale-105"
-        >
-          <Trash2 className="w-5 h-5" />
-          Supprimer tous les versements
-        </button>
-        <button
-          onClick={openCreateModal}
-          className="flex items-center gap-2 bg-gradient-to-r from-blue-600 to-blue-700 hover:from-blue-700 hover:to-blue-800 text-white px-6 py-3 rounded-xl font-semibold shadow-lg hover:shadow-xl transition-all transform hover:scale-105"
-        >
-          <Plus className="w-5 h-5" />
-          Nouveau versement
-        </button>
+      {/* En-tête */}
+      <div className={`${card} p-4 flex flex-wrap items-center gap-3`}>
+        <div className="flex-1 min-w-60">
+          <h2 className="text-lg font-black text-slate-800 flex items-center gap-2"><Wallet className="w-5 h-5 text-teal-600" /> Versements à l'admin</h2>
+          <p className="text-xs text-slate-500">Circuit : livreur → chef d'exploitation → chef d'agence → <b>admin</b>. Validez avec le montant réellement reçu : un écart reste « à régulariser » chez le chef d'agence.</p>
+        </div>
+        <button onClick={() => setDirect({ city: '', fromName: '', amount: '', paymentType: 'especes', reference: '', note: '', regul: false })}
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl bg-teal-600 hover:bg-teal-700 text-white text-sm font-semibold"><Plus className="w-4 h-4" /> Versement reçu directement</button>
       </div>
 
-      {/* Filters */}
-      <div className="bg-white rounded-2xl border border-gray-100 p-4 space-y-3">
-        <div className="flex flex-wrap items-center gap-3">
-          {/* Recherche par nom du chef */}
-          <div className="flex items-center gap-2 flex-1 min-w-[200px] bg-gray-50 border border-gray-200 rounded-xl px-3 py-2">
-            <Search className="w-4 h-4 text-gray-400 shrink-0" />
-            <input
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Rechercher un chef..."
-              className="flex-1 outline-none text-sm text-gray-700 placeholder-gray-400 bg-transparent"
-            />
-            {search && (
-              <button onClick={() => setSearch('')}>
-                <X className="w-4 h-4 text-gray-400" />
-              </button>
-            )}
-          </div>
-          {/* Ville */}
-          <select
-            value={cityFilter}
-            onChange={(e) => setCityFilter(e.target.value)}
-            className="border border-gray-200 rounded-xl px-3 py-2 text-sm font-semibold text-gray-600 bg-white focus:border-blue-500 focus:outline-none"
-          >
-            <option value="all">📍 Toutes les villes</option>
-            {cities.map((c) => (
-              <option key={c} value={c}>
-                {c}
-              </option>
-            ))}
-          </select>
-        </div>
+      {/* Soldes */}
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
+        <Tile cls="border-violet-200 bg-violet-50 text-violet-800" title="💼 Chez les chefs d'agence — à verser" value={ready ? `${fmt(T.aVerser)} DH` : '⏳'} sub="dans leur caisse, versable" />
+        <Tile cls="border-orange-200 bg-orange-50 text-orange-800" title="🚚 Pas encore reçu par les chefs d'agence" value={ready ? `${fmt(T.nonRecu)} DH` : '⏳'}
+          sub={ready ? `dont ${fmt(T.nonRecuGuichet)} DH au guichet (ports payés pas encore remis)` : undefined} />
+        <Tile cls="border-red-200 bg-red-50 text-red-800" title="⚠️ Écarts à régulariser" value={`${fmt(T.ecart)} DH`} sub="envoyé − reçu − régularisations" />
+        <Tile cls="border-amber-200 bg-amber-50 text-amber-800" title="⏳ À valider" value={`${fmt(sum(pending))} DH`} sub={`${pending.length} versement(s)`} />
+        <Tile cls="border-emerald-200 bg-emerald-50 text-emerald-800" title={`✅ Validé en ${monthName}`} value={`${fmt(T.month)} DH`} />
+      </div>
 
-        {/* Statut */}
-        <div className="flex gap-2 flex-wrap">
-          {['all', 'pending', 'confirmed', 'rejected'].map((status) => (
-            <button
-              key={status}
-              onClick={() => setStatusFilter(status)}
-              className={`px-4 py-2 rounded-xl text-sm font-semibold transition ${
-                statusFilter === status
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-white border border-gray-200 text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              {status === 'all' && 'Tous'}
-              {status === 'pending' && '⏳ En attente'}
-              {status === 'confirmed' && '✅ Validés'}
-              {status === 'rejected' && '❌ Rejetés'}
-            </button>
-          ))}
-        </div>
+      {/* Onglets */}
+      <div className="flex flex-wrap gap-2">
+        <button onClick={() => setTab('valider')} className={chip(tab === 'valider')}>⏳ À valider ({pending.length})</button>
+        <button onClick={() => setTab('agences')} className={chip(tab === 'agences')}>🏢 Par agence</button>
+        <button onClick={() => setTab('historique')} className={chip(tab === 'historique')}>📋 Historique ({all.length})</button>
+        <button onClick={() => setTab('ecarts')} className={chip(tab === 'ecarts')}>⚠️ Écarts{T.ecart > 0 ? ` (${fmt(T.ecart)} DH)` : ''}</button>
+      </div>
 
-        {/* Flux versements (Livreur → Chef ou Chef → Admin) */}
-        <div className="flex gap-2 flex-wrap">
-          <span className="text-sm font-semibold text-gray-700 flex items-center">Flux:</span>
-          <button
-            onClick={() => setFromRoleFilter('all')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
-              fromRoleFilter === 'all'
-                ? 'bg-indigo-600 text-white border-indigo-600'
-                : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
-            }`}
-          >
-            Tous
-          </button>
-          <button
-            onClick={() => setFromRoleFilter('agent')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
-              fromRoleFilter === 'agent'
-                ? 'bg-indigo-600 text-white border-indigo-600'
-                : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
-            }`}
-          >
-            🚗 Livreur → Chef d'agence
-          </button>
-          <button
-            onClick={() => setFromRoleFilter('chef_agence')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
-              fromRoleFilter === 'chef_agence'
-                ? 'bg-indigo-600 text-white border-indigo-600'
-                : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
-            }`}
-          >
-            👔 Chef d'agence → Admin
-          </button>
-        </div>
-
-        {/* Type de versement (Port Dû / COD / Ports Payés / Comptes) */}
-        <div className="flex gap-2 flex-wrap">
-          <button
-            onClick={() => setTypeFilter('all')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
-              typeFilter === 'all'
-                ? 'bg-gray-800 text-white border-gray-800'
-                : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
-            }`}
-          >
-            📦 Tous types
-          </button>
-          {Object.entries(TYPE_META).map(([key, meta]) => (
-            <button
-              key={key}
-              onClick={() => setTypeFilter(key)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
-                typeFilter === key
-                  ? 'bg-gray-800 text-white border-gray-800'
-                  : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
-              }`}
-            >
-              {meta.emoji} {meta.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Type de paiement */}
-        <div className="flex gap-2 flex-wrap">
-          <button
-            onClick={() => setPaymentFilter('all')}
-            className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
-              paymentFilter === 'all'
-                ? 'bg-gray-800 text-white border-gray-800'
-                : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
-            }`}
-          >
-            💳 Tous paiements
-          </button>
-          {Object.entries(PAYMENT_TYPES).map(([key, meta]) => (
-            <button
-              key={key}
-              onClick={() => setPaymentFilter(key)}
-              className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition ${
-                paymentFilter === key
-                  ? 'bg-gray-800 text-white border-gray-800'
-                  : 'bg-white text-gray-600 border-gray-200 hover:border-gray-300'
-              }`}
-            >
-              {meta.emoji} {meta.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Période - Champs de date uniquement (sans boutons de préréglage) */}
-        <div className="flex gap-3 items-center">
-          <label className="text-sm font-semibold text-gray-600">Période:</label>
-          <DateInput
-            value={dateFrom}
-            onChange={(e) => {
-              setDateFrom(e.target.value)
-              setDatePreset('custom')
-            }}
-            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
-            placeholder="Du"
-          />
-          <span className="text-gray-400">→</span>
-          <DateInput
-            value={dateTo}
-            onChange={(e) => {
-              setDateTo(e.target.value)
-              setDatePreset('custom')
-            }}
-            className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:border-blue-500 focus:outline-none"
-            placeholder="Au"
-          />
-          {(dateFrom || dateTo) && (
-            <button
-              onClick={() => {
-                setDateFrom('')
-                setDateTo('')
-                setDatePreset('all')
-              }}
-              className="text-xs text-gray-500 hover:text-gray-700 underline"
-            >
-              Réinitialiser
-            </button>
+      {/* À valider */}
+      {tab === 'valider' && (
+        <div className={`${card} p-4`}>
+          {!pending.length ? <p className="text-sm font-semibold text-emerald-700">✓ Aucun versement à valider.</p> : (
+            <div className="space-y-2">
+              {pending.map(t => (
+                <div key={t.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-amber-200 bg-amber-50/50 px-3 py-2">
+                  <div className="flex-1 min-w-56">
+                    <p className="font-bold text-slate-800"><span className={`mr-1.5 rounded-full px-2 py-0.5 text-[11px] ${NATURE(t).cls}`}>{NATURE(t).label}</span>{t.city} · {t.fromName || '—'}</p>
+                    <p className="text-xs text-slate-600">{t.note || '—'}{t.codParcelCount ? ` · ${t.codParcelCount} exp.` : ''} · envoyé le {fmtDT(dateOf(t))}
+                      {isOld(t) && <span className="ml-1.5 rounded bg-slate-200 px-1.5 text-[10px] font-bold text-slate-600">avant le 05/10 — en attente depuis {Math.floor((Date.now() - dateOf(t).getTime()) / 864e5)} j</span>}</p>
+                  </div>
+                  <Amount t={t} />
+                  <Actions t={t} />
+                </div>
+              ))}
+            </div>
           )}
         </div>
-      </div>
+      )}
 
-      {/* Table */}
-      <div className="bg-white rounded-2xl border border-gray-100 overflow-hidden">
-        <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-100">
-              <tr>
-                <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Date</th>
-                <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Type</th>
-                <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">De</th>
-                <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Agence</th>
-                <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Mode paiement</th>
-                <th className="px-4 py-3 text-right text-xs font-bold text-gray-600 uppercase">Montant</th>
-                <th className="px-4 py-3 text-left text-xs font-bold text-gray-600 uppercase">Statut</th>
-                <th className="px-4 py-3 text-center text-xs font-bold text-gray-600 uppercase">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filtered.length === 0 ? (
-                <tr>
-                  <td colSpan={8} className="px-4 py-8 text-center text-gray-400 text-sm">
-                    Aucun versement trouvé
-                  </td>
+      {/* Par agence */}
+      {tab === 'agences' && (
+        <div className={`${card} overflow-x-auto`}>
+          <table className="w-full text-sm">
+            <thead className="bg-slate-50 text-xs text-slate-600"><tr>
+              <th className="px-3 py-2 text-left">Agence</th><th className="px-3 py-2 text-right">💼 À verser (chez le chef)</th><th className="px-3 py-2 text-right">🚚 Pas encore reçu</th>
+              <th className="px-3 py-2 text-right">⏳ À valider</th><th className="px-3 py-2 text-right">⚠️ Écart</th><th className="px-3 py-2 text-right">✅ Validé en {monthName}</th><th className="px-3 py-2 text-left">Dernier versement</th>
+            </tr></thead>
+            <tbody>
+              {byCity.map(r => (
+                <tr key={r.city} onClick={() => { setCity(r.city); setTab('historique') }} className="border-t border-slate-100 cursor-pointer hover:bg-teal-50" title="Voir l'historique de l'agence">
+                  <td className="px-3 py-2 font-bold">{r.city}</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-bold text-violet-800">{!ready ? '⏳' : (r.reste?.amount || 0) > 0 ? <>{fmt(r.reste!.amount)} DH <span className="text-[11px] font-normal text-slate-500">({r.reste!.days} j.)</span></> : '✓ 0'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-orange-700">{!ready ? '⏳' : (r.reste?.nonRecu || 0) > 0 ? <>{fmt(r.reste!.nonRecu)} DH{(r.reste!.nonRecuGuichet || 0) > 0 && <div className="text-[10px] text-slate-500">dont guichet {fmt(r.reste!.nonRecuGuichet)}</div>}</> : '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-amber-700">{r.pending.length ? `${fmt(sum(r.pending))} DH (${r.pending.length})` : '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums font-bold text-red-700">{r.ecart.reste > 0 ? `${fmt(r.ecart.reste)} DH` : '—'}</td>
+                  <td className="px-3 py-2 text-right tabular-nums text-emerald-700">{r.month.length ? `${fmt(sum(r.month))} DH (${r.month.length})` : '—'}</td>
+                  <td className="px-3 py-2 text-xs text-slate-600">{r.last ? `${fmtDT(dateOf(r.last))} · ${fmt(num(r.last.amount))} DH · ${STATUS[r.last.status]?.label || r.last.status}` : '—'}</td>
                 </tr>
-              ) : (
-                filtered.map((transfer: any) => {
-                  const paymentType = PAYMENT_TYPES[transfer.paymentType || 'especes']
-                  const typeMeta = TYPE_META[transferType(transfer)]
-                  const date = transfer.createdAt?.toDate?.() || new Date(transfer.createdAt || 0)
-                  return (
-                    <tr key={transfer.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3 text-sm text-gray-600">
-                        {date.toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' })}
-                        <br />
-                        <span className="text-xs text-gray-400">
-                          {date.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-lg text-xs font-semibold ${typeMeta.cls}`}>
-                          {typeMeta.emoji} {typeMeta.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <p className="text-sm font-semibold text-gray-800">{transfer.fromName}</p>
-                        <p className="text-xs text-gray-400 capitalize">{transfer.fromRole?.replace('_', ' ')}</p>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span className="inline-flex items-center gap-1 px-2 py-1 bg-blue-50 text-blue-700 rounded-lg text-xs font-semibold">
-                          📍 {transfer.city}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3">
-                        <span
-                          className={`inline-flex items-center gap-1 px-2 py-1 bg-${paymentType.color}-50 text-${paymentType.color}-700 rounded-lg text-xs font-semibold`}
-                        >
-                          {paymentType.emoji} {paymentType.label}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <span className="text-base font-black text-gray-800">{fmt(transfer.amount)} DH</span>
-                      </td>
-                      <td className="px-4 py-3">
-                        {transfer.status === 'pending' && (
-                          <span className="inline-flex items-center gap-1 px-2 py-1 bg-orange-50 text-orange-700 rounded-lg text-xs font-semibold">
-                            <Clock className="w-3 h-3" /> En attente
-                          </span>
-                        )}
-                        {transfer.status === 'confirmed' && (
-                          <div>
-                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-green-50 text-green-700 rounded-lg text-xs font-semibold">
-                              <CheckCircle className="w-3 h-3" /> Validé
-                            </span>
-                            <p className="text-xs text-gray-400 mt-1">par {transfer.confirmedBy}</p>
-                          </div>
-                        )}
-                        {transfer.status === 'rejected' && (
-                          <div>
-                            <span className="inline-flex items-center gap-1 px-2 py-1 bg-red-50 text-red-700 rounded-lg text-xs font-semibold">
-                              <XCircle className="w-3 h-3" /> Rejeté
-                            </span>
-                            <p className="text-xs text-gray-400 mt-1">par {transfer.rejectedBy}</p>
-                          </div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center justify-center gap-2 flex-wrap">
-                          {transfer.status === 'pending' && (
-                            <>
-                              <button
-                                onClick={() => setConfirmModal(transfer)}
-                                className="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white rounded-lg text-xs font-semibold transition"
-                                title="Valider"
-                              >
-                                ✓
-                              </button>
-                              <button
-                                onClick={() => setRejectModal(transfer)}
-                                className="px-3 py-1.5 bg-red-500 hover:bg-red-600 text-white rounded-lg text-xs font-semibold transition"
-                                title="Rejeter"
-                              >
-                                ✗
-                              </button>
-                            </>
-                          )}
-                          {/* Boutons CRUD - disponibles pour tous les versements */}
-                          <button
-                            onClick={() => openEditModal(transfer)}
-                            className="p-1.5 bg-blue-500 hover:bg-blue-600 text-white rounded-lg transition"
-                            title="Modifier"
-                          >
-                            <Edit className="w-4 h-4" />
-                          </button>
-                          <button
-                            onClick={() => setDeleteConfirmModal(transfer)}
-                            className="p-1.5 bg-red-500 hover:bg-red-600 text-white rounded-lg transition"
-                            title="Supprimer"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </button>
-                          {transfer.note && (
-                            <button
-                              onClick={() => alert(transfer.note)}
-                              className="p-1.5 bg-gray-100 hover:bg-gray-200 text-gray-600 rounded-lg transition"
-                              title="Voir note"
-                            >
-                              <Eye className="w-4 h-4" />
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  )
-                })
-              )}
+              ))}
+              {!byCity.length && <tr><td colSpan={7} className="px-3 py-6 text-center text-slate-400">{ready ? 'Aucune donnée.' : 'Calcul en cours…'}</td></tr>}
             </tbody>
           </table>
         </div>
-      </div>
-
-      {/* Modal Confirmation */}
-      {confirmModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-12 h-12 bg-green-100 rounded-xl flex items-center justify-center">
-                <CheckCircle className="w-6 h-6 text-green-600" />
-              </div>
-              <div>
-                <h3 className="font-bold text-gray-800">Valider le versement</h3>
-                <p className="text-sm text-gray-500">Confirmer cette action</p>
-              </div>
-            </div>
-            <div className="bg-gray-50 rounded-xl p-4 mb-4 space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">De:</span>
-                <span className="font-semibold text-gray-800">{confirmModal.fromName}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Agence:</span>
-                <span className="font-semibold text-gray-800">{confirmModal.city}</span>
-              </div>
-              <div className="flex justify-between text-sm items-center">
-                <span className="text-gray-600">Type:</span>
-                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-xs font-semibold ${TYPE_META[transferType(confirmModal)].cls}`}>
-                  {TYPE_META[transferType(confirmModal)].emoji} {TYPE_META[transferType(confirmModal)].label}
-                </span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Montant:</span>
-                <span className="font-bold text-lg text-green-600">{fmt(confirmModal.amount)} DH</span>
-              </div>
-              {confirmModal.note && (
-                <div className="pt-2 border-t border-gray-200">
-                  <p className="text-xs text-gray-500">Note:</p>
-                  <p className="text-sm text-gray-700">{confirmModal.note}</p>
-                </div>
-              )}
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => setConfirmModal(null)}
-                className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition"
-              >
-                Annuler
-              </button>
-              <button
-                onClick={handleConfirm}
-                className="py-3 rounded-xl bg-green-600 hover:bg-green-700 text-white font-bold transition"
-              >
-                ✓ Valider
-              </button>
-            </div>
-          </div>
-        </div>
       )}
 
-      {/* Modal Rejet */}
-      {rejectModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center">
-                <XCircle className="w-6 h-6 text-red-600" />
-              </div>
-              <div>
-                <h3 className="font-bold text-gray-800">Rejeter le versement</h3>
-                <p className="text-sm text-gray-500">Indiquez le motif</p>
-              </div>
+      {/* Historique */}
+      {tab === 'historique' && (
+        <div className={`${card} overflow-hidden`}>
+          <div className="p-3 flex flex-wrap items-center gap-2 border-b border-slate-100">
+            <div className="relative flex-1 min-w-48">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
+              <input value={q} onChange={e => setQ(e.target.value)} placeholder="Nom, note…" className="w-full pl-9 pr-3 py-2 rounded-xl border border-slate-300 text-sm" />
             </div>
-            <div className="bg-gray-50 rounded-xl p-4 mb-4">
-              <div className="flex justify-between text-sm mb-2">
-                <span className="text-gray-600">Montant:</span>
-                <span className="font-bold text-red-600">{fmt(rejectModal.amount)} DH</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">De:</span>
-                <span className="font-semibold text-gray-800">{rejectModal.fromName}</span>
-              </div>
-            </div>
-            <textarea
-              value={rejectReason}
-              onChange={(e) => setRejectReason(e.target.value)}
-              placeholder="Motif du rejet..."
-              className="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:border-red-500 focus:outline-none mb-4"
-              rows={3}
-            />
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => {
-                  setRejectModal(null)
-                  setRejectReason('')
-                }}
-                className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition"
-              >
-                Annuler
-              </button>
-              <button
-                onClick={handleReject}
-                className="py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold transition"
-              >
-                ✗ Rejeter
-              </button>
-            </div>
+            <select value={city} onChange={e => setCity(e.target.value)} className={sel}>
+              <option value="all">Toutes les agences</option>{cities.map(c => <option key={c} value={c}>{c}</option>)}
+            </select>
+            <select value={status} onChange={e => setStatus(e.target.value)} className={sel}>
+              <option value="all">Tous les statuts</option><option value="pending">⏳ À valider</option><option value="confirmed">✅ Validés</option><option value="rejected">❌ Refusés</option>
+            </select>
+            <input type="date" value={from} onChange={e => setFrom(e.target.value)} className={sel} />
+            <span className="text-xs text-slate-500">au</span>
+            <input type="date" value={to} onChange={e => setTo(e.target.value)} className={sel} />
+            {(city !== 'all' || status !== 'all' || from || to || q) && <button onClick={() => { setCity('all'); setStatus('all'); setFrom(''); setTo(''); setQ('') }} className="text-xs text-slate-500 underline">Réinitialiser</button>}
           </div>
-        </div>
-      )}
-
-      {/* ══════════════════════════════════════════════════════════════════════════ */}
-      {/* Modal Création/Modification */}
-      {/* ══════════════════════════════════════════════════════════════════════════ */}
-      {(createModal || editModal) && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-2 sm:p-4">
-          <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[95vh] overflow-y-auto shadow-2xl">
-            <div className="sticky top-0 bg-white border-b border-gray-200 p-4 sm:p-6">
-              <div className="flex items-center justify-between">
-                <h3 className="text-xl font-bold text-gray-800">
-                  {createModal ? '➕ Nouveau versement' : '✏️ Modifier le versement'}
-                </h3>
-                <button
-                  onClick={() => {
-                    setCreateModal(false)
-                    setEditModal(null)
-                  }}
-                  className="p-2 hover:bg-gray-100 rounded-lg transition"
-                >
-                  <X className="w-5 h-5 text-gray-500" />
+          {/* Résumé par agence (clic = filtre) */}
+          <div className="px-3 py-3 flex flex-wrap gap-2 border-b border-slate-100 bg-slate-50/60">
+            {cities.map(c => {
+              const l = all.filter(t => t.city === c)
+              if (!l.length) return null
+              const on = city === c
+              return (
+                <button key={c} onClick={() => setCity(on ? 'all' : c)}
+                  className={`rounded-xl border px-3 py-2 text-left transition ${on ? 'border-teal-500 bg-teal-50 ring-2 ring-teal-200' : 'border-slate-200 bg-white hover:bg-slate-50'}`}>
+                  <p className="text-sm font-black text-slate-800">{c}</p>
+                  <p className="text-[11px] text-slate-600">{l.length} versement(s) · <span className="font-bold text-emerald-700">{fmt(sum(l.filter(t => t.status === 'confirmed')))} DH validés</span>
+                    {l.some(t => t.status === 'pending') && <> · <span className="font-bold text-amber-700">{l.filter(t => t.status === 'pending').length} à valider</span></>}</p>
                 </button>
-              </div>
-            </div>
+              )
+            })}
+          </div>
+          <div className="px-3 py-2 text-xs text-slate-600 border-b border-slate-100">{hist.length} versement(s) affiché(s) · validés <b className="text-emerald-700">{fmt(sum(hist.filter(t => t.status === 'confirmed')))} DH</b> · à valider <b className="text-amber-700">{fmt(sum(hist.filter(t => t.status === 'pending')))} DH</b> · refusés {fmt(sum(hist.filter(t => t.status === 'rejected')))} DH</div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-slate-50 text-xs text-slate-600"><tr>
+                <th className="px-3 py-2 text-left">Date</th><th className="px-3 py-2 text-left">Agence · de</th><th className="px-3 py-2 text-left">Nature</th>
+                <th className="px-3 py-2 text-left">Note</th><th className="px-3 py-2 text-right">Montant</th><th className="px-3 py-2 text-left">Statut</th><th className="px-3 py-2"></th>
+              </tr></thead>
+              <tbody>
+                {hist.map((t, i) => {
+                  const m = dateOf(t).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })
+                  const newMonth = i === 0 || m !== dateOf(hist[i - 1]).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' })
+                  const inMonth = newMonth ? hist.filter(x => dateOf(x).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric' }) === m) : []
+                  return (<Fragment key={t.id}>
+                  {newMonth && (
+                    <tr className="bg-teal-50/70"><td colSpan={7} className="px-3 py-1.5 text-xs font-black text-teal-900">
+                      📅 <span className="capitalize">{m}</span> — {inMonth.length} versement(s) · {fmt(sum(inMonth.filter(x => x.status === 'confirmed')))} DH validés
+                    </td></tr>
+                  )}
+                  <tr className={`border-t border-slate-100 align-top border-l-4 ${STATUS_BORDER[t.status] || 'border-l-slate-200'} ${isOld(t) ? 'bg-slate-50/70' : ''}`}>
+                    <td className="px-3 py-2 text-xs text-slate-600 whitespace-nowrap">{fmtDT(dateOf(t))}
+                      {isOld(t) && <div className="mt-0.5 inline-block rounded bg-slate-200 px-1.5 text-[10px] font-bold text-slate-600" title="Avant le début du vrai calcul (05/10/2026 08:00) : non compté dans les soldes">avant le 05/10</div>}</td>
+                    <td className="px-3 py-2"><b>{t.city}</b><div className="text-xs text-slate-500">{t.fromName || '—'}</div></td>
+                    <td className="px-3 py-2"><span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${NATURE(t).cls}`}>{NATURE(t).label}</span>{t.codParcelCount ? <div className="text-[11px] text-slate-500 mt-0.5">{t.codParcelCount} exp.</div> : null}</td>
+                    <td className="px-3 py-2 text-xs text-slate-600 max-w-64">{t.note || '—'}</td>
+                    <td className="px-3 py-2"><Amount t={t} /></td>
+                    <td className="px-3 py-2">
+                      <span className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${STATUS[t.status]?.cls || 'bg-gray-100'}`}>{STATUS[t.status]?.label || t.status}</span>
+                      {t.status === 'confirmed' && t.confirmedBy && <div className="text-[11px] text-slate-500 mt-0.5">par {t.confirmedBy}</div>}
+                      {t.status === 'rejected' && <div className="text-[11px] text-red-700 mt-0.5">{t.rejectionReason || ''}{t.rejectedBy ? ` (${t.rejectedBy})` : ''}</div>}
+                    </td>
+                    <td className="px-3 py-2"><Actions t={t} /></td>
+                  </tr>
+                  </Fragment>)
+                })}
+                {!hist.length && <tr><td colSpan={7} className="px-3 py-6 text-center text-slate-400">Aucun versement</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
 
-            <form onSubmit={createModal ? handleCreateSubmit : handleEditSubmit} className="p-4 sm:p-6 space-y-4">
-              {/* Ville */}
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  Ville <span className="text-red-500">*</span>
-                </label>
-                <select
-                  value={formData.city}
-                  onChange={(e) => setFormData({ ...formData, city: e.target.value })}
-                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
-                  required
-                >
-                  <option value="">-- Sélectionnez une ville --</option>
-                  {cities.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
+      {/* Écarts */}
+      {tab === 'ecarts' && (
+        <div className="space-y-3">
+          {!byCity.some(r => r.ecart.list.length) && <div className={`${card} p-4 text-sm font-semibold text-emerald-700`}>✓ Aucun écart : tous les versements ont été validés pour le montant envoyé.</div>}
+          {byCity.filter(r => r.ecart.list.length).map(r => (
+            <div key={r.city} className={`${card} p-4`}>
+              <div className="flex flex-wrap items-center gap-2 mb-2">
+                <h3 className="flex-1 font-bold text-slate-800">{r.city}</h3>
+                <span className={`rounded-full px-3 py-1 text-xs font-black ${r.ecart.reste > 0 ? 'bg-red-100 text-red-800' : 'bg-emerald-100 text-emerald-800'}`}>{r.ecart.reste > 0 ? `Reste à régulariser : ${fmt(r.ecart.reste)} DH` : '✓ Régularisé'}</span>
+              </div>
+              <p className="text-xs text-slate-600 mb-2">Écarts {fmt(r.ecart.ecarts)} DH − régularisations validées {fmt(r.ecart.regulValidees)} DH{r.ecart.regulEnAttente > 0 ? ` · régularisation à valider ${fmt(r.ecart.regulEnAttente)} DH` : ''}</p>
+              <table className="w-full text-xs">
+                <thead className="text-slate-500"><tr><th className="text-left py-1">Date</th><th className="text-left py-1">Versement</th><th className="text-right py-1">Envoyé</th><th className="text-right py-1">Reçu</th><th className="text-right py-1">Écart</th></tr></thead>
+                <tbody>
+                  {r.ecart.list.map((t: any) => (
+                    <tr key={t.id} className="border-t border-slate-100">
+                      <td className="py-1">{fmtDT(dateOf(t))}</td><td className="py-1">{t.fromName} — {t.note || ''}</td>
+                      <td className="py-1 text-right tabular-nums">{fmt(transferSent(t))}</td><td className="py-1 text-right tabular-nums">{fmt(num(t.amount))}</td>
+                      <td className="py-1 text-right tabular-nums font-bold text-red-700">{fmt(transferEcart(t))}</td>
+                    </tr>
                   ))}
-                </select>
-              </div>
-
-              {/* De (Nom) */}
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">
-                  De (Nom) <span className="text-red-500">*</span>
-                </label>
-                <input
-                  type="text"
-                  value={formData.fromName}
-                  onChange={(e) => setFormData({ ...formData, fromName: e.target.value })}
-                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
-                  placeholder="Nom du chef"
-                  required
-                />
-              </div>
-
-              {/* Rôle */}
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Rôle</label>
-                <select
-                  value={formData.fromRole}
-                  onChange={(e) => setFormData({ ...formData, fromRole: e.target.value })}
-                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
-                >
-                  <option value="agent">Agent / Chef</option>
-                  <option value="chef_agence">Chef Agence</option>
-                  <option value="caissier">Caissier</option>
-                  <option value="admin">Admin</option>
-                </select>
-              </div>
-
-              {/* Ligne: Montant + Type paiement + Type versement */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">
-                    Montant (DH) <span className="text-red-500">*</span>
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    value={formData.amount}
-                    onChange={(e) => setFormData({ ...formData, amount: e.target.value })}
-                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
-                    placeholder="0.00"
-                    required
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Mode paiement</label>
-                  <select
-                    value={formData.paymentType}
-                    onChange={(e) => setFormData({ ...formData, paymentType: e.target.value })}
-                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
-                  >
-                    <option value="especes">💵 Espèces</option>
-                    <option value="cheque">📝 Chèque</option>
-                    <option value="virement">🏦 Virement</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold text-gray-700 mb-2">Type</label>
-                  <select
-                    value={formData.type}
-                    onChange={(e) => setFormData({ ...formData, type: e.target.value })}
-                    className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
-                  >
-                    <option value="port_du">📮 Port Dû</option>
-                    <option value="cod">💰 COD</option>
-                    <option value="ports_payes">💵 Ports Payés</option>
-                    <option value="compte_expediteur">💼 Compte Expéditeur</option>
-                    <option value="compte_destinataire">🖐️ Compte Destinataire</option>
-                  </select>
-                </div>
-              </div>
-
-              {/* Statut */}
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Statut</label>
-                <select
-                  value={formData.status}
-                  onChange={(e) => setFormData({ ...formData, status: e.target.value })}
-                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
-                >
-                  <option value="pending">⏳ En attente</option>
-                  <option value="confirmed">✅ Validé</option>
-                  <option value="rejected">❌ Rejeté</option>
-                </select>
-              </div>
-
-              {/* Référence */}
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Référence</label>
-                <input
-                  type="text"
-                  value={formData.reference}
-                  onChange={(e) => setFormData({ ...formData, reference: e.target.value })}
-                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
-                  placeholder="Numéro de référence (optionnel)"
-                />
-              </div>
-
-              {/* Note */}
-              <div>
-                <label className="block text-sm font-semibold text-gray-700 mb-2">Note</label>
-                <textarea
-                  value={formData.note}
-                  onChange={(e) => setFormData({ ...formData, note: e.target.value })}
-                  className="w-full border border-gray-300 rounded-xl px-4 py-2.5 text-sm focus:border-blue-500 focus:outline-none"
-                  placeholder="Note additionnelle (optionnel)"
-                  rows={3}
-                />
-              </div>
-
-              {/* Boutons */}
-              <div className="flex flex-col sm:flex-row gap-3 pt-4 border-t border-gray-200">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCreateModal(false)
-                    setEditModal(null)
-                  }}
-                  className="flex-1 py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition"
-                >
-                  Annuler
-                </button>
-                <button
-                  type="submit"
-                  className="flex-1 py-3 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold transition"
-                >
-                  {createModal ? '➕ Créer' : '💾 Enregistrer'}
-                </button>
-              </div>
-            </form>
-          </div>
+                  {all.filter(t => t.city === r.city && t.kind === 'regul' && t.status !== 'rejected').map(t => (
+                    <tr key={t.id} className="border-t border-slate-100 text-violet-800">
+                      <td className="py-1">{fmtDT(dateOf(t))}</td><td className="py-1">⚖️ Régularisation — {t.fromName} {t.status === 'pending' ? '(à valider)' : ''}</td>
+                      <td></td><td></td><td className="py-1 text-right tabular-nums font-bold">−{fmt(num(t.amount))}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <button onClick={() => setDirect({ city: r.city, fromName: '', amount: r.ecart.reste ? String(r.ecart.reste) : '', paymentType: 'especes', reference: '', note: '', regul: true })}
+                className="mt-2 text-xs font-bold text-violet-700 underline">+ Enregistrer une régularisation reçue directement</button>
+            </div>
+          ))}
         </div>
       )}
 
-      {/* ══════════════════════════════════════════════════════════════════════════ */}
-      {/* Modal Suppression */}
-      {/* ══════════════════════════════════════════════════════════════════════════ */}
-      {deleteConfirmModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center">
-                <AlertTriangle className="w-6 h-6 text-red-600" />
-              </div>
-              <div>
-                <h3 className="font-bold text-gray-800">Supprimer le versement</h3>
-                <p className="text-sm text-gray-500">Cette action est irréversible</p>
-              </div>
-            </div>
-            <div className="bg-gray-50 rounded-xl p-4 mb-4 space-y-2">
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">De:</span>
-                <span className="font-semibold text-gray-800">{deleteConfirmModal.fromName}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Agence:</span>
-                <span className="font-semibold text-gray-800">{deleteConfirmModal.city}</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Montant:</span>
-                <span className="font-bold text-lg text-red-600">{fmt(deleteConfirmModal.amount)} DH</span>
-              </div>
-              <div className="flex justify-between text-sm">
-                <span className="text-gray-600">Statut:</span>
-                <span className="font-semibold text-gray-800 capitalize">{deleteConfirmModal.status}</span>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => setDeleteConfirmModal(null)}
-                className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition"
-              >
-                Annuler
-              </button>
-              <button
-                onClick={handleDelete}
-                className="py-3 rounded-xl bg-red-600 hover:bg-red-700 text-white font-bold transition"
-              >
-                🗑️ Supprimer
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* ── Fenêtres ── */}
+      {validate && (
+        <Modal title="Valider le versement" onClose={() => setValidate(null)}>
+          <Info rows={[['Agence', validate.city], ['De', validate.fromName], ['Nature', NATURE(validate).label], ['Note', validate.note || '—'], ['Montant envoyé', `${fmt(transferSent(validate))} DH`]]} />
+          <label className="block text-xs font-semibold text-slate-600 mt-3 mb-1">Montant reçu (DH)</label>
+          <input type="number" step="0.01" min="0" max={transferSent(validate)} value={received} onChange={e => setReceived(e.target.value)} placeholder={String(transferSent(validate))}
+            className="w-full px-3 py-2 rounded-lg border border-slate-300 text-lg font-bold tabular-nums" />
+          {received !== '' && Number(received) > 0 && Number(received) < transferSent(validate) - 0.009 && (
+            <p className="mt-1 text-xs font-bold text-orange-700">⚠️ Écart de {fmt(transferSent(validate) - Number(received))} DH : à régulariser par le chef d'agence.</p>)}
+          <p className="mt-1 text-[11px] text-slate-500">Vide = montant envoyé.</p>
+          <Buttons onCancel={() => setValidate(null)} onOk={doValidate} ok="✓ Valider" okCls="bg-emerald-600 hover:bg-emerald-700" busy={busy} />
+        </Modal>
       )}
-
-      {/* ══════════════════════════════════════════════════════════════════════════ */}
-      {/* Modal Suppression de tous les versements */}
-      {/* ══════════════════════════════════════════════════════════════════════════ */}
-      {deleteAllModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-2xl">
-            <div className="flex items-center gap-3 mb-4">
-              <div className="w-12 h-12 bg-red-100 rounded-xl flex items-center justify-center">
-                <AlertTriangle className="w-6 h-6 text-red-600" />
-              </div>
-              <div>
-                <h3 className="font-bold text-gray-800">Supprimer tous les versements</h3>
-                <p className="text-sm text-gray-500 mt-0.5">Cette action est irréversible</p>
-              </div>
-            </div>
-
-            <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4">
-              <p className="text-sm text-red-700 font-semibold mb-2">
-                ⚠️ Attention : Vous êtes sur le point de supprimer TOUS les versements livreurs
-              </p>
-              <p className="text-xs text-red-600">
-                <strong>{totals.total.count} versement(s)</strong> seront supprimés définitivement.
-                <br />
-                <strong>Montant total : {fmt(totals.total.amount)} DH</strong>
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <button
-                onClick={() => setDeleteAllModal(false)}
-                disabled={deleteAllLoading}
-                className="py-3 rounded-xl border border-gray-200 text-gray-600 font-semibold hover:bg-gray-50 transition disabled:opacity-50"
-              >
-                Annuler
-              </button>
-              <button
-                onClick={handleDeleteAllVersements}
-                disabled={deleteAllLoading}
-                className="py-3 rounded-xl bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold transition flex items-center justify-center gap-2"
-              >
-                {deleteAllLoading ? (
-                  <>
-                    <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    Suppression...
-                  </>
-                ) : (
-                  <>
-                    <Trash2 className="w-4 h-4" />
-                    Confirmer
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
+      {reject && (
+        <Modal title="Refuser le versement" onClose={() => setReject(null)}>
+          <Info rows={[['Agence', reject.city], ['De', reject.fromName], ['Montant', `${fmt(num(reject.amount))} DH`]]} />
+          <p className="mt-2 text-xs text-slate-600">Les expéditions du versement redeviennent « à verser » chez le chef d'agence.</p>
+          <textarea value={reason} onChange={e => setReason(e.target.value)} placeholder="Motif du refus (obligatoire)" rows={3} className="mt-2 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          <Buttons onCancel={() => setReject(null)} onOk={doReject} ok="✗ Refuser" okCls="bg-red-600 hover:bg-red-700" busy={busy} />
+        </Modal>
       )}
+      {noteEdit && (
+        <Modal title="Modifier la note" onClose={() => setNoteEdit(null)}>
+          <p className="text-xs text-slate-500">Le montant et le statut ne se modifient pas ici : validez avec le montant reçu, ou refusez.</p>
+          <textarea value={noteEdit.note} onChange={e => setNoteEdit((n: any) => ({ ...n, note: e.target.value }))} rows={3} className="mt-2 w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+          <Buttons onCancel={() => setNoteEdit(null)} onOk={doNote} ok="💾 Enregistrer" okCls="bg-teal-600 hover:bg-teal-700" busy={busy} />
+        </Modal>
+      )}
+      {del && (
+        <Modal title="Supprimer le versement" onClose={() => setDel(null)}>
+          <Info rows={[['Agence', del.city], ['De', del.fromName], ['Montant', `${fmt(num(del.amount))} DH`], ['Statut', STATUS[del.status]?.label || del.status]]} />
+          <p className="mt-2 text-xs font-semibold text-red-700">Suppression définitive.{isAgencyTransfer(del) && del.kind !== 'regul' ? ' Les expéditions du versement redeviennent « à verser » chez le chef d\'agence.' : ''}</p>
+          <Buttons onCancel={() => setDel(null)} onOk={doDelete} ok="🗑️ Supprimer" okCls="bg-red-600 hover:bg-red-700" busy={busy} />
+        </Modal>
+      )}
+      {direct && (
+        <Modal title="Versement reçu directement" onClose={() => setDirect(null)}>
+          <p className="text-xs text-slate-500 mb-2">Argent remis en main propre à l'admin : enregistré comme validé.</p>
+          <div className="grid grid-cols-2 gap-2">
+            <select value={direct.city} onChange={e => setDirect((d: any) => ({ ...d, city: e.target.value }))} className={sel}><option value="">Agence…</option>{cities.map(c => <option key={c} value={c}>{c}</option>)}</select>
+            <input value={direct.fromName} onChange={e => setDirect((d: any) => ({ ...d, fromName: e.target.value }))} placeholder="Remis par (nom)" className={sel} />
+            <input type="number" step="0.01" value={direct.amount} onChange={e => setDirect((d: any) => ({ ...d, amount: e.target.value }))} placeholder="Montant (DH)" className={sel} />
+            <select value={direct.paymentType} onChange={e => setDirect((d: any) => ({ ...d, paymentType: e.target.value }))} className={sel}><option value="especes">💵 Espèces</option><option value="cheque">📝 Chèque</option><option value="virement">🏦 Virement</option></select>
+            <input value={direct.reference} onChange={e => setDirect((d: any) => ({ ...d, reference: e.target.value }))} placeholder="Référence (optionnel)" className={`${sel} col-span-2`} />
+            <textarea value={direct.note} onChange={e => setDirect((d: any) => ({ ...d, note: e.target.value }))} placeholder="Note (optionnel)" rows={2} className={`${sel} col-span-2`} />
+          </div>
+          <label className="mt-2 inline-flex items-center gap-2 text-sm font-semibold text-violet-800"><input type="checkbox" checked={direct.regul} onChange={e => setDirect((d: any) => ({ ...d, regul: e.target.checked }))} className="w-4 h-4" /> Régularisation d'un écart de l'agence</label>
+          <Buttons onCancel={() => setDirect(null)} onOk={doDirect} ok="✓ Enregistrer" okCls="bg-teal-600 hover:bg-teal-700" busy={busy} />
+        </Modal>
+      )}
+    </div>
+  )
+}
+
+function Modal({ title, onClose, children }: { title: string; onClose: () => void; children: any }) {
+  return (
+    <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={onClose}>
+      <div className="bg-white rounded-2xl w-full max-w-md p-5 shadow-2xl max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3"><h3 className="font-bold text-slate-800">{title}</h3><button onClick={onClose} className="p-1 rounded-lg hover:bg-slate-100"><X className="w-5 h-5 text-slate-500" /></button></div>
+        {children}
+      </div>
+    </div>
+  )
+}
+function Info({ rows }: { rows: [string, any][] }) {
+  return <div className="rounded-xl bg-slate-50 p-3 space-y-1 text-sm">{rows.map(([k, v]) => <div key={k} className="flex justify-between gap-3"><span className="text-slate-500">{k}</span><span className="font-semibold text-slate-800 text-right">{v}</span></div>)}</div>
+}
+function Buttons({ onCancel, onOk, ok, okCls, busy }: { onCancel: () => void; onOk: () => void; ok: string; okCls: string; busy: boolean }) {
+  return (
+    <div className="mt-4 grid grid-cols-2 gap-2">
+      <button onClick={onCancel} disabled={busy} className="py-2.5 rounded-xl border border-slate-200 text-slate-600 font-semibold hover:bg-slate-50">Annuler</button>
+      <button onClick={onOk} disabled={busy} className={`py-2.5 rounded-xl text-white font-bold disabled:opacity-50 ${okCls}`}>{busy ? '…' : ok}</button>
     </div>
   )
 }

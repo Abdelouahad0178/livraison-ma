@@ -1,6 +1,7 @@
 import { useParcelEntryFocus } from '../hooks/useParcelEntryFocus'
 import DateInput from '../../../components/DateInput'
 import { lazy, Suspense, useState, useEffect, useMemo, useRef, startTransition, type RefObject } from 'react'
+import { isFullParcelEditor } from '../../../utils/agentProAccess'
 import { Calendar, Search, X, Plus, MapPin, ChevronDown, Check, MessageCircle, Printer } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
 import { CITIES, ALL_SERVICE_TYPES, normalizeServiceType } from '../../../firebase/constants'
@@ -14,6 +15,7 @@ import { db, auth } from '../../../firebase/config'
 import { getWorkingDateStr } from '../../../utils/workingDate'
 import { updateParcel, buildParcelCorrectionPatch, describeParcelSaveError } from '../../../firebase/parcels'
 import { showToast } from '../../../utils/toast'
+import { fitA4Script } from '../../../utils/printFitA4'
 import { getGareDriverForCity } from '../../../firebase/delivery'
 import { normIncludes } from '../../../utils/normText'
 import { mergeClientLists } from '../../../utils/clientLookup'
@@ -132,6 +134,20 @@ export default function NewTab() {
   const [confirmError, setConfirmError] = useState('')
   // 💵+📋 Types de retour de fonds cochés (Espèces + chèque/traite possible)
   const codSelection = codSelectionOf(form)
+
+  // ✏️ Compte « modification totale » (zahra@gmail.com, 29/10/2026) : saisie pour TOUTES les villes. La ville choisie est
+  // gardée (navigateur) et remise après chaque nouveau formulaire vide (sinon retour à la ville du compte).
+  const fullEditor = !adminSaisie && isFullParcelEditor(profile)
+  const FULL_CITY_KEY = 'fullEditorSenderCity'
+  const [fullCity, setFullCity] = useState<string>(() => { try { return localStorage.getItem(FULL_CITY_KEY) || '' } catch { return '' } })
+  const chooseFullCity = (c: string) => {
+    setFullCity(c)
+    try { localStorage.setItem(FULL_CITY_KEY, c) } catch { /* stockage indisponible */ }
+    setForm((p: any) => ({ ...p, senderCity: c }))
+  }
+  useEffect(() => {
+    if (fullEditor && fullCity && !form.senderName && form.senderCity !== fullCity) setForm((p: any) => ({ ...p, senderCity: fullCity }))
+  }, [fullEditor, fullCity, form.senderName, form.senderCity]) // eslint-disable-line react-hooks/exhaustive-deps
 
 
   // Ref pour le champ N EXP et le conteneur du ticket
@@ -766,6 +782,31 @@ export default function NewTab() {
   }
 
   const handlePrint = () => {
+    const title = createdParcel ? `Bon-Ramassage-${createdParcel.trackingId}` : 'Bon-Ramassage'
+    // 🖨️ Fenêtre d'impression dédiée (bon copié tel quel + feuilles de style de la page) : les 2 exemplaires sont
+    // agrandis à ≈ 95 % de la feuille A4 (utils/printFitA4). Repli : impression dans la page si la fenêtre est bloquée.
+    const ticketEl = ticketRef.current
+    const win = ticketEl ? window.open('', '_blank', 'width=800,height=1000') : null
+    if (win && ticketEl) {
+      const styles = Array.from(document.querySelectorAll('link[rel="stylesheet"], style')).map(n => n.outerHTML).join('\n')
+      win.document.write(`<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><base href="${window.location.origin}/">
+<title>${title}</title>${styles}
+<style>
+  @page { size: A4 portrait; margin: 5mm; }
+  body { margin: 0; padding: 12px; background: white; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  #ticket-print { display: flex !important; flex-direction: column !important; align-items: center !important; gap: 8px !important; }
+  .copy, .cut-line { width: 148mm !important; max-width: 148mm !important; margin: 0 auto !important; }
+  @media print {
+    body { padding: 0; }
+    #ticket-print { gap: 1mm !important; width: 100% !important; max-width: none !important; }
+    .copy { max-width: none !important; display: flex !important; flex-direction: column !important; }
+    .copy > .ticket-sign { flex: 1; }
+    .cut-line { max-width: none !important; }
+  }
+</style></head><body>${ticketEl.outerHTML}<script>${fitA4Script(true)}<\/script></body></html>`)
+      win.document.close()
+      return
+    }
     const previousTitle = document.title
     const style = document.createElement('style')
     style.textContent = `
@@ -1180,11 +1221,11 @@ export default function NewTab() {
         {['1', '2'].map((copyKey, copyIdx) => (
         <div key={copyKey} className="contents">
         {copyIdx === 1 && (
-          <div className="ticket-cut-line w-full text-center text-gray-400 text-[9px] border-t border-dashed border-gray-300 pt-1" style={{ maxWidth: '148mm' }}>
+          <div className="ticket-cut-line cut-line w-full text-center text-gray-400 text-[9px] border-t border-dashed border-gray-300 pt-1" style={{ maxWidth: '148mm' }}>
             ✂ - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - ✂
           </div>
         )}
-        <div className="ticket-copy bg-white border border-gray-300 text-[11px]" style={{ maxWidth: '148mm', margin: '0 auto', fontFamily: 'Arial, sans-serif' }}>
+        <div className="ticket-copy copy bg-white border border-gray-300 text-[11px]" style={{ maxWidth: '148mm', margin: '0 auto', fontFamily: 'Arial, sans-serif' }}>
           {/* Header */}
           <div className="flex items-center justify-between border-b border-gray-300 px-3 py-2">
             <img src="/LOGO.jpg" alt="BG Express" style={{ height: '36px', objectFit: 'contain' }} />
@@ -1307,7 +1348,7 @@ export default function NewTab() {
           </div>
 
           {/* Signature */}
-          <div className="grid grid-cols-2 border-t border-gray-300 text-[9px] text-gray-400">
+          <div className="ticket-sign grid grid-cols-2 border-t border-gray-300 text-[9px] text-gray-400">
             <div className="border-r border-gray-200 px-3 py-2">Cachet et Signature expéditeur</div>
             <div className="px-3 py-2">Cachet et Signature destinataire</div>
           </div>
@@ -1452,6 +1493,18 @@ export default function NewTab() {
                     onKeyDown={handleKeyNav}
                     className={selectCls}
                     title="Ville d'expédition"
+                  >
+                    {CITIES.map(c => <option key={c}>{c}</option>)}
+                  </select>
+                ) : fullEditor ? (
+                  // ✏️ Compte « modification totale » (zahra@gmail.com) : ville d'expédition au choix, gardée d'une saisie à l'autre
+                  <select
+                    id="senderCity"
+                    value={form.senderCity || profile?.city || ''}
+                    onChange={e => chooseFullCity(e.target.value)}
+                    onKeyDown={handleKeyNav}
+                    className={`${selectCls} border-amber-400 bg-amber-50`}
+                    title="Ville d'expédition (toutes les villes)"
                   >
                     {CITIES.map(c => <option key={c}>{c}</option>)}
                   </select>

@@ -24,7 +24,7 @@ export interface VerserJour {
   duJour: number
   /** dont expéditions antérieures : [date d'expédition, montant] */
   anciens: [string, number][]
-  /** Tout ce qui reste à verser, toutes journées confondues */
+  /** Reste à verser parmi les expéditions de la PÉRIODE AFFICHÉE (filtre de date) */
   totalNonVerse: number
   /** ⏳ Ports dus collectés ce jour-là, pas encore reçus par le chef d'agence (non versables) */
   nonRecu?: number
@@ -140,7 +140,9 @@ export default function CaisseSummaryCards({ stats, aVerser, jour, aVerserDetail
             </div>
           )}
           <div className="mt-2 pt-1.5 border-t border-purple-200 text-[11px] text-purple-700 flex justify-between">
-            <span>Total non versé (toutes journées)</span><b className="tabular-nums">{fmtAmt(jour.totalNonVerse)} DH</b>
+            {/* 🏷️ Lot 2 (25/10/2026) : calculé sur les expéditions de la PÉRIODE AFFICHÉE (filtre de date), pas sur toutes
+                les journées (avant : titre « toutes journées » trompeur — le chiffre changeait avec le filtre) */}
+            <span title="Ports encaissés non versés à l'admin, parmi les expéditions de la période choisie dans le filtre de date">Total non versé (période affichée)</span><b className="tabular-nums">{fmtAmt(jour.totalNonVerse)} DH</b>
           </div>
           {(jour.totalNonRecu || 0) > 0 && (
             <div className="text-[11px] text-amber-700 flex justify-between gap-2">

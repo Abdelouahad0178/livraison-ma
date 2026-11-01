@@ -15,6 +15,7 @@ import {
   loadReturnedParcelOnTruck, validateReturnArrival, getMoreAgentParcels,
 } from '../../../firebase/firestore'
 import { realignDeliveryAfterDestinationChange } from '../../../firebase/delivery'
+import { isParcelDateLocked, parcelDateLockMessage } from '../../../utils/parcelDateLock'
 import { showToast } from '../../../utils/toast'
 import { isInReturnCircuit, updateParcel, buildParcelCorrectionPatch, describeParcelSaveError, ensureFullParcel, ensureFullParcels, markParcelAsReturned } from '../../../firebase/parcels'
 import { reservePrintWindow, releasePrintWindow } from '../../../utils/printWindow'
@@ -34,7 +35,7 @@ import {
   buildCodWriteFields, validateCodChoice, toggleCodService, codSelectionOf, COD_PART_EMOJI, COD_PART_LABEL,
 } from '../../../utils/codParts'
 import { useAgentCtx } from '../AgentCtx'
-import { agentProCanEditBon, agentProReadOnly } from '../../../utils/agentProAccess'
+import { agentProCanEditBon, agentProReadOnly, isFullParcelEditor } from '../../../utils/agentProAccess'
 import { agencyCanDeliver } from '../../../utils/agencyDeliveryAccess'
 import { canBulkAssignDelivery, canBulkAssignPickup, pickupAssignmentUpdates } from '../../../utils/parcelBulkSelection'
 import BulkDeliverySelection from '../components/BulkDeliverySelection'
@@ -530,6 +531,15 @@ export default function ParcelsTab() {
       // pour ne pas affecter les filtres système
       const { updateParcel } = await import('../../../firebase/parcels')
       if (!/^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(newDate || '')) { alert('❌ Date invalide.'); return }
+      // 🔒 État RELU : arrivée à destination entre-temps → date verrouillée (utils/parcelDateLock, même règle serveur)
+      const { getDoc } = await import('firebase/firestore')
+      const freshSnap = await getDoc(doc(db, 'parcels', parcelId))
+      const fresh: any = freshSnap.exists() ? freshSnap.data() : null
+      if (fresh && isParcelDateLocked(fresh) && !isFullParcelEditor(profile)) {
+        alert(`🔒 ${parcelDateLockMessage(fresh)}`)
+        setEditingDateId(null); setEditingDateValue('')
+        return
+      }
       // expeditionDate = date affichée ; workDate = jour d'opération utilisé par les filtres de date
       // La date de CRÉATION suit aussi (même heure de la journée) pour que toutes les pages
       // (caisse, admin, impressions, filtres, requêtes serveur) restent cohérentes ; l'originale est conservée.
@@ -570,12 +580,14 @@ export default function ParcelsTab() {
   // (« En cours de livraison ») ou sans (« Initialisé »)
   const isLocalNotDelivered = (parcel: any) =>
     ['Initialisé', 'En cours de livraison'].includes(parcel.status) && parcel.originCity === parcel.destinationCity
+  // 27/10/2026 : comme à l'origine, TOUTE expédition dont la destination est ma ville (quelle que soit la ville de
+  // création) — la restriction « créée dans ma ville » de l'agent pro est retirée pour la bascule.
   const canToggleDestCity = (parcel: any) =>
-    agentProCanEditBon(profile, parcel) &&
     !!neighborCityOf(parcel)
     && (parcel.status === 'Arrivé en agence' || parcel.status === 'En cours de livraison' || isLocalNotDelivered(parcel))
     && (profile?.role === 'chef_agence' || profile?.role === 'agentpro')
-    && profile?.city === parcel.destinationCity
+    // ✏️ Compte « modification totale » (zahra@gmail.com, 29/10/2026) : bascule dans les DEUX sens (Agadir ⇄ Ait Melloul)
+    && (profile?.city === parcel.destinationCity || isFullParcelEditor(profile))
   // Livreurs de la ville cible (même filtre que les livreurs d'agence)
   const driversOfCity = (city: string) => (drivers || []).filter((d: any) =>
     d.city === city && (d.role === 'livreur' || (d.role === 'chauffeur' && d.chauffeurType !== 'transport')))
@@ -1754,8 +1766,11 @@ export default function ParcelsTab() {
             base mais ABSENTES de la liste affichée (hors période / filtres). Montrées à part, jamais comptées. */}
         {(() => {
           if (!search) return null
-          const shownIds = new Set((filteredParcels || []).map((p: any) => p.id))
-          const extra = (outOfPeriodResults || []).filter((p: any) => !shownIds.has(p.id))
+          // ⚡ Ensemble des expéditions affichées construit SEULEMENT s'il y a des résultats hors période à comparer
+          // (avant : ~17 000 identifiants recopiés à chaque chiffre tapé)
+          const outList = outOfPeriodResults || []
+          const shownIds = outList.length ? new Set((filteredParcels || []).map((p: any) => p.id)) : null
+          const extra = shownIds ? outList.filter((p: any) => !shownIds.has(p.id)) : []
           if (outOfPeriodSearching && !extra.length) {
             return (
               <div className="flex items-center gap-2 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-xl px-3 py-2">
@@ -3627,7 +3642,11 @@ export default function ParcelsTab() {
                             <td className="px-4 py-3 whitespace-nowrap border-r border-gray-100">
                               {(() => {
                                 const isOriginAgency = parcel.originCity === profile?.city || parcel.sender?.city === profile?.city
-                                const canEditDate = (profile?.role === 'chef_agence' || profile?.role === 'agentpro') && isOriginAgency && agentProCanEditBon(profile, parcel)
+                                const fullEditor = isFullParcelEditor(profile) // compte « modification totale » : toutes les dates
+                                const mayEditDate = fullEditor || ((profile?.role === 'chef_agence' || profile?.role === 'agentpro') && isOriginAgency && agentProCanEditBon(profile, parcel))
+                                // 🔒 Arrivée à destination (Arrivé en agence / En cours de livraison / Livré) : date verrouillée
+                                const dateLocked = mayEditDate && !fullEditor && isParcelDateLocked(parcel)
+                                const canEditDate = mayEditDate && !dateLocked
 
                                 // Utiliser expeditionDate si défini, sinon createdAt
                                 let currentDate: Date | null = null
@@ -3699,6 +3718,9 @@ export default function ParcelsTab() {
                                       >
                                         ✏️
                                       </button>
+                                    )}
+                                    {dateLocked && (
+                                      <span className="text-xs cursor-help" title={`Date verrouillée : l'expédition est « ${parcel.status} » à destination. Seul l'admin peut la changer.`}>🔒</span>
                                     )}
                                   </div>
                                 )

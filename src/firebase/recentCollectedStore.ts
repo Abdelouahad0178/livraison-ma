@@ -7,19 +7,21 @@
  *   1. l'ensemble est gardé en mémoire (et dans IndexedDB entre deux chargements de page) ;
  *   2. à l'ouverture : affiché tout de suite (dernière version connue), puis RATTRAPÉ — seules les expéditions
  *      modifiées depuis la dernière synchronisation sont relues (parcelsLite.liteUpdatedAt, posé par syncParcelLite) ;
- *   3. VÉRIFIÉ par comptage serveur (8 comptages, sans téléchargement) : un écart (expédition supprimée, partie vers
- *      une autre ville…) → relecture complète, comme avant ;
+ *   3. VÉRIFIÉ par comptage serveur (8 comptages, sans téléchargement) : un écart → relecture complète, comme avant.
+ *      Les expéditions supprimées / archivées / parties vers une autre ville sont retirées grâce aux traces
+ *      parcelsLiteGone (31/10/2026) : sans elles, chaque archivage provoquait une relecture complète ;
  *   4. TEMPS RÉEL : écoute des expéditions de la ville modifiées depuis l'ouverture (départ + arrivée).
  * `ready` (bouton « Verser ») ne passe à vrai qu'après le rattrapage + la vérification (ou la relecture complète)
  * ET la première réponse serveur du temps réel. Mêmes expéditions que les 16 requêtes d'avant (utils/recentCollected).
  * Tout échec (IndexedDB absent, quota, réseau) → relecture complète normale.
  */
-import { collection, query, where, getDocs, getDoc, doc as fsDoc, getCountFromServer, onSnapshot, orderBy, limit, Timestamp, GeoPoint } from 'firebase/firestore'
+import { collection, query, where, getDocs, getDoc, doc as fsDoc, documentId, getCountFromServer, onSnapshot, orderBy, limit, Timestamp, GeoPoint } from 'firebase/firestore'
 import { db } from './db'
 import { encodeLiteValue, decodeLiteValue } from '../utils/liteDayCache'
 import { RECENT_SHAPES, RECENT_FORMS, matchesRecentCollected, matchesRecentShape, type RecentCityField, type RecentForm } from '../utils/recentCollected'
 
 const COL = 'parcelsLite'
+const GONE = 'parcelsLiteGone'                // traces des expéditions sorties d'une ville (syncParcelLite)
 const MARGIN_MS = 10 * 60 * 1000          // décalage d'horloge / délai de la Cloud Function syncParcelLite
 const DELTA_MAX = 2000                    // au-delà : relecture complète
 const MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000 // mémoire enregistrée plus ancienne : relecture complète
@@ -41,6 +43,8 @@ interface CityState {
   unsubs: (() => void)[]
   notifyTimer?: ReturnType<typeof setTimeout>
   persistTimer?: ReturnType<typeof setTimeout>
+  dirty?: boolean          // changements pas encore enregistrés dans le navigateur
+  persistedOnce?: boolean  // 1er enregistrement de cette ouverture fait (rapide), ensuite toutes les 2 minutes
 }
 const STATES = new Map<string, CityState>()
 const keyOf = (city: string, sinceMs: number) => `${city}|${sinceMs}`
@@ -94,17 +98,34 @@ async function loadSaved(key: string): Promise<{ syncedAt: number; docs: any[] }
     })
   } catch { return null }
 }
+// ⚡ (26/10/2026) L'enregistrement réécrit TOUTE la mémoire (des milliers d'expéditions converties : ~0,45 s de page
+// figée à Agadir). Avant : 5 s après chaque changement en temps réel → la page Chef d'exploitation « ramait » en
+// continu. Désormais au plus toutes les 2 minutes, et aussitôt quand la page est cachée / quittée. Sans risque :
+// la mémoire ne sert qu'à l'ouverture suivante, qui rattrape tout ce qui a changé depuis syncedAt (catchUp).
+const PERSIST_DELAY_MS = 120000
+async function persistNow(st: CityState) {
+  if (st.persistTimer) { clearTimeout(st.persistTimer); st.persistTimer = undefined }
+  if (!st.synced || !st.dirty) return
+  st.dirty = false
+  st.persistedOnce = true
+  try {
+    const d = await openIdb()
+    if (!d) return
+    const row = { key: keyOf(st.city, st.sinceMs), syncedAt: st.syncedAt, docs: [...st.docs.values()].map(encodeLiteValue) }
+    d.transaction(STORE, 'readwrite').objectStore(STORE).put(row)
+  } catch (err) { console.warn('Collectes récentes : enregistrement impossible', err) }
+}
 function schedulePersist(st: CityState) {
-  if (!st.synced || st.persistTimer) return
-  st.persistTimer = setTimeout(async () => {
-    st.persistTimer = undefined
-    try {
-      const d = await openIdb()
-      if (!d) return
-      const row = { key: keyOf(st.city, st.sinceMs), syncedAt: st.syncedAt, docs: [...st.docs.values()].map(encodeLiteValue) }
-      d.transaction(STORE, 'readwrite').objectStore(STORE).put(row)
-    } catch (err) { console.warn('Collectes récentes : enregistrement impossible', err) }
-  }, 5000)
+  if (!st.synced) return
+  st.dirty = true
+  if (st.persistTimer) return
+  // 1er enregistrement rapide (une relecture complète ne doit pas être perdue si la page est fermée), puis espacés
+  st.persistTimer = setTimeout(() => { void persistNow(st) }, st.persistedOnce ? PERSIST_DELAY_MS : 5000)
+}
+if (typeof window !== 'undefined') {
+  const flushAll = () => { STATES.forEach(st => { void persistNow(st) }) }
+  window.addEventListener('pagehide', flushAll)
+  document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'hidden') flushAll() })
 }
 const DEC = { timestamp: (s: number, ns: number) => new Timestamp(s, ns), geoPoint: (a: number, b: number) => new GeoPoint(a, b) }
 
@@ -112,16 +133,38 @@ const DEC = { timestamp: (s: number, ns: number) => new Timestamp(s, ns), geoPoi
 /** Rattrapage (modifiées depuis la dernière synchronisation) + vérification par comptage. false → relecture complète. */
 async function catchUp(st: CityState): Promise<boolean> {
   const from = Timestamp.fromMillis(st.syncedAt - MARGIN_MS)
+  // ⚡ (31/10/2026) Comptages serveur lancés EN MÊME TEMPS que la lecture des changements (avant : après, ~1 s de plus).
+  // Un changement survenu entre les deux donne au pire un écart → relecture complète, comme avant.
+  const countsP = Promise.all(RECENT_SHAPES.flatMap(([cf, df]) => RECENT_FORMS.map(async form =>
+    ({ cf, df, form, server: (await getCountFromServer(shapeQuery(st.city, cf, df, form, st.sinceMs))).data().count }))))
+  countsP.catch(() => {}) // attendu plus bas (sauf sortie anticipée)
+  // 🪦 (31/10/2026) Expéditions SORTIES de la ville depuis la dernière synchronisation (archivées / supprimées / ville
+  // changée — traces parcelsLiteGone posées par syncParcelLite) : invisibles pour la lecture des changements ci-dessous,
+  // elles faussaient la vérification → relecture complète (≈ 11 Mo) après chaque archivage (tous les 3 jours).
+  const goneP = getDocs(query(collection(db, GONE), where('cities', 'array-contains', st.city), where('at', '>', from), limit(DELTA_MAX)))
+  goneP.catch(() => {})
   const snaps = await Promise.all(CITY_FIELDS.map(f => getDocs(query(collection(db, COL),
     where(f, '==', st.city), where('liteUpdatedAt', '>', from), orderBy('liteUpdatedAt'), limit(DELTA_MAX)))))
   if (snaps.some(s => s.size >= DELTA_MAX)) return false
   snaps.forEach(s => s.docs.forEach(d => apply(st, d.id, d.data())))
-  const checks = await Promise.all(RECENT_SHAPES.flatMap(([cf, df]) => RECENT_FORMS.map(async form => {
-    const server = (await getCountFromServer(shapeQuery(st.city, cf, df, form, st.sinceMs))).data().count
+  const gone = await goneP
+  if (gone.size >= DELTA_MAX) return false
+  // État ACTUEL de celles encore en mémoire, relu par paquets de 30 : absente → retirée ; présente → réévaluée (elle
+  // peut encore compter par l'autre champ ville), comme une sortie de requête en temps réel (startLive)
+  const ids = gone.docs.map(d => d.id).filter(id => st.docs.has(id))
+  const chunks: string[][] = []
+  for (let i = 0; i < ids.length; i += 30) chunks.push(ids.slice(i, i + 30))
+  await Promise.all(chunks.map(async chunk => {
+    const s = await getDocs(query(collection(db, COL), where(documentId(), 'in', chunk)))
+    const found = new Set(s.docs.map(d => d.id))
+    s.docs.forEach(d => apply(st, d.id, d.data()))
+    chunk.forEach(id => { if (!found.has(id)) st.docs.delete(id) })
+  }))
+  const checks = (await countsP).map(({ cf, df, form, server }) => {
     let local = 0
     st.docs.forEach(p => { if (matchesRecentShape(p, st.city, cf, df, form, st.sinceMs)) local++ })
     return server === local
-  })))
+  })
   return checks.every(Boolean)
 }
 
@@ -230,8 +273,11 @@ export function subscribeRecentCollected(city: string, sinceMs: number, cb: List
   }
   const s = st
   s.subs.add(cb)
-  if (s.subs.size === 1) start(s).catch(err => console.error('Collectes récentes :', err))
-  else cb({ docs: [...s.docs.values()], ready: s.synced && s.liveOk })
+  if (s.subs.size === 1) {
+    // Réabonnement (changement de page / de période) : la mémoire déjà connue reste affichée pendant le rattrapage
+    if (s.syncedAt && s.docs.size) cb({ docs: [...s.docs.values()], ready: false })
+    start(s).catch(err => console.error('Collectes récentes :', err))
+  } else cb({ docs: [...s.docs.values()], ready: s.synced && s.liveOk })
   return () => {
     s.subs.delete(cb)
     if (!s.subs.size) stop(s)

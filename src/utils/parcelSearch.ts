@@ -43,6 +43,8 @@ const isObj = (p: unknown): p is object => !!p && typeof p === 'object'
 const compact = (v: unknown) => normName(v).replace(/[^a-z0-9]/g, '')
 const agentNormRaw: Norm = v => normText(v)
 const agentNormCompact: Norm = v => compact(normText(v))
+/** Chiffres ASCII d'une valeur (identiques avant / après normText : ni NFD ni la casse ne touchent aux chiffres). */
+const digitsOf: Norm = v => (v == null ? '' : String(v).replace(/\D/g, ''))
 // 0-3 : communs ; 4-8 : expéditeur ; 9-12 : destinataire
 const agentFields = (p: any): unknown[] => [
   p.id, p.trackingId, p.senderNic, p.sender?.nic,
@@ -68,19 +70,30 @@ export function makeAgentSearchMatcher(query: string, scope: 'all' | 'sender' | 
       return numberStartsWith(v, q)
     })
   }
+  // ⚡ (29/10/2026) Terme mêlant chiffres et lettres (N° EXP « 1085829D ») : un champ ne peut correspondre que si
+  // ses chiffres contiennent les chiffres du terme (la normalisation ne crée ni n'enlève de chiffre ASCII, et une
+  // sous-chaîne garde ses chiffres contigus). Les champs qui ne passent pas ce test (simple, sans normalisation)
+  // sont écartés AVANT la normalisation coûteuse — résultats strictement identiques.
+  const qDigits = q.replace(/\D/g, '')
+  const gate = qDigits.length >= 3
   return (p: any) => {
     const vals = agentFields(p)
     if (!isObj(p)) {
       return vals.some((v, i) => {
         if ((skipSender && i >= 4 && i <= 8) || (skipReceiver && i >= 9)) return false
+        if (gate && !digitsOf(v).includes(qDigits)) return false
         const raw = agentNormRaw(v)
         return raw.includes(q) || compact(raw).includes(compactQ)
       })
     }
+    // Chiffres de chaque champ, mis en cache comme les formes normalisées (recherches suivantes : sans recalcul)
+    const digits = gate ? cachedNorms(p, 'agent.digits', vals, digitsOf) : null
+    if (digits && !digits.some((d, i) => !((skipSender && i >= 4 && i <= 8) || (skipReceiver && i >= 9)) && d.includes(qDigits))) return false
     const raw = cachedNorms(p, 'agent.raw', vals, agentNormRaw)
     let cmp: string[] | null = null
     for (let i = 0; i < vals.length; i++) {
       if ((skipSender && i >= 4 && i <= 8) || (skipReceiver && i >= 9)) continue
+      if (digits && !digits[i].includes(qDigits)) continue
       if (raw[i].includes(q)) return true
       if (!cmp) cmp = cachedNorms(p, 'agent.cmp', vals, agentNormCompact)
       if (cmp[i].includes(compactQ)) return true

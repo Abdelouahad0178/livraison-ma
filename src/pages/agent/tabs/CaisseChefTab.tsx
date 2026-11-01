@@ -1,4 +1,6 @@
-import { useState, useMemo, useEffect, useDeferredValue, startTransition } from 'react'
+import { Fragment, useState, useMemo, useEffect, useDeferredValue, startTransition } from 'react'
+import { summarizeEcarts, transferEcart, transferSent } from '../../../utils/versementEcarts'
+import { loadVersementDay, useVersementDays, type VersementDayDetail } from '../../../firebase/versementCopy'
 import { docPartKeepingTotal } from '../../../utils/codParts'
 import PendingBadge from '../../../components/PendingBadge'
 import {
@@ -12,7 +14,8 @@ import { VIA_EXPLOITATION_MSG, isCodMoneyBeforeStart } from '../../../utils/mone
 import { chefCancelCod, chefCancelPortDu, chefCancelPortPaye, chefReceiveCod, chefReceivePortDu, chefReceivePortPaye } from '../../../firebase/chefPortReception'
 import {
   createAdminTransferFromAgent,
-  subscribeMyAdminTransfers
+  createRegularisationTransfer,
+  subscribeAdminTransfersByCity
 } from '../../../firebase/caisse'
 import {
   createDeliveryDelay,
@@ -38,11 +41,12 @@ import CollectesParJour, { CodCollectesParJour } from '../../../components/caiss
 import { CARD, SectionTitle } from '../../exploitation/ui'
 import { printFeuilleDeCharge } from '../../../utils/printFeuilleDeCharge'
 import { useGarePending } from '../../exploitation/useGarePending'
-import { useDepotIds, useAgencyHolderIds } from '../../exploitation/useDepotIds'
+import { useDepotIds, useAgencyHolderIds, useCityDriverNames } from '../../exploitation/useDepotIds'
 import {
   firestoreBoundsFor, caisseFilterByDate, safeParseAmount, computeCaisseView, caisseDateBounds,
   caisseCodAmountOfType, caisseCodTotals, CAISSE_DEFAULT_PRESET, caisseDefaultOperationalDay, CAISSE_STATUS_OPTIONS,
   isRamasseGuichet, guichetGroupIdOf, GARE_GROUP_ID, ramasseGuichetEtat, toDateSafe, isPortDuHeldByAgency, isAdminTransferred,
+  caisseStatusMatches, isReturnPortDu,
 } from '../../../utils/agencyCaisseRules'
 import { getOperationalDayString } from '../../../config/operationalDay'
 import BilanPeriode from '../../../components/caisse/BilanPeriode'
@@ -272,6 +276,14 @@ export default function CaisseChefTab() {
 
   // État versements
   const [versementForm, setVersementForm] = useState({ amount: '', note: '' })
+  // 💼 Onglet Versements (30/10/2026) : fenêtre « Verser » d'une journée + filtre de l'historique
+  const [verserOpen, setVerserOpen] = useState(false)
+  const [histFilter, setHistFilter] = useState<'all' | 'pending' | 'confirmed' | 'rejected'>('all')
+  const [openDay, setOpenDay] = useState<string | null>(null) // journée de collecte dépliée (détail + versements)
+  const [showAllDays, setShowAllDays] = useState(false)        // aussi les journées entièrement versées
+  // 💼 Régularisation d'un écart (versement validé par l'admin pour moins que le montant envoyé)
+  const [regulForm, setRegulForm] = useState<{ amount: string; note: string } | null>(null)
+  const [sendingRegul, setSendingRegul] = useState(false)
   const [sendingVersement, setSendingVersement] = useState(false)
   const [adminTransfers, setAdminTransfers] = useState<any[]>([])
   const [deliveryDelays, setDeliveryDelays] = useState<any[]>([])
@@ -307,18 +319,20 @@ export default function CaisseChefTab() {
   // Vérification du rôle
   const isChef = profile?.role === 'chef_agence'
 
-  // Abonnement aux versements admin
+  // Abonnement aux versements admin — de TOUTE l'agence (30/10/2026) : avant, seulement ceux créés par ce compte
+  // (fromId) ; une régularisation d'écart enregistrée par l'admin (« reçu directement ») n'était pas vue par le chef
+  // d'agence et son écart restait affiché.
   useEffect(() => {
-    if (!uid || !isChef) return
+    if (!profile?.city || !isChef) return
 
-    const unsubscribe = subscribeMyAdminTransfers(
-      uid,
+    const unsubscribe = subscribeAdminTransfersByCity(
+      profile.city,
       setAdminTransfers,
       (err: any) => console.error('Erreur chargement versements:', err)
     )
 
     return () => unsubscribe()
-  }, [uid, isChef])
+  }, [profile?.city, isChef])
 
   // Abonnement aux retards de livraison
   useEffect(() => {
@@ -476,41 +490,17 @@ export default function CaisseChefTab() {
 
     if (statusFilter === 'all') return resultsWithModifications
 
+    // 🔎 Lot 2 (25/10/2026) : MÊME règle de statut que les cartes (caisseStatusMatches, agencyCaisseRules) — avant, une
+    // copie locale ignorait « pending » et « Arrivé en agence » dans « À collecter » (expéditions absentes en recherche).
     const now = new Date()
-    const oneDayAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000)
-
-    return resultsWithModifications.filter((p: any) => {
-      const isPortDu = p.portType === 'port_du' && !p.portPayeMethod
-      const isCollected = p.portStatus === 'collected' || p.portStatus === 'received'
-      const isInDelivery = p.status === 'En cours de livraison' || p.status === 'Livré'
-
-      let isLate = false
-      if (isPortDu && p.status === 'En cours de livraison' && p.deliveryAssignedAt) {
-        const assignedDate = p.deliveryAssignedAt?.toDate ? p.deliveryAssignedAt.toDate() : new Date(p.deliveryAssignedAt)
-        isLate = assignedDate < oneDayAgo
-      }
-
-      switch (statusFilter) {
-        case 'a_collecter':
-          return isPortDu && !p.portStatus && isInDelivery && p.status?.toLowerCase().trim() !== 'retourné'
-        case 'collecte':
-          return isPortDu && isCollected && p.status?.toLowerCase().trim() !== 'retourné'
-        case 'en_compte':
-          return String(p.portType || '').startsWith('port_en_compte') && !(p.returnedAt || p.wasReturned || p.status === 'Retourné')
-        case 'ramasse':
-          return p.portType === 'port_paye' && !p.portPayeMethod && !(p.returnedAt || p.wasReturned || p.status === 'Retourné')
-        case 'en_retard':
-          return isPortDu && isLate && p.status?.toLowerCase().trim() !== 'retourné'
-        default:
-          return true
-      }
-    })
+    return resultsWithModifications.filter((p: any) => caisseStatusMatches(p, statusFilter, p.deliveryDriverId || '', now))
   }, [searchResults, statusFilter, modifiedParcels])
 
   // 🏬 Colis arrivés en attente en gare (hors fenêtre de dates) + comptes « Livreur en gare »
   const garePending = useGarePending(profile?.city)
   const depotIds = useDepotIds(profile?.city)
   const agencyHolderIds = useAgencyHolderIds(profile?.city)
+  const driverNames = useCityDriverNames(profile?.city)
 
   // ⚖️ TOUS les calculs de l'écran (source datée, soldes, livreurs, totaux, bilan, instances,
   // collectes par jour) : computeCaisseView (src/utils/agencyCaisseRules.ts), la MÊME fonction que
@@ -529,8 +519,9 @@ export default function CaisseChefTab() {
     deliveryDelays,
     // 💼 « À verser » = seulement les ports dus réellement reçus par le chef d'agence
     agencyHolderIds,
+    driverNames,
   }), [allDisplayParcels, garePending, datePreset, dateFrom, dateTo, operationalDay, driverFilter, statusFilter,
-    searchResults, modifiedParcels, extraCollectedParcels, recentCollected, depotIds, deliveryDelays, agencyHolderIds, profile?.city])
+    searchResults, modifiedParcels, extraCollectedParcels, recentCollected, depotIds, deliveryDelays, agencyHolderIds, driverNames, profile?.city])
   const {
     stats, soldeCaisseGlobal, soldeLivreur, portsCollectesForPrint, drivers, filteredDrivers,
     bilanJournee, instances, collectesParJour, codCollectesParJour, periodLabel, statusFilterLabel, nonRecuTotal,
@@ -541,14 +532,37 @@ export default function CaisseChefTab() {
   // que la carte « Collectes par jour »), ports des expéditions du jour ET des expéditions antérieures.
   const todayOpKey = getOperationalDayString(new Date())
   const [versementDay, setVersementDay] = useState<string>('')
-  const dayKeys = useMemo(() => collectesParJour.map(([k]) => k), [collectesParJour])
+  // 💼 Copie allégée (30/10/2026) : totaux par journée de l'agence, en temps réel (versementDays — même règle que les
+  // cartes) ; le détail d'une journée n'est lu qu'à l'ouverture (loadVersementDay) → l'onglet Versements n'attend plus
+  // le chargement des « Collectes par jour ».
+  const vDays = useVersementDays(isChef ? profile?.city : null)
+  const [copyDays, setCopyDays] = useState<Record<string, VersementDayDetail | 'loading'>>({})
+  const ensureCopyDay = (k: string) => {
+    if (!profile?.city) return
+    setCopyDays(prev => ({ ...prev, [k]: 'loading' }))
+    loadVersementDay(profile.city, k)
+      .then(d => setCopyDays(prev => ({ ...prev, [k]: d })))
+      .catch(e => { console.error('Détail de la journée', e); setCopyDays(prev => { const n = { ...prev }; delete n[k]; return n }) })
+  }
+  const dayKeys = useMemo(() => [...new Set([...collectesParJour.map(([k]) => k), ...(vDays || []).map(d => d.day)])], [collectesParJour, vDays])
   // Par défaut : la plus ancienne journée qui reste à verser, sinon aujourd'hui
   const defaultVersementDay = useMemo(() => {
-    const pending = collectesParJour.filter(([, d]) => (d.aVerser || 0) > 0).map(([k]) => k).sort()
+    const pending = (vDays || []).filter(d => (d.aVerser || 0) > 0.009).map(d => d.day).sort()
     return pending[0] || (dayKeys.includes(todayOpKey) ? todayOpKey : dayKeys[0] || todayOpKey)
-  }, [collectesParJour, dayKeys, todayOpKey])
+  }, [vDays, dayKeys, todayOpKey])
   const selectedVersementDay = versementDay && dayKeys.includes(versementDay) ? versementDay : defaultVersementDay
-  const verserDayData = useMemo(() => collectesParJour.find(([k]) => k === selectedVersementDay)?.[1] || null, [collectesParJour, selectedVersementDay])
+  // Journée à verser : expéditions « dans ma caisse » lues dans la copie allégée (à l'ouverture de « Verser »)
+  const copySel = copyDays[selectedVersementDay]
+  const verserDayData = useMemo(() => {
+    if (!copySel || copySel === 'loading') return null
+    const ids = copySel.contribs.filter(c => c.bucket === 'aVerser').map(c => c.id)
+    return {
+      aVerser: Math.round(copySel.contribs.filter(c => c.bucket === 'aVerser').reduce((s, c) => s + (Number(c.amount) || 0), 0) * 100) / 100,
+      aVerserIds: ids,
+      parcels: copySel.parcels,
+      nonRecu: copySel.contribs.filter(c => c.bucket === 'nonRecu').reduce((s, c) => s + (Number(c.amount) || 0), 0),
+    }
+  }, [copySel])
   const fmtKeyFr = (k: string) => k.split('-').reverse().join('/')
   const verserJour = useMemo(() => {
     const ids = new Set(verserDayData?.aVerserIds || [])
@@ -1099,9 +1113,11 @@ Le reste sera le ${docLabel} (total inchangé).`)
           note: `Collectes du ${fmtKeyFr(selectedVersementDay)} — versement exceptionnel autorisé par l'admin (calculé ${fmtAmt(verserDayData?.aVerser || 0)} DH)${versementForm.note ? ` — ${versementForm.note}` : ''}`,
           codParcelIds: exIds,
           kind: 'port', // ports collectés de la journée : seule la marque « port versé » (jamais « COD versé »)
+          exceptionCity: profile?.city, // 🔒 exception marquée « utilisée » dans la même transaction que le versement
         })
-        await updateDoc(fsDoc(db, 'versementExceptions', profile?.city), { used: true, usedAt: new Date().toISOString(), usedBy: profile?.name || '', transferId })
+        void transferId
         setVersementForm({ amount: '', note: '' })
+        setVerserOpen(false)
         alert('✅ Versement exceptionnel créé ! En attente de validation admin.')
       } catch (err: any) {
         alert(`❌ Erreur: ${err.message}`)
@@ -1146,6 +1162,7 @@ Le reste sera le ${docLabel} (total inchangé).`)
       })
 
       setVersementForm({ amount: '', note: '' })
+      setVerserOpen(false)
       alert('✅ Versement créé! En attente de validation admin.')
     } catch (err: any) {
       console.error('Erreur création versement:', err)
@@ -1195,16 +1212,6 @@ Le reste sera le ${docLabel} (total inchangé).`)
       alert(`❌ Erreur: ${err.message}`)
     }
   }
-
-  // Versements filtrés par date
-  const filteredVersements = useMemo(() => {
-    const versementDate = (v: any) => {
-      if (v.createdAt?.toDate) return v.createdAt.toDate()
-      if (v.createdAt) return new Date(v.createdAt)
-      return new Date(0)
-    }
-    return caisseFilterByDate(adminTransfers, datePreset, dateFrom, dateTo, versementDate)
-  }, [adminTransfers, datePreset, dateFrom, dateTo])
 
   // Rendu conditionnel si pas chef d'agence
   if (!isChef) {
@@ -1389,17 +1396,6 @@ Le reste sera le ${docLabel} (total inchangé).`)
         >
           <Send className="w-4 h-4 inline-block mr-2" />
           Versements
-        </button>
-        <button
-          onClick={() => setActiveTab('historique')}
-          className={`flex-1 px-4 py-2.5 rounded-lg text-sm font-semibold transition ${
-            activeTab === 'historique'
-              ? 'bg-blue-600 text-white'
-              : 'text-gray-600 hover:bg-gray-100'
-          }`}
-        >
-          <Clock className="w-4 h-4 inline-block mr-2" />
-          Historique
         </button>
       </div>
 
@@ -1610,7 +1606,8 @@ Le reste sera le ${docLabel} (total inchangé).`)
                                 {fmtAmt(parcel.price)} DH
                               </td>
                               <td className="py-2 px-3 text-center">
-                                {(parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné') ? (
+                                {isReturnPortDu(parcel) && <div className="text-[10px] font-semibold text-red-600 mb-0.5">↩️ Retour — port dû ici</div>}
+                                {(parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné') && !isReturnPortDu(parcel) ? (
                                   <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-semibold">
                                     <X className="w-3 h-3" />
                                     Retourné
@@ -1639,7 +1636,7 @@ Le reste sera le ${docLabel} (total inchangé).`)
                               </td>
                               <td className="py-2 px-3 text-center">
                                 <div className="flex items-center justify-center gap-2">
-                                  {(parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné') ? (
+                                  {(parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné') && !isReturnPortDu(parcel) ? (
                                     <span className="text-xs text-gray-500 italic">-</span>
                                   ) : (
                                     <>
@@ -1881,7 +1878,8 @@ Le reste sera le ${docLabel} (total inchangé).`)
                                   )}
                                   {driverTableColumns.status && (
                                   <td className="py-2 px-3 text-center">
-                                    {parcel.status === 'Retourné' ? (
+                                    {isReturnPortDu(parcel) && <div className="text-[10px] font-semibold text-red-600 mb-0.5">↩️ Retour — port dû ici</div>}
+                                    {parcel.status === 'Retourné' && !isReturnPortDu(parcel) ? (
                                       <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-red-100 text-red-700 text-xs font-semibold">
                                         <X className="w-3 h-3" />
                                         Retourné
@@ -1950,7 +1948,7 @@ Le reste sera le ${docLabel} (total inchangé).`)
                                   )}
                                   <td className="py-2 px-3 text-center">
                                     <div className="flex items-center justify-center gap-2">
-                                      {(parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné') ? (
+                                      {(parcel.returnedAt || parcel.wasReturned || parcel.status === 'Retourné') && !isReturnPortDu(parcel) ? (
                                         <span className="text-xs text-gray-500 italic">-</span>
                                       ) : (
                                         <>
@@ -1995,7 +1993,7 @@ Le reste sera le ${docLabel} (total inchangé).`)
                                                       ? 'Annuler'
                                                       : 'Collecter'}
                                               </button>
-                                              {!isCollected && (
+                                              {!isCollected && !isReturnPortDu(parcel) && (
                                                 <>
                                                   <button
                                                     onClick={() => openDelayModal(parcel, driver)}
@@ -2021,7 +2019,7 @@ Le reste sera le ${docLabel} (total inchangé).`)
                                             </>
                                           )}
                                           {/* Bouton Livrer : seulement les expéditions livrées par MON agence (destination = ma ville, ou locale) */}
-                                          {parcel.status !== 'Livré' && parcel.status !== 'Retourné' && isDestinationHere(parcel) && (
+                                          {parcel.status !== 'Livré' && parcel.status !== 'Retourné' && !isReturnPortDu(parcel) && isDestinationHere(parcel) && (
                                             <button
                                               onClick={() => handleMarkAsDelivered(parcel)}
                                               disabled={deliveringParcelIds.has(parcel.id)}
@@ -2448,25 +2446,290 @@ Le reste sera le ${docLabel} (total inchangé).`)
         </div>
       )}
 
-      {activeTab === 'versements' && (
+      {activeTab === 'versements' && (() => {
+        // 💼 Versements à l'admin (30/10/2026) : soldes, journées à verser (bouton « Verser »), historique — même calcul qu'avant
+        // Journées avec de l'argent à verser (dans ma caisse) OU pas encore reçu (chez le chef d'exploitation / livreurs)
+        // 💼 Journées lues dans la COPIE ALLÉGÉE (versementDays, temps réel) — mêmes montants que les « Collectes par jour »
+        const copyRows: [string, any][] = (vDays || []).map(d => [d.day, {
+          aVerser: Number(d.aVerser) || 0, nonRecu: Number(d.nonRecu) || 0, verse: Number(d.verse) || 0,
+          montant: (Number(d.aVerser) || 0) + (Number(d.nonRecu) || 0) + (Number(d.verse) || 0),
+          count: (d.n_aVerser || 0) + (d.n_nonRecu || 0) + (d.n_verse || 0), nAVerser: d.n_aVerser || 0,
+        }])
+        const recentReady = vDays !== null
+        const toVerse = copyRows.filter(([, d]) => d.aVerser > 0.009 || d.nonRecu > 0.009).sort((a, b) => a[0].localeCompare(b[0]))
+        const totalAVerser = toVerse.reduce((s, [, d]) => s + (d.aVerser || 0), 0)
+        const totalNonRecu = toVerse.reduce((s, [, d]) => s + (d.nonRecu || 0), 0)
+        const daysAVerser = toVerse.filter(([, d]) => (d.aVerser || 0) > 0.009).length
+        // Journées affichées : celles qui ont encore de l'argent (à verser / pas encore reçu), ou toutes (« entrées » complètes)
+        const shownDays = (showAllDays ? [...copyRows] : toVerse).sort((a, b) => b[0].localeCompare(a[0]))
+        const totalCollecte = shownDays.reduce((s, [, d]) => s + (d.montant || 0), 0)
+        const totalVerse = shownDays.reduce((s, [, d]) => s + (d.verse || 0), 0)
+        /** Versements à l'admin d'une journée de collecte (note « Collectes du JJ/MM/AAAA… ») */
+        const transfersOfDay = (k: string) => adminTransfers.filter((t: any) => String(t.note || '').startsWith(`Collectes du ${fmtKeyFr(k)}`))
+        const tDate = (t: any): Date => t.createdAt?.toDate?.() || new Date(t.createdAt || 0)
+        const tSum = (l: any[]) => l.reduce((s, t) => s + (safeParseAmount(t.amount) || 0), 0)
+        const pendingT = adminTransfers.filter((t: any) => t.status === 'pending')
+        const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0)
+        const monthT = adminTransfers.filter((t: any) => t.status === 'confirmed' && tDate(t) >= monthStart)
+        const hist = [...adminTransfers].filter((t: any) => histFilter === 'all' || t.status === histFilter).sort((a, b) => tDate(b).getTime() - tDate(a).getTime())
+        const STATUS: Record<string, { label: string; cls: string }> = {
+          pending: { label: '⏳ En attente de l\'admin', cls: 'bg-amber-100 text-amber-800' },
+          confirmed: { label: '✅ Validé', cls: 'bg-emerald-100 text-emerald-800' },
+          rejected: { label: '❌ Refusé', cls: 'bg-red-100 text-red-800' },
+        }
+        // Ouverture de « Verser » / du détail : expéditions de la journée relues à chaque fois (état à jour)
+        const openVerser = (k: string) => { setVersementDay(k); setVersementForm({ amount: '', note: '' }); ensureCopyDay(k); setVerserOpen(true) }
+        // 💼 Écarts : versements validés par l'admin pour moins que le montant envoyé, moins les régularisations
+        const ecart = summarizeEcarts(adminTransfers)
+        const regulMax = Math.max(0, Math.round((ecart.reste - ecart.regulEnAttente) * 100) / 100)
+        const sendRegul = async () => {
+          if (!regulForm) return
+          const amount = regulForm.amount === '' ? regulMax : safeParseAmount(regulForm.amount)
+          if (!(amount > 0)) { alert('⚠️ Montant invalide.'); return }
+          if (amount > regulMax + 0.001) { alert(`⚠️ Le montant ne peut pas dépasser l'écart restant (${fmtAmt(regulMax)} DH).`); return }
+          if (!confirm(`Verser ${fmtAmt(amount)} DH à l'admin pour régulariser l'écart ?`)) return
+          setSendingRegul(true)
+          try {
+            await createRegularisationTransfer({ fromId: uid, fromName: profile?.name || '', city: profile?.city, amount, note: regulForm.note })
+            setRegulForm(null)
+            alert('✅ Régularisation envoyée. En attente de validation admin.')
+          } catch (err: any) { alert(`❌ Erreur : ${err.message}`) } finally { setSendingRegul(false) }
+        }
+        return (
         <div className="space-y-4">
-          {/* Formulaire de versement */}
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
-              <Send className="w-5 h-5 text-blue-600" />
-              Nouveau versement à l'admin
-            </h3>
+          {/* Soldes */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
+              <p className="text-xs font-bold text-violet-700">💼 Dans ma caisse — à verser à l'admin</p>
+              <p className="mt-1 text-2xl font-black text-violet-800 tabular-nums">{recentReady ? `${fmtAmt(totalAVerser)} DH` : '⏳ calcul…'}</p>
+              <p className="text-xs text-violet-700">{daysAVerser} journée(s) de collecte</p>
+            </div>
+            <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4" title="Ports collectés pas encore remis au chef d'agence : chez le chef d'exploitation ou les livreurs. Ils deviennent « à verser » une fois reçus.">
+              <p className="text-xs font-bold text-orange-700">🚚 Pas encore reçu du chef d'exploitation</p>
+              <p className="mt-1 text-2xl font-black text-orange-800 tabular-nums">{recentReady ? `${fmtAmt(totalNonRecu)} DH` : '⏳ calcul…'}</p>
+              <p className="text-xs text-orange-700">collecté, à recevoir avant de verser</p>
+            </div>
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+              <p className="text-xs font-bold text-amber-700">⏳ En attente de validation</p>
+              <p className="mt-1 text-2xl font-black text-amber-800 tabular-nums">{fmtAmt(tSum(pendingT))} DH</p>
+              <p className="text-xs text-amber-700">{pendingT.length} versement(s) envoyé(s) à l'admin</p>
+            </div>
+            <div className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+              <p className="text-xs font-bold text-emerald-700">✅ Validé ce mois</p>
+              <p className="mt-1 text-2xl font-black text-emerald-800 tabular-nums">{fmtAmt(tSum(monthT))} DH</p>
+              <p className="text-xs text-emerald-700">{monthT.length} versement(s)</p>
+            </div>
+          </div>
+
+          {/* ⚠️ Écarts à régulariser (versements validés pour moins que le montant envoyé) */}
+          {(ecart.reste > 0 || ecart.list.length > 0) && (
+            <div className={`rounded-xl border p-4 ${ecart.reste > 0 ? 'border-red-200 bg-red-50' : 'border-emerald-200 bg-emerald-50'}`}>
+              <div className="flex flex-wrap items-center gap-3">
+                <div className="flex-1 min-w-56">
+                  <p className="font-bold text-red-800">⚠️ Écart à régulariser avec l'admin : {fmtAmt(ecart.reste)} DH</p>
+                  <p className="text-xs text-red-700">Versements validés par l'admin pour moins que le montant envoyé : {fmtAmt(ecart.ecarts)} DH · déjà régularisé {fmtAmt(ecart.regulValidees)} DH{ecart.regulEnAttente > 0 ? ` · en attente de validation ${fmtAmt(ecart.regulEnAttente)} DH` : ''}</p>
+                </div>
+                {regulMax > 0 && <button onClick={() => setRegulForm({ amount: '', note: '' })} className="px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-sm font-bold">Verser la régularisation ▸</button>}
+              </div>
+              <div className="mt-2 space-y-1">
+                {ecart.list.map((t: any) => (
+                  <p key={t.id} className="text-xs text-red-800">
+                    • {tDate(t).toLocaleDateString('fr-FR')} — {t.note || 'Versement'} : envoyé <b>{fmtAmt(transferSent(t))} DH</b>, reçu par l'admin <b>{fmtAmt(t.amount)} DH</b> → écart <b>{fmtAmt(transferEcart(t))} DH</b>
+                  </p>
+                ))}
+              </div>
+            </div>
+          )}
+          {regulForm && (
+            <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => !sendingRegul && setRegulForm(null)}>
+              <div className="bg-white rounded-2xl max-w-md w-full p-6 space-y-3" onClick={e => e.stopPropagation()}>
+                <h3 className="text-lg font-bold text-gray-900">Régulariser l'écart avec l'admin</h3>
+                <p className="text-sm text-gray-600">Écart restant : <b>{fmtAmt(regulMax)} DH</b></p>
+                <input type="number" step="0.01" min="0" max={regulMax} value={regulForm.amount} onChange={e => setRegulForm(f => f && ({ ...f, amount: e.target.value }))}
+                  placeholder={`${fmtAmt(regulMax)} (tout l'écart)`} className="w-full px-3 py-2 border border-gray-200 rounded-lg" />
+                <textarea value={regulForm.note} onChange={e => setRegulForm(f => f && ({ ...f, note: e.target.value }))} placeholder="Note (optionnel)" rows={2} className="w-full px-3 py-2 border border-gray-200 rounded-lg" />
+                <div className="grid grid-cols-2 gap-2">
+                  <button onClick={() => setRegulForm(null)} disabled={sendingRegul} className="py-2 rounded-lg border border-gray-200 font-semibold text-gray-600">Annuler</button>
+                  <button onClick={sendRegul} disabled={sendingRegul} className="py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white font-bold disabled:opacity-50">{sendingRegul ? 'Envoi…' : 'Verser'}</button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Journées à verser */}
+          <div className="bg-white border border-gray-200 rounded-xl p-4">
+            <h3 className="font-bold text-gray-900 mb-3 flex items-center gap-2"><Send className="w-5 h-5 text-blue-600" /> Journées à verser</h3>
+            {!recentReady ? <p className="text-sm text-amber-700">⏳ Chargement des collectes… (quelques secondes)</p>
+              : (
+                <div className="overflow-x-auto">
+                  <label className="mb-2 inline-flex items-center gap-2 text-xs font-semibold text-gray-600 cursor-pointer">
+                    <input type="checkbox" checked={showAllDays} onChange={e => setShowAllDays(e.target.checked)} className="w-4 h-4" />
+                    Afficher aussi les journées entièrement versées (toutes les entrées)
+                  </label>
+                  {!shownDays.length ? <p className="text-sm font-semibold text-emerald-700">✓ Tout est versé : rien à verser pour le moment.</p> : (
+                  <table className="w-full text-sm">
+                    <thead className="text-xs text-gray-500 border-b border-gray-100"><tr>
+                      <th className="text-left py-2 pr-3">Journée de collecte</th>
+                      <th className="text-right py-2 px-3">📥 Collecté (entrées)</th>
+                      <th className="text-right py-2 px-3">✅ Déjà versé</th>
+                      <th className="text-right py-2 px-3">💼 Dans ma caisse (à verser)</th>
+                      <th className="text-right py-2 px-3">🚚 Pas encore reçu</th>
+                      <th className="py-2 pl-3"></th>
+                    </tr></thead>
+                    <tbody>
+                      {shownDays.map(([k, d]) => {
+                        const isOpen = openDay === k
+                        const detail = copyDays[k]
+                        const dayTransfers = isOpen ? transfersOfDay(k).sort((a: any, b: any) => tDate(b).getTime() - tDate(a).getTime()) : []
+                        // Où est l'argent : d'après la copie allégée (même règle que les cartes)
+                        const stateOf = (p: any) => p.__bucket === 'verse'
+                          ? { label: '✅ Versé à l\'admin', cls: 'bg-emerald-100 text-emerald-800' }
+                          : p.__bucket === 'aVerser' ? { label: '💼 Dans ma caisse', cls: 'bg-violet-100 text-violet-800' }
+                          : { label: `🚚 Chez ${p.portExpReceivedBy || p.portPayeExpReceivedBy || p.portCollectedBy || 'le livreur'}`, cls: 'bg-orange-100 text-orange-800' }
+                        return (<Fragment key={k}>
+                          <tr className={`border-b border-gray-50 ${isOpen ? 'bg-blue-50/40' : ''}`}>
+                            <td className="py-2 pr-3 font-bold text-gray-800 whitespace-nowrap">{fmtKeyFr(k)}
+                              {versementException && versementException.dayKey === k && <span className="ml-2 text-[11px] font-bold text-amber-800 bg-amber-100 rounded-full px-2 py-0.5">⭐ exception admin</span>}</td>
+                            <td className="py-2 px-3 text-right tabular-nums text-gray-800">{fmtAmt(d.montant || 0)} DH <span className="text-xs text-gray-500">({d.count} exp.)</span></td>
+                            <td className="py-2 px-3 text-right tabular-nums text-emerald-700">{(d.verse || 0) > 0 ? `${fmtAmt(d.verse || 0)} DH` : <span className="text-gray-300">—</span>}</td>
+                            <td className="py-2 px-3 text-right tabular-nums font-black text-violet-800">{(d.aVerser || 0) > 0 ? <>{fmtAmt(d.aVerser || 0)} DH <span className="text-xs font-normal text-gray-500">({d.nAVerser} exp.)</span></> : <span className="text-gray-300">—</span>}</td>
+                            <td className="py-2 px-3 text-right tabular-nums font-semibold text-orange-700">{(d.nonRecu || 0) > 0 ? `${fmtAmt(d.nonRecu || 0)} DH` : <span className="text-gray-300">—</span>}</td>
+                            <td className="py-2 pl-3 text-right whitespace-nowrap">
+                              <button onClick={() => { if (!isOpen) ensureCopyDay(k); setOpenDay(isOpen ? null : k) }} className="mr-2 inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-gray-200 bg-white hover:bg-gray-50 text-gray-700 text-xs font-bold">{isOpen ? 'Fermer ▴' : 'Détail ▾'}</button>
+                              {(d.aVerser || 0) > 0 && (
+                                <button onClick={() => openVerser(k)} className="inline-flex items-center gap-1 px-4 py-1.5 rounded-lg bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold">Verser ▸</button>)}
+                            </td>
+                          </tr>
+                          {isOpen && (
+                            <tr className="bg-blue-50/40"><td colSpan={6} className="px-3 pb-4">
+                              {/* Historique des versements de la journée */}
+                              <div className="mt-1 mb-3 rounded-lg border border-gray-200 bg-white p-3">
+                                <p className="text-xs font-bold text-gray-700 mb-1">🧾 Versements de cette journée ({dayTransfers.length})</p>
+                                {!dayTransfers.length ? <p className="text-xs text-gray-500">Aucun versement pour cette journée.</p> : dayTransfers.map((t: any) => {
+                                  const st = STATUS[t.status] || { label: t.status, cls: 'bg-gray-100 text-gray-700' }
+                                  const dd = tDate(t)
+                                  return (
+                                    <div key={t.id} className="flex flex-wrap items-center gap-2 py-1 text-xs border-t border-gray-100 first:border-t-0">
+                                      <span className="text-gray-600 w-32">{dd.toLocaleDateString('fr-FR')} {dd.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</span>
+                                      <b className="tabular-nums">{fmtAmt(t.amount)} DH</b>
+                                      <span className="text-gray-500">{t.codParcelCount ? `${t.codParcelCount} exp.` : ''}</span>
+                                      <span className={`px-2 py-0.5 rounded-full font-bold ${st.cls}`}>{st.label}</span>
+                                      {t.status === 'rejected' && t.rejectionReason && <span className="text-red-700">Motif : {t.rejectionReason}</span>}
+                                      <button onClick={() => handlePrintVersement(t)} className="ml-auto inline-flex items-center gap-1 px-2 py-0.5 rounded bg-gray-100 hover:bg-gray-200 font-semibold"><Printer className="w-3 h-3" /> Imprimer</button>
+                                    </div>
+                                  )
+                                })}
+                              </div>
+                              {/* Détail des expéditions collectées ce jour-là */}
+                              <div className="rounded-lg border border-gray-200 bg-white overflow-x-auto">
+                                <table className="w-full text-xs">
+                                  <thead className="bg-gray-50 text-gray-600"><tr>
+                                    <th className="text-left py-1.5 px-2">N° EXP</th><th className="text-left py-1.5 px-2">Type</th><th className="text-left py-1.5 px-2">Créée</th>
+                                    <th className="text-left py-1.5 px-2">Encaissé par</th><th className="text-right py-1.5 px-2">Montant</th><th className="text-left py-1.5 px-2">Où est l'argent</th>
+                                  </tr></thead>
+                                  <tbody>
+                                    {detail === 'loading' || !detail ? (
+                                      <tr><td colSpan={6} className="py-3 px-2 text-center text-gray-500">⏳ Chargement des expéditions de la journée…</td></tr>
+                                    ) : [...detail.parcels].sort((a: any, b: any) => (toDateSafe(a.createdAt)?.getTime() || 0) - (toDateSafe(b.createdAt)?.getTime() || 0)).map((p: any) => {
+                                      const s = stateOf(p)
+                                      const cd = toDateSafe(p.createdAt)
+                                      return (
+                                        <tr key={p.id} className="border-t border-gray-100">
+                                          <td className="py-1 px-2 font-mono font-bold text-blue-700">{p.senderNic || p.trackingId || p.id}</td>
+                                          <td className="py-1 px-2">{p.portType === 'port_du' ? 'Port dû' : 'Port payé (guichet)'}</td>
+                                          <td className="py-1 px-2">{cd ? cd.toLocaleDateString('fr-FR') : '—'}</td>
+                                          <td className="py-1 px-2">{p.portCollectedBy || '—'}</td>
+                                          <td className="py-1 px-2 text-right tabular-nums font-semibold">{fmtAmt(p.price)} DH</td>
+                                          <td className="py-1 px-2"><span className={`px-2 py-0.5 rounded-full font-bold ${s.cls}`}>{s.label}</span></td>
+                                        </tr>
+                                      )
+                                    })}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </td></tr>
+                          )}
+                        </Fragment>)
+                      })}
+                    </tbody>
+                    <tfoot><tr className="font-black">
+                      <td className="py-2 pr-3">Total</td>
+                      <td className="py-2 px-3 text-right tabular-nums text-gray-800">{fmtAmt(totalCollecte)} DH</td>
+                      <td className="py-2 px-3 text-right tabular-nums text-emerald-700">{fmtAmt(totalVerse)} DH</td>
+                      <td className="py-2 px-3 text-right tabular-nums text-violet-800">{fmtAmt(totalAVerser)} DH</td>
+                      <td className="py-2 px-3 text-right tabular-nums text-orange-700">{fmtAmt(totalNonRecu)} DH</td>
+                      <td></td>
+                    </tr></tfoot>
+                  </table>
+                  )}
+                  <p className="mt-2 text-[11px] text-gray-500">📥 Collecté = toutes les entrées de la journée (ports dus encaissés + ports payés ramassés au guichet). « Pas encore reçu » : encore chez le chef d'exploitation ou les livreurs ; ils passent « dans ma caisse » (et deviennent versables) quand vous les recevez. « Détail » : expéditions de la journée et versements déjà faits.</p>
+                </div>
+              )}
+          </div>
+
+          {/* Historique */}
+          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
+            <div className="p-4 border-b border-gray-200 flex flex-wrap items-center gap-2">
+              <h3 className="font-bold text-gray-900 flex-1">Historique des versements</h3>
+              {([['all', 'Tous'], ['pending', 'En attente'], ['confirmed', 'Validés'], ['rejected', 'Refusés']] as const).map(([k, l]) => (
+                <button key={k} onClick={() => setHistFilter(k)}
+                  className={`px-3 py-1 rounded-full text-xs font-bold border ${histFilter === k ? 'bg-blue-600 border-blue-600 text-white' : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'}`}>{l}</button>
+              ))}
+            </div>
+            {!hist.length ? <p className="text-center py-8 text-gray-500">Aucun versement</p> : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="bg-gray-50 border-b border-gray-200 text-xs text-gray-600"><tr>
+                    <th className="text-left py-2 px-3">Envoyé le</th><th className="text-right py-2 px-3">Montant</th><th className="text-left py-2 px-3">Journée / note</th>
+                    <th className="text-left py-2 px-3">Statut</th><th className="text-center py-2 px-3"></th>
+                  </tr></thead>
+                  <tbody>
+                    {hist.map((t: any) => {
+                      const st = STATUS[t.status] || { label: t.status, cls: 'bg-gray-100 text-gray-700' }
+                      const d = tDate(t)
+                      return (
+                        <tr key={t.id} className="border-b border-gray-100">
+                          <td className="py-2 px-3 text-gray-700 whitespace-nowrap">{d.toLocaleDateString('fr-FR')} {d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</td>
+                          <td className="py-2 px-3 text-right font-bold tabular-nums">{fmtAmt(t.amount)} DH
+                            {transferEcart(t) > 0 && <div className="text-[11px] font-semibold text-red-700">envoyé {fmtAmt(transferSent(t))} · écart {fmtAmt(transferEcart(t))}</div>}
+                            {t.kind === 'regul' && <div className="text-[11px] font-semibold text-violet-700">Régularisation</div>}
+                          </td>
+                          <td className="py-2 px-3 text-gray-600">{t.note || '—'}{t.codParcelCount ? <span className="text-xs text-gray-400"> · {t.codParcelCount} exp.</span> : null}</td>
+                          <td className="py-2 px-3">
+                            <span className={`inline-flex px-2 py-0.5 rounded-full text-xs font-bold ${st.cls}`}>{st.label}</span>
+                            {t.status === 'confirmed' && t.confirmedBy && <div className="text-[11px] text-gray-500 mt-0.5">par {t.confirmedBy}</div>}
+                            {t.status === 'rejected' && <div className="text-[11px] text-red-700 mt-0.5">{t.rejectionReason ? `Motif : ${t.rejectionReason}` : ''}{t.rejectedBy ? ` (${t.rejectedBy})` : ''}</div>}
+                          </td>
+                          <td className="py-2 px-3 text-center">
+                            <button onClick={() => handlePrintVersement(t)} className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-gray-100 hover:bg-gray-200 text-gray-700 text-xs font-semibold" title="Imprimer les expéditions de ce versement">
+                              <Printer className="w-3.5 h-3.5" /> Imprimer
+                            </button>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Fenêtre « Verser » : même formulaire et mêmes contrôles qu'avant */}
+          {verserOpen && (
+          <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" onClick={() => !sendingVersement && setVerserOpen(false)}>
+          <div className="bg-white rounded-2xl max-w-lg w-full max-h-[90vh] overflow-y-auto p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2">
+                <Send className="w-5 h-5 text-blue-600" />
+                Verser les collectes du {fmtKeyFr(selectedVersementDay)}
+              </h3>
+              <button onClick={() => setVerserOpen(false)} disabled={sendingVersement} className="text-gray-400 hover:text-gray-600"><X className="w-5 h-5" /></button>
+            </div>
 
             <div className="space-y-4">
+              {(!copySel || copySel === 'loading') && <p className="text-sm font-semibold text-amber-700">⏳ Chargement des expéditions de la journée…</p>}
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Journée de collecte à verser
-                </label>
-                <select value={selectedVersementDay} onChange={e => { setVersementDay(e.target.value); setVersementForm(f => ({ ...f, amount: "" })) }}
-                  className="w-full px-4 py-2 border border-gray-200 rounded-lg focus:outline-none focus:border-blue-500 text-sm font-semibold">
-                  {verserJour.days.map(d => <option key={d.key} value={d.key}>Collectes du {d.label}{d.aVerser > 0 ? ` — ${fmtAmt(d.aVerser)} DH à verser` : ' — déjà versé ✅'}</option>)}
-                </select>
-                <div className="mt-3 rounded-lg bg-blue-50 border border-blue-100 p-3 text-sm">
+                <div className="rounded-lg bg-blue-50 border border-blue-100 p-3 text-sm">
                   {activeException && (
                     <div className="mb-2 rounded-md bg-amber-100 border border-amber-300 px-2 py-1.5 text-xs font-bold text-amber-900">
                       ⭐ Versement exceptionnel autorisé par l'admin (une seule fois) : <span className="tabular-nums">{fmtAmt(Number(activeException.amount) || 0)} DH</span> au lieu de {fmtAmt(verserJour.montant)} DH
@@ -2543,143 +2806,11 @@ Le reste sera le ${docLabel} (total inchangé).`)
               </button>
             </div>
           </div>
-
-          {/* Liste des versements en attente */}
-          <div className="bg-white border border-gray-200 rounded-xl p-6">
-            <h3 className="text-lg font-bold text-gray-900 mb-4">Versements en attente</h3>
-
-            {adminTransfers.filter((t: any) => t.status === 'pending').length === 0 ? (
-              <div className="text-center py-8 text-gray-500">
-                Aucun versement en attente
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {adminTransfers
-                  .filter((t: any) => t.status === 'pending')
-                  .map((transfer: any) => (
-                    <div
-                      key={transfer.id}
-                      className="border border-amber-200 bg-amber-50 rounded-lg p-4 flex items-center justify-between"
-                    >
-                      <div>
-                        <div className="font-semibold text-gray-900">
-                          {fmtAmt(transfer.amount)} DH
-                        </div>
-                        <div className="text-sm text-gray-600 mt-1">{transfer.note}</div>
-                        <div className="text-xs text-gray-500 mt-1">
-                          {transfer.createdAt?.toDate?.()?.toLocaleDateString('fr-FR', {
-                            day: '2-digit',
-                            month: '2-digit',
-                            year: 'numeric',
-                            hour: '2-digit',
-                            minute: '2-digit',
-                          })}
-                        </div>
-                      </div>
-                      <span className="px-3 py-1 rounded-full bg-amber-100 text-amber-700 text-xs font-semibold">
-                        En attente
-                      </span>
-                    </div>
-                  ))}
-              </div>
-            )}
           </div>
+          )}
         </div>
-      )}
-
-      {activeTab === 'historique' && (
-        <div className="space-y-4">
-          {/* Filtre date */}
-          <DateFilter
-            value={datePresetUi}
-            onChange={handleDatePresetChange}
-            from={dateFromUi}
-            onFromChange={setDateFrom}
-            to={dateToUi}
-            onToChange={setDateTo}
-            tone="blue"
-            operationalMode
-            operationalDay={operationalDayUi}
-            onOperationalDayChange={setOperationalDay}
-          />
-
-          {/* Historique */}
-          <div className="bg-white border border-gray-200 rounded-xl overflow-hidden">
-            <div className="p-4 border-b border-gray-200">
-              <h3 className="text-lg font-bold text-gray-900">Historique des versements</h3>
-            </div>
-
-            {filteredVersements.length === 0 ? (
-              <div className="text-center py-12 text-gray-500">
-                <Clock className="w-12 h-12 text-gray-300 mx-auto mb-3" />
-                <p>Aucun versement trouvé</p>
-              </div>
-            ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead className="bg-gray-50 border-b border-gray-200">
-                    <tr>
-                      <th className="text-left py-3 px-4 font-semibold text-gray-700">Date</th>
-                      <th className="text-right py-3 px-4 font-semibold text-gray-700">Montant</th>
-                      <th className="text-left py-3 px-4 font-semibold text-gray-700">Note</th>
-                      <th className="text-center py-3 px-4 font-semibold text-gray-700">Status</th>
-                      <th className="text-left py-3 px-4 font-semibold text-gray-700">Validé par</th>
-                      <th className="text-center py-3 px-4 font-semibold text-gray-700">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredVersements.map((transfer: any) => {
-                      const statusConfig = {
-                        pending: { label: 'En attente', bg: 'bg-amber-100', text: 'text-amber-700' },
-                        confirmed: { label: 'Validé', bg: 'bg-green-100', text: 'text-green-700' },
-                        rejected: { label: 'Rejeté', bg: 'bg-red-100', text: 'text-red-700' },
-                      }[transfer.status] || { label: transfer.status, bg: 'bg-gray-100', text: 'text-gray-700' }
-
-                      return (
-                        <tr key={transfer.id} className="border-b border-gray-100 hover:bg-gray-50">
-                          <td className="py-3 px-4 text-gray-700">
-                            {transfer.createdAt?.toDate?.()?.toLocaleDateString('fr-FR', {
-                              day: '2-digit',
-                              month: '2-digit',
-                              year: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                          </td>
-                          <td className="py-3 px-4 text-right font-bold text-gray-900">
-                            {fmtAmt(transfer.amount)} DH
-                          </td>
-                          <td className="py-3 px-4 text-gray-600">
-                            {transfer.note || '-'}
-                          </td>
-                          <td className="py-3 px-4 text-center">
-                            <span className={`inline-flex px-2 py-1 rounded-full text-xs font-semibold ${statusConfig.bg} ${statusConfig.text}`}>
-                              {statusConfig.label}
-                            </span>
-                          </td>
-                          <td className="py-3 px-4 text-gray-600">
-                            {transfer.confirmedBy || '-'}
-                          </td>
-                          <td className="py-3 px-4 text-center">
-                            <button
-                              onClick={() => handlePrintVersement(transfer)}
-                              className="inline-flex items-center gap-1 px-3 py-1.5 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition text-xs font-semibold"
-                              title="Imprimer les expéditions de ce versement"
-                            >
-                              <Printer className="w-3.5 h-3.5" />
-                              Imprimer
-                            </button>
-                          </td>
-                        </tr>
-                      )
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
+        )
+      })()}
 
       {/* Modal retard */}
       {delayModal && (

@@ -46,22 +46,30 @@ export default function AgentPortsEnCompteTab({ allParcels, profile }: Props) {
 
   const myCity = profile?.city || ''
 
-  // 💼 Chargement DÉDIÉ de tous les ports en compte de l'agence (voir getAgencyPortEnCompteParcels) :
+  // 💼 Chargement DÉDIÉ des ports en compte de l'agence (voir getAgencyPortEnCompteParcels) :
   // la liste temps réel de la page (allParcels) est plafonnée et exclut les archivés, elle ne sert
   // plus qu'à superposer les dernières modifications.
+  // ⚡ Lot 4 : seulement la période choisie (Du / Au), version allégée ; sans date = tout l'historique.
   const [loadedParcels, setLoadedParcels] = useState<any[] | null>(null)
   const [loadingPEC, setLoadingPEC] = useState(false)
   const [reloadPEC, setReloadPEC] = useState(0)
   useEffect(() => {
     if (!myCity) return
+    const isYmd = (s: string) => /^\d{4}-\d{2}-\d{2}$/.test(s)
+    if ((filterDateDebut && !isYmd(filterDateDebut)) || (filterDateFin && !isYmd(filterDateFin))) return // saisie en cours
     let cancelled = false
-    setLoadingPEC(true)
-    getAgencyPortEnCompteParcels(myCity)
-      .then(docs => { if (!cancelled) setLoadedParcels(docs) })
-      .catch(err => console.error('Ports en compte - chargement:', err))
-      .finally(() => { if (!cancelled) setLoadingPEC(false) })
-    return () => { cancelled = true }
-  }, [myCity, reloadPEC])
+    const timer = setTimeout(() => {
+      setLoadingPEC(true)
+      getAgencyPortEnCompteParcels(myCity, {
+        from: filterDateDebut ? new Date(filterDateDebut + 'T00:00:00') : null,
+        to: filterDateFin ? new Date(filterDateFin + 'T23:59:59.999') : null,
+      })
+        .then(docs => { if (!cancelled) setLoadedParcels(docs) })
+        .catch(err => console.error('Ports en compte - chargement:', err))
+        .finally(() => { if (!cancelled) setLoadingPEC(false) })
+    }, 400)
+    return () => { cancelled = true; clearTimeout(timer) }
+  }, [myCity, reloadPEC, filterDateDebut, filterDateFin])
 
   const sourceParcels = useMemo(() => {
     if (!loadedParcels) return allParcels

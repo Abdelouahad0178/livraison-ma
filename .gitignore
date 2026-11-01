@@ -25,3 +25,8 @@ scripts/*.bak*.json
 .cursor/
 .windsurf/
 /0
+
+# Captures d'écran (peuvent montrer des noms / téléphones de clients) : restent sur le PC
+scripts/_*.png
+Capture*.PNG
+Capture*.png

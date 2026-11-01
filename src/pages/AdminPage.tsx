@@ -101,6 +101,7 @@ const AdminTariffsTab = lazy(() => import('./admin/tabs/AdminTariffsTab'))
 const AdminExportsTab = lazy(() => import('./admin/tabs/AdminExportsTab'))
 const AdminArchivageTab = lazy(() => import('./admin/tabs/AdminArchivageTab'))
 const AdminControleurTab = lazy(() => import('./admin/tabs/AdminControleurTab'))
+const AdminEnGareTab = lazy(() => import('./admin/tabs/AdminEnGareTab'))
 const AdminPortAgenciesTab = lazy(() => import('./admin/tabs/AdminPortAgenciesTab'))
 const AdminCodAgenciesTab = lazy(() => import('./admin/tabs/AdminCodAgenciesTab'))
 const AdminLostParcelsTab = lazy(() => import('./admin/tabs/AdminLostParcelsTab'))
@@ -665,12 +666,9 @@ export default function AdminPage() {
       adminFilteredPage,
     })
 
-    if (isSearchActive) {
-      // Mode recherche : on utilise searchParcels - GARDER liveParcels/moreParcels pour éviter l'affichage à 0
-      console.warn(`❌ BLOQUÉ: Mode recherche actif - pas de rechargement`)
-      setLoading(false)
-      return () => {}
-    }
+    // ⚡ (29/10/2026) La recherche ne coupe PLUS le chargement de la période : avant, taper un N° EXP arrêtait
+    // l'écoute, et vider le champ RELISAIT toute la période (« Ce mois » : 31 à 135 Mo, plusieurs secondes bloquées).
+    // La liste chargée reste donc la même (et à jour) pendant et après la recherche.
 
     // ⚡ Si rechargement automatique désactivé → ne rien charger
     if (!autoReloadEnabled) {
@@ -840,7 +838,7 @@ export default function AdminPage() {
 
       return () => unsubParcels()
     }
-  }, [isSearchActive, autoReloadEnabled, loadPreset, dateFrom, dateTo, operationalDayFormatted, cityFilter, filteredPageForQuery])
+  }, [autoReloadEnabled, loadPreset, dateFrom, dateTo, operationalDayFormatted, cityFilter, filteredPageForQuery])
 
   // 🔄 Écouter les mises à jour de prix depuis d'autres pages (ex: Facturier)
   useEffect(() => {
@@ -1316,15 +1314,33 @@ export default function AdminPage() {
     const pDate = (p: any) => p.createdAt?.toDate ? p.createdAt.toDate() : new Date(p.createdAt || 0)
     const eDate = (e: any) => e.createdAt?.toDate ? e.createdAt.toDate() : new Date(e.createdAt || 0)
     const periodEntries = filterByDate(caisseEntries, adminDatePreset, adminDateFrom, adminDateTo, eDate, operationalDay)
-    if (!Array.isArray(periodEntries)) return []
+    if (!Array.isArray(periodParcels) || !Array.isArray(periodEntries)) return []
+    // ⚡ Calculé seulement quand l'onglet Activité est affiché (seul utilisateur de ces chiffres)
+    if (mainTab !== 'activity') return []
+    // ⚡ (29/10/2026) Expéditions rangées UNE fois par utilisateur (agent, agent destination, chauffeur, livreur) :
+    // avant, 4 parcours des ~18 000 expéditions de la période PAR utilisateur (≈ 7 s par recherche sur « Ce mois »).
+    // Mêmes listes, même ordre (ordre de periodParcels conservé dans chaque groupe).
+    const EMPTY: any[] = []
+    const groupBy = (key: string) => {
+      const m = new Map<any, any[]>()
+      for (const p of periodParcels) {
+        const k = p?.[key]
+        if (k === undefined || k === null) continue
+        const list = m.get(k)
+        if (list) list.push(p); else m.set(k, [p])
+      }
+      return m
+    }
+    const byAgent = groupBy('agentId'), byDestAgent = groupBy('destinationAgentId')
+    const byChauffeur = groupBy('chauffeurId'), byDriver = groupBy('deliveryDriverId')
     return users
       .filter((u: any) => isAgencyStaff(u.role) || ['chauffeur','livreur','caissier'].includes(u.role))
       .filter((u: any) => matchesActivityRole(activityRoleFilter, u.role))
       .map((u: any) => {
-        const created    = periodParcels.filter((p: any) => p.agentId === u.id && (u.role === 'aide_agent' || p.agentRole !== 'aide_agent'))
-        const claimed    = periodParcels.filter((p: any) => p.destinationAgentId === u.id)
-        const transports = periodParcels.filter((p: any) => p.chauffeurId === u.id)
-        const deliveries = periodParcels.filter((p: any) => p.deliveryDriverId === u.id)
+        const created    = (byAgent.get(u.id) || EMPTY).filter((p: any) => u.role === 'aide_agent' || p.agentRole !== 'aide_agent')
+        const claimed    = byDestAgent.get(u.id) || EMPTY
+        const transports = byChauffeur.get(u.id) || EMPTY
+        const deliveries = byDriver.get(u.id) || EMPTY
         const myParcels  = [...new Map([...created, ...claimed, ...transports, ...deliveries].map((p: any) => [p.id, p])).values()]
         const myEntries  = periodEntries.filter((e: any) => e.cashierId === u.id || e.agentId === u.id)
         // Agent fields
@@ -1364,7 +1380,7 @@ export default function AdminPage() {
         }
       })
       .sort((a, b) => (b.parcels.length || 0) - (a.parcels.length || 0))
-  }, [periodParcels, caisseEntries, driverPortDuTxs, users, activityRoleFilter, adminDatePreset, adminDateFrom, adminDateTo])
+  }, [periodParcels, caisseEntries, driverPortDuTxs, users, activityRoleFilter, adminDatePreset, adminDateFrom, adminDateTo, mainTab])
 
   const agencyStats = useMemo(() => {
     if (!Array.isArray(periodParcels) || !Array.isArray(users)) return []
@@ -1466,6 +1482,8 @@ export default function AdminPage() {
     debounceMs: ADMIN_SEARCH_CONFIG.debounceMs,
     limit: ADMIN_SEARCH_CONFIG.limit,
     shouldSearch: shouldTriggerSearch, // 7 chiffres / 3 lettres avant toute recherche
+    // ⚡ N° EXP / code (lettres-chiffres, 5 caractères ou plus) : `filtered` ci-dessous n'utilise jamais Fuse pour ces termes
+    skipQuery: (q: string) => /^[0-9A-Z]+$/.test(q.trim().toUpperCase()) && q.trim().length >= 5,
   })
 
   // ⏎ Entrée dans la zone de recherche : recherche immédiate (N° EXP de moins de 7 chiffres)
@@ -1483,6 +1501,31 @@ export default function AdminPage() {
 
   // 🗄️ Inclure les archives dans la recherche
   const [includeArchived, setIncludeArchived] = useState(false)
+
+  // 🔄 En QUITTANT l'onglet Expéditions (ex. retour à l'Accueil), ses filtres reviennent à l'état normal : au retour,
+  // « Tout » et les 50 expéditions les plus récentes (demande du 25/10/2026). Les filtres propres aux autres onglets
+  // (COD / Port par agence, Utilisateurs…) ne sont pas touchés.
+  const prevMainTabRef = useRef(mainTab)
+  useEffect(() => {
+    const prev = prevMainTabRef.current
+    prevMainTabRef.current = mainTab
+    if (prev !== 'expeditions' || mainTab === 'expeditions') return
+    setAdminDatePreset('all')
+    setDateFromInput('')
+    setDateToInput('')
+    setOperationalDayRaw(getCurrentOperationalDay())
+    setCityFilter('Toutes')
+    setDriverFilter('Tous')
+    setStatusFilter([])
+    setServiceTypeFilter([])
+    setPortTypeFilter([])
+    setSearch('')
+    setSearchScope('all')
+    setIncludeArchived(false)
+    setServerSearchResults(null)
+    setIsSearchActive(false)
+    setDisplayLimit(DISPLAY_LIMIT)
+  }, [mainTab]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ⚡ Détecter si recherche active - MAIS sans charger 2000 colis
   // On garde isSearchActive pour la logique, mais loadLimit reste à 500
@@ -1892,7 +1935,7 @@ export default function AdminPage() {
               </button>
               <span className="text-gray-200 font-light">/</span>
               <span className="text-sm font-bold text-blue-600">
-                {{ expeditions:'Expéditions', doublons:'Doublons', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', exports:'Exports', caisse:'Caisse', versements:'Versements Admin', invoices:'Facturation', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires', controleur:'Rapports du Contrôleur', cod_agencies:'COD par agence', port_agencies:'Port par agence', archivage:'Archives', clients:'Clients', banque:'Banque RETOUR FOND', permissions:'Permissions' }[mainTab] || mainTab}
+                {{ expeditions:'Expéditions', doublons:'Doublons', cod:'RETOUR FOND', users:'Utilisateurs', activity:'Activité', agencies:'Agences', alerts:'Alertes', tariffs:'Tarifs', returns:'Retours', lostparcels:'Colis perdus', exports:'Exports', caisse:'Caisse', versements:'Versements Admin', invoices:'Facturation', employees:'Dossiers RH', reglements:'Règlements', notes:'Notes agents', utilities:'Utilitaires', controleur:'Rapports du Contrôleur', en_gare:'En gare', cod_agencies:'COD par agence', port_agencies:'Port par agence', archivage:'Archives', clients:'Clients', banque:'Banque RETOUR FOND', permissions:'Permissions' }[mainTab] || mainTab}
               </span>
             </div>
           )}
@@ -1909,8 +1952,8 @@ export default function AdminPage() {
                 { key: 'doublons',    label: '⚠️ Doublons',         icon: AlertTriangle },
                 { key: 'cod_agencies', label: '💰 COD par agence',   icon: Wallet    },
                 { key: 'port_agencies', label: '📮 Port par agence', icon: Building2 },
-                { key: 'controleur',  label: '🤖 Rapports du Contrôleur', icon: AlertTriangle },
-                { key: 'archivage',   label: '🗄️ Archives',          icon: Archive   },
+                { key: 'en_gare',     label: '🏬 En gare',           icon: Package   },
+                { key: 'controleur',  label: '🤖 Rapports du Contrôleur', icon: AlertTriangle },                { key: 'archivage',   label: '🗄️ Archives',          icon: Archive   },
                 { key: 'users',       label: 'Utilisateurs',         icon: Users     },
                 { key: 'activity',    label: 'Activité',             icon: BarChart2 },
                 { key: 'agencies',    label: 'Agences',              icon: Building2 },
@@ -2467,13 +2510,19 @@ export default function AdminPage() {
           </Suspense>
         )}
 
+        {/* TAB: 🏬 EN GARE (ce qui reste en gare dans chaque ville) */}
+        {mainTab === 'en_gare' && (
+          <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
+            <AdminEnGareTab />
+          </Suspense>
+        )}
+
         {/* TAB: 🤖 RAPPORTS DU CONTRÔLEUR */}
         {mainTab === 'controleur' && (
           <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>
             <AdminControleurTab />
           </Suspense>
         )}
-
         {/* TAB: ARCHIVAGE */}
         {mainTab === 'archivage' && (
           <Suspense fallback={<div className="mt-4 h-96 rounded-2xl border border-gray-100 bg-white animate-pulse" />}>

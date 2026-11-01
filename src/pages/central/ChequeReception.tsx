@@ -110,10 +110,18 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
   const expectedTotal = members.reduce((s, m) => s + docAmountOf(m), 0)
   const total = rows.reduce((s, r) => s + (parseFloat(String(r.montant).replace(',', '.')) || 0), 0)
   const diff = Math.round((total - expectedTotal) * 100) / 100
-  // ⚠️ Chèque reçu INFÉRIEUR au montant attendu (une seule expédition, COD pas déjà mixte) : le reste a pu être payé en espèces
-  const canSignalCash = !grouped && diff <= -0.01 && total > 0 && parcel?.codMixed !== true
-  const [cashRest, setCashRest] = useState(false)
-  const [cashNote, setCashNote] = useState('')
+  // ⚠️ Chèque reçu INFÉRIEUR au montant attendu (COD pas déjà mixte) : le reste a pu être payé en espèces.
+  // 🔗 (27/10/2026) Aussi pour un CHÈQUE GROUPÉ (plusieurs expéditions payées par un chèque + le reste en espèces).
+  const canSignalCash = diff <= -0.01 && total > 0 && (grouped || parcel?.codMixed !== true)
+  // 🔁 Fenêtre rouverte après enregistrement : le reste en espèces déjà signalé est réaffiché (case, montant, remarque)
+  const savedCash = parcel?.codDocMismatch === true && Number(parcel?.codDocMismatchCash) > 0 ? Number(parcel.codDocMismatchCash) : 0
+  const [cashRest, setCashRest] = useState(savedCash > 0)
+  const [cashNote, setCashNote] = useState(savedCash > 0 ? String(parcel?.codDocMismatchNote || '') : '')
+  // 💵 Montant payé en espèces : prérempli avec le reste (attendu − chèque), modifiable
+  const [cashInput, setCashInput] = useState(savedCash > 0 ? String(savedCash) : '')
+  const cashDefault = Math.round(-diff * 100) / 100
+  const cashAmount = cashInput.trim() ? (parseFloat(cashInput.replace(',', '.')) || 0) : cashDefault
+  const cashGap = Math.round((total + cashAmount - expectedTotal) * 100) / 100
   const set = (i: number, patch: Partial<Row>) => setRows(rs => rs.map((r, k) => (k === i ? { ...r, ...patch } : r)))
   // 🔗 Expéditeur écrit autrement / différent : confirmation avant de l'ajouter au chèque (plus de refus — 24/10/2026)
   const confirmOther = (c: any) => !c?._otherSender || confirm(
@@ -139,21 +147,30 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
       if (!(parseFloat(String(r.montant).replace(',', '.')) > 0)) return setError(`Ligne ${n} : montant invalide.`)
     }
     const signal = canSignalCash && cashRest
+    if (signal && !(cashAmount > 0)) return setError('Montant payé en espèces invalide.')
     if (expectedTotal > 0 && Math.abs(diff) >= 0.01 && !signal
       && !confirm(`Le total saisi (${money(total)} DH) est différent du montant attendu (${money(expectedTotal)} DH${grouped ? ` pour ${members.length} expéditions` : ''}).\n\nEnregistrer quand même ?`)) return
+    if (signal && Math.abs(cashGap) >= 0.01
+      && !confirm(`Chèque ${money(total)} DH + espèces ${money(cashAmount)} DH = ${money(total + cashAmount)} DH, différent du montant attendu (${money(expectedTotal)} DH).\n\nEnregistrer quand même ?`)) return
     setSaving(true)
     try {
       await onSave(rows.map(r => ({
         type: r.type, numero: r.numero.trim(), banque: r.banque.trim().toUpperCase(),
         montant: parseFloat(String(r.montant).replace(',', '.')) || 0, echeance: r.echeance,
       })), point, grouped ? members : undefined,
-      signal ? { cash: Math.round(-diff * 100) / 100, expected: expectedTotal, received: total, note: cashNote.trim() } : undefined)
+      signal ? { cash: Math.round(cashAmount * 100) / 100, expected: expectedTotal, received: total, note: cashNote.trim() } : undefined)
     } catch (e: any) {
       setError(e?.message || 'Erreur lors de l\'enregistrement.')
     } finally {
       setSaving(false)
     }
   }
+
+  // 🖨️ Résumé de l'opération (tel que saisi à l'écran) : expéditions, chèque(s) / traite(s), espèces, totaux
+  const printSummary = () => printChequeOperationSummary({
+    members, rows: rows.map(r => ({ type: r.type, numero: r.numero.trim(), banque: r.banque.trim().toUpperCase(), montant: parseFloat(String(r.montant).replace(',', '.')) || 0 })),
+    grouped: grouped && members.length > 1, expectedTotal, cash: canSignalCash && cashRest ? cashAmount : 0, note: cashRest ? cashNote.trim() : '',
+  })
 
   const inp = 'w-full px-2.5 py-2 rounded-xl border-2 border-slate-200 focus:border-purple-400 focus:outline-none text-sm font-semibold'
   return (
@@ -162,9 +179,17 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
         <div className="px-5 py-4 border-b border-slate-100 flex items-start gap-3">
           <div className="flex-1 min-w-0">
             <h3 className="text-lg font-black text-slate-800">🧾 Données du chèque / de la traite</h3>
-            <p className="text-xs text-slate-500">
-              N° EXP <b>{nicOf(parcel)}</b> · {senderNameOf(parcel) || '—'} → {parcel?.receiver?.name || '—'} · montant attendu <b className="text-emerald-700">{money(expected)} DH</b>
-            </p>
+            {/* 🔗 Chèque groupé : TOUS les N° EXP et le montant TOTAL attendu (27/10/2026) */}
+            {grouped && members.length > 1 ? (
+              <p className="text-xs text-slate-500">
+                {members.length} expéditions · N° EXP <b>{members.map(m => nicOf(m)).join(', ')}</b> · {senderNameOf(parcel) || '—'}
+                {' '}· montant attendu total <b className="text-emerald-700">{money(expectedTotal)} DH</b>
+              </p>
+            ) : (
+              <p className="text-xs text-slate-500">
+                N° EXP <b>{nicOf(parcel)}</b> · {senderNameOf(parcel) || '—'} → {parcel?.receiver?.name || '—'} · montant attendu <b className="text-emerald-700">{money(expected)} DH</b>
+              </p>
+            )}
           </div>
           <button type="button" onClick={onClose} disabled={saving} className="p-2 rounded-xl hover:bg-slate-100 text-slate-500"><X className="w-5 h-5" /></button>
         </div>
@@ -268,12 +293,24 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
             <div className="rounded-xl border-2 border-amber-300 bg-amber-50 px-3 py-2.5 space-y-2">
               <label className="flex items-start gap-2 text-sm font-bold text-amber-900 cursor-pointer">
                 <input type="checkbox" className="mt-0.5 w-4 h-4 accent-amber-600" checked={cashRest} onChange={e => setCashRest(e.target.checked)} />
-                <span>💵 Le reste ({money(-diff)} DH) a été payé <u>en espèces</u> par le destinataire — signaler à l'admin
-                  <span className="block text-[11px] font-semibold text-amber-700">Le chèque est enregistré pour {money(total)} DH ; l'admin corrigera le COD en « chèque + espèces ».</span>
+                <span>💵 Le reste ({money(-diff)} DH) a été payé <u>en espèces</u>{grouped ? ` pour ces ${members.length} expéditions` : ' par le destinataire'} — signaler à l'admin
+                  <span className="block text-[11px] font-semibold text-amber-700">Le chèque est enregistré pour {money(total)} DH ; l'admin corrigera le COD en « chèque + espèces »{grouped ? ' (signalement sur chaque expédition du chèque, avec la liste des N° EXP)' : ''}.</span>
                 </span>
               </label>
               {cashRest && (
-                <input className={inp} value={cashNote} onChange={e => setCashNote(e.target.value)} placeholder="Remarque (facultatif) : qui a reçu les espèces, etc." />
+                <>
+                  <div className="grid grid-cols-1 sm:grid-cols-[220px_1fr] gap-2 items-end">
+                    <label className="text-[11px] font-bold text-amber-900">Montant payé en espèces (DH) *
+                      <input className={inp} inputMode="decimal" value={cashInput} placeholder={money(cashDefault)}
+                        onChange={e => setCashInput(e.target.value)} />
+                    </label>
+                    <p className={`text-xs font-bold pb-2 ${Math.abs(cashGap) < 0.01 ? 'text-emerald-700' : 'text-red-700'}`}>
+                      Chèque {money(total)} + espèces {money(cashAmount)} = {money(total + cashAmount)} DH
+                      {Math.abs(cashGap) < 0.01 ? ' ✓ égal au montant attendu' : ` — écart ${cashGap > 0 ? '+' : ''}${money(cashGap)} DH avec ${money(expectedTotal)} DH attendus`}
+                    </p>
+                  </div>
+                  <input className={inp} value={cashNote} onChange={e => setCashNote(e.target.value)} placeholder="Remarque (facultatif) : qui a reçu les espèces, etc." />
+                </>
               )}
             </div>
           )}
@@ -281,6 +318,10 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
         </div>
 
         <div className="px-5 py-4 border-t border-slate-100 flex flex-wrap justify-end gap-2">
+          <button type="button" onClick={printSummary} disabled={saving}
+            className="mr-auto px-4 py-2.5 rounded-xl bg-white border-2 border-slate-200 hover:bg-slate-50 text-slate-700 text-sm font-black flex items-center gap-2">
+            <Printer className="w-4 h-4" /> Imprimer le résumé
+          </button>
           <button type="button" onClick={onClose} disabled={saving} className="px-4 py-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-black">Annuler</button>
           {alreadyControlled && !grouped ? (
             <button type="button" onClick={() => submit(false)} disabled={saving}
@@ -303,6 +344,60 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
       </div>
     </div>
   )
+}
+
+/** 🖨️ Résumé d'une opération de chèque / traite (simple ou groupé, avec le reste en espèces) — A4 portrait. */
+export function printChequeOperationSummary(o: {
+  members: any[]
+  rows: { type: 'cheque' | 'traite'; numero: string; banque: string; montant: number }[]
+  grouped: boolean; expectedTotal: number; cash: number; note: string
+}) {
+  const docsTotal = o.rows.reduce((s, r) => s + r.montant, 0)
+  const paid = docsTotal + o.cash
+  const gap = Math.round((paid - o.expectedTotal) * 100) / 100
+  const first = o.members[0] || {}
+  const expRows = o.members.map((m, i) => `<tr><td class="c">${i + 1}</td><td class="b">${esc(nicOf(m))}</td><td>${esc(fmtD(m.createdAt))}</td>
+    <td>${esc(senderNameOf(m))}</td><td>${esc(m.receiver?.name || '')}<br><small>${esc(m.destinationCity || m.receiver?.city || '')}</small></td>
+    <td class="r b">${money(docAmountOf(m))}</td></tr>`).join('')
+  const docRows = o.rows.map(r => `<tr><td>${r.type === 'traite' ? 'Traite' : 'Chèque'}${o.grouped ? ' groupé' : ''}</td><td class="b">${esc(r.numero)}</td><td>${esc(r.banque)}</td><td class="r b">${money(r.montant)}</td></tr>`).join('')
+  const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Résumé opération chèque — ${esc(o.members.map(nicOf).join(', '))}</title><style>
+    *{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
+    @page{size:A4 portrait;margin:12mm}
+    body{font-family:Arial,sans-serif;color:#111;font-size:12px;margin:0}
+    .brand{display:flex;justify-content:space-between;align-items:flex-end;border-bottom:2px solid #4338ca;padding-bottom:6px;margin-bottom:12px}
+    .brand b{font-size:17px;color:#4338ca}.brand span{font-size:10px;color:#555}
+    h1{font-size:18px;margin:4px 0 10px}h2{font-size:13px;margin:14px 0 6px;color:#4338ca}
+    table{width:100%;border-collapse:collapse}th,td{border:1px solid #cbd5e1;padding:5px 6px;font-size:11px;vertical-align:top}
+    th{background:#eef2ff;text-align:left;font-size:10px;text-transform:uppercase}td small{color:#64748b}
+    .r{text-align:right}.c{text-align:center}.b{font-weight:bold}
+    tfoot td{font-weight:bold;background:#f8fafc}
+    .tot{margin-top:12px;border:2px solid #4338ca;border-radius:6px;padding:8px 10px;font-size:13px;line-height:1.7}
+    .ok{color:#047857}.ko{color:#b91c1c}.note{margin-top:8px;font-size:11px;color:#475569}
+    .sign{display:grid;grid-template-columns:1fr 1fr;gap:20px;margin-top:22px}.box{border:1px dashed #94a3b8;height:65px;margin-top:4px}
+  </style></head><body>
+    <div class="brand"><b>BG EXPRESS</b><span>Imprimé le ${new Date().toLocaleString('fr-MA', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' })}</span></div>
+    <h1>Résumé de l'opération — ${o.grouped ? `chèque groupé (${o.members.length} expéditions)` : 'chèque / traite'}${o.cash > 0 ? ' + espèces' : ''}</h1>
+    <div>Expéditeur : <b>${esc(senderNameOf(first))}</b> · Agence : <b>${esc(first.originCity || first.sender?.city || '')}</b></div>
+    <h2>Expéditions (${o.members.length})</h2>
+    <table><thead><tr><th>#</th><th>N° EXP</th><th>Date</th><th>Expéditeur</th><th>Destinataire</th><th class="r">Attendu (DH)</th></tr></thead>
+      <tbody>${expRows}</tbody><tfoot><tr><td colspan="5">TOTAL ATTENDU</td><td class="r">${money(o.expectedTotal)}</td></tr></tfoot></table>
+    <h2>Paiement</h2>
+    <table><thead><tr><th>Type</th><th>N°</th><th>Banque</th><th class="r">Montant (DH)</th></tr></thead>
+      <tbody>${docRows}<tr><td>Espèces${o.cash > 0 ? ' (reste)' : ''}</td><td>—</td><td>—</td><td class="r b">${money(o.cash)}</td></tr></tbody>
+      <tfoot><tr><td colspan="3">TOTAL PAYÉ</td><td class="r">${money(paid)}</td></tr></tfoot></table>
+    <div class="tot">
+      Chèque${o.rows.length > 1 ? 's / traites' : ''} : <b>${money(docsTotal)} DH</b> &nbsp;+&nbsp; Espèces : <b>${money(o.cash)} DH</b> &nbsp;=&nbsp; <b>${money(paid)} DH</b><br>
+      Montant attendu : <b>${money(o.expectedTotal)} DH</b> —
+      ${Math.abs(gap) < 0.01 ? '<b class="ok">✓ conforme</b>' : `<b class="ko">écart ${gap > 0 ? '+' : ''}${money(gap)} DH</b>`}
+    </div>
+    ${o.note ? `<div class="note">Remarque : ${esc(o.note)}</div>` : ''}
+    <div class="sign"><div><b>Encaisseur central</b><div class="box"></div></div><div><b>Client / remettant</b><div class="box"></div></div></div>
+    <script>window.onload=function(){window.print()}<\/script>
+  </body></html>`
+  const w = window.open('', '_blank')
+  if (!w) { alert('Autorisez les fenêtres pop-up pour imprimer le résumé.'); return }
+  w.document.write(html)
+  w.document.close()
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -347,6 +442,21 @@ export function printReceptionSheet(parcels: any[], profileName: string) {
       <td class="s">${esc(l.p.receiver?.name || '')}</td>
     </tr>`).join('') + Array.from({ length: Math.max(0, minRows - lines.length) }, () => `<tr class="empty">${'<td></td>'.repeat(withEch ? 7 : 6)}</tr>`).join('')
   const plural = lines.length > 1
+  // 💵 Reste payé en ESPÈCES signalé à l'encaisseur central (chèque + espèces) — une seule fois par chèque groupé
+  const cashSeen = new Set<string>()
+  const cashLines: { nics: string; amount: number }[] = []
+  parcels.forEach(p => {
+    const c = p?.codDocMismatch === true ? Number(p.codDocMismatchCash) || 0 : 0
+    if (c <= 0) return
+    const nics = Array.isArray(p.codDocMismatchGroupNics) && p.codDocMismatchGroupNics.length > 1 ? p.codDocMismatchGroupNics.join(', ') : nicOf(p)
+    if (cashSeen.has(nics)) return
+    cashSeen.add(nics)
+    cashLines.push({ nics, amount: c })
+  })
+  const cashTotal = cashLines.reduce((s, c) => s + c.amount, 0)
+  const cashHtml = cashLines.length ? `<table style="margin-top:8px"><thead><tr><th>Espèces (reste payé en espèces)</th><th>N° EXP</th><th>Montant (DH)</th></tr></thead>
+      <tbody>${cashLines.map(c => `<tr><td>Espèces</td><td class="s">${esc(c.nics)}</td><td class="r b">${money(c.amount)}</td></tr>`).join('')}</tbody>
+      <tfoot><tr><td colspan="2">TOTAL ESPÈCES — chèques / traites + espèces = ${money(total + cashTotal)} DH</td><td class="r">${money(cashTotal)}</td></tr></tfoot></table>` : ''
   const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Fiche de réception — ${esc(client)}</title><style>
     *{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
     @page{size:A4 portrait;margin:14mm 14mm}
@@ -381,6 +491,7 @@ export function printReceptionSheet(parcels: any[], profileName: string) {
       <tbody>${body}</tbody>
       <tfoot><tr><td colspan="3">TOTAL — ${lines.length} document${plural ? 's' : ''}</td><td class="r">${money(total)}</td><td colspan="${withEch ? 3 : 2}"></td></tr></tfoot>
     </table>
+    ${cashHtml}
     <div class="txt">
       <p>Déclare avoir reçu de la société BGEXPRESS ${plural ? 'les chèques et traites ci-dessus, correspondant aux expéditions mentionnées' : 'le chèque ci-dessus, correspondant à l\'expédition mentionnée'}.</p>
       <p>Je reconnais avoir vérifié les références ${plural ? 'des chèques et traites' : 'du chèque'} et en avoir pris possession en bon état.</p>

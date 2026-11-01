@@ -9,7 +9,8 @@ import { bumpPresence } from '../services/presenceCounters'
 import { CITIES, STATUSES } from './constants'
 import { daysAgoTimestamp } from './firestoreUtils'
 import { isCodMoneyBeforeStart } from '../utils/moneyFlow'
-import { isParcelVisibleInDestinationAgency } from './parcels'
+import { isParcelVisibleInDestinationAgency, isInReturnCircuit } from './parcels'
+import { deliveryStatusChangeBlock } from '../utils/agencyDeliveryAccess'
 
 // 🚉 Livreur-gare d'une ville (assignation auto « Livraison en gare »). Même requête qu'avant,
 // mise en cache 5 min par ville (et préchargée par le formulaire) : évite un aller-retour serveur
@@ -261,6 +262,42 @@ export async function getMoreDeliveryDriverParcels(
     console.error('getMoreDeliveryDriverParcels error:', error)
     return { docs: [], lastDocs, hasMore: false }
   }
+}
+
+/**
+ * 🚚 Assignation à un livreur + statut « En cours de livraison » en UNE écriture (transaction, expédition RELUE) — lot 3
+ * du diagnostic de la page chef d'agence (25/10/2026). Avant (assignation groupée) : deux écritures par expédition
+ * (assignDeliveryDriver puis updateParcelStatus), une erreur entre les deux laissait une expédition assignée sans statut.
+ * Mêmes contrôles que updateParcelStatus : agence autorisée à livrer (deliveryStatusChangeBlock), pas de retour.
+ */
+export async function assignDeliveryAndStart(parcelId: string, driverId: string, driverName: string,
+  extra: { deliverySectorId?: string; deliverySectorCode?: string; deliverySectorName?: string; deliveryAssignedBy?: string },
+  note: string, actor: { role?: string; realRole?: string; city?: string } | null) {
+  const ref = doc(db, 'parcels', parcelId)
+  await runTransaction(db, async tx => {
+    const snap = await tx.get(ref)
+    if (!snap.exists()) throw new Error('Expédition introuvable.')
+    const cur: any = snap.data()
+    const nic = cur.senderNic || cur.trackingId || parcelId
+    const block = actor ? deliveryStatusChangeBlock(actor as any, cur, 'En cours de livraison') : null
+    if (block) throw new Error(`${nic} : ${block}`)
+    if (isInReturnCircuit(cur)) throw new Error(`${nic} : expédition en retour, elle ne part pas en livraison.`)
+    const now = new Date().toISOString()
+    tx.update(ref, {
+      deliveryDriverId: driverId,
+      deliveryDriverName: driverName,
+      deliverySectorId: extra.deliverySectorId ?? null,
+      deliverySectorCode: extra.deliverySectorCode ?? '',
+      deliverySectorName: extra.deliverySectorName ?? '',
+      deliveryVehicleId: null,
+      deliveryVehicleLabel: '',
+      deliveryAssignedAt: now,
+      deliveryAssignedBy: extra.deliveryAssignedBy || '',
+      status: 'En cours de livraison',
+      history: arrayUnion({ status: 'En cours de livraison', timestamp: now, note }),
+    })
+  })
+  bumpPresence('updated')
 }
 
 export async function assignDeliveryDriver(parcelId: any, deliveryDriverId: any, deliveryDriverName: any, extra: any = {}) {

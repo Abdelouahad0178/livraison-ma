@@ -208,7 +208,10 @@ export function subscribeClientsByCity(
   callback: (rows: FirestoreRow[], fromCache: boolean) => void,
   onError: (err?: any) => void = () => {},
 ) {
-  const q = query(collection(db, 'clients'), where('city', '==', city))
+  // ⚡ Lot 4 (25/10/2026) : version allégée clientsLite (Cloud Function syncClientLite, sans les champs
+  // lastReceiver* jamais lus) — les fiches ne sont plus renvoyées à chaque expédition créée pour ce destinataire.
+  // Les destinataires créés par ce poste sont retenus à part (createdReceiverClients, parcels.ts) pendant ce délai.
+  const q = query(collection(db, 'clientsLite'), where('city', '==', city))
   let last: boolean | null = null
   return onSnapshot(q, { includeMetadataChanges: true }, snap => {
     // Métadonnées seules (écriture confirmée…) et même état cache / serveur : rien de nouveau

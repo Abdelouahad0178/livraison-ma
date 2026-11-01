@@ -4,10 +4,22 @@
       "collectionGroup": "parcels",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "originCity", "order": "ASCENDING" },
-        { "fieldPath": "portType", "order": "ASCENDING" },
-        { "fieldPath": "portStatus", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
+        {
+          "fieldPath": "originCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "portType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "portStatus",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
@@ -1225,6 +1237,42 @@
       "queryScope": "COLLECTION",
       "fields": [
         {
+          "fieldPath": "originCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "portType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcelsLite",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "destinationCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "portType",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcelsLite",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
           "fieldPath": "agentId",
           "order": "ASCENDING"
         },
@@ -1703,9 +1751,47 @@
           "order": "DESCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "parcelsLiteGone",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "cities",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "at",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcelsLite",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "destinationCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "wasReturned",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "returnedAt",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": [
+    {
+      "collectionGroup": "parcelsLiteGone",
+      "fieldPath": "expireAt",
+      "ttl": true,
+      "indexes": []
+    },
     {
       "collectionGroup": "parcels",
       "fieldPath": "history",

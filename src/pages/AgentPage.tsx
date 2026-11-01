@@ -22,7 +22,7 @@ import {
   subscribeAllParcelsWithArchives, loadMoreParcelsWithArchives,
 } from '../firebase/parcels'
 import { shouldTriggerSearch } from '../utils/searchUtils'
-import { agentProCanEditBon, isRestrictedAgentPro } from '../utils/agentProAccess'
+import { agentProCanEditBon, isRestrictedAgentPro, isFullParcelEditor } from '../utils/agentProAccess'
 import { canBulkLoadTransport } from '../utils/parcelBulkSelection'
 import { agencyCanDeliver, agencyCanTransport } from '../utils/agencyDeliveryAccess'
 import { agencyCanDeleteParcel, isAgencyDeletionRestricted } from '../utils/parcelDeletionAccess'
@@ -604,7 +604,9 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
     // cette période sont déjà chargées pour l'agence → recherche LOCALE (accents ignorés), sans interroger
     // toute la base. 🎯 Exception : N° EXP / téléphone / N° LMA (1 à 2 expéditions) — lus AUSSI directement
     // dans la base, pour trouver une expédition HORS de la période sans recharger quoi que ce soit.
-    if (datePreset !== 'all' && !showAllCities && !includeArchived) {
+    // ✏️ Compte « modification totale » (zahra, 29/10/2026) : recherche toujours dans toute la base, toutes dates
+    // (sa ville seule, sauf « Toutes les villes » ; archives seulement avec « Inclure archives »)
+    if (datePreset !== 'all' && !showAllCities && !includeArchived && !isFullParcelEditor(profile)) {
       setServerSearchResults(null)
       setIsSearching(false)
       const compact = query.replace(/[\s\-().]/g, '')
@@ -637,7 +639,10 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
     let cancelled = false
     setServerSearchResults(null)
     setIsSearching(true)
-    searchParcels(query, { limit: 50000, includeArchived, nameScope: searchScope, lite: USE_PARCELS_LITE })
+    // ⚡ zahra sur une période, « Ma ville » : recherche par début de nom plafonnée à 300 (comme ailleurs) — N° EXP,
+    // téléphone, N° LMA et nom complet restent exacts et sans plafond
+    const zahraPeriod = datePreset !== 'all' && !showAllCities && !includeArchived
+    searchParcels(query, { limit: zahraPeriod ? 300 : 50000, includeArchived, nameScope: searchScope, lite: USE_PARCELS_LITE })
       .then(results => {
         if (cancelled) return
         setServerSearchResults(results)
@@ -650,7 +655,7 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
         setIsSearching(false)
       })
     return () => { cancelled = true }
-  }, [debouncedSearch, includeArchived, searchScope, datePreset, showAllCities, profile?.city])
+  }, [debouncedSearch, includeArchived, searchScope, datePreset, showAllCities, profile?.city, profile?.uid])
 
   const [editingParcel, setEditingParcel] = useState<any>(null)
   const [editForm, setEditForm]         = useState<any>(null)
@@ -818,7 +823,7 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
           // (aller-retour chez Google, ≈ 0,4 s sur PC, davantage en 4G) retardait les onglets et tous les chargements ;
           // inutile : les règles Firestore lisent le document utilisateur, pas le contenu du jeton. Un refus d'accès
           // relance toujours sa propre actualisation du jeton (voir plus bas et dans chaque abonnement).
-          setProfile(data)
+          setProfile({ uid, ...data }) // uid : reconnaissance du compte « modification totale » (utils/agentProAccess)
         }
       },
       (err) => {
@@ -859,8 +864,11 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
   // }, [profile?.city])
 
   // ⭐ Charger les colis perdus pour le badge de notification
+  // ⚡ Lot 4 (25/10/2026) : DÉSACTIVÉ — l'onglet « Colis perdus » et son badge sont cachés pour tous les rôles ; cette
+  // lecture relisait TOUTE la collection lostParcels toutes les 5 min pour rien. À réactiver avec l'onglet.
+  const LOST_PARCELS_BADGE_ENABLED = false
   useEffect(() => {
-    if (!profile?.city) return
+    if (!LOST_PARCELS_BADGE_ENABLED || !profile?.city) return
 
     const loadLostParcels = async () => {
       try {
@@ -1272,8 +1280,11 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
           to: filterDateTo?.toLocaleString('fr-MA')
         })
       } else if (datePreset === 'day' && dateFrom) {
-        filterDateFrom = new Date(dateFrom + 'T00:00:00')
-        filterDateTo = new Date(dateFrom + 'T23:59:59')
+        // 🗓️ Lot 2 (25/10/2026) : JOURNÉE D'OPÉRATION (08:00 → 06:00 le lendemain), comme le filtre d'affichage (workDate).
+        // Avant : 00:00 → 23:59 calendaire — les expéditions saisies entre minuit et 6 h (même journée) n'étaient jamais lues.
+        const range = getOperationalDayRange(new Date(dateFrom + 'T12:00:00'))
+        filterDateFrom = range.start
+        filterDateTo = range.end
       } else {
         // 📦 « Récent » (ou « Jour précis » sans date choisie) : les 30 DERNIÈRES journées d'opération, chargées EN
         // ENTIER par le chargement jour par jour ci-dessous (journées passées gardées en mémoire, journée en cours en
@@ -1397,6 +1408,10 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
               console.log(`✅ [Chef d'agence] Chargement jour par jour terminé: ${loaded} colis (${slices.length} jours)`)
             } catch (err) {
               console.error('[Chef d\'agence] chargement jour par jour error:', err)
+              // ⚠️ Lot 2 (25/10/2026) : une journée non chargée = totaux INCOMPLETS → message visible (avant : console seule)
+              if (gen === agencyLoadGenRef.current) {
+                setMsg({ type: 'error', text: "⚠️ Certaines journées de la période n'ont pas pu être chargées (connexion) : les listes et les totaux sont incomplets. Rechargez la page (Ctrl+F5)." })
+              }
             } finally {
               if (gen === agencyLoadGenRef.current) {
                 flush()
@@ -1636,8 +1651,11 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
     }
   }
 
+  // ⚡ Lot 4 (25/10/2026) : écoute DÉSACTIVÉE — l'onglet « Modif. clients » et son badge sont cachés pour tous les rôles.
+  // À réactiver avec l'onglet (MOD_REQUESTS_ENABLED).
+  const MOD_REQUESTS_ENABLED = false
   useEffect(() => {
-    if (profile?.role !== 'chef_agence' || !profile?.city) {
+    if (!MOD_REQUESTS_ENABLED || profile?.role !== 'chef_agence' || !profile?.city) {
       setModRequests([])
       return
     }
@@ -2281,6 +2299,7 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
 
   const profileCity = profile?.city
   const profileRole = profile?.role
+  const searchAllDates = isFullParcelEditor(profile)
 
   // 🏬 « En gare - ville » : toutes les expéditions ARRIVÉES en attente (hors fenêtre de dates)
   // ⚡ Écoute démarrée seulement à la première ouverture de l'onglet Expéditions (seul utilisateur
@@ -2361,7 +2380,10 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
     // un colis trouvé par nom pouvait s'afficher hors de la période sélectionnée, ce qui ne
     // correspondait plus au contexte affiché (totaux, période) du reste de la page.
     // 🏬 « En gare » : même filtre de date que tous les autres livreurs (date de création / jour d'opération)
-    const dateFilteredData = filterByDate(sourceData, datePreset, dateFrom, dateTo, dateExtractor, operationalDay)
+    // ✏️ Compte « modification totale » (zahra) : les résultats de la recherche serveur ne sont pas limités à la période
+    const dateFilteredData = (searchAllDates && fSearch && serverSearchResults !== null)
+      ? sourceData
+      : filterByDate(sourceData, datePreset, dateFrom, dateTo, dateExtractor, operationalDay)
 
     // 🔍 Prédicat de recherche locale construit UNE fois par recalcul (champs normalisés en cache)
     const agentSearchMatch = (fSearch && serverSearchResults === null)
@@ -2499,7 +2521,7 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
     })
 
     return filtered
-  }, [parcelsTabKept, fAllDisplay, deferredParcelFilters, profileCity, profileRole, uid, fSearch, serverSearchResults, garePendingList, archiveSearchOnly])
+  }, [parcelsTabKept, fAllDisplay, deferredParcelFilters, profileCity, profileRole, uid, fSearch, serverSearchResults, garePendingList, archiveSearchOnly, searchAllDates])
 
   // 📊 Nombre d'expéditions affichées : UNE expédition = UNE ligne = compte 1.
   // ⚠️ Avant, pour la direction « Tous », un colis LOCAL (ville d'expédition = ville de destination) était
@@ -2628,12 +2650,14 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
     (parcel?.agentRole === 'aide_agent' || parcel?.agentRole === 'client_portal') &&
     (parcel?.originCity === profile?.city || parcel?.sender?.city === profile?.city ||
       allUsers.find((u: any) => u.id === parcel?.agentId)?.city === profile?.city)
-  const canActAsParcelOwner = (parcel: any) => isRestrictedAgentPro(profile)
-    ? agentProCanEditBon(profile, parcel) : isParcelCreator(parcel) || isChefAgencyAideParcel(parcel)
+  // ✏️ Compte « modification totale » (zahra@gmail.com) : toutes les données de toutes les expéditions, comme l'admin
+  const fullParcelEditor = isFullParcelEditor(profile)
+  const canActAsParcelOwner = (parcel: any) => fullParcelEditor || (isRestrictedAgentPro(profile)
+    ? agentProCanEditBon(profile, parcel) : isParcelCreator(parcel) || isChefAgencyAideParcel(parcel))
   const canEditParcelDetails = (parcel: any) => {
     if (!agentProCanEditBon(profile, parcel)) return false
     // 👑 Admin peut TOUJOURS éditer
-    if (profile?.role === 'admin') return true
+    if (profile?.role === 'admin' || fullParcelEditor) return true
 
     // 🔒 VERROUILLAGE: Si colis chargé dans camion (shipmentLoadedAt existe),
     // SEUL admin peut modifier les données du bon
@@ -2658,6 +2682,7 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
   // aides-agents) et / ou reçues par son agence, quel que soit le statut SAUF « Livré » — même chargées
   // dans un camion. Les champs restent ceux cochés par l'admin (canEditField). Même règle côté Firestore.
   const adminScopeAllowsEdit = (parcel: any) => {
+    if (fullParcelEditor) return true
     if (!agentProCanEditBon(profile, parcel)) return false
     const role = profile?.role
     if (role !== 'chef_agence' && role !== 'agentpro') return false
@@ -2669,8 +2694,8 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
 
   // ⭐ Vérifier si un champ spécifique peut être modifié selon les permissions Admin
   const canEditField = (fieldPath: string) => {
-    // Admin peut TOUJOURS tout modifier
-    if (profile?.role === 'admin') return true
+    // Admin (et compte « modification totale ») peut TOUJOURS tout modifier
+    if (profile?.role === 'admin' || fullParcelEditor) return true
 
     // Chef d'agence: vérifier les permissions configurées
     if (profile?.role === 'chef_agence') {
@@ -2942,11 +2967,12 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
     }
   }, [allDisplayParcels])
 
-  // Hook scan automatique douchette
+  // Hook scan automatique douchette — ❌ DÉSACTIVÉ le 29/10/2026 (douchette abandonnée par l'utilisateur) :
+  // il avalait les chiffres tapés vite (< 100 ms) dans la recherche (« 1212730 » → « 12 »)
   useBarcodeScanner({
     onScan: handleGlobalBarcodeScan,
     minLength: 5,
-    enabled: true
+    enabled: false
   })
 
   // ESC pour fermer le modal

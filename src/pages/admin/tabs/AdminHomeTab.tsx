@@ -122,12 +122,25 @@ export default function AdminHomeTab({
       action: () => setMainTab('port_agencies'),
     },
     {
+      // 🏬 Ce qui reste en gare dans chaque ville (à vider chaque matin) — 29/10/2026
+      key: 'en_gare', label: '🏬 En gare', desc: 'Ce qui reste en gare dans chaque ville (à vider chaque matin)',
+      icon: Package, grad: 'from-teal-500 via-emerald-600 to-cyan-700',
+      glow: 'bg-teal-50/80', stat: 'Suivi par ville, date, N° EXP',
+      action: () => setMainTab('en_gare'),
+    },
+    {
+      // 💰 Placée après « En gare » et avant « Rapports du Contrôleur » (demande du 30/10/2026)
+      key: 'versements', label: '💰 Versements Admin', desc: 'Valider les versements espèces · chèques · virements',
+      icon: Banknote, grad: 'from-emerald-500 via-emerald-600 to-green-700',
+      glow: 'bg-emerald-50/80', stat: 'Confirmation des versements reçus',
+      action: () => setMainTab('versements'),
+    },
+    {
       key: 'controleur', label: '🤖 Rapports du Contrôleur', desc: 'Erreurs des utilisateurs détectées par les règles, rapport rédigé par l\'IA',
       icon: AlertTriangle, grad: 'from-indigo-500 via-violet-600 to-purple-700',
       glow: 'bg-indigo-50/80', stat: 'À la demande',
       action: () => setMainTab('controleur'),
-    },
-    {
+    },    {
       key: 'archivage', label: '🗄️ Archives', desc: 'Archivage cloud automatique et manuel',
       icon: Archive, grad: 'from-slate-500 via-gray-600 to-slate-700',
       glow: 'bg-slate-50/80', stat: 'Optimisation base de données',
@@ -204,12 +217,6 @@ export default function AdminHomeTab({
       icon: Wallet, grad: 'from-teal-500 via-teal-600 to-cyan-700',
       glow: 'bg-teal-50/80', stat: `${caisseEntries.length} mouvement(s)`,
       action: () => setMainTab('caisse'),
-    },
-    {
-      key: 'versements', label: '💰 Versements Admin', desc: 'Valider les versements espèces · chèques · virements',
-      icon: Banknote, grad: 'from-emerald-500 via-emerald-600 to-green-700',
-      glow: 'bg-emerald-50/80', stat: 'Confirmation des versements reçus',
-      action: () => setMainTab('versements'),
     },
     {
       key: 'employees', label: 'Dossiers RH', desc: 'CIN · CNSS · Contrats · Salaires',

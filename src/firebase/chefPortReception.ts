@@ -85,7 +85,7 @@ export async function chefReceivePortDu(p: any, by: ChefActor, linked = true): P
     const notCollected = cur.portStatus !== 'collected' && cur.portStatus !== 'received'
     // Pas de collecte NI de réception sans livraison — même si le port était déjà « encaissé » (diagnostic du
     // 24/10/2026, point 1.4 : 1077852D « Initialisé », 1057734 « En transit » reçus le 15/10)
-    assertCollectAllowedStatus(cur)
+    assertCollectAllowedStatus(cur, 'port')
     // Espèces en caisse (un port dû payé par chèque suit le circuit des chèques)
     const withEntry = (notCollected || cur.portDuReceivedMethod !== 'cheque') && priceOf(cur) > 0
     if (withEntry) {

@@ -17,6 +17,11 @@ export default function PWAUpdateBanner() {
         setInterval(() => {
           try { if (navigator.onLine) reg.update() } catch { /* silencieux */ }
         }, 60_000)
+        // 📱 (29/10/2026) Sur téléphone, le minuteur est suspendu quand l'application est en arrière-plan / écran éteint :
+        // vérification aussi à CHAQUE retour au premier plan (sinon l'ancienne version restait affichée longtemps).
+        document.addEventListener('visibilitychange', () => {
+          try { if (document.visibilityState === 'visible' && navigator.onLine) reg.update() } catch { /* silencieux */ }
+        })
       }
     },
   })

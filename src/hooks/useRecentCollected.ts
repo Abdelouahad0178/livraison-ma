@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, startTransition } from 'react'
+import { useEffect, useMemo, useRef, useState, startTransition } from 'react'
 import { opDayOf, opStart } from '../utils/daySlices'
 import { MONEY_START } from '../utils/moneyFlow'
 import { subscribeRecentCollected, type RecentCollectedState } from '../firebase/recentCollectedStore'
@@ -19,6 +19,8 @@ const EMPTY: RecentCollectedState = { docs: [], ready: false }
  * changement de période — la période ne fait que filtrer l'ensemble.
  * `enabled` : la page a le droit de lire ; `pageLoaded` : sa période est chargée. Sur téléphone, la lecture attend
  * la période puis un moment libre du navigateur ; sur PC, elle part tout de suite.
+ * (31/10/2026, mesuré : partir tout de suite sur téléphone même avec une mémoire récente retardait la liste des
+ * livreurs de ~2,5 s pour 1,5 s gagnée ici → gardé tel quel.)
  */
 export function useRecentCollected(city: string | undefined | null, loadedFrom: Date | null, loadedTo: Date | null, enabled = true, pageLoaded = true) {
   const fromMs = loadedFrom ? loadedFrom.getTime() : 0
@@ -40,8 +42,11 @@ export function useRecentCollected(city: string | undefined | null, loadedFrom: 
 
   const [state, setState] = useState<RecentCollectedState>(EMPTY)
   const [timedOut, setTimedOut] = useState(false)
+  const shownCity = useRef<string | null | undefined>(null)
   useEffect(() => {
-    setState(EMPTY)
+    // Même ville : les chiffres déjà affichés restent (pas de trou pendant le rattrapage), seulement « pas prêt »
+    setState(prev => (shownCity.current === city && prev.docs.length ? { docs: prev.docs, ready: false } : EMPTY))
+    shownCity.current = city
     setTimedOut(false)
     if (!go || !idle || !needed || !city) return
     const today = opDayOf(new Date())
