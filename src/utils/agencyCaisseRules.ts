@@ -849,6 +849,14 @@ export interface CollecteContribution {
 }
 
 /**
+ * 📬 Port payé encaissé au guichet RÉELLEMENT collecté (01/11/2026) : remis par le guichet au chef d'exploitation, reçu par
+ * le chef d'agence, ou encaissé par un compte chef d'agence relié à un chef d'exploitation (même argent, voir
+ * config/guichetHolders). Encore au guichet (ex. ENGAREAGA6017) : pas encore compté dans les collectes.
+ */
+export const isGuichetPortPayeCollected = (p: any): boolean =>
+  p?.portStatus === 'received' || !!p?.portPayeExpReceivedAt || !!linkedExploitationOf(p?.portCollectedById)
+
+/**
  * ⚖️ RÈGLE UNIQUE « Collectes par jour » (30/10/2026) — utilisée par computeCaisseView (Caisse Agence, Chef d'exploitation)
  * ET par le serveur (copie allégée versementDays : Admin › Versements). null = l'expédition ne compte pas pour `city`.
  *  • port dû ENCAISSÉ (agence de destination), hors argent d'avant le 05/10 et hors port encaissé avant un retour —
@@ -857,15 +865,19 @@ export interface CollecteContribution {
  *    au chef d'exploitation, sinon réception par le chef d'agence) : une somme = UNE journée, comme dans le bilan.
  * Où est l'argent : déjà versé à l'admin ; pas encore reçu par le chef d'agence (port dû chez le chef d'exploitation /
  * le livreur ; port payé ramassé pas encore reçu — seulement avec la liste des comptes de l'agence) ; sinon à verser.
+ * 💰 (01/11/2026, demande de l'admin) Seulement l'argent RÉELLEMENT collecté : une expédition à 0 DH ne compte pas, et un
+ * port payé encaissé au guichet ne compte qu'une fois sorti du guichet (isGuichetPortPayeCollected) — avant, il comptait
+ * dès l'encaissement (ex. Agadir 31/10 : 145 · 7 955 DH affichés pour 143 · 7 930 DH réellement collectés).
  */
 export const collecteContributionFor = (p: any, city: string, agencyHolderIds?: Set<string> | null): CollecteContribution | null => {
   if (p?.portStatus !== 'collected' && p?.portStatus !== 'received') return null
+  if (!(safeParseAmount(p.price) > 0)) return null
   let kind: 'portDu' | 'portPaye'
   let when: Date | null
   if (isPortDuParcel(p) && !isPortDuMoneyBeforeStart(p) && p.destinationCity === city && !isPortCollectedBeforeReturn(p)) {
     kind = 'portDu'
     when = toDateSafe(p.portCollectedAt) ?? toDateSafe(p.portReceivedAt)
-  } else if (isRamasseGuichet(p, city) && !isReturnedForGroup(p)) {
+  } else if (isRamasseGuichet(p, city) && !isReturnedForGroup(p) && isGuichetPortPayeCollected(p)) {
     kind = 'portPaye'
     when = toDateSafe(p.portCollectedAt) ?? toDateSafe(p.portPayeExpReceivedAt) ?? (p.portStatus === 'received' ? toDateSafe(p.portReceivedAt) : null)
   } else return null
