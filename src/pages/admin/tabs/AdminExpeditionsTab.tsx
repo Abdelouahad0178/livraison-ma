@@ -28,6 +28,7 @@ import {
   STATUSES,
   STATUS_COLORS,
   codCollectedLabel,
+  CLOSED_STATUSES,
 } from '../../../firebase/constants'
 import { fmt } from '../../../utils/formatNumber'
 import { printAdminExpeditions } from '../../../utils/agentPrintUtils'
@@ -114,11 +115,10 @@ export default function AdminExpeditionsTab({
   const fullList: any[] = Array.isArray(allFiltered) ? allFiltered : (Array.isArray(filtered) ? filtered : [])
   const kpi = useMemo(() => {
     const list = fullList
-    const DONE = ['Livré', 'Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé', 'Annulé']
     return {
       total: list.length,
       livres: list.filter(p => p.status === 'Livré').length,
-      enCours: list.filter(p => !DONE.includes(p.status)).length,
+      enCours: list.filter(p => !CLOSED_STATUSES.includes(p.status)).length,
       cod: list.filter(p => parseFloat(p.codAmount) > 0 && (!p.codStatus || p.codStatus === 'pending')).reduce((s, p) => s + (parseFloat(p.codAmount) || 0), 0),
     }
   }, [fullList])

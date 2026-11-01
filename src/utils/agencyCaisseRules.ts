@@ -19,6 +19,7 @@ import { getCurrentOperationalDay, getOperationalDayRange, getOperationalDayStri
 import { codSplitAmount } from './codParts'
 import { isCodMoneyBeforeStart, isPortDuMoneyBeforeStart, isPortPayeMoneyBeforeStart } from './moneyFlow'
 import { activeDays, recentCollectDays } from '../config/siteDelays'
+import { RETURN_STATUSES } from '../firebase/constants'
 
 // ── Dates ────────────────────────────────────────────────────────────────────
 
@@ -263,7 +264,6 @@ export const ramasseGuichetEtat = (p: any): { label: string; tone: 'gare' | 'exp
 
 // ── Statuts / montants ───────────────────────────────────────────────────────
 
-const RETURN_STATUSES = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
 const isReturnedForGroup = (p: any) => !!(p.returnedAt || p.wasReturned || p.status === 'Retourné')
 const isPortDuParcel = (p: any) => p.portType === 'port_du' && !p.portPayeMethod
 /** Port pas encore encaissé : aucun état, ou état « pending » (42 expéditions l'ont : elles étaient oubliées). */

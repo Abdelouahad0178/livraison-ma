@@ -31,15 +31,32 @@ function dayOf(date) {
 const shortHash = s => crypto.createHash('sha1').update(s).digest('hex').slice(0, 16)
 const safeId = s => String(s).replace(/[\/\s]+/g, '-')
 
+// Même liste que src/firebase/constants.ts (RETURN_STATUSES)
+const RETURN_STATUSES = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
+
+/**
+ * ↩️ Expéditeur et agence d'ORIGINE (01/11/2026) : au retour, le site ÉCHANGE expéditeur ⇄ destinataire et
+ * origine ⇄ destination (markParcelReturned, état d'avant gardé dans preReturn). Sans ceci, une expédition retournée
+ * passait chez l'autre agence, avec le destinataire comme client (183 retours, ~10 900 DH mal rangés au 01/11).
+ */
+function originalSideOf(p) {
+  const returned = p.wasReturned === true || (!!p.returnToCity && RETURN_STATUSES.includes(p.status))
+  if (!returned) return { sender: p.sender, senderNameNorm: p.senderNameNorm, originCity: p.originCity }
+  if (p.preReturn?.sender) return { sender: p.preReturn.sender, senderNameNorm: '', originCity: p.preReturn.originCity }
+  // Ancien retour sans état d'avant : l'échange inverse
+  return { sender: p.receiver, senderNameNorm: '', originCity: p.returnToCity || p.destinationCity }
+}
+
 /** Contribution d'une expédition, ou null si elle ne compte pas (sans date / sans client). */
 function contributionOf(p) {
   if (!p) return null
   const date = toDate(p.createdAt)
-  const clientKey = p.senderNameNorm || norm(p.sender?.name || p.senderName || p.clientName)
+  const side = originalSideOf(p)
+  const clientKey = side.senderNameNorm || norm(side.sender?.name || p.senderName || p.clientName)
   if (!date || !clientKey) return null
   const day = dayOf(date)
   const month = day.slice(0, 7)
-  const city = p.originCity || p.sender?.city || p.createdByCity || 'Inconnue'
+  const city = side.originCity || side.sender?.city || p.createdByCity || 'Inconnue'
   const status = p.status || ''
   const annule = status === 'Annulé'
   const price = annule ? 0 : num(p.price)
@@ -57,10 +74,10 @@ function contributionOf(p) {
     cod,
     codExp: cod > 0 ? 1 : 0,
     livres: status === 'Livré' ? 1 : 0,
-    retours: status === 'Retourné' || status === 'Retour finalisé' ? 1 : 0,
+    retours: RETURN_STATUSES.includes(status) ? 1 : 0,
     annules: annule ? 1 : 0,
   }
-  const clientName = String(p.sender?.name || p.senderName || p.clientName || clientKey).trim()
+  const clientName = String(side.sender?.name || p.senderName || p.clientName || clientKey).trim()
   return {
     values,
     meta: { month, day, city, clientKey, clientName },

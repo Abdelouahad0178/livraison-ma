@@ -64,7 +64,7 @@ import { shouldTriggerSearch } from '../utils/searchUtils'
 import {
   CAISSE_CATEGORIES, CITIES, STATUSES, STATUS_COLORS, COD_PAYMENT_TYPES, COD_STATUS,
   DIRECTOR_PERMISSIONS, DEFAULT_TARIFF_CONFIG, calculateTariff, normalizeTariffConfig,
-  codCollectedLabel, REGLEMENT_MODES, REGLEMENT_STATUSES,
+  codCollectedLabel, REGLEMENT_MODES, REGLEMENT_STATUSES, isReturnStatus,
 } from '../firebase/constants'
 import {
   LayoutDashboard, LogOut, Package, Clock, CheckCircle,
@@ -1618,8 +1618,7 @@ export default function AdminPage() {
       if (statusFilter.length > 0) {
         // Logique : "Retourné" inclut tous les statuts du circuit retour
         if (statusFilter.includes('Retourné')) {
-          const returnStatuses = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
-          if (returnStatuses.includes(p.status)) return true
+          if (isReturnStatus(p.status)) return true
         }
         // Match exact pour les autres statuts
         if (!statusFilter.includes(p.status)) return false

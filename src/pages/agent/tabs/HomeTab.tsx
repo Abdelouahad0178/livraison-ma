@@ -1,7 +1,7 @@
 import { useMemo, useState, useEffect } from 'react'
 import { Plus, Package, MapPin, Wallet, MessageCircle, Printer, LayoutGrid, Truck, ArrowRight, TrendingUp, Clock, CheckCircle, Banknote, X, Building2 } from 'lucide-react'
 import { useAgentCtx } from '../AgentCtx'
-import { STATUSES, STATUS_COLORS } from '../../../firebase/constants'
+import { STATUSES, STATUS_COLORS, CLOSED_STATUSES } from '../../../firebase/constants'
 import { parcelDate, entryDate, filterByDate, opPeriodRange } from '../../../utils/dateFilter'
 import { getEmptyParcelForm } from '../emptyParcelForm'
 import { HERO_STAT_CARD, HERO_CARD, HERO_BUTTON } from '../../../styles/heroTheme'
@@ -60,10 +60,9 @@ export default function HomeTab({ setTab: setTabProp, setParcelStatusFilter }: {
     const todayCount = parcels.length
     let enCours = 0, livres = 0, totalRetourFond = 0
     const statusMap: Record<string, number> = {}
-    const NOT_IN_PROGRESS = ['Livré', 'Retourné', 'Annulé', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
 
     parcels.forEach((p: any) => {
-      if (!NOT_IN_PROGRESS.includes(p.status)) enCours++
+      if (!CLOSED_STATUSES.includes(p.status)) enCours++
       if (p.codAmount > 0 && p.codStatus === 'pending') totalRetourFond += p.codAmount || 0
     })
 

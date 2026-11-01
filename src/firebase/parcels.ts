@@ -9,7 +9,7 @@ import { db } from './db'
 import type { Parcel } from '../types'
 import {
   CITIES, STATUSES, COD_PAYMENT_TYPES, COD_STATUS, STATUS_COLORS, CAISSE_CATEGORIES, codPaymentTypeOf,
-  normalizeServiceType, codPaymentTypeForService, sanitizeParcelCodWrite, NON_COD_SERVICE_TYPES,
+  normalizeServiceType, codPaymentTypeForService, sanitizeParcelCodWrite, NON_COD_SERVICE_TYPES, RETURN_STATUSES,
 } from './constants'
 import { daysAgoTimestamp, sortByCreatedDesc } from './firestoreUtils'
 import { codPartView, isMixedCod } from '../utils/codParts'
@@ -1034,7 +1034,6 @@ export async function markParcelAsReturned(parcel: any, extra: any = {}) {
 export async function cancelParcelReturn(parcel: any, by = ''): Promise<{ codRestored: boolean }> {
   const now = new Date().toISOString()
   const snap = parcel.preReturn
-  const RETURN_STATUSES = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
   let updates: Record<string, any>
   let codRestored = true
   if (snap) {

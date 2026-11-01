@@ -2,6 +2,7 @@ import { caisseCodAmountOfType, isRamasseGuichet, isAdminTransferred, isPortDuHe
 import { isMixedCod } from './codParts'
 import { isCodMoneyBeforeStart, isPortDuMoneyBeforeStart } from './moneyFlow'
 import { opDayKeyOf } from './versementPeriod'
+import { isReturnStatus } from '../firebase/constants'
 
 /**
  * 📅 Bilan d'une journée / période — module UNIQUE pour le chef d'exploitation et le chef d'agence.
@@ -23,8 +24,7 @@ export interface Bilan {
   encaisse: { ports: Enc; codEspeces: Enc; codDocs: Enc }
 }
 
-const RETURNED = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
-const isReturned = (p: any) => !!(p.returnedAt || p.wasReturned || RETURNED.includes(p.status))
+const isReturned = (p: any) => !!(p.returnedAt || p.wasReturned || isReturnStatus(p.status))
 const amt = (v: any) => { const n = typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(',', '.')); return Number.isFinite(n) ? n : 0 }
 const r2 = (n: number) => Math.round(n * 100) / 100
 const line = (): Line => ({ total: 0, encaisse: 0, docs: 0, reste: 0, n: 0, items: { total: [], encaisse: [], docs: [], reste: [] } })

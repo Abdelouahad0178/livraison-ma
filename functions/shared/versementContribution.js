@@ -143,6 +143,13 @@ var DEFAULT_TARIFF_CONFIG = {
   })),
   extraPerAdditionalParcel: 5
 };
+var RETURN_STATUSES = [
+  "Retourn\xE9",
+  "Retour en transit",
+  "Retour arriv\xE9",
+  "Retour finalis\xE9"
+];
+var CLOSED_STATUSES = ["Livr\xE9", ...RETURN_STATUSES, "Annul\xE9"];
 
 // src/utils/moneyFlow.ts
 var MONEY_START = /* @__PURE__ */ new Date("2026-10-05T08:00:00+01:00");

@@ -6,7 +6,7 @@
 //     envoyées = valeurs déjà RÉGLÉES aux expéditeurs.
 // Montant par type (espèces / chèque / traite, RF mixte compris) : caisseCodAmountOfType — même règle que Caisse Agence.
 // Exclus : services sans valeur (simple, Retour BL), expéditions retournées, argent encaissé avant le 05/10/2026.
-import { CITIES } from '../firebase/constants'
+import { CITIES, RETURN_STATUSES } from '../firebase/constants'
 import { caisseCodAmountOfType } from './agencyCaisseRules'
 import { isMixedCod } from './codParts'
 import { isCodMoneyBeforeStart, isCodSenderPaid } from './moneyFlow'
@@ -31,7 +31,6 @@ export interface AgencyCodStat {
 }
 
 const round2 = (n: number) => Math.round(n * 100) / 100
-const RETURN_STATUSES = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
 
 /** Valeur (COD) à compter : montant > 0, service avec valeur, pas retournée, pas d'argent d'avant le 05/10/2026. */
 export const hasCountedCod = (p: any): boolean => {

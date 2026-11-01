@@ -7,7 +7,8 @@ const { contributionOf, NUM_FIELDS } = createRequire(import.meta.url)('../functi
 admin.initializeApp({ credential: admin.credential.cert(JSON.parse(readFileSync('./serviceAccountKey.json', 'utf8'))) })
 const db = admin.firestore(); db.settings({ preferRest: true })
 const exp = new Map(), seen = new Set()
-for (const c of ['parcels', 'parcels_archive']) (await db.collection(c).select('createdAt', 'senderNameNorm', 'sender', 'senderName', 'clientName', 'originCity', 'createdByCity', 'status', 'price', 'portType', 'codAmount', 'nbColis').get()).docs.forEach(d => {
+for (const c of ['parcels', 'parcels_archive']) (await db.collection(c).select('createdAt', 'senderNameNorm', 'sender', 'senderName', 'clientName', 'originCity', 'createdByCity', 'status', 'price', 'portType', 'codAmount', 'nbColis',
+    'wasReturned', 'preReturn', 'returnToCity', 'receiver', 'destinationCity').get()).docs.forEach(d => {
   if (seen.has(d.id)) return; seen.add(d.id); const k = contributionOf(d.data()); if (!k) return
   for (const path of Object.values(k.targets)) { const t = exp.get(path) || Object.fromEntries(NUM_FIELDS.map(f => [f, 0])); NUM_FIELDS.forEach(f => { t[f] += k.values[f] }); exp.set(path, t) }
 })
