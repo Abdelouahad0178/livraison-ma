@@ -14,6 +14,8 @@ const admin = require('firebase-admin')
 const { projectParcelLite, liteKey } = require('./parcelLite')
 const { versementOf, holdersByCity, sameContribution, BUCKETS } = require('./versement')
 const { envoiContribOf, envoiKey, holderTotalsOf, HOLDER_GROUPS } = require('./envoiContrib')
+const { PORT_DAY_FIELDS, PORT_ALL_CITY } = require('./portAgency')
+const { codDayDeltas, COD_DAY_FIELDS, COD_UNION_FIELDS, COD_ALL_CITY } = require('./codAgency')
 
 const RETURN_STATUSES = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
 const MAX_EXAMPLES = 15
@@ -107,6 +109,61 @@ async function runHealthCheck(db, { save = true } = {}) {
   holderIds.forEach(h => {
     aggregates.envoiHolders.checked++
     if (HOLDER_GROUPS.some(g => r2(holdWant[h]?.[g]) !== r2(ehMap.get(h)?.[g]))) { aggregates.envoiHolders.diff++; if (aggregates.envoiHolders.examples.length < MAX_EXAMPLES) aggregates.envoiHolders.examples.push(h) }
+  })
+
+  // 📮 Totaux de « Port par agence » (01/11/2026) : chaque document de journée = somme des contributions enregistrées
+  aggregates.portAgencyDays = { checked: 0, diff: 0, examples: [] }
+  const [pcAll, pdAll] = await Promise.all([db.collection('portAgencyContrib').get(), db.collection('portAgencyDays').get()])
+  const portWant = {}
+  pcAll.docs.forEach(d => {
+    const c = d.data()
+    for (const [city, v] of Object.entries(c.cities || {})) {
+      const w = portWant[`${c.day}_${String(city).replace(/[/\s]+/g, '-')}`] = portWant[`${c.day}_${String(city).replace(/[/\s]+/g, '-')}`] || {}
+      for (const f of PORT_DAY_FIELDS) w[f] = r2((w[f] || 0) + (Number(v[f]) || 0))
+    }
+    if (c.union) { const k = `${c.day}_${PORT_ALL_CITY}`; const w = portWant[k] = portWant[k] || {}; w.nUnion = (w.nUnion || 0) + 1 }
+  })
+  pdAll.docs.forEach(d => {
+    aggregates.portAgencyDays.checked++
+    const x = d.data(), w = portWant[d.id] || {}
+    const fields = x.city === PORT_ALL_CITY ? ['nUnion'] : PORT_DAY_FIELDS
+    if (fields.some(f => r2(x[f]) !== r2(w[f]))) { aggregates.portAgencyDays.diff++; if (aggregates.portAgencyDays.examples.length < MAX_EXAMPLES) aggregates.portAgencyDays.examples.push(d.id) }
+  })
+
+  // 💰 Totaux de « COD par agence » (01/11/2026) : même contrôle
+  aggregates.codAgencyDays = { checked: 0, diff: 0, examples: [] }
+  const [ccAll, cdAll] = await Promise.all([db.collection('codAgencyContrib').get(), db.collection('codAgencyDays').get()])
+  // Documents attendus = somme des différences de chaque contribution (même règle que la Cloud Function : codDayDeltas),
+  // compteurs simples ET imbriqués (par ville d'origine, par combinaison d'agences)
+  const codWant = {}
+  const sid = s => String(s).replace(/[/\s]+/g, '-')
+  const leaf = (o, path, n) => { for (const k of path.slice(0, -1)) o = o[k] || (o[k] = {}); const l = path[path.length - 1]; o[l] = r2((o[l] || 0) + n) }
+  ccAll.docs.forEach(d => {
+    for (const x of codDayDeltas(d.data(), 1)) {
+      const w = codWant[`${x.day}_${sid(x.city)}`] = codWant[`${x.day}_${sid(x.city)}`] || {}
+      for (const [k, n] of Object.entries(x.nums)) w[k] = r2((w[k] || 0) + n)
+      for (const { path, n } of x.nested) leaf(w, path, n)
+    }
+  })
+  // Compare toutes les feuilles numériques (un compteur imbriqué à 0 vaut absent)
+  const sameLeaves = (a, b) => {
+    const keys = new Set([...Object.keys(a || {}), ...Object.keys(b || {})])
+    for (const k of keys) {
+      const x = a?.[k], y = b?.[k]
+      if ((x && typeof x === 'object') || (y && typeof y === 'object')) { if (!sameLeaves(x || {}, y || {})) return false }
+      else if (r2(x) !== r2(y)) return false
+    }
+    return true
+  }
+  cdAll.docs.forEach(d => {
+    aggregates.codAgencyDays.checked++
+    const x = d.data(), w = codWant[d.id] || {}
+    const fields = x.city === COD_ALL_CITY ? COD_UNION_FIELDS : COD_DAY_FIELDS
+    const nested = x.city === COD_ALL_CITY ? ['sets', 'setsO'] : ['byOrigin']
+    if (fields.some(f => r2(x[f]) !== r2(w[f])) || nested.some(f => !sameLeaves(x[f], w[f]))) {
+      aggregates.codAgencyDays.diff++
+      if (aggregates.codAgencyDays.examples.length < MAX_EXAMPLES) aggregates.codAgencyDays.examples.push(d.id)
+    }
   })
 
   const now = new Date()

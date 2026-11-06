@@ -79,6 +79,13 @@ export async function loadPersistedLiteDays(): Promise<PersistedLiteDay[] | null
  * - `remove`  : journées effacées.
  * Renvoie les clés dont la validité a été avancée (null : échec, rien n'est écrit).
  */
+/** Pause jusqu'au prochain moment libre du navigateur (au plus 1 s). */
+const idle = () => new Promise<void>(resolve => {
+  const w: any = typeof window !== 'undefined' ? window : null
+  if (w?.requestIdleCallback) w.requestIdleCallback(() => resolve(), { timeout: 1000 })
+  else setTimeout(resolve, 0)
+})
+
 export async function savePersistedLiteDays(
   session: string, syncedAt: number,
   put: { key: string; docs: any[] }[], refresh: { key: string; tag: PersistedLiteTag }[], remove: string[],
@@ -86,12 +93,21 @@ export async function savePersistedLiteDays(
   try {
     const db = await openDb()
     if (!db) return null
+    const stamp = (key: string) => ({ key, syncedAt, session, schema: LITE_PERSIST_SCHEMA })
+    // ⚡ (01/11/2026) UNE journée par transaction, avec une pause (moment libre du navigateur) entre deux : la copie d'une
+    // journée vers IndexedDB (≈ 600 expéditions) ne fige plus la page. Avant : toutes les journées dans une seule
+    // transaction — jusqu'à 21 s de page figée sur téléphone pour la période « Tout » (45 jours).
+    for (const row of put) {
+      const t = db.transaction([DAYS, VALID], 'readwrite')
+      t.objectStore(DAYS).put(row)
+      t.objectStore(VALID).put(stamp(row.key))
+      await done(t)
+      await idle()
+    }
     const tx = db.transaction([DAYS, VALID], 'readwrite')
     const days = tx.objectStore(DAYS)
     const valid = tx.objectStore(VALID)
-    const stamp = (key: string) => ({ key, syncedAt, session, schema: LITE_PERSIST_SCHEMA })
     for (const key of remove) { days.delete(key); valid.delete(key) }
-    for (const row of put) { days.put(row); valid.put(stamp(row.key)) }
     const refreshed: string[] = []
     for (const { key, tag } of refresh) {
       const req = valid.get(key)

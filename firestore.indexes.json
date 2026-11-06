@@ -1783,6 +1783,154 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "codAgencyContrib",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "cityList",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "day",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "isArchived",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "status",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "createdByCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "codStatus",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcels",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "destinationCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "isArchived",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "clients",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "isExpediteur",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "name",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "clients",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "isDestinataire",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "name",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcelsLite",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "destinationCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "liteUpdatedAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcelsLite",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "originCity",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "liteUpdatedAt",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "parcelSearch",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "w",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "d",
+          "order": "DESCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": [

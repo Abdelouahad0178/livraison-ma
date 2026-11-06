@@ -429,7 +429,7 @@ export default function FacturierExpeditionsTab({ profileCity, userName }: { pro
     let cancelled = false
     setArchiveSearching(true)
     // 🪶 Partie non archivée lue en version allégée (seuls les résultats archivés sont gardés ici)
-    searchParcels(q, { includeArchived: true, limit: 300, lite: true })
+    searchParcels(q, { includeArchived: true, limit: 300, lite: true, wordSearch: true })
       .then(r => { if (!cancelled) setArchiveResults((r || []).filter((p: any) => p.isArchived)) })
       .catch(() => { if (!cancelled) setArchiveResults([]) })
       .finally(() => { if (!cancelled) setArchiveSearching(false) })

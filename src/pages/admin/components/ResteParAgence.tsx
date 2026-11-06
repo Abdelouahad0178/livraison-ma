@@ -5,7 +5,12 @@ import { Building2, TrendingUp } from 'lucide-react'
 import ResteAEncaisserModal from './ResteAEncaisserModal'
 import type { ResteLine } from '../../../utils/agencyFollowUp'
 
-export interface ResteRow { city: string; attendu: number; encaisse: number; reste: number; lines: ResteLine[] }
+export interface ResteRow {
+  city: string; attendu: number; encaisse: number; reste: number; lines: ResteLine[]
+  /** 💰 (01/11/2026) Liste chargée seulement au clic : nombre d'expéditions connu d'avance (totaux du serveur) */
+  count?: number
+  loadLines?: () => Promise<ResteLine[]>
+}
 
 const dh = (n: number) => `${(Math.round((n || 0) * 100) / 100).toLocaleString('fr-MA')} DH`
 
@@ -22,7 +27,16 @@ export default function ResteParAgence({ rows, subject, periodText, kindLabels, 
   children?: ReactNode
 }) {
   const [open, setOpen] = useState<ResteRow | null>(null)
-  const tot = rows.reduce((t, r) => ({ attendu: t.attendu + r.attendu, encaisse: t.encaisse + r.encaisse, reste: t.reste + r.reste, n: t.n + r.lines.length }), { attendu: 0, encaisse: 0, reste: 0, n: 0 })
+  const [loadingCity, setLoadingCity] = useState<string | null>(null)
+  const [loadError, setLoadError] = useState<string | null>(null)
+  const countOf = (r: ResteRow) => r.count ?? r.lines.length
+  // Liste chargée au clic (expéditions ciblées) ou déjà connue
+  const openRow = async (r: ResteRow) => {
+    if (!r.loadLines) { setOpen(r); return }
+    setLoadingCity(r.city); setLoadError(null)
+    try { setOpen({ ...r, lines: await r.loadLines() }) } catch (e: any) { setLoadError(e?.message || String(e)) } finally { setLoadingCity(null) }
+  }
+  const tot = rows.reduce((t, r) => ({ attendu: t.attendu + r.attendu, encaisse: t.encaisse + r.encaisse, reste: t.reste + r.reste, n: t.n + countOf(r) }), { attendu: 0, encaisse: 0, reste: 0, n: 0 })
   const blink = alert && tot.reste > 0.005
   const resteTotal = blink ? <span className="blink-alert inline-block text-red-600">⚠️ {dh(tot.reste)}</span> : dh(tot.reste)
   return (
@@ -65,11 +79,11 @@ export default function ResteParAgence({ rows, subject, periodText, kindLabels, 
                 <td className="px-6 py-4 text-right font-bold text-indigo-700">{dh(r.attendu)}</td>
                 <td className="px-6 py-4 text-right font-bold text-green-700">{dh(r.encaisse)}</td>
                 <td className="px-6 py-4 text-right">
-                  <button onClick={() => setOpen(r)} disabled={!r.lines.length} title="Voir et imprimer les expéditions"
-                    className="font-black text-lg text-amber-700 hover:underline disabled:no-underline disabled:text-gray-400">{dh(r.reste)} {r.lines.length > 0 && '👁'}</button>
+                  <button onClick={() => openRow(r)} disabled={!countOf(r) || loadingCity === r.city} title="Voir et imprimer les expéditions"
+                    className="font-black text-lg text-amber-700 hover:underline disabled:no-underline disabled:text-gray-400">{dh(r.reste)} {loadingCity === r.city ? '⏳' : countOf(r) > 0 && '👁'}</button>
                 </td>
                 <td className="px-6 py-4 text-center">
-                  <span className="inline-flex px-3 py-1 bg-amber-100 text-amber-800 rounded-lg font-bold">{r.lines.length}</span>
+                  <span className="inline-flex px-3 py-1 bg-amber-100 text-amber-800 rounded-lg font-bold">{countOf(r)}</span>
                 </td>
               </tr>
             ))}
@@ -86,6 +100,7 @@ export default function ResteParAgence({ rows, subject, periodText, kindLabels, 
         </table>
       </div>
       <p className="text-xs text-gray-500 print:hidden">Cliquez sur un montant « Reste à encaisser » pour voir les expéditions, les filtrer par livreur et les imprimer.</p>
+      {loadError && <p className="text-sm font-semibold text-red-700 bg-red-50 border border-red-200 rounded-xl px-4 py-2 print:hidden">Liste impossible à charger : {loadError}</p>}
 
       {children}
 

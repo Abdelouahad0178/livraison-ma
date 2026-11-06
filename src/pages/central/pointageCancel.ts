@@ -112,11 +112,50 @@ export interface GroupChequeInput {
   type: 'cheque' | 'traite'; numero: string; banque: string; montant: number; echeance: string
 }
 
+const r2 = (n: number) => Math.round(n * 100) / 100
+
 /**
- * Données à écrire sur chaque expédition quand on enregistre un chèque groupé (ou quand on en sort une expédition).
- * Tous les membres reçoivent EXACTEMENT les mêmes groupId / groupIds / groupNics / groupTotal.
+ * Répartit `amount` au prorata de `weights` (montant attendu de chaque expédition), arrondi au centime : la somme des
+ * parts est EXACTEMENT `amount` (l'écart d'arrondi va sur la plus grosse part). Poids tous nuls → parts égales.
+ */
+export function splitProRata(amount: number, weights: number[]): number[] {
+  const n = weights.length
+  if (!n) return []
+  const w = weights.map(x => (x > 0 ? x : 0))
+  const tot = w.reduce((s, x) => s + x, 0)
+  const out = w.map(x => r2(tot > 0 ? (amount * x) / tot : amount / n))
+  const gap = r2(amount - out.reduce((s, x) => s + x, 0))
+  if (gap) { const i = out.indexOf(Math.max(...out)); out[i] = r2(out[i] + gap) }
+  return out
+}
+
+/** Expéditions d'une opération : celle en cours d'abord, sans doublon (même ordre partout : écritures, parts, impression). */
+export function operationMembers(current: any, members: any[]): any[] {
+  const seen = new Set<string>()
+  return [current, ...members.filter(m => m.id !== current.id)].filter(m => (seen.has(m.id) ? false : (seen.add(m.id), true)))
+}
+
+/**
+ * 🔗 Parts de chaque expédition d'une opération « plusieurs chèques / traites → plusieurs expéditions » (+ reste en
+ * espèces) : chaque chèque, puis les espèces, sont répartis au prorata du montant attendu de chaque expédition.
+ */
+export function groupOperationShares(list: any[], partOf: (p: any) => number, chequeAmounts: number[], cash: number) {
+  const weights = list.map(partOf)
+  const perCheque = chequeAmounts.map(a => splitProRata(Number(a) || 0, weights))
+  const cashParts = splitProRata(Number(cash) || 0, weights)
+  return list.map((m, i) => ({ id: m.id, nic: nicOf(m), expected: r2(weights[i]), cheque: r2(perCheque.reduce((s, sh) => s + sh[i], 0)), cash: cashParts[i] }))
+}
+
+/** Chèques / traites GROUPÉS de l'expédition (une opération peut en compter plusieurs). */
+const groupDocsOf = (p: any): any[] => docsOf(p).filter(d => (d?.groupIds || []).length > 1)
+
+/**
+ * Données à écrire sur chaque expédition quand on enregistre une opération groupée (ou quand on en sort une expédition).
+ * 🔗 (03/11/2026) PLUSIEURS chèques / traites pour plusieurs expéditions : chaque expédition reçoit TOUS les chèques de
+ * l'opération, chacun avec son groupId (1er = groupId de l'opération, suivants « …~k »), les mêmes groupIds / groupNics,
+ * groupTotal = montant du chèque, montant = PART de l'expédition dans ce chèque (prorata de son montant attendu).
  * @param current  expédition en cours (état FRAIS)
- * @param members  expéditions couvertes par le chèque, celle en cours comprise (état FRAIS) — vide/1 = pas de groupe
+ * @param members  expéditions couvertes, celle en cours comprise (état FRAIS) — vide/1 = pas de groupe
  * @param byId     état FRAIS des anciens membres du groupe (pour retirer / réduire proprement)
  * @param partOf   part de COD document d'une expédition (docAmountOf)
  */
@@ -126,36 +165,40 @@ export function planGroupChequeWrites(
 ): Record<string, any[]> {
   const writes: Record<string, any[]> = {}
   const prev = groupOf(current)
+  const prevDocs = groupDocsOf(current)
   const prevRest = prev?.groupId
     ? (prev.groupIds || []).filter((id: string) => id !== current.id && inGroup(byId.get(id), prev.groupId))
     : []
-  const r2 = (n: number) => Math.round(n * 100) / 100
 
   if (members && members.length > 1) {
-    const cheque = docs[0]
-    const groupId = prev?.groupId || newGroupId()
-    const seen = new Set<string>()
-    const list = [current, ...members.filter(m => m.id !== current.id)].filter(m => (seen.has(m.id) ? false : (seen.add(m.id), true)))
+    const base = prev?.groupId || newGroupId()
+    const list = operationMembers(current, members)
     const groupIds = list.map(m => m.id)
     const groupNics = list.map(nicOf)
-    list.forEach(m => { writes[m.id] = [{ ...cheque, montant: r2(partOf(m)), groupId, groupIds, groupNics, groupTotal: r2(Number(cheque.montant) || 0) }] })
-    // Expéditions retirées du groupe : leur chèque n'est plus le leur → données à ressaisir
+    const weights = list.map(partOf)
+    const perCheque = docs.map((c, k) => ({ c, groupId: k === 0 ? base : `${base}~${k}`, shares: splitProRata(Number(c.montant) || 0, weights) }))
+    list.forEach((m, i) => {
+      writes[m.id] = perCheque.map(({ c, groupId, shares }) => ({ ...c, montant: shares[i], groupId, groupIds, groupNics, groupTotal: r2(Number(c.montant) || 0) }))
+    })
+    // Expéditions retirées du groupe : leurs chèques ne sont plus les leurs → données à ressaisir
     prevRest.filter((id: string) => !groupIds.includes(id)).forEach((id: string) => { writes[id] = [] })
     return writes
   }
 
   writes[current.id] = docs
-  // Expédition sortie d'un groupe : les autres gardent le chèque, sans elle (total diminué de sa part)
+  // Expédition sortie d'un groupe : les autres gardent les chèques, sans elle (chaque total diminué de sa part)
   if (prev && prevRest.length) {
-    const total = r2((Number(prev.groupTotal) || 0) - (Number(prev.montant) || 0))
     const restNics = prevRest.map((id: string) => nicOf(byId.get(id)))
     prevRest.forEach((id: string) => {
       const o = byId.get(id)
-      const base = docsOf(o).find(d => d?.groupId === prev.groupId)
-      const single = { type: prev.type, numero: prev.numero, banque: prev.banque, echeance: prev.echeance || '' }
-      writes[id] = prevRest.length > 1
-        ? [{ ...single, montant: r2(Number(base?.montant) || partOf(o)), groupId: prev.groupId, groupIds: prevRest, groupNics: restNics, groupTotal: total }]
-        : [{ ...single, montant: total }]
+      writes[id] = prevDocs.map(pd => {
+        const total = r2((Number(pd.groupTotal) || 0) - (Number(pd.montant) || 0))
+        const base = docsOf(o).find(d => d?.groupId === pd.groupId)
+        const single = { type: pd.type, numero: pd.numero, banque: pd.banque, echeance: pd.echeance || '' }
+        return prevRest.length > 1
+          ? { ...single, montant: r2(Number(base?.montant) || partOf(o)), groupId: pd.groupId, groupIds: prevRest, groupNics: restNics, groupTotal: total }
+          : { ...single, montant: total }
+      })
     })
   }
   return writes

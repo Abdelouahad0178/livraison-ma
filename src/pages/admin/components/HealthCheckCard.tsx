@@ -16,6 +16,8 @@ const COPY_LABEL: Record<string, string> = {
   envoi: 'Argent détenu par le chef d\'exploitation (envoiContrib)',
   versementDays: 'Totaux par journée et par agence (versementDays)',
   envoiHolders: 'Reste à verser par compte (envoiHolders)',
+  portAgencyDays: 'Totaux de Port par agence (portAgencyDays)',
+  codAgencyDays: 'Totaux de COD par agence (codAgencyDays)',
 }
 const fmtAt = (s: string) => { const d = new Date(s); return Number.isNaN(d.getTime()) ? '' : `${d.toLocaleDateString('fr-FR')} à ${d.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}` }
 

@@ -33,7 +33,8 @@ const ENVOI_MSG = "elle arrivera par son envoi (onglet « Valeurs à valider »)
 // 🔗 PORT DÛ ⇄ COD ESPÈCES ENSEMBLE (demande de l'admin, 20/10/2026) — même règle que la page Chef d'exploitation
 // (pages/exploitation/exploitationActions) : collecter / recevoir l'un fait aussi l'autre, puis « Livré » d'un coup.
 // Concerné : port dû espèces (portType « port_du ») + COD 100 % espèces (ni chèque / traite, ni mixte). État RELU.
-const linkedCashCod = (c: any) => !c?.isArchived && (Number.parseFloat(String(c?.codAmount ?? '')) || 0) > 0 && !isMixedCod(c)
+// Expédition rangée : comprise (lot 3 de l'archivage, 05/11/2026 — encaissable à tout moment)
+const linkedCashCod = (c: any) => (Number.parseFloat(String(c?.codAmount ?? '')) || 0) > 0 && !isMixedCod(c)
   && (codPaymentTypeOf(c) || 'especes') === 'especes' && !c.wasReturned && !c.returnedAt && c.status !== 'Retourné'
 const linkedPortDu = (c: any) => c?.portType === 'port_du' && !c.portPayeMethod
 /** COD encore à collecter / recevoir par le chef d'agence (ni déjà reçu, ni chez le chef d'exploitation, ni d'avant le 05/10). */
@@ -61,8 +62,16 @@ const codLockReason = (c: any) => c.valeursEnvoiId ? "reçu par un envoi validé
   : c.centralDeposited ? 'déjà versé au compte société' : c.codSentToSource ? "déjà envoyé à l'agence source" : ''
 const portMineForChef = (c: any, by: ChefActor) => c.portExpReceivedRole === 'chef_agence' && c.portChefReceivedById === by.id
 
-/** Port dû : collecté (si pas encore encaissé par le livreur) puis reçu par le chef d'agence → caisse. */
-export async function chefReceivePortDu(p: any, by: ChefActor, linked = true): Promise<Record<string, any>> {
+/** Chèque remis pour un port dû (mêmes champs que la collecte par chèque du chef d'exploitation, collectPortDuCheque). */
+export interface PortDuCheque { banque: string; numero: string; dateEncaissement: string }
+const PORT_CHEQUE_FIELDS = ['portDuChequeBanque', 'portDuChequeNumero', 'portDuChequeDateEncaissement', 'portDuChequeFinalizedAt', 'portDuChequeFinalizedBy'] as const
+
+/**
+ * Port dû : collecté (si pas encore encaissé par le livreur) puis reçu par le chef d'agence → caisse.
+ * `cheque` (04/11/2026, recherche de Caisse Agence) : le destinataire a payé le port dû PAR CHÈQUE — collecte avec les
+ * détails du chèque, SANS entrée de caisse espèces (le chèque suit le circuit des chèques : onglet « Ports dû chèque »).
+ */
+export async function chefReceivePortDu(p: any, by: ChefActor, linked = true, cheque?: PortDuCheque): Promise<Record<string, any>> {
   const ref = await parcelRefOf(p)
   const entryRef = newCaisseEntryRef()
   const now = new Date().toISOString()
@@ -70,6 +79,13 @@ export async function chefReceivePortDu(p: any, by: ChefActor, linked = true): P
     portExpReceivedAt: now, portExpReceivedBy: by.name, portExpReceivedById: by.id, portExpReceivedRole: 'chef_agence',
     portChefReceivedAt: now, portChefReceivedBy: by.name, portChefReceivedById: by.id,
   }
+  const chq = cheque ? { banque: String(cheque.banque || '').trim(), numero: String(cheque.numero || '').trim(), dateEncaissement: String(cheque.dateEncaissement || '') } : null
+  if (chq && (!chq.banque || !chq.numero)) throw new Error('Banque et numéro du chèque obligatoires.')
+  const method = chq ? 'cheque' : 'especes'
+  const chequeFields = chq ? {
+    portDuChequeBanque: chq.banque, portDuChequeNumero: chq.numero, portDuChequeDateEncaissement: chq.dateEncaissement,
+    portDuChequeFinalizedAt: now, portDuChequeFinalizedBy: by.name,
+  } : {}
   const out = await runTransaction(db, async tx => {
     const snap = await tx.get(ref)
     if (!snap.exists()) throw new Error(`${nicOf(p)} : expédition introuvable.`)
@@ -83,11 +99,14 @@ export async function chefReceivePortDu(p: any, by: ChefActor, linked = true): P
       throw new Error(`${nicOf(p)} : port dû déjà reçu par le chef d'exploitation${cur.portExpReceivedBy ? ` (${cur.portExpReceivedBy})` : ''} — ${ENVOI_MSG}.`)
     }
     const notCollected = cur.portStatus !== 'collected' && cur.portStatus !== 'received'
+    if (chq && !notCollected) throw new Error(`${nicOf(p)} : port dû déjà encaissé${cur.portCollectedBy ? ` par ${cur.portCollectedBy}` : ''} — collecte par chèque impossible.`)
+    // ↩️ Port dû d'un RETOUR : espèces seulement (la règle Firestore dédiée aux retours n'autorise pas les champs du chèque)
+    if (chq && (cur.wasReturned || cur.returnedAt)) throw new Error(`${nicOf(p)} : expédition retournée — port dû en espèces seulement.`)
     // Pas de collecte NI de réception sans livraison — même si le port était déjà « encaissé » (diagnostic du
     // 24/10/2026, point 1.4 : 1077852D « Initialisé », 1057734 « En transit » reçus le 15/10)
     assertCollectAllowedStatus(cur, 'port')
     // Espèces en caisse (un port dû payé par chèque suit le circuit des chèques)
-    const withEntry = (notCollected || cur.portDuReceivedMethod !== 'cheque') && priceOf(cur) > 0
+    const withEntry = !chq && (notCollected || cur.portDuReceivedMethod !== 'cheque') && priceOf(cur) > 0
     if (withEntry) {
       tx.set(entryRef, caisseEntryDoc({
         type: 'entree', category: 'port_du', amount: priceOf(cur),
@@ -97,7 +116,7 @@ export async function chefReceivePortDu(p: any, by: ChefActor, linked = true): P
       }))
     }
     tx.update(ref, {
-      ...(notCollected ? { portStatus: 'collected', portCollectedBy: by.name, portCollectedById: by.id, portCollectedAt: Timestamp.now(), portDuReceivedMethod: 'especes' } : {}),
+      ...(notCollected ? { portStatus: 'collected', portCollectedBy: by.name, portCollectedById: by.id, portCollectedAt: Timestamp.now(), portDuReceivedMethod: method, ...chequeFields } : {}),
       ...received,
       ...(withEntry ? { portCaisseEntryId: entryRef.id } : {}),
     })
@@ -113,7 +132,7 @@ export async function chefReceivePortDu(p: any, by: ChefActor, linked = true): P
     ...codFields,
     ...received, ...(out.withEntry ? { portCaisseEntryId: entryRef.id } : {}), ...(delivered || {}),
     // portCollectedAt : la carte « Collectes par jour » range le port à cette date (affichage immédiat)
-    ...(out.notCollected ? { portStatus: 'collected', portCollectedBy: by.name, portCollectedById: by.id, portCollectedAt: now, portDuReceivedMethod: 'especes' } : {}),
+    ...(out.notCollected ? { portStatus: 'collected', portCollectedBy: by.name, portCollectedById: by.id, portCollectedAt: now, portDuReceivedMethod: method, ...chequeFields } : {}),
   }
 }
 
@@ -136,7 +155,11 @@ export async function chefCancelPortDu(p: any, by: ChefActor, linked = true): Pr
       portChefReceivedAt: null, portChefReceivedBy: null, portChefReceivedById: null, portCaisseEntryId: null,
     }
     // Collecté par moi au guichet de la caisse : la collecte est annulée aussi (redevient à collecter)
-    if (cur.portCollectedById === by.id) Object.assign(reset, { portStatus: null, portCollectedBy: null, portCollectedById: null, portCollectedAt: null, portDuReceivedMethod: null })
+    if (cur.portCollectedById === by.id) {
+      Object.assign(reset, { portStatus: null, portCollectedBy: null, portCollectedById: null, portCollectedAt: null, portDuReceivedMethod: null })
+      // Collecte PAR CHÈQUE faite par moi : détails du chèque effacés aussi (l'expédition sort de « Ports dû chèque »)
+      if (cur.portDuReceivedMethod === 'cheque') for (const k of PORT_CHEQUE_FIELDS) if (k in cur) reset[k] = null
+    }
     if (cur.portCaisseEntryId) tx.delete(doc(db, 'caisseEntries', cur.portCaisseEntryId))
     tx.update(ref, reset)
     return reset

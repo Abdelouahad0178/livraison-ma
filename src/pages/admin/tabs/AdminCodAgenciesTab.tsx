@@ -7,7 +7,10 @@ import { collection, query, orderBy, onSnapshot, where, Timestamp } from 'fireba
 import { db } from '../../../firebase/config'
 import { getLiteDaySliceCached, PARCELS_LITE_COLLECTION } from '../../../firebase/parcels'
 import { ALL_CITIES } from '../../../utils/liteDayCache'
-import { getOperationalDayRange, getCurrentOperationalDay } from '../../../config/operationalDay'
+import { getOperationalDayRange, getCurrentOperationalDay, getOperationalDayString } from '../../../config/operationalDay'
+import { useCodAgencyDays } from '../../../hooks/useCodAgencyDays'
+import { codAgencyFromDays, codResteFromDays } from '../../../utils/codAgencyContribution'
+import { fetchCodAgencyParcels } from '../../../firebase/codAgencyLists'
 import { useOperationalDay } from '../../../hooks/useOperationalDay'
 import { useStartOnPreviousWorkedDay } from '../../../hooks/useStartOnPreviousWorkedDay'
 import { buildDaySlices, opDayOf } from '../../../utils/daySlices'
@@ -131,6 +134,8 @@ export default function AdminCodAgenciesTab({
 
   // État pour la modale Caisse Agence
   const [showCaisseModal, setShowCaisseModal] = useState(false)
+  // 📋 Clic sur un montant (vue théorique / caisse) → expéditions de cette agence, espèces OU valeurs, imprimables
+  const [detail, setDetail] = useState<{ city: string; part: 'especes' | 'cheque' | 'traite' } | null>(null)
 
   // 📅 Période active (recalculée aussi au changement de journée d'opération)
   const { dayString: currentOpDay } = useOperationalDay()
@@ -152,6 +157,18 @@ export default function AdminCodAgenciesTab({
   const periodStartMs = period.start.getTime()
   const periodEndMs = period.end.getTime()
 
+  // 💰 (01/11/2026) TOTAUX TENUS PAR LE SERVEUR (codAgencyDays, Cloud Function syncCodAgencyStats — même règle
+  // computeAgencyCodStats) : Résumé, tableau, TOUS les filtres (vue, direction, ville d'origine, type de valeur) et
+  // « Reste à encaisser » sans charger les expéditions de la période ; les listes (montant cliqué, reste d'une agence) ne
+  // lisent que les expéditions concernées (fetchCodAgencyParcels). Totaux du serveur indisponibles → ancienne méthode
+  // (toutes les expéditions de la période), automatiquement.
+  const [serverFailed, setServerFailed] = useState(false)
+  const serverTotals = !serverFailed
+  const fromDay = getOperationalDayString(period.start)
+  const toDay = getOperationalDayString(new Date(periodEndMs - 1))
+  const server = useCodAgencyDays(fromDay, toDay, serverTotals && startReady)
+  useEffect(() => { if (server.error) setServerFailed(true) }, [server.error])
+
   // États de chargement
   // ⚡ Journée d'opération EN COURS : écoute temps réel (onSnapshot). Journées PASSÉES : lues UNE fois
   // en version allégée (parcelsLite) via la MÉMOIRE DES JOURNÉES (firebase/parcels getLiteDaySliceCached,
@@ -170,6 +187,9 @@ export default function AdminCodAgenciesTab({
   const [loadedCount, setLoadedCount] = useState(0)
   const [dayProgress, setDayProgress] = useState<{ done: number; total: number; label: string } | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // ✅ Période dont les expéditions sont ENTIÈREMENT chargées (publiée avec elles) : en passant des totaux du serveur aux
+  // expéditions (filtre, liste), aucun chiffre n'est affiché avant la fin du chargement — pas de zéros d'un instant
+  const [parcelsFor, setParcelsFor] = useState('')
   // 🔢 Génération : toute réponse d'un chargement précédent (autre période) est ignorée
   const loadGenRef = useRef(0)
 
@@ -193,6 +213,14 @@ export default function AdminCodAgenciesTab({
   // donnée de l'ancienne période ne peut revenir (génération).
   useEffect(() => {
     if (!startReady) return
+    // 💰 Totaux du serveur : aucune expédition à charger (elles le seront si un filtre, « Reste à encaisser » ou une liste les demande)
+    if (serverTotals) {
+      loadGenRef.current += 1
+      startTransition(() => setPeriodParcels([]))
+      setLoading(false); setSyncing(false); setLoadedCount(0); setLoadError(null); setDayProgress(null)
+      setParcelsFor('')
+      return
+    }
     const gen = ++loadGenRef.current
     const start = new Date(periodStartMs)
     const end = new Date(periodEndMs)
@@ -245,6 +273,7 @@ export default function AdminCodAgenciesTab({
           allReady = true
           setDayProgress(null)
           publish() // résultat complet, publié d'un seul coup (comme avant)
+          startTransition(() => setParcelsFor(`${periodStartMs}|${periodEndMs}`))
           setLoading(false)
         }
       }
@@ -353,7 +382,7 @@ export default function AdminCodAgenciesTab({
       if (refreshTimer) clearInterval(refreshTimer)
       unsubs.forEach((u) => u())
     }
-  }, [periodStartMs, periodEndMs, startReady])
+  }, [periodStartMs, periodEndMs, startReady, serverTotals])
   // Note: ville, type de port, direction et mode sont appliqués côté frontend (useMemo) : pas de
   // rechargement Firestore pour ces filtres.
 
@@ -383,13 +412,20 @@ export default function AdminCodAgenciesTab({
   }, [periodParcels, deferredFilters])
 
   const periodRangeText = `${fmtDay(period.start)} 08h00 → ${fmtDay(period.end)} 06h00`
+  const parcelsReady = !loading && parcelsFor === `${periodStartMs}|${periodEndMs}`
 
   // ✅ Statistiques COD par agence (utils/agencyCodStats — même organisation que computeAgencyPortStats)
   // Mode theoretical = valeurs attendues ; mode physical = argent réellement encaissé / réglé
+  const fromDays = useMemo(() => {
+    if (!serverTotals || !server.docs) return null
+    const { directionFilter, originCityFilter, viewMode } = deferredFilters
+    return codAgencyFromDays(server.docs, CITIES, { viewMode, directionFilter, originCityFilter })
+  }, [serverTotals, server.docs, deferredFilters])
   const codStats = useMemo(() => {
+    if (fromDays) return fromDays.stats
     const { directionFilter, originCityFilter, viewMode } = deferredFilters
     return computeAgencyCodStats(filteredByDate, { viewMode, directionFilter, originCityFilter })
-  }, [filteredByDate, deferredFilters])
+  }, [filteredByDate, deferredFilters, fromDays])
 
   // Filtres ville et type de valeur (portTypeFilter = type de COD : especes / cheque / traite)
   const filteredStats = useMemo(() => {
@@ -403,12 +439,14 @@ export default function AdminCodAgenciesTab({
 
   // 🔢 Expéditions DISTINCTES avec une valeur comptée pour les agences affichées
   const uniqueExpeditionsCount = useMemo(() => {
+    // Totaux du serveur : expéditions distinctes des agences affichées (combinaisons d'agences tenues par le serveur)
+    if (fromDays) return fromDays.uniqueOf(filteredStats.map(s => s.city))
     const { directionFilter, originCityFilter, viewMode } = deferredFilters
     const cities = filteredStats.map(s => s.city)
     return filteredByDate.filter((p: any) => hasCountedCod(p) &&
       (directionFilter !== 'received' || originCityFilter === 'all' || p.originCity === originCityFilter) &&
       cities.some(c => computeAgencyCodStats([p], { viewMode, directionFilter, originCityFilter, cities: [c] })[0].total > 0)).length
-  }, [filteredByDate, filteredStats, deferredFilters])
+  }, [filteredByDate, filteredStats, deferredFilters, fromDays])
 
   const totauxFiltres = useMemo(() => {
     const t = filteredStats.reduce((acc, s) => ({
@@ -426,6 +464,18 @@ export default function AdminCodAgenciesTab({
   // 💵 Espèces et 📋 valeurs (chèques + traites) toujours SÉPARÉES dans « Caisse » et « Reste à encaisser »
   const resteRowsOf = (part: 'especes' | 'cheque' | 'traite'): ResteRow[] => {
     const { selectedCity } = deferredFilters
+    // Totaux du serveur : attendu / encaissé / nombre d'expéditions ; la liste d'une agence est lue au clic (ciblée)
+    if (serverTotals && server.docs) {
+      const docs = server.docs
+      return CITIES.filter(c => selectedCity === 'all' || c === selectedCity).map(c => {
+        const r = codResteFromDays(docs, c, part)
+        return {
+          city: c, attendu: r.attendu, encaisse: r.encaisse, reste: r.reste, lines: [], count: r.count,
+          loadLines: () => fetchCodAgencyParcels(c, fromDay, toDay, v => (Number(v[`reste_${part}_n`]) || 0) > 0)
+            .then(ps => codResteLines(ps, c, part) as any),
+        }
+      }).filter(r => r.attendu || r.encaisse)
+    }
     return CITIES.filter(c => selectedCity === 'all' || c === selectedCity).map(c => {
       const t = computeAgencyCodStats(filteredByDate, { viewMode: 'theoretical', directionFilter: 'received', cities: [c] })[0]
       const ph = computeAgencyCodStats(filteredByDate, { viewMode: 'physical', directionFilter: 'received', cities: [c] })[0]
@@ -434,16 +484,34 @@ export default function AdminCodAgenciesTab({
       return { city: c, attendu, encaisse, reste: Math.round((attendu - encaisse) * 100) / 100, lines: codResteLines(filteredByDate, c, part) as any }
     }).filter(r => r.attendu || r.encaisse)
   }
-  const resteRows = useMemo(() => (showReste ? resteRowsOf('especes') : []), [showReste, filteredByDate, deferredFilters])
-  const resteRowsCheques = useMemo(() => (showReste ? resteRowsOf('cheque') : []), [showReste, filteredByDate, deferredFilters])
-  const resteRowsTraites = useMemo(() => (showReste ? resteRowsOf('traite') : []), [showReste, filteredByDate, deferredFilters])
+  const resteRows = useMemo(() => (showReste ? resteRowsOf('especes') : []), [showReste, filteredByDate, deferredFilters, server.docs])
+  const resteRowsCheques = useMemo(() => (showReste ? resteRowsOf('cheque') : []), [showReste, filteredByDate, deferredFilters, server.docs])
+  const resteRowsTraites = useMemo(() => (showReste ? resteRowsOf('traite') : []), [showReste, filteredByDate, deferredFilters, server.docs])
   /** Vue « Caisse » : seules les ESPÈCES entrent en caisse ; les valeurs sont affichées à part. */
   const cashOnly = viewMode === 'physical'
   // 📋 Clic sur un montant (vue théorique / caisse) → expéditions de cette agence, espèces OU valeurs, imprimables
-  const [detail, setDetail] = useState<{ city: string; part: 'especes' | 'cheque' | 'traite' } | null>(null)
-  const detailLines = useMemo(() => !detail ? [] : codAgencyLines(filteredByDate, detail.city, {
-    viewMode: deferredFilters.viewMode, directionFilter: deferredFilters.directionFilter, originCityFilter: deferredFilters.originCityFilter, part: detail.part,
-  }), [detail, filteredByDate, deferredFilters])
+  // Totaux du serveur : seules les expéditions concernées sont lues (montant de cette agence, cette direction, ce type)
+  const detailKey = detail ? [detail.city, detail.part, fromDay, toDay, deferredFilters.viewMode, deferredFilters.directionFilter, deferredFilters.originCityFilter].join('|') : ''
+  const [detailState, setDetailState] = useState<{ key: string; lines: any[] | null; error?: string } | null>(null)
+  useEffect(() => {
+    if (!detail || !serverTotals) return
+    let alive = true
+    const { viewMode, directionFilter, originCityFilter } = deferredFilters
+    const dir = directionFilter === 'sent' ? 'snd' : directionFilter === 'received' ? 'rcv' : 'all'
+    setDetailState({ key: detailKey, lines: null })
+    fetchCodAgencyParcels(detail.city, fromDay, toDay, v => (Number(v[`th_${dir}_${detail.part}`]) || 0) > 0)
+      .then(ps => { if (alive) setDetailState({ key: detailKey, lines: codAgencyLines(ps, detail.city, { viewMode, directionFilter, originCityFilter, part: detail.part }) }) })
+      .catch(e => { if (alive) setDetailState({ key: detailKey, lines: [], error: e?.message || String(e) }) })
+    return () => { alive = false }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [detailKey, serverTotals])
+  const detailLines = useMemo(() => {
+    if (!detail) return []
+    if (serverTotals) return detailState?.key === detailKey ? detailState.lines : null
+    return codAgencyLines(filteredByDate, detail.city, {
+      viewMode: deferredFilters.viewMode, directionFilter: deferredFilters.directionFilter, originCityFilter: deferredFilters.originCityFilter, part: detail.part,
+    })
+  }, [detail, filteredByDate, deferredFilters, serverTotals, detailState, detailKey])
 
   const hasActiveFilter = selectedCity !== 'all' || portTypeFilter !== 'all' || datePreset !== 'all' || directionFilter !== 'received'
 
@@ -983,8 +1051,24 @@ export default function AdminCodAgenciesTab({
         </div>
       </div>
 
+      {/* 💰 Totaux du serveur : lecture impossible → message (aucun chiffre faux affiché) */}
+      {serverTotals && server.error && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-xl p-4 flex items-center gap-3 print:hidden">
+          <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0" />
+          <p className="text-sm font-bold text-red-900">Totaux du serveur indisponibles : {server.error}</p>
+        </div>
+      )}
+
       {/* ⏳ Chargement de la période : aucune donnée d'une autre période n'est affichée */}
-      {loading && (
+      {serverTotals && !server.ready && !server.error && (
+        <div className="bg-white rounded-2xl border border-purple-200 shadow-sm p-6 print:hidden">
+          <div className="flex items-center gap-3">
+            <Loader2 className="w-6 h-6 text-purple-600 animate-spin flex-shrink-0" />
+            <p className="text-sm font-bold text-purple-900">Chargement des totaux de la période…</p>
+          </div>
+        </div>
+      )}
+      {!serverTotals && !parcelsReady && (
         <div className="bg-white rounded-2xl border border-purple-200 shadow-sm p-6 print:hidden">
           <div className="flex items-center gap-3">
             <Loader2 className="w-6 h-6 text-purple-600 animate-spin flex-shrink-0" />
@@ -1001,7 +1085,7 @@ export default function AdminCodAgenciesTab({
         </div>
       )}
 
-      {!loading && showReste && (
+      {(serverTotals ? server.ready : parcelsReady) && showReste && (
         <ResteParAgence alert rows={resteRows} subject={"COD espèces"} periodText={restePeriodText} kindLabels={COD_KIND_LABEL} help={"espèces des expéditions reçues, attendues moins encaissées"}>
           {/* 📋 Valeurs (chèques / traites) : présentées SÉPARÉMENT des espèces */}
           <div className="pt-2 border-t-2 border-dashed border-blue-200">
@@ -1019,7 +1103,7 @@ export default function AdminCodAgenciesTab({
         </ResteParAgence>
       )}
 
-      {!loading && !showReste && (
+      {(serverTotals ? server.ready : parcelsReady) && !showReste && (
       <>
       {/* Carte résumé (filtré) */}
       <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-orange-200 rounded-xl p-6 shadow-lg print:bg-gray-50 print:rounded-none print:mb-6">
@@ -1030,6 +1114,7 @@ export default function AdminCodAgenciesTab({
             </h3>
             <p className="text-xs text-gray-500 mt-0.5">
               🗓️ {period.label} — journées d'opération : {periodRangeText}
+              {serverTotals && <span className="ml-1 text-emerald-700 font-semibold">· ⚡ totaux du serveur, en temps réel</span>}
             </p>
           </div>
           <span className="text-sm text-gray-600">
@@ -1178,7 +1263,15 @@ export default function AdminCodAgenciesTab({
         </HScrollArrows>
       </div>
       <p className="text-xs text-gray-500 print:hidden">Cliquez sur un montant 👁 (espèces, chèques ou traites) pour voir les expéditions — espèces, chèques et traites séparés — et les imprimer.</p>
-      {detail && (
+      {detail && detailLines === null && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4 print:hidden" onClick={() => setDetail(null)}>
+          <div className="bg-white rounded-2xl shadow-xl px-6 py-5 flex items-center gap-3" onClick={e => e.stopPropagation()}>
+            <Loader2 className="w-6 h-6 text-purple-600 animate-spin" />
+            <p className="text-sm font-bold text-purple-900">Chargement des expéditions de {detail.city}…</p>
+          </div>
+        </div>
+      )}
+      {detail && detailLines !== null && (
         <ResteAEncaisserModal
           city={detail.city}
           periodText={`${restePeriodText} · ${directionFilter === 'sent' ? 'envoyées' : directionFilter === 'received' ? 'reçues' : 'envoyées + reçues'}`}

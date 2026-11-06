@@ -71,3 +71,14 @@ describe('COD mixte (chèque + espèces) — COD par agence', () => {
     expect(codAgencyLines([p], 'Ait Melloul', { viewMode: 'physical', part: 'especes' })[0]).toMatchObject({ attendu: 356.22, kind: 'mixte' })
   })
 })
+
+// 01/11/2026 — COD encaissés avant le 05/10/2026 comptés (comme la page du chef d'agence), dans les deux vues
+describe('COD par agence : COD encaissé avant le 05/10/2026', () => {
+  const p = { id: 'av', originCity: 'Marrakech', destinationCity: 'Agadir', status: 'Livré', destinationArrivedAt: 'x', serviceType: 'especes',
+    codAmount: 2720, codStatus: 'collected', codCollectedAt: '2026-10-02T10:00:00.000Z', createdAt: '2026-10-01T10:00:00.000Z', workDate: '2026-10-01' }
+  it('compté en vue théorique ET en situation caisse : le reste à encaisser ne change pas', () => {
+    expect(computeAgencyCodStats([p], { viewMode: 'theoretical', directionFilter: 'received', cities: ['Agadir'] })[0].especes).toBe(2720)
+    expect(computeAgencyCodStats([p], { viewMode: 'physical', directionFilter: 'received', cities: ['Agadir'] })[0].especes).toBe(2720)
+    expect(codResteLines([p], 'Agadir', 'especes')).toEqual([])
+  })
+})

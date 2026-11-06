@@ -412,11 +412,16 @@ ${rows.map(r => `<tr>${cols.map(c => `<td${c.includes('DH') ? ' class="r"' : ''}
                         {isMixedCod(p) && <span className="block text-[11px] font-semibold text-orange-500">{codPartsBreakdown(p)}</span>}
                         {p.codDocMismatch === true && (
                           <span className="block mt-0.5 rounded bg-amber-100 border border-amber-300 px-1 text-[10px] font-bold text-amber-800"
-                            title={`Signalé par ${p.codDocMismatchBy || '—'}${p.codDocMismatchNote ? ` : ${p.codDocMismatchNote}` : ''} — à corriger : « Modifier l'expédition » → + Espèces`}>
-                            ⚠️ {Array.isArray(p.codDocMismatchGroupNics) && p.codDocMismatchGroupNics.length > 1 ? 'Chèque groupé' : 'Chèque'} reçu {Number(p.codDocMismatchReceived || 0).toLocaleString('fr-MA')} DH · reste {Number(p.codDocMismatchCash || 0).toLocaleString('fr-MA')} DH en espèces{isMixedCod(p) ? ' (✓ corrigé en mixte)' : ''}
-                            {/* 🔗 Chèque groupé : montants du GROUPE entier, à répartir entre ses expéditions */}
+                            title={`Signalé par ${p.codDocMismatchBy || '—'}${p.codDocMismatchNote ? ` : ${p.codDocMismatchNote}` : ''} — à corriger : « Modifier l'expédition » → Type de service « Chèque + espèces »`}>
+                            ⚠️ {Array.isArray(p.codDocMismatchGroupNics) && p.codDocMismatchGroupNics.length > 1 ? 'Chèque groupé' : 'Chèque'} reçu {Number(p.codDocMismatchReceived || 0).toLocaleString('fr-MA')} DH · reste {Number(p.codDocMismatchCash || 0).toLocaleString('fr-MA')} DH en espèces{p.codDocMismatchShare === true ? ' (part de cette expédition)' : ''}{isMixedCod(p) ? ' (✓ corrigé en mixte)' : ''}
+                            {/* 🔗 Groupe : depuis le 03/11/2026, montants PROPRES à l'expédition (codDocMismatchShare) ; avant, montants
+                                du groupe entier, à répartir entre ses expéditions */}
                             {Array.isArray(p.codDocMismatchGroupNics) && p.codDocMismatchGroupNics.length > 1 && (
-                              <span className="block font-semibold text-amber-700">pour {p.codDocMismatchGroupNics.length} expéditions : {p.codDocMismatchGroupNics.join(', ')}</span>
+                              <span className="block font-semibold text-amber-700">
+                                {p.codDocMismatchShare === true
+                                  ? `groupe de ${p.codDocMismatchGroupNics.length} expéditions (espèces en tout : ${Number(p.codDocMismatchGroupCash || 0).toLocaleString('fr-MA')} DH) : `
+                                  : `pour ${p.codDocMismatchGroupNics.length} expéditions (montants du groupe entier) : `}{p.codDocMismatchGroupNics.join(', ')}
+                              </span>
                             )}
                           </span>
                         )}

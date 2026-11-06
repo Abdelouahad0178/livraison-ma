@@ -437,6 +437,46 @@ exports.onParcelWrite = onDocumentWritten('parcels/{parcelId}', async (event) =>
 // - Sinon on RELIT le colis (et non l'instantané de l'événement) : les événements peuvent arriver
 //   dans le désordre ; relire garantit que la dernière exécution écrit l'état le plus récent.
 // Idempotent (set complet, pas de merge) : rejouer un événement réécrit la même projection.
+// ── 🔎 Index de recherche par mot (Admin, 03/11/2026) : parcels/{id} → parcelSearch/{id} = { w: jetons, d: date } ──
+// Règle partagée avec la page (shared/searchWords.js, compilé depuis src/utils/searchWords.ts) : mots des noms
+// (expéditeur, destinataire, client en compte) et numéros de chèque / traite. Rien n'est écrit si l'index ne change pas ;
+// sinon le colis est RELU (événements dans le désordre) et l'index remplacé. Les expéditions ne sont jamais modifiées.
+const { searchDocOf } = require('./shared/searchWords')
+exports.syncParcelSearch = onDocumentWritten({ document: 'parcels/{parcelId}', retry: true }, async (event) => {
+  const id = event.params.parcelId
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after  = event.data?.after?.exists  ? event.data.after.data()  : null
+  const key = d => (d ? JSON.stringify(searchDocOf(d)) : '')
+  if (before && after && key(before) === key(after)) return
+  const ref = db.collection('parcelSearch').doc(id)
+  const fresh = await db.collection('parcels').doc(id).get()
+  if (!fresh.exists) { await ref.delete(); return }
+  await ref.set(searchDocOf(fresh.data()))
+})
+
+// ── 🔔 Réveil automatique des expéditions rangées (05/11/2026) ─────────────────────────────────────────────
+// Une expédition RANGÉE (isArchived) et réglée qui redevient « à régler » (encaissement annulé, livraison annulée…) sort
+// des archives : rien de non réglé ne reste caché. Période d'essai (avant le 05/10) jamais réveillée. Règle partagée :
+// shared/archiveRule.js (compilé depuis src/utils/archiveRule.ts, testé). État RELU dans une transaction (événements
+// dans le désordre) ; une seule écriture, seulement quand il faut réveiller.
+const { shouldWakeArchived, isArchivedButUnsettled, isArchiveSettled, isTrialPeriodParcel, UNARCHIVED_BY_AUTO } = require('./shared/archiveRule')
+exports.wakeArchivedParcel = onDocumentWritten({ document: 'parcels/{parcelId}', retry: true }, async (event) => {
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after  = event.data?.after?.exists  ? event.data.after.data()  : null
+  if (!shouldWakeArchived(before, after)) return
+  const ref = db.collection('parcels').doc(event.params.parcelId)
+  await db.runTransaction(async tx => {
+    const snap = await tx.get(ref)
+    if (!snap.exists) return
+    const cur = snap.data()
+    if (!isArchivedButUnsettled(cur)) return
+    tx.update(ref, {
+      isArchived: false, archivedAt: FieldValue.delete(), archivedBy: FieldValue.delete(),
+      unarchivedAt: new Date().toISOString(), unarchivedBy: UNARCHIVED_BY_AUTO, unarchivedFrom: cur.archivedBy || '',
+    })
+  })
+})
+
 const { projectParcelLite, liteKey, citiesLeft } = require('./parcelLite')
 // retry: true — la fonction relit toujours le colis à jour (idempotente) : un échec ponctuel ne doit plus
 // laisser une copie allégée en retard (les pages de caisse lisent parcelsLite pour les journées passées).
@@ -550,6 +590,36 @@ exports.syncEnvoiContrib = onDocumentWritten({ document: 'parcels/{parcelId}', r
   if (b && a && envoiKey(b) === envoiKey(a)) return
   const fresh = await db.collection('parcels').doc(id).get()
   await syncEnvoi(db, FieldValue, id, fresh.exists ? fresh.data() : null)
+})
+
+// ── 📮 Totaux de « Port par agence » (Admin) — voir functions/portAgency.js (01/11/2026) ──
+// Même principe : rien à faire si la contribution n'a pas changé ; sinon relecture du colis à jour puis différence
+// appliquée en transaction. Expédition supprimée : retirée (l'onglet ne lit que les expéditions de la base active).
+const { syncPortAgency, portAgencyOf, agencyCities, sameContribution: samePortAgency } = require('./portAgency')
+exports.syncPortAgencyStats = onDocumentWritten({ document: 'parcels/{parcelId}', retry: true }, async (event) => {
+  const id = event.params.parcelId
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after  = event.data?.after?.exists  ? event.data.after.data()  : null
+  const cities = await agencyCities(db)
+  const b = portAgencyOf(before, cities), a = portAgencyOf(after, cities)
+  if (!b && !a) return
+  if (samePortAgency(b, a)) return
+  const fresh = await db.collection('parcels').doc(id).get()
+  await syncPortAgency(db, FieldValue, id, fresh.exists ? fresh.data() : null, cities)
+})
+
+// ── 💰 Totaux de « COD par agence » (Admin) — voir functions/codAgency.js (01/11/2026) ──
+const { syncCodAgency, codAgencyOf, sameContribution: sameCodAgency } = require('./codAgency')
+exports.syncCodAgencyStats = onDocumentWritten({ document: 'parcels/{parcelId}', retry: true }, async (event) => {
+  const id = event.params.parcelId
+  const before = event.data?.before?.exists ? event.data.before.data() : null
+  const after  = event.data?.after?.exists  ? event.data.after.data()  : null
+  const cities = await agencyCities(db)
+  const b = codAgencyOf(before, cities), a = codAgencyOf(after, cities)
+  if (!b && !a) return
+  if (sameCodAgency(b, a)) return
+  const fresh = await db.collection('parcels').doc(id).get()
+  await syncCodAgency(db, FieldValue, id, fresh.exists ? fresh.data() : null, cities)
 })
 
 // ── 🤖 Rapport du Contrôleur (Admin › 🤖 Rapports, à la demande, admin seulement) — voir functions/controlReport.js ──
@@ -784,92 +854,64 @@ exports.autoArchiveOldParcels = onSchedule({
 
 // ── Fonction callable pour archivage manuel ──────────────────────────────
 exports.manualArchive = onCall({ maxInstances: 1, timeoutSeconds: 540 }, async (request) => {
+  // 🗄️ Archivage manuel (Admin › Archivage, par statut / ville / ancienneté) — 05/11/2026 : RANGE sur place (isArchived),
+  // ne déplace plus vers parcels_archive et n'efface plus rien de la base principale (avant : copie + suppression).
+  // Seulement les expéditions TERMINÉES ET RÉGLÉES (shared/archiveRule) ; période d'essai (avant le 05/10/2026) : sans condition.
   const { olderThanDays = 90, statuses = ['Livré', 'Retourné', 'Retour finalisé'], city = null } = request.data || {}
 
   if (!request.auth || !request.auth.uid) {
     throw new Error('Non authentifié')
   }
-
   const userDoc = await db.collection('users').doc(request.auth.uid).get()
   if (!userDoc.exists || userDoc.data().role !== 'admin') {
     throw new Error('Permission refusée - Admin uniquement')
   }
 
-  console.log(`🗄️  Archivage manuel: colis > ${olderThanDays} jours, ville: ${city || 'Toutes'}`)
-
-  const cutoffDate = new Date()
-  cutoffDate.setDate(cutoffDate.getDate() - olderThanDays)
-  const cutoffTimestamp = Timestamp.fromDate(cutoffDate)
+  const days = Math.max(1, Math.round(Number(olderThanDays)) || 90)
+  const st = Array.isArray(statuses) && statuses.length ? statuses.filter(Boolean).slice(0, 10) : ['Livré']
+  const cutoff = Timestamp.fromDate(new Date(Date.now() - days * 86400000))
+  const name = userDoc.data().name || 'Admin'
+  console.log(`🗄️  Archivage manuel (rangement sur place) : > ${days} jours, statuts ${st.join(', ')}, ville ${city || 'Toutes'}`)
 
   let totalArchived = 0
-  const BATCH_SIZE = 500
-  let hasMore = true
-
-  while (hasMore) {
-    const snapshot = await db.collection('parcels')
-      .where('createdAt', '<', cutoffTimestamp)
-      .where('status', 'in', statuses)
-      .limit(BATCH_SIZE)
-      .get()
-
-    if (snapshot.empty) {
-      hasMore = false
-      break
-    }
-
+  let skippedUnsettled = 0
+  let scanned = 0
+  let last = null
+  const startedAt = Date.now()
+  for (;;) {
+    if (Date.now() - startedAt > 480000) break
+    let q = db.collection('parcels').where('createdAt', '<', cutoff).where('status', 'in', st).orderBy('createdAt').limit(500)
+    if (last) q = q.startAfter(last)
+    const snap = await q.get()
+    if (snap.empty) break
+    last = snap.docs[snap.docs.length - 1]
+    scanned += snap.size
     const batch = db.batch()
-    const archiveBatch = db.batch()
-
-    // Filtrer par ville si spécifiée
-    const docsToArchive = city
-      ? snapshot.docs.filter(doc => {
-          const data = doc.data()
-          return data.originCity === city || data.destinationCity === city
-        })
-      : snapshot.docs
-
-    if (docsToArchive.length === 0 && snapshot.size === BATCH_SIZE) {
-      // Si aucun doc ne correspond au filtre ville mais qu'on a un batch plein, continuer
-      continue
+    let n = 0
+    for (const d of snap.docs) {
+      const x = d.data()
+      if (x.isArchived) continue
+      if (city && x.originCity !== city && x.destinationCity !== city) continue
+      if (!isTrialPeriodParcel(x) && !isArchiveSettled(x)) { skippedUnsettled++; continue }
+      batch.update(d.ref, { isArchived: true, archivedAt: new Date().toISOString(), archivedBy: `admin-manual-${request.auth.uid}`, archivedByName: name })
+      n++
     }
-
-    docsToArchive.forEach(doc => {
-      const archiveRef = db.collection('parcels_archive').doc(doc.id)
-      archiveBatch.set(archiveRef, {
-        ...doc.data(),
-        archivedAt: FieldValue.serverTimestamp(),
-        archivedReason: 'manual_archive',
-        archivedBy: request.auth.uid,
-        archivedByName: userDoc.data().name || 'Admin'
-      })
-      batch.delete(doc.ref)
-    })
-
-    if (docsToArchive.length > 0) {
-      await archiveBatch.commit()
-      await batch.commit()
-      totalArchived += docsToArchive.length
-      console.log(`✅ ${totalArchived} colis archivés...`)
-    }
-
-    // Si on n'a pas un batch plein, on a fini
-    if (snapshot.size < BATCH_SIZE) {
-      hasMore = false
-    }
+    if (n) { await batch.commit(); totalArchived += n }
+    if (snap.size < 500) break
   }
 
-  // Log l'action
   await db.collection('director_logs').add({
     type: 'manual_archive',
-    action: `Archivage manuel par ${userDoc.data().name}`,
-    details: { totalArchived, olderThanDays, statuses },
+    action: `Archivage manuel (rangement sur place) par ${name}`,
+    details: { totalArchived, skippedUnsettled, scanned, olderThanDays: days, statuses: st, city: city || 'Toutes' },
     userId: request.auth.uid,
-    userName: userDoc.data().name,
+    userName: name,
     timestamp: FieldValue.serverTimestamp()
   })
 
-  return { success: true, totalArchived, cutoffDate: cutoffDate.toISOString() }
+  return { success: true, totalArchived, skippedUnsettled, scanned, cutoffDate: cutoff.toDate().toISOString() }
 })
+
 
 // ── Supprimer les archives ────────────────────────────────────────────────
 exports.deleteArchive = onCall({ maxInstances: 1, timeoutSeconds: 540 }, async (request) => {
@@ -947,123 +989,16 @@ exports.deleteArchive = onCall({ maxInstances: 1, timeoutSeconds: 540 }, async (
   }
 })
 
-// ── Archivage automatique hebdomadaire ────────────────────────────────────────
+// ── Archivage automatique (chaque jour à 2 h) ────────────────────────────────
 
-/**
- * Marque les vieux colis comme archivés (soft delete)
- * Politique AGGRESSIVE: 30 jours pour Livré, Retourné, Annulé
- */
-async function runWeeklyArchiving() {
-  console.log('🗄️  Démarrage archivage automatique...')
+// Code dans functions/weeklyArchiving.js (04/11/2026) : le même archivage peut être lancé à la main par
+// scripts/run-archiving-now.mjs (essai sans écriture, sauvegarde, puis application).
+const { runWeeklyArchiving: runWeeklyArchivingWith } = require('./weeklyArchiving')
+const runWeeklyArchiving = () => runWeeklyArchivingWith(db)
 
-  const DAYS_THRESHOLD = 30       // Livrés SANS COD : archivés après 30 jours
-  // Tous les autres (même avec COD) : archivés après 45 jours — réglable par l'admin (settings/agencies.delays.activeDays,
-  // = jours chargés par « Tout » ; 45 à 90, jamais moins : src/config/siteDelays.ts)
-  const setDays = Math.round(Number((await db.doc('settings/agencies').get()).data()?.delays?.activeDays))
-  const DAYS_FORCE = Number.isFinite(setDays) ? Math.min(90, Math.max(45, setDays)) : 45
-  const BATCH_SIZE = 500  // = limite d'un WriteBatch Firestore
-  // Borne de temps (au lieu d'un nombre fixe d'itérations) : la fonction dispose de 540s.
-  // L'ancien plafond de 200×100 colis était épuisé par des colis déjà archivés / non archivables
-  // (COD non réglé) avant d'atteindre les colis à archiver.
-  const TIME_BUDGET_MS = 480000
-  const startedAt = Date.now()
-  let timedOut = false
-
-  const cutoffDate = new Date()
-  cutoffDate.setDate(cutoffDate.getDate() - DAYS_THRESHOLD)
-  const cutoffTimestamp = Timestamp.fromDate(cutoffDate)
-  const forceCutoffMs = Date.now() - DAYS_FORCE * 86400000
-
-  let totalArchived = 0
-  let totalProcessed = 0
-  let lastDoc = null
-  let iterations = 0
-
-  console.log(`📦 Archivage de TOUS les colis de +${DAYS_THRESHOLD} jours (livrés sans COD) et de +${DAYS_FORCE} jours (tous statuts, COD inclus)...`)
-
-  while (true) {
-    if (Date.now() - startedAt > TIME_BUDGET_MS) { timedOut = true; break }
-    iterations++
-
-    // 🔄 Pagination correcte avec startAfter
-    let query = db.collection('parcels')
-      .where('createdAt', '<', cutoffTimestamp)
-      .orderBy('createdAt')
-      .limit(BATCH_SIZE)
-
-    if (lastDoc) {
-      query = query.startAfter(lastDoc)
-    }
-
-    const snapshot = await query.get()
-
-    // ✅ Vraiment fini quand plus aucun doc
-    if (snapshot.empty) {
-      console.log('✅ Tous les colis de +30j ont été parcourus')
-      break
-    }
-
-    totalProcessed += snapshot.size
-    lastDoc = snapshot.docs[snapshot.docs.length - 1]
-
-    // Filtrer déjà archivés et COD non payé
-    const batch = db.batch()
-    let batchCount = 0
-
-    snapshot.docs.forEach(doc => {
-      const data = doc.data()
-
-      // Skip si déjà archivé
-      if (data.isArchived) {
-        return
-      }
-
-      // Règles : +45 jours = archivé quoi qu'il arrive (COD inclus) ;
-      // entre 30 et 45 jours = seulement les expéditions LIVRÉES et SIMPLES (sans COD)
-      const createdMs = data.createdAt?.toMillis ? data.createdAt.toMillis() : 0
-      const older45 = createdMs > 0 && createdMs < forceCutoffMs
-      const livreSansCod = data.status === 'Livré' && !(Number(data.codAmount) > 0)
-      if (!older45 && !livreSansCod) return
-
-      // Marquer comme archivé
-      batch.update(doc.ref, {
-        isArchived: true,
-        archivedAt: new Date().toISOString(),
-        archivedBy: 'auto-system'
-      })
-      batchCount++
-    })
-
-    if (batchCount > 0) {
-      await batch.commit()
-      totalArchived += batchCount
-      console.log(`✅ Batch ${iterations}: ${batchCount} archivés (Total: ${totalArchived} / ${totalProcessed} parcourus)`)
-    }
-
-  }
-
-  if (timedOut) {
-    console.log(`⚠️ Budget de temps épuisé après ${iterations} itérations — le reste sera traité au prochain passage`)
-  }
-
-  console.log(`🎉 Archivage terminé: ${totalArchived} archivés sur ${totalProcessed} colis parcourus`)
-
-  // Log dans director_logs
-  await db.collection('director_logs').add({
-    type: 'auto_archiving',
-    action: 'Archivage automatique hebdomadaire',
-    details: { totalArchived, totalProcessed, daysThreshold: DAYS_THRESHOLD, allStatuses: true },
-    userId: 'system',
-    userName: 'Système automatique',
-    timestamp: FieldValue.serverTimestamp()
-  })
-
-  return { success: true, totalArchived, totalProcessed }
-}
-
-// Archivage automatique tous les 3 jours à 02h00 (heure Casablanca)
+// Archivage automatique CHAQUE JOUR à 02h00 (heure Casablanca) — demande du 04/11/2026 (avant : tous les 3 jours)
 exports.scheduledWeeklyArchiving = onSchedule({
-  schedule:       '0 2 */3 * *',  // Tous les 3 jours à 2h00
+  schedule:       '0 2 * * *',  // Chaque jour à 2h00
   timeZone:       'Africa/Casablanca',
   memory:         '512MiB',
   timeoutSeconds: 540,

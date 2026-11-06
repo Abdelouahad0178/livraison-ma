@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-route
 import ErrorBoundary from './components/ErrorBoundary'
 import MaintenanceOverlay from './components/MaintenanceOverlay'
 import RefreshTipBanner from './components/RefreshTipBanner'
+import { isThanksPopupUser, THANKS_NEXT_TIP_DELAY_MS, THANKS_NEXT_TIP_SHOW_MS, whenThanksShown } from './components/FloralTheme'
 import { initMonitoring, setUserContext } from './utils/monitoring'
 import { loadWorkingDateFromFirestore } from './utils/workingDate'
 
@@ -424,7 +425,10 @@ function AppContent() {
       <MaintenanceOverlay role={role} userName={profile?.name || profile?.email || ''} />
 
       {/* 🔄 Rappel Ctrl+Shift+R / Ctrl+F5 (en arabe) : pages des utilisateurs connectés, une fois toutes les 3 h */}
-      {user && !publicPath && <RefreshTipBanner scope={`${user.uid}:/${location.pathname.split('/')[1] || ''}`} />}
+      {/* ⏱️ MANAL et HAJAR (06/11/2026) : le remerciement de la direction d'abord, ce rappel 10 s après, pendant 3 s */}
+      {user && !publicPath && (isThanksPopupUser(user.email)
+        ? <RefreshTipBanner scope={`${user.uid}:/${location.pathname.split('/')[1] || ''}`} delayMs={THANKS_NEXT_TIP_DELAY_MS} showMs={THANKS_NEXT_TIP_SHOW_MS} waitFor={whenThanksShown} />
+        : <RefreshTipBanner scope={`${user.uid}:/${location.pathname.split('/')[1] || ''}`} />)}
 
       {/* ── Popup de blocage de compte ── */}
       {blockedOut && (

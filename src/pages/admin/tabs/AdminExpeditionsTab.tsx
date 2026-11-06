@@ -245,7 +245,7 @@ export default function AdminExpeditionsTab({
                 setSearch(searchInput)
                 window.dispatchEvent(new CustomEvent('force-search', { detail: searchInput }))
               }}
-              placeholder="🔍 Recherche rapide: N° EXP, Tracking ID, nom, téléphone... (⏎ pour un N° court)"
+              placeholder="🔍 Recherche : N° EXP, Tracking ID, nom (un mot suffit), téléphone, N° de chèque… (⏎ pour un N° court)"
               className="w-full border-2 border-gray-300 rounded-xl pl-10 pr-16 py-2.5 text-sm bg-white focus:border-blue-500 focus:ring-2 focus:ring-blue-100 focus:outline-none transition"
             />
             {isSearching ? (
@@ -282,19 +282,9 @@ export default function AdminExpeditionsTab({
             </div>
           )}
 
-          {/* 🗄️ Checkbox Archives (visible seulement si recherche active) */}
-          {search && (
-            <label className="flex items-center gap-2 px-4 py-2 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer hover:bg-amber-100 transition-colors whitespace-nowrap">
-              <input
-                type="checkbox"
-                checked={includeArchived}
-                onChange={e => setIncludeArchived(e.target.checked)}
-                className="w-4 h-4 text-amber-600 border-amber-300 rounded focus:ring-amber-500 cursor-pointer"
-              />
-              <span className="text-sm font-medium text-amber-900">
-                🗄️ Inclure archives (+30j)
-              </span>
-            </label>
+          {/* 🗄️ Archives TOUJOURS comprises dans la recherche (lot 2, 05/11/2026) : plus de case à cocher */}
+          {search && includeArchived && setIncludeArchived && (
+            <span className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 whitespace-nowrap">🗄️ archives comprises</span>
           )}
 
           {/* 🎛️ Filtres pliés (22/10/2026) : un bouton, le nombre de filtres actifs, et leur résumé ci-dessous */}
@@ -658,6 +648,9 @@ export default function AdminExpeditionsTab({
                           </button>
                           {p.lastAdminEditAt && (
                             <span className="text-[10px] text-purple-600 bg-purple-50 px-1.5 py-0.5 rounded font-semibold" title={`Modifie admin le ${new Date(p.lastAdminEditAt).toLocaleDateString('fr-MA')}`}>Admin</span>
+                          )}
+                          {!p.isArchived && p.rangee && (
+                            <span className="text-[10px] text-gray-600 bg-gray-100 px-1.5 py-0.5 rounded font-semibold" title="Expédition rangée (archivée sur place) — toujours encaissable">🗄️ rangée</span>
                           )}
                           {p.isArchived && (
                             <div className="flex items-center gap-1">
