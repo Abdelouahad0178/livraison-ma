@@ -20,9 +20,28 @@ const EMPTY: RecentCollectedState = { docs: [], ready: false }
  * (31/10/2026, mesuré : partir tout de suite sur téléphone même avec une mémoire récente retardait la liste des
  * livreurs de ~2,5 s pour 1,5 s gagnée ici → gardé tel quel.)
  */
-export function useRecentCollected(city: string | undefined | null, loadedFrom: Date | null, loadedTo: Date | null, enabled = true, pageLoaded = true) {
+export function useRecentCollected(city: string | undefined | null, loadedFrom: Date | null, loadedTo: Date | null, enabled = true, pageLoaded = true,
+  windowMode: 'start' | 'recent' = 'start') {
   const fromMs = loadedFrom ? loadedFrom.getTime() : 0
   const toMs = loadedTo ? loadedTo.getTime() : 0
+  // Départ de la fenêtre (journée d'opération) — 'start' : depuis le 05/10 (Caisse Agence : une journée non versée de
+  // plus de 14 jours reste visible et versable) ; 'recent' (chef d'exploitation, 01/11/2026) : ses cartes ne montrent que
+  // les 14 dernières journées (+ la période choisie) → fenêtre BORNÉE (avant : tout depuis le 05/10, qui grossissait
+  // chaque jour — Agadir ≈ 16 Mo à chaque ouverture).
+  const today = opDayOf(new Date())
+  const sinceMs = useMemo(() => {
+    const [y, m, d] = today.split('-').map(Number)
+    const dayStart = (back: number) => {
+      const x = new Date(y, m - 1, d - back)
+      return opStart(`${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, '0')}-${String(x.getDate()).padStart(2, '0')}`)
+    }
+    const since14 = dayStart(recentCollectDays() - 1)
+    if (windowMode === 'start') return (MONEY_START < since14 ? MONEY_START : since14).getTime()
+    // + 7 jours de marge (jours sans collecte) ; période choisie plus longue (« Tout ») : couverte
+    let s = dayStart(recentCollectDays() - 1 + 7).getTime()
+    if (fromMs && fromMs < s) s = fromMs
+    return Math.max(s, MONEY_START.getTime())
+  }, [today, windowMode, fromMs])
   const desktop = typeof window !== 'undefined' && !!window.matchMedia?.('(min-width: 1024px)').matches
   const go = enabled && !!city && (pageLoaded || desktop)
   const needed = hasOutsideRanges(fromMs, toMs)
@@ -47,19 +66,11 @@ export function useRecentCollected(city: string | undefined | null, loadedFrom: 
     shownCity.current = city
     setTimedOut(false)
     if (!go || !idle || !needed || !city) return
-    const today = opDayOf(new Date())
-    const [y, m, d] = today.split('-').map(Number)
-    // Fenêtre des cartes « Collectes par jour » : 14 journées (réglable, Admin › Agences › Réglages)
-    const first = new Date(y, m - 1, d - (recentCollectDays() - 1))
-    const since14 = opStart(`${first.getFullYear()}-${String(first.getMonth() + 1).padStart(2, '0')}-${String(first.getDate()).padStart(2, '0')}`)
-    // 💼 Depuis le début du circuit de l'argent (MONEY_START) : une journée non versée de plus de 14 jours reste
-    // visible et versable.
-    const since = MONEY_START < since14 ? MONEY_START : since14
     // Filet de sécurité (réseau coupé) : prêt au bout de 30 s au plus
     const safety = setTimeout(() => setTimedOut(true), 30000)
-    const unsub = subscribeRecentCollected(city, since.getTime(), s => startTransition(() => setState(s)))
+    const unsub = subscribeRecentCollected(city, sinceMs, s => startTransition(() => setState(s)))
     return () => { clearTimeout(safety); unsub() }
-  }, [city, go, idle, needed])
+  }, [city, go, idle, needed, sinceMs])
 
   const docs = useMemo(
     () => (needed ? state.docs.filter(p => createdOutsidePeriod(p, fromMs, toMs)) : []),

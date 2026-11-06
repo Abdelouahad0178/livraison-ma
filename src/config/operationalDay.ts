@@ -142,9 +142,20 @@ export function getOperationalDay(date: Date | number): Date {
  * getOperationalDayString(new Date('2026-07-24T02:00:00'))
  * // → '2026-07-23' (appartient à la journée du 23)
  */
+// ⚡ (01/11/2026) Le résultat ne dépend que de la MINUTE (heure du Maroc) : gardé en mémoire. La conversion en heure de
+// Casablanca est coûteuse et était refaite des milliers de fois (Bilan, cartes par jour : 6,5 s sur téléphone pour « Tout »).
+const OP_DAY_STRING_CACHE = new Map<number, string>()
 export function getOperationalDayString(date: Date | number): string {
-  const opDay = getOperationalDay(date)
-  return opDay.toISOString().split('T')[0]
+  const ms = typeof date === 'number' ? date : date.getTime()
+  if (Number.isNaN(ms)) return getOperationalDay(date).toISOString().split('T')[0] // date invalide : comportement inchangé
+  const minute = Math.floor(ms / 60000)
+  let s = OP_DAY_STRING_CACHE.get(minute)
+  if (s === undefined) {
+    s = getOperationalDay(date).toISOString().split('T')[0]
+    if (OP_DAY_STRING_CACHE.size >= 50000) OP_DAY_STRING_CACHE.clear()
+    OP_DAY_STRING_CACHE.set(minute, s)
+  }
+  return s
 }
 
 /**

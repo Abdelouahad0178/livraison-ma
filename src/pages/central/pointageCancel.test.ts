@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { planPointageCancel, groupMemberIdsToFetch, planGroupChequeWrites } from './pointageCancel'
+import { planPointageCancel, groupMemberIdsToFetch, planGroupChequeWrites, splitProRata, groupOperationShares } from './pointageCancel'
 
 const ME = 'me'
 const cheque = (extra: any = {}) => ({ type: 'cheque', numero: '123', banque: 'CIH', montant: 100, echeance: '', ...extra })
@@ -126,5 +126,47 @@ describe('planGroupChequeWrites', () => {
     const w = planGroupChequeWrites(a, [cheque()] as any, undefined, map(a, b), part, newId)
     expect(w.b[0].groupIds).toBeUndefined()
     expect(w.b[0].montant).toBe(150)
+  })
+})
+
+describe('Plusieurs chèques / traites pour plusieurs expéditions (03/11/2026)', () => {
+  const part = (p: any) => p.part || 0
+  const newId = () => 'GNEW'
+
+  it('répartition au prorata, arrondie au centime, somme exacte', () => {
+    expect(splitProRata(100, [1, 1, 1])).toEqual([33.34, 33.33, 33.33])
+    expect(splitProRata(300, [100, 200])).toEqual([100, 200])
+    expect(splitProRata(50, [0, 0])).toEqual([25, 25])
+    expect(splitProRata(1000, [])).toEqual([])
+  })
+  it('2 chèques pour 3 expéditions : chaque expédition reçoit les 2 chèques, avec sa part de chacun', () => {
+    const a = exp('a', { part: 1000 }), b = exp('b', { part: 3000 }), c = exp('c', { part: 1000 })
+    const w = planGroupChequeWrites(a, [cheque({ numero: '111', montant: 3000 }), cheque({ numero: '222', montant: 2000 })] as any, [a, b, c], map(a, b, c), part, newId)
+    expect(w.a.map((d: any) => d.groupId)).toEqual(['GNEW', 'GNEW~1'])
+    expect(w.a.map((d: any) => d.montant)).toEqual([600, 400])
+    expect(w.b.map((d: any) => d.montant)).toEqual([1800, 1200])
+    expect(w.c.map((d: any) => d.groupTotal)).toEqual([3000, 2000])
+    expect(w.b[1]).toMatchObject({ numero: '222', groupIds: ['a', 'b', 'c'], groupNics: ['Na', 'Nb', 'Nc'] })
+    // Chaque chèque : la somme des parts = montant du chèque
+    for (const k of [0, 1]) expect(['a', 'b', 'c'].reduce((s, id) => s + w[id][k].montant, 0)).toBe(k === 0 ? 3000 : 2000)
+  })
+  it('sortie d\'une opération à 2 chèques : les autres gardent les 2 chèques, totaux diminués', () => {
+    const ids = ['a', 'b', 'c']
+    const docsFor = (m1: number, m2: number) => [grp(ids, { montant: m1, groupTotal: 3000 }), grp(ids, { numero: '222', groupId: 'G1~1', montant: m2, groupTotal: 2000 })]
+    const a = exp('a', { part: 1000, codDocuments: docsFor(600, 400) })
+    const b = exp('b', { part: 3000, codDocuments: docsFor(1800, 1200) })
+    const c = exp('c', { part: 1000, codDocuments: docsFor(600, 400) })
+    const w = planGroupChequeWrites(a, [cheque({ numero: '999', montant: 1000 })] as any, undefined, map(a, b, c), part, newId)
+    expect(w.a).toEqual([cheque({ numero: '999', montant: 1000 })])
+    expect(w.b.map((d: any) => [d.groupId, d.groupTotal, d.montant])).toEqual([['G1', 2400, 1800], ['G1~1', 1600, 1200]])
+    expect(w.c[1].groupIds).toEqual(['b', 'c'])
+  })
+  it('parts de chaque expédition : chèques puis reste en espèces, au prorata', () => {
+    const list = [exp('a', { part: 1000 }), exp('b', { part: 3000 })]
+    const s = groupOperationShares(list, part, [2000, 1000], 1000)
+    expect(s).toEqual([
+      { id: 'a', nic: 'Na', expected: 1000, cheque: 750, cash: 250 },
+      { id: 'b', nic: 'Nb', expected: 3000, cheque: 2250, cash: 750 },
+    ])
   })
 })

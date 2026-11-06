@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback, useDeferredValue, startTransition, lazy, Suspense, memo, type ComponentType } from 'react'
-import { isFloralUser } from '../components/FloralTheme'
+import { DirectionThanksPopup, isFloralUser } from '../components/FloralTheme'
 import { canManageClientAccounts } from '../config/clientAccountsAccess'
 import KeepAlive from '../components/KeepAlive'
 import { setPresenceTab } from '../services/presenceCounters'
@@ -611,11 +611,15 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
       setServerSearchResults(null)
       setIsSearching(false)
       const compact = query.replace(/[\s\-().]/g, '')
-      if (!/^\d{7,}$/.test(compact) && !/^LMA/i.test(compact)) return
+      // 🗄️ Lot 2 de l'archivage (05/11/2026) : un NOM (3 lettres ou plus) est aussi cherché dans toute la base, archives
+      // comprises (avant : seulement N° EXP / téléphone / N° LMA) — plafond 50 pour la recherche par début de nom
+      const exact = /^\d{7,}$/.test(compact) || /^LMA/i.test(compact)
+      const isName = /\p{L}{3,}/u.test(query)
+      if (!exact && !isName) return
       let cancelledTargeted = false
       setOutOfPeriodSearching(true)
       const city = profile?.city
-      searchParcels(query, { includeArchived, lite: USE_PARCELS_LITE })
+      searchParcels(query, { includeArchived: true, lite: USE_PARCELS_LITE, ...(exact ? {} : { limit: 50, nameScope: searchScope, wordSearch: true }) })
         .then(results => {
           if (cancelledTargeted) return
           // Chef d'agence : seulement les expéditions de SON agence (départ, arrivée ou retour)
@@ -643,7 +647,7 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
     // ⚡ zahra sur une période, « Ma ville » : recherche par début de nom plafonnée à 300 (comme ailleurs) — N° EXP,
     // téléphone, N° LMA et nom complet restent exacts et sans plafond
     const zahraPeriod = datePreset !== 'all' && !showAllCities && !includeArchived
-    searchParcels(query, { limit: zahraPeriod ? 300 : 50000, includeArchived, nameScope: searchScope, lite: USE_PARCELS_LITE })
+    searchParcels(query, { limit: zahraPeriod ? 300 : 50000, includeArchived: true, nameScope: searchScope, lite: USE_PARCELS_LITE, wordSearch: true })
       .then(results => {
         if (cancelled) return
         setServerSearchResults(results)
@@ -3557,6 +3561,8 @@ export default function AgentPage({ adminSaisie = false }: Readonly<{ adminSaisi
   return (
     <AgentCtx.Provider value={ctxValue}>
     <div className={`min-h-screen overflow-x-clip relative isolate bg-gray-50 ${floral ? 'floral-page' : ''}`}>
+      {/* 💐 Remerciement de la direction (MANAL, HAJAR) : 4 secondes au démarrage, ne bloque rien */}
+      {!adminSaisie && <DirectionThanksPopup email={auth.currentUser?.email || profile?.email} />}
       <CompanyContact />
 
       {/* Header — mode saisie ADMIN : barre simple (retour admin + ville d'expédition) */}

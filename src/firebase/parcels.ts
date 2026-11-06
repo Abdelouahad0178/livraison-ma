@@ -26,11 +26,13 @@ import { loadPersistedLiteDays, savePersistedLiteDays, removePersistedLiteDays, 
 import { addPayment } from './clients'
 import { bumpPresence } from '../services/presenceCounters'
 import { normName, isVisibleInDestinationAgency } from '../utils/billingAgency'
+import { wordQueryOf, wordQueryMatches } from '../utils/searchWords'
 import { deliveryCityBlock, collectCityBlock } from '../utils/deliveryCity'
 import { auth } from './auth'
 import { daysBetween, shiftParcelDates } from '../utils/shiftParcelDates'
 import { guichetHolderOf } from '../config/agencySettings'
 import { activeDays } from '../config/siteDelays'
+import { restRunQuery } from './restQuery'
 import { portTypeChangeBlock } from '../utils/portTypeGuard'
 import { deliveryStatusChangeBlock } from '../utils/agencyDeliveryAccess'
 
@@ -1244,7 +1246,12 @@ export async function getAllArchivedParcels(maxResults = 1000) {
   return snapshot.docs.map(d => ({ id: d.id, ...d.data() }))
 }
 
+// 🗄️ Archivage « ranger, jamais cacher ni bloquer » (05/11/2026) : plus AUCUN déplacement vers parcels_archive ni effacement
+// de la base principale. Les expéditions sont rangées sur place (isArchived) chaque nuit par le serveur (functions/weeklyArchiving.js).
+const MOVE_ARCHIVE_REMOVED = "Archivage par déplacement retiré : les expéditions terminées et réglées sont rangées automatiquement chaque nuit (Admin › Archivage)."
+
 export async function archiveParcels(city: any, olderThanDays = 180, onProgress: (done?: number, total?: number) => void = () => {}) {
+  throw new Error(MOVE_ARCHIVE_REMOVED) // 🗄️ archiveParcels : archivage par DÉPLACEMENT retiré (05/11/2026)
   const cutoff = daysAgoTimestamp(olderThanDays)
   const [r1, r2, r3, r4] = await Promise.all([
     getDocs(query(collection(db, 'parcels'), where('originCity', '==', city), where('status', '==', 'Livré'), where('createdAt', '<', cutoff))),
@@ -1284,6 +1291,7 @@ export async function archiveParcelsByCriteria({
   olderThanDays?: number
   onProgress?: (done?: number, total?: number) => void
 }) {
+  throw new Error(MOVE_ARCHIVE_REMOVED) // 🗄️ archiveParcelsByCriteria : archivage par DÉPLACEMENT retiré (05/11/2026)
   const selectedStatuses = [...new Set((statuses || []).filter(Boolean))]
   if (selectedStatuses.length === 0) return { archived: 0 }
 
@@ -1331,6 +1339,7 @@ export async function archiveParcelsByCriteria({
 }
 
 export async function archiveAllParcels(olderThanDays = 90) {
+  throw new Error(MOVE_ARCHIVE_REMOVED) // 🗄️ archiveAllParcels : archivage par DÉPLACEMENT retiré (05/11/2026)
   const cutoff = daysAgoTimestamp(olderThanDays)
   const [livresSnap, retoursSnap] = await Promise.all([
     getDocs(query(collection(db, 'parcels'), where('status', '==', 'Livré'),    where('createdAt', '<', cutoff))),
@@ -2394,6 +2403,12 @@ export async function getAgencyParcelsDaySlice(
   pageSize = 2000,
   lite = false // 🪶 parcelsLite (version allégée)
 ): Promise<any[]> {
+  // ⚡ (01/11/2026) Journée passée en version allégée : LECTURE DIRECTE (restQuery) — mêmes expéditions, même forme,
+  // sans le tri / cache / recherche locale de la bibliothèque Firebase (téléphone : période « Tout » bien plus rapide).
+  // Échec → lecture habituelle ci-dessous.
+  if (lite && !afterDoc) {
+    try { return await restDaySlice(city, field, start, end, endInclusive, pageSize) } catch (err) { console.warn('Lecture directe impossible, lecture habituelle', err) }
+  }
   const out: any[] = []
   let cursor: any = afterDoc
   for (let guard = 0; guard < 200; guard++) {
@@ -2409,6 +2424,28 @@ export async function getAgencyParcelsDaySlice(
     snap.docs.forEach(d => out.push({ id: d.id, ...d.data() }))
     if (snap.docs.length < pageSize) break
     cursor = snap.docs[snap.docs.length - 1]
+  }
+  return out
+}
+
+/** Journée passée (parcelsLite) lue directement (API REST), paginée par pageSize, tri createdAt décroissant. */
+async function restDaySlice(city: string, field: LiteDayField, start: Date, end: Date, endInclusive: boolean, pageSize: number): Promise<any[]> {
+  const out: any[] = []
+  let after: { value: any; name: string } | null = null
+  for (let guard = 0; guard < 200; guard++) {
+    const docs = await restRunQuery({
+      collection: PARCELS_LITE_COLLECTION,
+      filters: [
+        ...(city === ALL_CITIES ? [] : [{ field, op: '==' as const, value: city }]),
+        { field: 'createdAt', op: '>=', value: Timestamp.fromDate(start) },
+        { field: 'createdAt', op: endInclusive ? '<=' : '<', value: Timestamp.fromDate(end) },
+      ],
+      orderBy: { field: 'createdAt', desc: true }, limit: pageSize, after,
+    })
+    docs.forEach(d => out.push({ id: d.id, ...d.data }))
+    if (docs.length < pageSize) break
+    const last = docs[docs.length - 1]
+    after = { value: last.raw.createdAt, name: last.name }
   }
   return out
 }
@@ -2780,13 +2817,18 @@ export async function searchParcels(
     // 🪶 Version allégée (parcelsLite) pour les expéditions non archivées — onglet Expéditions, qui affiche
     // déjà cette version (≈ −35 % de données téléchargées). Les archives restent lues en version complète.
     lite?: boolean
+    // 🔎 (03/11/2026, page Admin) Recherche par MOT n'importe où dans le nom (« BAKRIM » trouve « NOUREDINE BAKRIM »)
+    // et par numéro de chèque / traite, via l'index parcelSearch (utils/searchWords) — en plus des recherches habituelles.
+    wordSearch?: boolean
   } = {}
 ): Promise<any[]> {
   try {
     if (!term || term.trim().length === 0) return []
 
     const searchTerm = term.trim()
-    const includeArchived = options.includeArchived ?? false // Par défaut: NE PAS inclure archives (performance)
+    // 🗄️ Archives comprises PAR DÉFAUT (lot 2 de l'archivage, 05/11/2026) : une recherche trouve toujours une expédition,
+    // rangée ou non, sans case à cocher. (L'ancienne « armoire » parcels_archive ne compte que 1 745 expéditions.)
+    const includeArchived = options.includeArchived ?? true
     const agencyCity = options.agencyCity
     const nameScope = options.nameScope || 'all'
 
@@ -2794,7 +2836,7 @@ export async function searchParcels(
     // s'affiche immédiatement, sans nouvelle lecture
     const lite = options.lite ?? false
     const prefixLimit = Math.max(1, Math.floor(options.limit ?? 300)) // recherches par début de nom seulement
-    const cacheKey = JSON.stringify([searchTerm, includeArchived, agencyCity || '', nameScope, lite, prefixLimit])
+    const cacheKey = JSON.stringify([searchTerm, includeArchived, agencyCity || '', nameScope, lite, prefixLimit, !!options.wordSearch])
     const hit = SEARCH_CACHE.get(cacheKey)
     if (hit && Date.now() - hit.at < SEARCH_CACHE_TTL_MS) return hit.results
 
@@ -2891,6 +2933,15 @@ export async function searchParcels(
       }
     }
 
+    // 🔎 Recherche par mot / chèque (index parcelSearch) EN MÊME TEMPS que les autres : ids des expéditions trouvées
+    // (les plus récentes d'abord), puis lecture de ces expéditions (version allégée ou complète, comme le reste)
+    const wq = options.wordSearch ? wordQueryOf(searchTerm, nameScope) : null
+    const wordIdsPromise: Promise<string[]> = wq
+      ? getDocs(query(collection(db, 'parcelSearch'), where('w', 'array-contains-any', wq.any), orderBy('d', 'desc'), limit(Math.min(prefixLimit, 1000))))
+        .then(snap => snap.docs.filter(d => wordQueryMatches((d.data() as any).w || [], wq)).map(d => d.id))
+        .catch(e => { console.error('Erreur recherche par mot :', e); return [] as string[] })
+      : Promise.resolve([])
+
     // Une requête en erreur n'empêche pas les autres (comme avant : groupe ignoré, erreur journalisée)
     const snapsByGroup = await Promise.all(groups.map(g =>
       Promise.all(g.queries.map(q => getDocs(q))).catch(e => {
@@ -2906,14 +2957,27 @@ export async function searchParcels(
       for (const d of snaps.flatMap(snap => snap.docs)) {
         if (!uniqueIds.has(d.id)) {
           uniqueIds.add(d.id)
-          results.push({ id: d.id, ...d.data(), isArchived })
+          // isArchived = COLLECTION d'origine (parcels / parcels_archive) ; rangee = expédition rangée (badge « 🗄️ rangée »)
+          const data: any = d.data()
+          results.push({ id: d.id, ...data, isArchived, rangee: isArchived || data?.isArchived === true })
         }
       }
     })
+    // Expéditions trouvées par mot / chèque et pas encore lues : lecture par paquets de 30 (en parallèle)
+    const wordIds = (await wordIdsPromise).filter(id => !uniqueIds.has(id))
+    if (wordIds.length) {
+      const col = collection(db, lite ? 'parcelsLite' : 'parcels')
+      const chunks: string[][] = []
+      for (let i = 0; i < wordIds.length; i += 30) chunks.push(wordIds.slice(i, i + 30))
+      const snaps = await Promise.all(chunks.map(c => getDocs(query(col, where(documentId(), 'in', c))).catch(e => { console.error('Erreur lecture (recherche par mot) :', e); return null })))
+      for (const snap of snaps) for (const d of snap?.docs || []) {
+        if (!uniqueIds.has(d.id)) { uniqueIds.add(d.id); const data: any = d.data(); results.push({ id: d.id, ...data, isArchived: false, rangee: data?.isArchived === true }) }
+      }
+    }
 
-    // Filtrer par ville si spécifié (pour chefs d'agence)
+    // Filtrer par ville si spécifié (pour chefs d'agence) : départ, arrivée ou ville de retour
     const out = agencyCity
-      ? results.filter(p => p.originCity === agencyCity || p.destinationCity === agencyCity)
+      ? results.filter(p => p.originCity === agencyCity || p.destinationCity === agencyCity || p.returnToCity === agencyCity)
       : results
     // Recherche sans résultat jamais gardée (une expédition créée juste après doit être trouvée)
     // (ni une réponse lue dans le cache local faute de réseau)
@@ -2934,6 +2998,7 @@ const SEARCH_CACHE_TTL_MS = 60 * 1000
  * 📦 Archiver manuellement une expédition
  */
 export async function archiveParcelManual(parcelId: string): Promise<void> {
+  throw new Error(MOVE_ARCHIVE_REMOVED) // 🗄️ archiveParcelManual : archivage par DÉPLACEMENT retiré (05/11/2026)
   const parcelRef = doc(db, 'parcels', parcelId)
   const parcelSnap = await getDoc(parcelRef)
 
@@ -2983,27 +3048,10 @@ export async function unarchiveParcel(parcelId: string): Promise<void> {
  * 📦 Archiver plusieurs expéditions en masse
  */
 export async function bulkArchiveParcels(
-  parcelIds: string[],
-  onProgress?: (done: number, total: number) => void
+  _parcelIds: string[],
+  _onProgress?: (done: number, total: number) => void
 ): Promise<{ success: number; errors: number }> {
-  let success = 0
-  let errors = 0
-
-  for (let i = 0; i < parcelIds.length; i++) {
-    try {
-      await archiveParcelManual(parcelIds[i])
-      success++
-    } catch (error) {
-      console.error('Erreur archivage:', parcelIds[i], error)
-      errors++
-    }
-
-    if (onProgress) {
-      onProgress(i + 1, parcelIds.length)
-    }
-  }
-
-  return { success, errors }
+  throw new Error(MOVE_ARCHIVE_REMOVED) // 🗄️ bulkArchiveParcels : archivage par DÉPLACEMENT retiré (05/11/2026)
 }
 
 /**
@@ -3015,6 +3063,7 @@ export async function autoArchiveParcels(options: {
   canceledDays?: number   // Annulés > X jours (défaut: 30)
   dryRun?: boolean        // Test sans archiver
 } = {}): Promise<{ candidates: number; archived: number; errors: number }> {
+  throw new Error(MOVE_ARCHIVE_REMOVED) // 🗄️ autoArchiveParcels : archivage par DÉPLACEMENT retiré (05/11/2026)
   const deliveredDays = options.deliveredDays ?? 90
   const returnedDays = options.returnedDays ?? 60
   const canceledDays = options.canceledDays ?? 30

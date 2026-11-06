@@ -43,7 +43,7 @@ import { OperationalDaySelector } from '../components/OperationalDaySelector'
 import { saveParcelsCodDocuments, changeCodValueType, type CodDocument } from '../firebase/central'
 import { ChequeEntryModal, ReceptionSheetModal, isDocParcel, hasDocData, docsOf, docAmountOf, groupOf } from './central/ChequeReception'
 import { COD_DOC_SERVICE_TYPE_VALUES, COD_DOC_PAYMENT_TYPE_VALUES } from '../utils/codParts'
-import { planPointageCancel, planGroupChequeWrites, groupMemberIdsToFetch } from './central/pointageCancel'
+import { planPointageCancel, planGroupChequeWrites, groupMemberIdsToFetch, groupOperationShares, operationMembers } from './central/pointageCancel'
 import { ValeursEnvoiPanel } from './central/ValeursEnvoiPanel'
 import { ReceptionValeursPanel } from './central/ReceptionValeursPanel'
 import { ControlReportsPanel,controlReportHtml, saveControlReport, openPrint, type ReportLine } from './central/ControlReports'
@@ -554,7 +554,7 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
         console.warn(`🔍 Recherche serveur CentralCollector: "${searchQuery}" dans TOUTE la base...`)
         // ⚡ Plafond 300 (avant 50 000 : « moham » ramenait > 1 200 expéditions complètes) — N° EXP, téléphone,
         // N° LMA : recherches exactes, non concernées. Plafond atteint → message « affinez la recherche ».
-        const results = await searchParcels(searchQuery, { limit: SEARCH_CAP })
+        const results = await searchParcels(searchQuery, { limit: SEARCH_CAP, includeArchived: true, wordSearch: true }) // 🗄️ archives comprises (05/11/2026)
         if (cancelled) return
         setSearchCapped(results.length >= SEARCH_CAP)
         setServerResults(results)
@@ -968,24 +968,35 @@ export default function CentralCollectorPage({ mode = 'central' }: { mode?: 'cen
     }
     // ⚠️ Signalement « le reste payé en espèces » (chèque reçu < attendu) : visible par l'admin (Contrôle COD → filtre
     // « Chèque + espèces signalé ») ; le COD n'est PAS modifié ici — l'admin le corrige en « chèque + espèces »
-    // 🔗 (27/10/2026) Chèque GROUPÉ + reste en espèces : le MÊME signalement (montants du chèque groupé, N° EXP du groupe)
-    // sur chaque expédition du chèque — l'admin répartit les espèces entre elles en corrigeant les COD.
-    let signal: Record<string, any> = {}
-    const signalIds: string[] = cashRest ? (isGroup ? members!.map((m: any) => m.id) : [p.id]) : []
+    // 🔗 (03/11/2026) Opération GROUPÉE (un ou plusieurs chèques / traites) + reste en espèces : chaque expédition reçoit
+    // SA part (chèques et espèces au prorata de son montant attendu — même calcul que la fenêtre), avec le rappel du
+    // groupe (N° EXP, totaux) ; codDocMismatchShare = montants propres à l'expédition (avant : montants du groupe entier).
+    const signals: Record<string, Record<string, any>> = {}
     if (cashRest) {
-      signal = {
-        codDocMismatch: true, codDocMismatchCash: cashRest.cash, codDocMismatchExpected: cashRest.expected,
-        codDocMismatchReceived: cashRest.received, codDocMismatchNote: cashRest.note || '',
+      const common = {
+        codDocMismatch: true, codDocMismatchNote: cashRest.note || '',
         codDocMismatchAt: new Date().toISOString(), codDocMismatchBy: name, codDocMismatchById: uid,
-        ...(isGroup ? { codDocMismatchGroupNics: members!.map(nicOfP) } : {}),
+      }
+      if (isGroup) {
+        const list = operationMembers(p, members!)
+        const groupNics = list.map(nicOfP)
+        groupOperationShares(list, docAmountOf, docs.map(d => Number(d.montant) || 0), cashRest.cash).forEach(s => {
+          signals[s.id] = {
+            ...common, codDocMismatchCash: s.cash, codDocMismatchExpected: s.expected, codDocMismatchReceived: s.cheque,
+            codDocMismatchShare: true, codDocMismatchGroupNics: groupNics,
+            codDocMismatchGroupCash: cashRest.cash, codDocMismatchGroupReceived: cashRest.received, codDocMismatchGroupExpected: cashRest.expected,
+          }
+        })
+      } else {
+        signals[p.id] = { ...common, codDocMismatchCash: cashRest.cash, codDocMismatchExpected: cashRest.expected, codDocMismatchReceived: cashRest.received }
       }
       const batch = writeBatch(db)
-      signalIds.forEach(id => batch.update(doc(db, 'parcels', id), signal))
+      Object.entries(signals).forEach(([id, s]) => batch.update(doc(db, 'parcels', id), s))
       await batch.commit()
     }
     setControlOverrides(prev => {
       const next = { ...prev }
-      Object.entries(saved).forEach(([id, d]) => { next[id] = { ...(next[id] || {}), codDocuments: d, ...(signalIds.includes(id) ? signal : {}) } })
+      Object.entries(saved).forEach(([id, d]) => { next[id] = { ...(next[id] || {}), codDocuments: d, ...(signals[id] || {}) } })
       return next
     })
     setChequeModal(null)

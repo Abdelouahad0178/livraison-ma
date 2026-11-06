@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { X, Plus, Trash2, Printer, Save } from 'lucide-react'
 import { codDocTypeOf, codDocPartOf } from '../../utils/codParts'
 import type { CodDocument } from '../../firebase/central'
+import { groupOperationShares, operationMembers } from './pointageCancel'
 
 const money = (n: any) => (Math.round((parseFloat(n) || 0) * 100) / 100).toLocaleString('fr-MA', { minimumFractionDigits: 2 })
 const esc = (s: any) => String(s ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]!))
@@ -53,8 +54,9 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
   const existingGroup = groupOf(parcel)
   const [rows, setRows] = useState<Row[]>(() => {
     const existing = docsOf(parcel)
-    // Chèque groupé : une seule ligne, montant = TOTAL du chèque
-    if (existingGroup) return [{ type: existingGroup.type, numero: existingGroup.numero, banque: existingGroup.banque, montant: String(existingGroup.groupTotal ?? existingGroup.montant ?? ''), echeance: existingGroup.echeance || '' }]
+    // 🔗 Opération groupée : TOUS ses chèques / traites (03/11/2026 : plusieurs possibles), montant = celui du chèque
+    const groupDocs = existing.filter(d => (d.groupIds || []).length > 1)
+    if (groupDocs.length) return groupDocs.map(d => ({ type: d.type, numero: d.numero, banque: d.banque, montant: String(d.groupTotal ?? d.montant ?? ''), echeance: d.echeance || '' }))
     if (existing.length) return existing.map(d => ({ type: d.type, numero: d.numero, banque: d.banque, montant: String(d.montant ?? ''), echeance: d.echeance || '' }))
     return [{ type: defType, numero: '', banque: '', montant: expected ? String(expected) : '', echeance: '' }]
   })
@@ -122,6 +124,16 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
   const cashDefault = Math.round(-diff * 100) / 100
   const cashAmount = cashInput.trim() ? (parseFloat(cashInput.replace(',', '.')) || 0) : cashDefault
   const cashGap = Math.round((total + cashAmount - expectedTotal) * 100) / 100
+  // 🔗 Parts de chaque expédition (chèques puis espèces, au prorata de son montant attendu) — même calcul que l'enregistrement
+  const isMulti = grouped && members.length > 1
+  const amountsOf = () => rows.map(r => parseFloat(String(r.montant).replace(',', '.')) || 0)
+  const shares = isMulti ? groupOperationShares(operationMembers(parcel, members), docAmountOf, amountsOf(), canSignalCash && cashRest ? cashAmount : 0) : []
+  // ➕ Nouveau chèque / traite : prérempli avec ce qui reste à couvrir
+  const addRow = () => setRows(rs => {
+    const used = rs.reduce((s, r) => s + (parseFloat(String(r.montant).replace(',', '.')) || 0), 0)
+    const rest = Math.round((expectedTotal - used) * 100) / 100
+    return [...rs, { type: defType, numero: '', banque: rs[rs.length - 1]?.banque || '', montant: rest > 0 ? String(rest) : '', echeance: '' }]
+  })
   const set = (i: number, patch: Partial<Row>) => setRows(rs => rs.map((r, k) => (k === i ? { ...r, ...patch } : r)))
   // 🔗 Expéditeur écrit autrement / différent : confirmation avant de l'ajouter au chèque (plus de refus — 24/10/2026)
   const confirmOther = (c: any) => !c?._otherSender || confirm(
@@ -168,8 +180,10 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
 
   // 🖨️ Résumé de l'opération (tel que saisi à l'écran) : expéditions, chèque(s) / traite(s), espèces, totaux
   const printSummary = () => printChequeOperationSummary({
-    members, rows: rows.map(r => ({ type: r.type, numero: r.numero.trim(), banque: r.banque.trim().toUpperCase(), montant: parseFloat(String(r.montant).replace(',', '.')) || 0 })),
-    grouped: grouped && members.length > 1, expectedTotal, cash: canSignalCash && cashRest ? cashAmount : 0, note: cashRest ? cashNote.trim() : '',
+    members: isMulti ? operationMembers(parcel, members) : members,
+    rows: rows.map(r => ({ type: r.type, numero: r.numero.trim(), banque: r.banque.trim().toUpperCase(), montant: parseFloat(String(r.montant).replace(',', '.')) || 0 })),
+    grouped: isMulti, expectedTotal, cash: canSignalCash && cashRest ? cashAmount : 0, note: cashRest ? cashNote.trim() : '',
+    shares: isMulti ? shares : undefined,
   })
 
   const inp = 'w-full px-2.5 py-2 rounded-xl border-2 border-slate-200 focus:border-purple-400 focus:outline-none text-sm font-semibold'
@@ -178,7 +192,7 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
       <div className="bg-white rounded-3xl shadow-2xl w-full max-w-3xl max-h-[92vh] overflow-y-auto" onClick={e => e.stopPropagation()}>
         <div className="px-5 py-4 border-b border-slate-100 flex items-start gap-3">
           <div className="flex-1 min-w-0">
-            <h3 className="text-lg font-black text-slate-800">🧾 Données du chèque / de la traite</h3>
+            <h3 className="text-lg font-black text-slate-800">🧾 Chèques / traites{canSignalCash && cashRest ? ' + espèces' : ''}</h3>
             {/* 🔗 Chèque groupé : TOUS les N° EXP et le montant TOTAL attendu (27/10/2026) */}
             {grouped && members.length > 1 ? (
               <p className="text-xs text-slate-500">
@@ -195,13 +209,57 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
         </div>
 
         <div className="p-5 space-y-3">
-          {/* 🔗 Un seul chèque pour plusieurs expéditions du même expéditeur */}
+          {/* 1️⃣ Chèques / traites reçus (03/11/2026 : plusieurs possibles, même pour plusieurs expéditions) */}
+          <p className="text-xs font-black text-slate-500 uppercase tracking-wide">1. Chèques / traites reçus ({rows.length}) · total {money(total)} DH</p>
+          {rows.map((r, i) => (
+            <div key={i} className="rounded-2xl border border-slate-200 p-3 bg-slate-50/60">
+              <div className="flex items-center gap-2 mb-2">
+                <span className="text-xs font-black text-slate-500">{r.type === 'traite' ? 'Traite' : 'Chèque'} {i + 1}</span>
+                <div className="flex gap-1">
+                  {(['cheque', 'traite'] as const).map(t => (
+                    <button key={t} type="button" onClick={() => set(i, { type: t })}
+                      className={`px-2.5 py-1 rounded-lg text-xs font-black border ${r.type === t ? 'bg-purple-600 border-purple-600 text-white' : 'bg-white border-slate-200 text-slate-600'}`}>
+                      {t === 'cheque' ? '📋 Chèque' : '📝 Traite'}
+                    </button>
+                  ))}
+                </div>
+                {rows.length > 1 && (
+                  <button type="button" onClick={() => setRows(rs => rs.filter((_, k) => k !== i))} className="ml-auto p-1.5 rounded-lg text-red-500 hover:bg-red-50" title="Retirer ce document">
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <label className="text-[11px] font-bold text-slate-500">N° {r.type === 'traite' ? 'traite' : 'chèque'} *
+                  <input autoFocus={i === 0} className={inp} value={r.numero} onChange={e => set(i, { numero: e.target.value })} placeholder="ex. 0012345" />
+                </label>
+                <label className="text-[11px] font-bold text-slate-500">Banque *
+                  <input className={inp} value={r.banque} onChange={e => set(i, { banque: e.target.value })} placeholder="ex. BMCE, CIH…" list="cc-banques" />
+                </label>
+                <label className="text-[11px] font-bold text-slate-500">Montant de ce {r.type === 'traite' ? 'document' : 'chèque'} (DH) *
+                  <input className={inp} inputMode="decimal" value={r.montant} onChange={e => set(i, { montant: e.target.value })} />
+                </label>
+              </div>
+            </div>
+          ))}
+          <datalist id="cc-banques">
+            {['ATTIJARIWAFA BANK', 'BMCE BANK OF AFRICA', 'BANQUE POPULAIRE', 'CIH BANK', 'SOCIÉTÉ GÉNÉRALE', 'CRÉDIT DU MAROC', 'CRÉDIT AGRICOLE', 'BMCI', 'AL BARID BANK', 'CFG BANK'].map(b => <option key={b} value={b} />)}
+          </datalist>
+          {/* ➕ Toujours affiché (avant : caché dès que « plusieurs expéditions » était coché) */}
+          <button type="button" onClick={addRow}
+            className="flex items-center gap-1.5 px-3 py-2 rounded-xl border-2 border-dashed border-purple-300 text-xs font-black text-purple-700 hover:bg-purple-50 w-full justify-center">
+            <Plus className="w-4 h-4" /> Ajouter un chèque / une traite{isMulti ? ' (pour ces expéditions)' : ''}
+          </button>
+
+          {/* 2️⃣ Expéditions payées par ces chèques : celle-ci, puis une ou plusieurs autres */}
+          <p className="text-xs font-black text-slate-500 uppercase tracking-wide pt-1">2. Expéditions payées par {rows.length > 1 ? 'ces chèques / traites' : 'ce chèque / cette traite'}</p>
           <div className={`rounded-2xl border p-3 ${grouped ? 'border-indigo-300 bg-indigo-50/60' : 'border-slate-200'}`}>
             <label className="flex items-center gap-2 text-sm font-black text-indigo-800 cursor-pointer">
               <input type="checkbox" className="w-4 h-4 accent-indigo-600" checked={grouped}
-                onChange={e => { setGrouped(e.target.checked); if (e.target.checked) setRows(rs => [rs[0]]) }} />
-              🔗 Ce chèque couvre plusieurs expéditions (même expéditeur ou même destinataire, toutes dates)
+                onChange={e => setGrouped(e.target.checked)} />
+              🔗 Ajouter une ou plusieurs autres expéditions (même expéditeur ou même destinataire, toutes dates)
             </label>
+            {!grouped && <p className="text-xs text-slate-500 mt-1">Pour l'instant : seulement {nicOf(parcel)} ({money(expected)} DH).</p>}
             {grouped && (
               searching ? <p className="text-xs text-slate-500 mt-2">Recherche des expéditions de cet expéditeur (toutes dates)…</p>
               : options.length === 0 && !findByNic
@@ -240,61 +298,22 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
                   </>
                 )
             )}
-            {grouped && <p className="text-xs font-bold text-indigo-800 mt-2">{members.length} expédition(s) · montant attendu du chèque : {money(expectedTotal)} DH</p>}
+            {grouped && <p className="text-xs font-bold text-indigo-800 mt-2">{members.length} expédition(s) · montant attendu : {money(expectedTotal)} DH</p>}
           </div>
 
-          {rows.map((r, i) => (
-            <div key={i} className="rounded-2xl border border-slate-200 p-3 bg-slate-50/60">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs font-black text-slate-500">{grouped ? 'Chèque groupé' : `Document ${i + 1}`}</span>
-                <div className="flex gap-1">
-                  {(['cheque', 'traite'] as const).map(t => (
-                    <button key={t} type="button" onClick={() => set(i, { type: t })}
-                      className={`px-2.5 py-1 rounded-lg text-xs font-black border ${r.type === t ? 'bg-purple-600 border-purple-600 text-white' : 'bg-white border-slate-200 text-slate-600'}`}>
-                      {t === 'cheque' ? '📋 Chèque' : '📝 Traite'}
-                    </button>
-                  ))}
-                </div>
-                {rows.length > 1 && (
-                  <button type="button" onClick={() => setRows(rs => rs.filter((_, k) => k !== i))} className="ml-auto p-1.5 rounded-lg text-red-500 hover:bg-red-50" title="Retirer ce document">
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                )}
-              </div>
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                <label className="text-[11px] font-bold text-slate-500">N° {r.type === 'traite' ? 'traite' : 'chèque'} *
-                  <input autoFocus={i === 0} className={inp} value={r.numero} onChange={e => set(i, { numero: e.target.value })} placeholder="ex. 0012345" />
-                </label>
-                <label className="text-[11px] font-bold text-slate-500">Banque *
-                  <input className={inp} value={r.banque} onChange={e => set(i, { banque: e.target.value })} placeholder="ex. BMCE, CIH…" list="cc-banques" />
-                </label>
-                <label className="text-[11px] font-bold text-slate-500">{grouped ? 'Montant TOTAL du chèque (DH) *' : 'Montant (DH) *'}
-                  <input className={inp} inputMode="decimal" value={r.montant} onChange={e => set(i, { montant: e.target.value })} />
-                </label>
-              </div>
-            </div>
-          ))}
-          <datalist id="cc-banques">
-            {['ATTIJARIWAFA BANK', 'BMCE BANK OF AFRICA', 'BANQUE POPULAIRE', 'CIH BANK', 'SOCIÉTÉ GÉNÉRALE', 'CRÉDIT DU MAROC', 'CRÉDIT AGRICOLE', 'BMCI', 'AL BARID BANK', 'CFG BANK'].map(b => <option key={b} value={b} />)}
-          </datalist>
-
-          {!grouped && (
-            <button type="button" onClick={() => setRows(rs => [...rs, { type: defType, numero: '', banque: rs[rs.length - 1]?.banque || '', montant: '', echeance: '' }])}
-              className="flex items-center gap-1.5 text-xs font-black text-purple-700 hover:underline">
-              <Plus className="w-4 h-4" /> Ajouter un autre chèque / traite pour ce colis
-            </button>
-          )}
-
+          {/* 3️⃣ Totaux : chèques / traites face au montant attendu */}
+          <p className="text-xs font-black text-slate-500 uppercase tracking-wide pt-1">3. Totaux</p>
           <div className={`rounded-xl px-3 py-2 text-sm font-bold ${Math.abs(diff) < 0.01 ? 'bg-emerald-50 text-emerald-800' : 'bg-amber-50 text-amber-800'}`}>
-            Total saisi : {money(total)} DH {Math.abs(diff) < 0.01 ? '✓ conforme' : `— écart ${diff > 0 ? '+' : ''}${money(diff)} DH avec le montant attendu`}
+            {rows.length} chèque(s) / traite(s) : {money(total)} DH · attendu {money(expectedTotal)} DH{isMulti ? ` (${members.length} expéditions)` : ''}
+            {' '}{Math.abs(diff) < 0.01 ? '✓ conforme' : `— ${diff < 0 ? 'reste' : 'écart'} ${diff > 0 ? '+' : ''}${money(Math.abs(diff))} DH`}
           </div>
           {/* ⚠️ Chèque reçu inférieur au montant attendu : le destinataire a payé le reste en espèces → signalement à l'admin */}
           {canSignalCash && (
             <div className="rounded-xl border-2 border-amber-300 bg-amber-50 px-3 py-2.5 space-y-2">
               <label className="flex items-start gap-2 text-sm font-bold text-amber-900 cursor-pointer">
                 <input type="checkbox" className="mt-0.5 w-4 h-4 accent-amber-600" checked={cashRest} onChange={e => setCashRest(e.target.checked)} />
-                <span>💵 Le reste ({money(-diff)} DH) a été payé <u>en espèces</u>{grouped ? ` pour ces ${members.length} expéditions` : ' par le destinataire'} — signaler à l'admin
-                  <span className="block text-[11px] font-semibold text-amber-700">Le chèque est enregistré pour {money(total)} DH ; l'admin corrigera le COD en « chèque + espèces »{grouped ? ' (signalement sur chaque expédition du chèque, avec la liste des N° EXP)' : ''}.</span>
+                <span>💵 Compléter le reste ({money(-diff)} DH) par un montant <u>en espèces</u>{isMulti ? ` pour ces ${members.length} expéditions` : ' payé par le destinataire'} — signalé à l'admin
+                  <span className="block text-[11px] font-semibold text-amber-700">Les chèques / traites sont enregistrés pour {money(total)} DH ; {isMulti ? 'la part en espèces de CHAQUE expédition est calculée (au prorata de son montant) et signalée sur chacune' : 'le reste en espèces est signalé'} — l'admin corrige le COD en « chèque + espèces ».</span>
                 </span>
               </label>
               {cashRest && (
@@ -310,6 +329,18 @@ export function ChequeEntryModal({ parcel, alreadyControlled, loadCandidates, fi
                     </p>
                   </div>
                   <input className={inp} value={cashNote} onChange={e => setCashNote(e.target.value)} placeholder="Remarque (facultatif) : qui a reçu les espèces, etc." />
+                  {/* 🔗 Part de chaque expédition : chèques / traites + espèces = attendu */}
+                  {isMulti && (
+                    <table className="w-full text-xs bg-white rounded-lg overflow-hidden border border-amber-200">
+                      <thead><tr className="bg-amber-100/70 text-amber-900"><th className="px-2 py-1 text-left">N° EXP</th><th className="px-2 py-1 text-right">Attendu</th><th className="px-2 py-1 text-right">Chèques / traites</th><th className="px-2 py-1 text-right">Espèces</th></tr></thead>
+                      <tbody className="divide-y divide-amber-100">
+                        {shares.map(s => (
+                          <tr key={s.id}><td className="px-2 py-1 font-mono font-bold">{s.nic}</td><td className="px-2 py-1 text-right">{money(s.expected)}</td>
+                            <td className="px-2 py-1 text-right">{money(s.cheque)}</td><td className="px-2 py-1 text-right font-black text-amber-800">{money(s.cash)}</td></tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
                 </>
               )}
             </div>
@@ -351,14 +382,17 @@ export function printChequeOperationSummary(o: {
   members: any[]
   rows: { type: 'cheque' | 'traite'; numero: string; banque: string; montant: number }[]
   grouped: boolean; expectedTotal: number; cash: number; note: string
+  /** 🔗 Part de chaque expédition (même ordre que members) : chèques / traites et espèces */
+  shares?: { cheque: number; cash: number }[]
 }) {
   const docsTotal = o.rows.reduce((s, r) => s + r.montant, 0)
   const paid = docsTotal + o.cash
   const gap = Math.round((paid - o.expectedTotal) * 100) / 100
   const first = o.members[0] || {}
+  const sh = o.shares && o.shares.length === o.members.length ? o.shares : null
   const expRows = o.members.map((m, i) => `<tr><td class="c">${i + 1}</td><td class="b">${esc(nicOf(m))}</td><td>${esc(fmtD(m.createdAt))}</td>
     <td>${esc(senderNameOf(m))}</td><td>${esc(m.receiver?.name || '')}<br><small>${esc(m.destinationCity || m.receiver?.city || '')}</small></td>
-    <td class="r b">${money(docAmountOf(m))}</td></tr>`).join('')
+    <td class="r b">${money(docAmountOf(m))}</td>${sh ? `<td class="r">${money(sh[i].cheque)}</td><td class="r">${money(sh[i].cash)}</td>` : ''}</tr>`).join('')
   const docRows = o.rows.map(r => `<tr><td>${r.type === 'traite' ? 'Traite' : 'Chèque'}${o.grouped ? ' groupé' : ''}</td><td class="b">${esc(r.numero)}</td><td>${esc(r.banque)}</td><td class="r b">${money(r.montant)}</td></tr>`).join('')
   const html = `<!DOCTYPE html><html lang="fr"><head><meta charset="UTF-8"><title>Résumé opération chèque — ${esc(o.members.map(nicOf).join(', '))}</title><style>
     *{box-sizing:border-box;-webkit-print-color-adjust:exact!important;print-color-adjust:exact!important}
@@ -379,8 +413,8 @@ export function printChequeOperationSummary(o: {
     <h1>Résumé de l'opération — ${o.grouped ? `chèque groupé (${o.members.length} expéditions)` : 'chèque / traite'}${o.cash > 0 ? ' + espèces' : ''}</h1>
     <div>Expéditeur : <b>${esc(senderNameOf(first))}</b> · Agence : <b>${esc(first.originCity || first.sender?.city || '')}</b></div>
     <h2>Expéditions (${o.members.length})</h2>
-    <table><thead><tr><th>#</th><th>N° EXP</th><th>Date</th><th>Expéditeur</th><th>Destinataire</th><th class="r">Attendu (DH)</th></tr></thead>
-      <tbody>${expRows}</tbody><tfoot><tr><td colspan="5">TOTAL ATTENDU</td><td class="r">${money(o.expectedTotal)}</td></tr></tfoot></table>
+    <table><thead><tr><th>#</th><th>N° EXP</th><th>Date</th><th>Expéditeur</th><th>Destinataire</th><th class="r">Attendu (DH)</th>${sh ? '<th class="r">Chèques / traites</th><th class="r">Espèces</th>' : ''}</tr></thead>
+      <tbody>${expRows}</tbody><tfoot><tr><td colspan="5">TOTAL ATTENDU</td><td class="r">${money(o.expectedTotal)}</td>${sh ? `<td class="r">${money(sh.reduce((s, x) => s + x.cheque, 0))}</td><td class="r">${money(sh.reduce((s, x) => s + x.cash, 0))}</td>` : ''}</tr></tfoot></table>
     <h2>Paiement</h2>
     <table><thead><tr><th>Type</th><th>N°</th><th>Banque</th><th class="r">Montant (DH)</th></tr></thead>
       <tbody>${docRows}<tr><td>Espèces${o.cash > 0 ? ' (reste)' : ''}</td><td>—</td><td>—</td><td class="r b">${money(o.cash)}</td></tr></tbody>

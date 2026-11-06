@@ -14,10 +14,13 @@
  * `ready` (bouton « Verser ») ne passe à vrai qu'après le rattrapage + la vérification (ou la relecture complète)
  * ET la première réponse serveur du temps réel. Mêmes expéditions que les 16 requêtes d'avant (utils/recentCollected).
  * Tout échec (IndexedDB absent, quota, réseau) → relecture complète normale.
+ * (01/11/2026) Mémoire enregistrée PAR VILLE avec sa date de départ : une fenêtre plus courte (chef d'exploitation, fenêtre
+ * qui avance chaque jour) réutilise la mémoire d'une fenêtre qui la couvre, en ne gardant que ses expéditions.
  */
 import { collection, query, where, getDocs, getDoc, doc as fsDoc, documentId, getCountFromServer, onSnapshot, orderBy, limit, Timestamp, GeoPoint } from 'firebase/firestore'
 import { db } from './db'
 import { encodeLiteValue, decodeLiteValue } from '../utils/liteDayCache'
+import { restRunQuery } from './restQuery'
 import { RECENT_SHAPES, RECENT_FORMS, matchesRecentCollected, matchesRecentShape, type RecentCityField, type RecentForm } from '../utils/recentCollected'
 
 const COL = 'parcelsLite'
@@ -87,15 +90,18 @@ function openIdb(): Promise<IDBDatabase | null> {
   })
   return idb
 }
-async function loadSaved(key: string): Promise<{ syncedAt: number; docs: any[] } | null> {
+async function loadSaved(city: string, sinceMs: number): Promise<{ syncedAt: number; docs: any[] } | null> {
   try {
     const d = await openIdb()
     if (!d) return null
-    return await new Promise(resolve => {
-      const req = d.transaction(STORE, 'readonly').objectStore(STORE).get(key)
-      req.onsuccess = () => resolve(req.result && typeof req.result.syncedAt === 'number' && Array.isArray(req.result.docs) ? req.result : null)
+    const row: any = await new Promise(resolve => {
+      const req = d.transaction(STORE, 'readonly').objectStore(STORE).get(city)
+      req.onsuccess = () => resolve(req.result || null)
       req.onerror = () => resolve(null)
     })
+    // Utilisable seulement si elle COUVRE la fenêtre demandée (départ identique ou plus ancien)
+    if (!row || typeof row.syncedAt !== 'number' || !Array.isArray(row.docs) || typeof row.sinceMs !== 'number' || row.sinceMs > sinceMs) return null
+    return row
   } catch { return null }
 }
 // ⚡ (26/10/2026) L'enregistrement réécrit TOUTE la mémoire (des milliers d'expéditions converties : ~0,45 s de page
@@ -111,8 +117,11 @@ async function persistNow(st: CityState) {
   try {
     const d = await openIdb()
     if (!d) return
-    const row = { key: keyOf(st.city, st.sinceMs), syncedAt: st.syncedAt, docs: [...st.docs.values()].map(encodeLiteValue) }
-    d.transaction(STORE, 'readwrite').objectStore(STORE).put(row)
+    const row = { key: st.city, sinceMs: st.sinceMs, syncedAt: st.syncedAt, docs: [...st.docs.values()].map(encodeLiteValue) }
+    const store = d.transaction(STORE, 'readwrite').objectStore(STORE)
+    store.put(row)
+    // Ancien format (une mémoire par « ville|départ », avant le 01/11/2026) : effacé (≈ 15 Mo par ville)
+    store.delete(IDBKeyRange.bound(`${st.city}|`, `${st.city}|￿`))
   } catch (err) { console.warn('Collectes récentes : enregistrement impossible', err) }
 }
 function schedulePersist(st: CityState) {
@@ -168,12 +177,21 @@ async function catchUp(st: CityState): Promise<boolean> {
   return checks.every(Boolean)
 }
 
-/** Relecture complète : les 8 requêtes (sans filtre de période, appliqué ensuite par la page). */
+/** Relecture complète : les 8 requêtes (sans filtre de période, appliqué ensuite par la page). ⚡ (01/11/2026) Lecture
+ *  DIRECTE (restQuery, mêmes requêtes et même forme), sans le tri / cache de la bibliothèque Firebase ; échec → SDK. */
 async function fullRead(st: CityState) {
   const m = new Map<string, any>()
   await Promise.all(RECENT_SHAPES.flatMap(([cf, df]) => RECENT_FORMS.map(async form => {
-    const snap = await getDocs(shapeQuery(st.city, cf, df, form, st.sinceMs))
-    snap.docs.forEach(d => m.set(d.id, { id: d.id, ...d.data() }))
+    try {
+      const docs = await restRunQuery({ collection: COL, filters: [
+        { field: cf, op: '==', value: st.city }, { field: df, op: '>=', value: sinceValue(form, st.sinceMs) }, { field: 'createdAt', op: '<', value: FAR },
+      ] })
+      docs.forEach(d => m.set(d.id, { id: d.id, ...d.data }))
+    } catch (err) {
+      console.warn('Collectes récentes : lecture directe impossible, lecture habituelle', err)
+      const snap = await getDocs(shapeQuery(st.city, cf, df, form, st.sinceMs))
+      snap.docs.forEach(d => m.set(d.id, { id: d.id, ...d.data() }))
+    }
   })))
   st.docs = m
 }
@@ -220,11 +238,12 @@ async function start(st: CityState) {
   st.liveOk = false
   // 1. Mémoire enregistrée (premier passage de cette page) → affichée tout de suite
   if (!st.syncedAt) {
-    const saved = await loadSaved(keyOf(st.city, st.sinceMs))
+    const saved = await loadSaved(st.city, st.sinceMs)
     if (gen !== st.gen) return
     if (saved && Date.now() - saved.syncedAt < MAX_AGE_MS) {
       const m = new Map<string, any>()
-      for (const enc of saved.docs) { const p = decodeLiteValue(enc, DEC); if (p?.id) m.set(p.id, p) }
+      // fenêtre plus courte que celle enregistrée : seules les expéditions de CETTE fenêtre sont gardées
+      for (const enc of saved.docs) { const p = decodeLiteValue(enc, DEC); if (p?.id && matchesRecentCollected(p, st.city, st.sinceMs)) m.set(p.id, p) }
       st.docs = m
       st.syncedAt = saved.syncedAt
       notify(st, true)

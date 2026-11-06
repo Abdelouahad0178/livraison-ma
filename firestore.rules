@@ -1973,6 +1973,18 @@ service cloud.firestore {
       allow read: if isStaff();
       allow write: if false;
     }
+    // 🔎 Index de recherche par mot (03/11/2026) : écrit UNIQUEMENT par syncParcelSearch (et le script de rattrapage) ;
+    // lu par la recherche de la page Admin. Mêmes lecteurs que parcels (personnel).
+    match /parcelSearch/{parcelId} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+    // 🗂️ « Anciennes à régler » (05/11/2026) : liste préparée chaque nuit par l'archivage automatique (Admin SDK) —
+    // expéditions non rangées, plus vieilles que la fenêtre des listes et pas réglées. Lue par le personnel.
+    match /archiveWatch/{docId} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
     // 💼 Copie allégée des versements (30/10/2026) : totaux par journée et par agence (versementDays) et contribution de
     // chaque expédition (versementContrib), écrits UNIQUEMENT par la Cloud Function syncVersementStats (Admin SDK).
     match /versementDays/{dayId} {
@@ -1980,6 +1992,25 @@ service cloud.firestore {
       allow write: if false;
     }
     match /versementContrib/{parcelId} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+    // 📮 Totaux de « Port par agence » (01/11/2026) : par journée et par agence (portAgencyDays) et contribution de chaque
+    // expédition (portAgencyContrib), écrits UNIQUEMENT par la Cloud Function syncPortAgencyStats (Admin SDK).
+    match /portAgencyDays/{dayId} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+    match /portAgencyContrib/{parcelId} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+    // 💰 Totaux de « COD par agence » (01/11/2026) : même principe, Cloud Function syncCodAgencyStats.
+    match /codAgencyDays/{dayId} {
+      allow read: if isStaff();
+      allow write: if false;
+    }
+    match /codAgencyContrib/{parcelId} {
       allow read: if isStaff();
       allow write: if false;
     }
@@ -2191,9 +2222,34 @@ service cloud.firestore {
         && request.resource.data.status in ['recu', 'recu_partiel']
         && request.resource.data.receivedById == request.auth.uid
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'receivedAt', 'receivedBy', 'receivedById', 'receivedIds', 'missingIds', 'receiveNote']);
+      // ➖ Retrait d'UNE expédition (auteur du lot ou admin), même après réception (demande du 03/11/2026) : la liste ne
+      // fait que perdre UNE expédition (jamais d'ajout), avec UNE trace de plus dans « removed » au nom de l'auteur ;
+      // statut inchangé, sauf « reçu partiellement » → « reçu » (plus de manquante) ou « annulé » (lot vidé).
+      allow update: if (resource.data.createdById == request.auth.uid || isAdmin())
+        && resource.data.status in ['cree', 'recu', 'recu_partiel']
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['parcelIds', 'nics', 'rows', 'totals', 'cheques', 'traites', 'removed',
+          'receivedIds', 'missingIds', 'status', 'cancelledAt', 'cancelledBy', 'cancelledById'])
+        && resource.data.parcelIds.hasAll(request.resource.data.parcelIds)
+        && request.resource.data.parcelIds.size() == resource.data.parcelIds.size() - 1
+        && request.resource.data.removed.size() == resource.data.get('removed', []).size() + 1
+        && request.resource.data.removed[request.resource.data.removed.size() - 1].byId == request.auth.uid
+        && (request.resource.data.status == resource.data.status
+          || (resource.data.status == 'recu_partiel' && request.resource.data.status == 'recu')
+          || (request.resource.data.parcelIds.size() == 0 && request.resource.data.status == 'annule'));
+      // ➕ Ajout d'expéditions à un lot EN ATTENTE (auteur du lot ou admin, demande du 03/11/2026) : la liste ne fait que
+      // s'allonger (240 au plus), avec UNE trace de plus dans « added » au nom de l'auteur ; statut inchangé. Les fiches
+      // valeursLotItems des ajoutées sont créées dans la même transaction (refus si une expédition est déjà dans un lot).
+      allow update: if (resource.data.createdById == request.auth.uid || isAdmin())
+        && resource.data.status == 'cree'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['parcelIds', 'nics', 'rows', 'totals', 'cheques', 'traites', 'added'])
+        && request.resource.data.parcelIds.hasAll(resource.data.parcelIds)
+        && request.resource.data.parcelIds.size() > resource.data.parcelIds.size()
+        && request.resource.data.parcelIds.size() <= 240
+        && request.resource.data.added.size() == resource.data.get('added', []).size() + 1
+        && request.resource.data.added[request.resource.data.added.size() - 1].byId == request.auth.uid;
     }
     // 🔒 Une fiche par expédition (id = id de l'expédition) : PAS de mise à jour → une expédition déjà dans un lot
-    // ne peut jamais entrer dans un 2e lot (la création échoue). Libérée seulement par l'annulation du lot.
+    // ne peut jamais entrer dans un 2e lot (la création échoue). Libérée par l'annulation du lot ou le retrait de l'expédition.
     match /valeursLotItems/{parcelId} {
       allow read: if isCentralCollector() || isChequeAnalyst() || isAdminOrDirecteur();
       allow create: if (isCentralCollector() || isChequeAnalyst() || isAdmin())
@@ -2244,8 +2300,8 @@ service cloud.firestore {
           'centralCodDeposits', 'centralSupplierPayments', 'return_funds_especes', 'return_funds_cheques',
           'deliveryDelays', 'controlReports', 'backupImports', 'directorLogs', 'director_logs', 'stats', 'clientAccounts'])
         && isStaff();
-      // parcelsLite / parcelsFacturier : écrits uniquement par les Cloud Functions (Admin SDK)
-      allow write: if coll != 'presence' && coll != 'parcelsLite' && coll != 'parcelsFacturier' && !coll.matches('commercial.*') && coll != 'controlAiReports' && coll != 'healthChecks' && isAdmin();
+      // parcelsLite / parcelsFacturier / portAgency* (totaux Port par agence) : écrits uniquement par les Cloud Functions (Admin SDK)
+      allow write: if coll != 'presence' && coll != 'parcelsLite' && coll != 'parcelsFacturier' && coll != 'parcelSearch' && coll != 'archiveWatch' && !coll.matches('commercial.*') && !coll.matches('portAgency.*') && !coll.matches('codAgency.*') && coll != 'controlAiReports' && coll != 'healthChecks' && isAdmin();
     }
   }
 }

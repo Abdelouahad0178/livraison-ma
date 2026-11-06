@@ -6,6 +6,7 @@ import { db } from '../../../firebase/config'
 import { getFunctions, httpsCallable } from 'firebase/functions'
 import { CITIES } from '../../../firebase/constants'
 import AdminArchiveBrowser from '../components/AdminArchiveBrowser'
+import OldUnsettledCard from '../../../components/caisse/OldUnsettledCard'
 
 export default function AdminArchivageTab() {
   const [stats, setStats] = useState<any>(null)
@@ -121,7 +122,7 @@ export default function AdminArchivageTab() {
   const [autoArchiveResult, setAutoArchiveResult] = useState<any>(null)
 
   const handleAutoArchiving = async () => {
-    const confirmMessage = `🗄️ ARCHIVAGE AUTOMATIQUE\n\nMarquer comme archivés tous les colis:\n• TOUS statuts (Livré, En transit, Arrivé, etc.)\n• De plus de 30 jours\n• COD payé (pour livrés uniquement)\n\nLes colis resteront accessibles via recherche.\n\nContinuer?`
+    const confirmMessage = `🗄️ ARCHIVAGE AUTOMATIQUE (le même que chaque nuit à 2 h)\n\nRanger maintenant :\n• les expéditions TERMINÉES ET RÉGLÉES de plus de 30 jours (port et COD réglés)\n• les passagers de plus de 15 jours\n• période d'essai (avant le 05/10) : ancienne règle\n\nJamais une expédition non livrée ou avec de l'argent en attente.\nLes expéditions rangées restent trouvables par la recherche.\n\nContinuer?`
 
     if (!confirm(confirmMessage)) return
 
@@ -230,6 +231,9 @@ export default function AdminArchivageTab() {
         </div>
       )}
 
+      {/* 🗂️ Anciennes à régler (05/11/2026) : toutes les villes */}
+      <div className="mb-6"><OldUnsettledCard /></div>
+
       {/* 🗄️ ARCHIVAGE AUTOMATIQUE (SOFT DELETE) */}
       <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-xl border-2 border-green-300 p-6 mb-6">
         <h2 className="text-xl font-bold text-green-900 mb-3 flex items-center gap-2">
@@ -242,10 +246,11 @@ export default function AdminArchivageTab() {
             <strong className="text-green-700">Archivage soft:</strong> Marque les vieux colis comme archivés sans les supprimer.
           </p>
           <ul className="text-sm text-gray-600 space-y-1 ml-5 list-disc">
-            <li><strong>TOUS statuts</strong> (Livré, En transit, Arrivé, Retour, etc.) de <strong>+30 jours</strong></li>
-            <li>COD payé vérifié pour les livrés (protection comptable)</li>
-            <li>Accessibles via recherche avec checkbox "Inclure archives"</li>
-            <li>⚡ Allège le site de ~70-80%</li>
+            <li>Chaque nuit à 2 h : seulement les expéditions <strong>terminées ET réglées</strong> (livrées avec port et COD réglés, retours finalisés, annulées) de <strong>+30 jours</strong> ; passagers : 15 jours</li>
+            <li><strong>Jamais</strong> une expédition non livrée ou avec un port dû / COD en attente : elle va dans « Anciennes à régler » ci-dessous</li>
+            <li>Rangée qui redevient à régler (encaissement annulé…) : elle sort des archives toute seule</li>
+            <li>Période d'essai (créées avant le 05/10/2026) : ancienne règle gardée</li>
+            <li>Les expéditions rangées restent dans les caisses, les totaux, le Facturier et la recherche</li>
           </ul>
         </div>
 
@@ -297,14 +302,15 @@ export default function AdminArchivageTab() {
       <div className="bg-white rounded-xl border border-gray-200 p-6 mb-6">
         <h2 className="text-lg font-bold text-gray-900 mb-4 flex items-center gap-2">
           <Calendar className="w-5 h-5 text-purple-600" />
-          Archivage Manuel (Ancien système)
+          Archivage manuel (par statut, ville, ancienneté)
         </h2>
 
         <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mb-4">
           <div className="flex gap-2">
             <AlertCircle className="w-5 h-5 text-amber-600 flex-shrink-0 mt-0.5" />
             <div className="text-sm text-amber-900">
-              <strong>🔄 Automatique:</strong> Chaque nuit à 2h, archive colis &gt; 7 jours (statuts finaux). Optimisé pour 2000 colis/jour.
+              <strong>Rangement sur place (05/11/2026) :</strong> les expéditions choisies sont <strong>rangées</strong> (toujours dans la base, les caisses, le Facturier et la recherche) — plus rien n'est déplacé ni effacé.
+              Seules les expéditions <strong>terminées et réglées</strong> sont rangées ; celles avec de l'argent en attente sont laissées (comptées à part). Période d'essai (avant le 05/10) : sans condition.
             </div>
           </div>
         </div>
@@ -446,7 +452,8 @@ export default function AdminArchivageTab() {
                   <CheckCircle className="w-5 h-5" />
                   <strong>Archivage terminé!</strong>
                 </div>
-                <p className="text-sm mt-1">{archiveResult.totalArchived} colis archivés</p>
+                <p className="text-sm mt-1">{archiveResult.totalArchived} expédition(s) rangée(s)</p>
+                {archiveResult.skippedUnsettled > 0 && <p className="text-sm mt-1 text-amber-800">{archiveResult.skippedUnsettled} laissée(s) : pas encore réglée(s) (port dû ou COD en attente)</p>}
                 <p className="text-xs text-green-700 mt-1">Limite: {new Date(archiveResult.cutoffDate).toLocaleDateString('fr-MA')}</p>
                 <button
                   onClick={() => window.location.reload()}
@@ -469,7 +476,7 @@ export default function AdminArchivageTab() {
           <Trash2 className="w-5 h-5 text-red-600" />
           Supprimer les archives transférées
         </h2>
-        <p className="text-sm text-gray-600 mb-4">Ces actions concernent les archives transférées par l’ancien système.</p>
+        <p className="text-sm text-gray-600 mb-4">Ces actions concernent seulement l'ancienne armoire (1 745 expéditions de juillet 2026, transférées par l'ancien système). Les expéditions rangées sur place ne sont jamais supprimées ici.</p>
 
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-4">
           <div className="flex gap-2">

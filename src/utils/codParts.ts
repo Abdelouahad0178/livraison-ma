@@ -360,6 +360,38 @@ export function codSplitAmount(p: any, type: string, legacyType: string): number
  * ✏️ Modification d'un COD existant en MIXTE : le client paie le MÊME total, une partie en espèces. Saisir la part espèces
  * la RETIRE de la part chèque / traite (total inchangé) au lieu de l'ajouter. Renvoie la nouvelle part document (texte).
  */
+// ── 🔀 Liste « Type de service » de la page Admin (03/11/2026) : les COD mixtes sont des CHOIX de la liste
+// (« cheque+especes », « traite+especes »), traduits vers les champs habituels (serviceType + codMixed).
+export const SERVICE_CHOICES: [string, string][] = [
+  ['simple', 'Simple (sans retour de fonds)'], ['especes', '💵 Espèces'], ['cheque', '📋 Chèque'], ['traite', '📝 Traite'],
+  ['cheque+especes', '📋 Chèque + 💵 espèces'], ['traite+especes', '📝 Traite + 💵 espèces'], ['retour_bl', 'Retour BL'],
+]
+
+/** Choix de la liste correspondant au formulaire. */
+export function serviceChoiceOf(form: any): string {
+  const st = String(form?.serviceType || '').split(',')[0].trim()
+  return form?.codMixed === true && COD_DOC_TYPES.includes(st) ? `${st}+especes` : st
+}
+
+/**
+ * Formulaire après le choix d'un type de service. Le montant ne change pas de lui-même : passage à « chèque + espèces »
+ * → le chèque reprend le montant actuel (ou le chèque / les espèces SIGNALÉS par l'encaisseur central s'il y en a) ;
+ * retour à un seul type → ce type reprend le total chèque + espèces ; Simple / Retour BL → 0.
+ */
+export function applyServiceChoice(form: any, choice: string, signal?: { received?: any; cash?: any } | null): any {
+  const [st, plus] = String(choice).split('+')
+  const wasMixed = form?.codMixed === true
+  const total = round2(num(form?.codAmount) + (wasMixed ? num(form?.codCashAmount) : 0))
+  if (plus === 'especes') {
+    if (wasMixed) return { ...form, serviceType: st }
+    const useSignal = !!signal && num(signal.received) > 0 && num(signal.cash) > 0
+    return { ...form, serviceType: st, codMixed: true,
+      codAmount: String(useSignal ? round2(num(signal!.received)) : total), codCashAmount: useSignal ? String(round2(num(signal!.cash))) : '' }
+  }
+  if (st === 'simple' || st === 'retour_bl') return { ...form, serviceType: st, codMixed: false, codCashAmount: '', codAmount: '0' }
+  return { ...form, serviceType: st, codMixed: false, codCashAmount: '', codAmount: String(total) }
+}
+
 export function docPartKeepingTotal(docStr: any, oldCashStr: any, newCashStr: any): string {
   const total = num(docStr) + num(oldCashStr)
   const doc = Math.max(0, round2(total - num(newCashStr)))

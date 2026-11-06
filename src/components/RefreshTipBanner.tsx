@@ -14,7 +14,14 @@ const SHOW_MS = 20_000
 
 /** `scope` : utilisateur + page (ex. « uid:/agent ») — compté PAR utilisateur et PAR page (avant : pour tout le
  *  navigateur, une fois vu dans l'admin il ne s'affichait plus sur les autres pages pendant 3 h). */
-export default function RefreshTipBanner({ scope = '' }: Readonly<{ scope?: string }>) {
+export default function RefreshTipBanner({ scope = '', delayMs = 5000, showMs = SHOW_MS, waitFor }: Readonly<{
+  scope?: string
+  /** Délai avant l'affichage (défaut : 5 s après le chargement) et durée (défaut : 20 s). */
+  delayMs?: number
+  showMs?: number
+  /** Attendre ce signal avant de compter le délai (ex. le message de remerciement, components/FloralTheme). */
+  waitFor?: (cb: () => void) => () => void
+}>) {
   const [open, setOpen] = useState(false)
   const key = scope ? `${KEY}:${scope}` : KEY
   const lastShown = () => { try { return Number(localStorage.getItem(key)) || 0 } catch { return 0 } }
@@ -28,16 +35,18 @@ export default function RefreshTipBanner({ scope = '' }: Readonly<{ scope?: stri
       markShown()
       setOpen(true)
       clearTimeout(hideTimer)
-      hideTimer = setTimeout(() => setOpen(false), SHOW_MS)
+      hideTimer = setTimeout(() => setOpen(false), showMs)
     }
     // Après le chargement COMPLET de la page (+ 5 s pour laisser les données s'afficher)
-    const start = () => { showTimer = setTimeout(tryShow, 5000) }
-    if (document.readyState === 'complete') start()
-    else window.addEventListener('load', start, { once: true })
+    const start = () => { showTimer = setTimeout(tryShow, delayMs) }
+    let stopWaiting = () => {}
+    const begin = () => { if (waitFor) stopWaiting = waitFor(start); else start() }
+    if (document.readyState === 'complete') begin()
+    else window.addEventListener('load', begin, { once: true })
     // Puis vérification chaque minute : nouvel affichage quand 3 h sont passées
     const every = setInterval(tryShow, 60_000)
-    return () => { clearTimeout(showTimer); clearTimeout(hideTimer); clearInterval(every); window.removeEventListener('load', start) }
-  }, [key]) // eslint-disable-line react-hooks/exhaustive-deps
+    return () => { clearTimeout(showTimer); clearTimeout(hideTimer); clearInterval(every); window.removeEventListener('load', begin); stopWaiting() }
+  }, [key, delayMs, showMs, waitFor]) // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!open) return null
   const kbd = 'inline-block px-1 py-0 mx-0.5 rounded-md bg-white/20 border border-white/30 font-mono text-[11px] font-bold'

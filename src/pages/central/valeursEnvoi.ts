@@ -5,6 +5,7 @@
  */
 import { caisseCodAmountOfType } from '../../utils/agencyCaisseRules'
 import { docsOf, nicOf } from './ChequeReception'
+import type { LotAddition, LotRemoval, LotRow, ValeursLot } from '../../firebase/valeursLots'
 
 export const VALUE_TYPES = [
   { key: 'especes', label: 'Espèces', emoji: '💵' },
@@ -75,6 +76,67 @@ export function physicalDocs(rows: ValueRow[]) {
     })
   })
   return { cheques, traites }
+}
+
+/**
+ * ➖ Nouveau contenu d'un lot après le retrait d'UNE expédition (calcul pur, appliqué par removeFromValeursLot sur
+ * la version relue du lot) : lignes, N° EXP, totaux et chèques / traites recalculés comme à la création, trace
+ * ajoutée dans `removed`. Lot déjà reçu : l'expédition sort aussi des listes reçues / manquantes (plus de manquante
+ * → « reçu »). Dernière expédition retirée → le lot est annulé.
+ */
+export function lotRemovalPatch(lot: ValeursLot, parcelId: string, t: { by: string; byId: string; at: string; reason: string }): Record<string, any> {
+  if (lot.status === 'annule') throw new Error('Ce lot est annulé.')
+  const idx = lot.parcelIds.indexOf(parcelId)
+  if (idx < 0) throw new Error('Cette expédition n\'est plus dans le lot (actualisez la page).')
+  const row = (lot.rows || []).find(r => r.id === parcelId)
+  const rows = (lot.rows || []).filter(r => r.id !== parcelId)
+  const parcelIds = lot.parcelIds.filter(id => id !== parcelId)
+  const sums = sumRows(rows as any)
+  const round = (n: number) => Math.round(n * 100) / 100
+  const removal: LotRemoval = {
+    id: parcelId, nic: row?.nic || lot.nics[idx] || parcelId, total: row?.total || 0,
+    amounts: { especes: row?.amounts?.especes || 0, cheque: row?.amounts?.cheque || 0, traite: row?.amounts?.traite || 0 }, docs: row?.docs || [],
+    by: t.by, byId: t.byId, at: t.at, reason: t.reason || '', lotStatus: lot.status,
+  }
+  const patch: Record<string, any> = {
+    parcelIds, nics: lot.nics.filter((_, i) => i !== idx), rows,
+    totals: { especes: round(sums.especes), cheque: round(sums.cheque), traite: round(sums.traite), total: round(sums.total) },
+    ...physicalDocs(rows as any),
+    removed: [...(lot.removed || []), removal],
+  }
+  if (lot.status === 'recu' || lot.status === 'recu_partiel') {
+    patch.receivedIds = (lot.receivedIds || []).filter(id => id !== parcelId)
+    patch.missingIds = (lot.missingIds || []).filter(id => id !== parcelId)
+    if (lot.status === 'recu_partiel' && patch.missingIds.length === 0) patch.status = 'recu'
+  }
+  if (!parcelIds.length) Object.assign(patch, { status: 'annule', cancelledAt: t.at, cancelledBy: t.by, cancelledById: t.byId })
+  return patch
+}
+
+/**
+ * ➕ Nouveau contenu d'un lot EN ATTENTE après l'ajout d'expéditions (calcul pur, appliqué par addToValeursLot sur la
+ * version relue du lot) : lignes ajoutées à la fin, totaux et chèques / traites recalculés comme à la création, trace
+ * ajoutée dans `added`. Refusé si le lot est déjà reçu ou annulé (le colis est parti : faire un nouveau lot).
+ */
+export function lotAdditionPatch(lot: ValeursLot, newRows: LotRow[], t: { by: string; byId: string; at: string }): Record<string, any> {
+  if (lot.status === 'annule') throw new Error('Ce lot est annulé.')
+  if (lot.status !== 'cree') throw new Error('Ce lot a déjà été reçu par l\'agence destinataire : mettez ces valeurs dans un nouveau lot.')
+  const fresh = newRows.filter((r, i) => !lot.parcelIds.includes(r.id) && newRows.findIndex(x => x.id === r.id) === i)
+  if (!fresh.length) throw new Error('Ces expéditions sont déjà dans le lot.')
+  if (lot.parcelIds.length + fresh.length > 240) throw new Error('240 expéditions au plus par lot : faites un nouveau lot.')
+  const rows = [...(lot.rows || []), ...fresh]
+  const sums = sumRows(rows as any)
+  const round = (n: number) => Math.round(n * 100) / 100
+  const addition: LotAddition = {
+    ids: fresh.map(r => r.id), nics: fresh.map(r => r.nic), total: round(fresh.reduce((s, r) => s + (r.total || 0), 0)),
+    by: t.by, byId: t.byId, at: t.at,
+  }
+  return {
+    parcelIds: [...lot.parcelIds, ...fresh.map(r => r.id)], nics: [...lot.nics, ...fresh.map(r => r.nic)], rows,
+    totals: { especes: round(sums.especes), cheque: round(sums.cheque), traite: round(sums.traite), total: round(sums.total) },
+    ...physicalDocs(rows as any),
+    added: [...(lot.added || []), addition],
+  }
 }
 
 const HTML_ESC: Record<string, string> = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }

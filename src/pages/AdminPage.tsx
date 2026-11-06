@@ -1484,7 +1484,7 @@ export default function AdminPage() {
   const isSearching = fuseIsSearching || isServerSearching // Recherche locale OU serveur
 
   // 🗄️ Inclure les archives dans la recherche
-  const [includeArchived, setIncludeArchived] = useState(false)
+  const [includeArchived, setIncludeArchived] = useState(true) // 🗄️ archives TOUJOURS comprises (lot 2, 05/11/2026) — plus de case à cocher
 
   // 🔄 En QUITTANT l'onglet Expéditions (ex. retour à l'Accueil), ses filtres reviennent à l'état normal : au retour,
   // « Tout » et les 50 expéditions les plus récentes (demande du 25/10/2026). Les filtres propres aux autres onglets
@@ -1505,7 +1505,7 @@ export default function AdminPage() {
     setPortTypeFilter([])
     setSearch('')
     setSearchScope('all')
-    setIncludeArchived(false)
+    setIncludeArchived(true)
     setServerSearchResults(null)
     setIsSearchActive(false)
     setDisplayLimit(DISPLAY_LIMIT)
@@ -1534,7 +1534,8 @@ export default function AdminPage() {
       setIsServerSearching(true)
       try {
         console.warn(`🔍 Recherche serveur: "${query}" dans TOUTE la base (archives: ${includeArchived})...`)
-        const results = await searchParcels(query, { limit: 50000, includeArchived, nameScope: searchScope })
+        // 🔎 wordSearch : mot n'importe où dans le nom + numéro de chèque / traite (index parcelSearch, 03/11/2026)
+        const results = await searchParcels(query, { limit: 50000, includeArchived, nameScope: searchScope, wordSearch: true })
         setServerSearchResults(results)
         setIsServerSearching(false)
         console.warn(`✅ Recherche serveur: ${results.length} résultats trouvés`)

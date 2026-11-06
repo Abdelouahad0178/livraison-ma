@@ -1505,20 +1505,17 @@ export default function ParcelsTab() {
           </div>
         )}
 
-        {/* Keep the option accessible when clearing an all-date archive search. */}
-        {(search || includeArchived) && (
+        {/* 🗄️ Archives TOUJOURS comprises dans la recherche (lot 2, 05/11/2026) : plus de case à cocher. (Une recherche
+            d'archives déjà ouverte avec l'ancienne case reste refermable.) */}
+        {includeArchived ? (
           <label className="flex items-center gap-2 px-4 py-2 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer hover:bg-amber-100 transition-colors">
-            <input
-              type="checkbox"
-              checked={includeArchived}
-              onChange={e => setIncludeArchived(e.target.checked)}
-              className="w-4 h-4 text-amber-600 border-amber-300 rounded focus:ring-amber-500 cursor-pointer"
-            />
-            <span className="text-sm font-medium text-amber-900">
-              🗄️ Inclure archives (+30 jours)
-            </span>
+            <input type="checkbox" checked onChange={() => setIncludeArchived(false)}
+              className="w-4 h-4 text-amber-600 border-amber-300 rounded focus:ring-amber-500 cursor-pointer" />
+            <span className="text-sm font-medium text-amber-900">🗄️ Recherche toutes dates (décocher pour revenir à la période)</span>
           </label>
-        )}
+        ) : search ? (
+          <span className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs font-medium text-amber-900">🗄️ archives comprises</span>
+        ) : null}
         {archiveSearchOnly && (
           <p role="status" className="px-4 py-2 text-sm text-amber-800 bg-amber-50 rounded-lg">
             Recherche dans toutes les archives, sans limite de date. Seules les expéditions correspondant à votre recherche sont chargées.
@@ -1769,7 +1766,7 @@ export default function ParcelsTab() {
           </div>
         )}
 
-        {/* 🎯 Recherche ciblée (N° EXP, téléphone, N° LMA) avec une période choisie : expéditions trouvées dans la
+        {/* 🎯 Recherche ciblée (N° EXP, téléphone, N° LMA — et nom depuis le 05/11/2026, archives comprises) avec une période choisie : expéditions trouvées dans la
             base mais ABSENTES de la liste affichée (hors période / filtres). Montrées à part, jamais comptées. */}
         {(() => {
           if (!search) return null
@@ -1814,7 +1811,7 @@ export default function ParcelsTab() {
                             <span className="text-[11px] font-semibold text-amber-800 bg-amber-100 px-2 py-0.5 rounded-full">
                               hors période · créée le {d ? d.toLocaleDateString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric' }) : '—'}
                             </span>
-                            {parcel.isArchived && <span className="text-[11px] font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full">archivée</span>}
+                            {(parcel.isArchived || parcel.rangee) && <span className="text-[11px] font-semibold text-gray-600 bg-gray-100 px-2 py-0.5 rounded-full">🗄️ rangée</span>}
                           </div>
                           <div className="text-xs text-gray-600 space-y-0.5">
                             <div className="flex items-center gap-2 flex-wrap">
@@ -1859,6 +1856,7 @@ export default function ParcelsTab() {
                   )
                 })}
               </div>
+              {extra.length > 10 && <div className="px-3 py-2 text-xs font-semibold text-amber-800 bg-amber-50">… et {extra.length - 10} autre{extra.length - 10 > 1 ? 's' : ''} : précisez la recherche (nom complet, N° EXP, téléphone)</div>}
             </div>
           )
         })()}
@@ -1871,7 +1869,7 @@ export default function ParcelsTab() {
               🔍 Aucun résultat trouvé
             </div>
             <div className="text-sm text-amber-600">
-              {includeArchived ? 'Précisez votre recherche ou vérifiez les autres filtres.' : 'Essayez avec un autre terme de recherche ou activez l’option « Inclure archives » ci-dessus.'}
+              Précisez votre recherche ou vérifiez les autres filtres (les expéditions rangées sont déjà comprises).
             </div>
           </div>
         )}

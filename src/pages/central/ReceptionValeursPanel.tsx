@@ -1,13 +1,13 @@
 // 📥 Onglet « Réception des valeurs » : lots de valeurs envoyés VERS ma ville (onglet « Envoi des valeurs » de l'autre
 // ville) → je coche ce qui est réellement dans le colis et je confirme la réception. L'arrivée des valeurs reçues est
 // confirmée sur chaque expédition (deliveryControlled, comme « Confirmer arrivée »).
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { Inbox, Printer, CheckCircle2, FileSignature } from 'lucide-react'
 import { doc, getDoc } from 'firebase/firestore'
 import { db } from '../../firebase/config'
 import { subscribeValeursLots, receiveValeursLot, lotRowsMatching, LOT_STATUS_LABEL, type ValeursLot } from '../../firebase/valeursLots'
 import { LotFilterBar, applyLotFilters, lotFilterSince, EMPTY_LOT_FILTERS, type LotFilterState } from './LotFilters'
-import { LotDetails, LotToggle } from './LotDetails'
+import { LotDetails, LotChangesNote, LotToggle } from './LotDetails'
 import { markParcelsDeliveryControlled } from '../../firebase/central'
 import { openPrint } from './ControlReports'
 import { bordereauHtml, clientReceiptHtml, groupBySender, sumRows, fmtD, fmtDT, VALUE_TYPES, type ValueRow } from './valeursEnvoi'
@@ -182,15 +182,26 @@ function ClientReceiptsModal({ lot, myName, onClose }: { lot: ValeursLot; myName
 
 function LotToReceive({ lot, canReceive, myUid, myName, onPrint, highlight, open, onToggle }: { lot: ValeursLot; canReceive: boolean; myUid: string; myName: string; onPrint: () => void; highlight: Set<string>; open: boolean; onToggle: () => void }) {
   const [checked, setChecked] = useState<Set<string>>(() => new Set(lot.parcelIds))
+  // ➕ Expédition ajoutée au lot par l'expéditeur pendant que l'écran est ouvert : cochée (présente) par défaut,
+  // comme les autres, au lieu d'apparaître « MANQUANTE »
+  const seenIds = useRef<Set<string>>(new Set(lot.parcelIds))
+  useEffect(() => {
+    const fresh = lot.parcelIds.filter(id => !seenIds.current.has(id))
+    if (!fresh.length) return
+    fresh.forEach(id => seenIds.current.add(id))
+    setChecked(prev => new Set([...prev, ...fresh]))
+  }, [lot.parcelIds])
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
   const rows = lot.rows || []
   const recTotal = rows.filter(r => checked.has(r.id)).reduce((s, r) => s + (r.total || 0), 0)
+  // Cochées parmi les expéditions ENCORE dans le lot (une expédition retirée par l'expéditeur n'y est plus)
+  const recCount = lot.parcelIds.filter(id => checked.has(id)).length
   const toggle = (id: string) => setChecked(prev => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n })
 
   const confirm = async () => {
-    const missing = lot.parcelIds.length - checked.size
-    if (!window.confirm(`Confirmer la réception du lot ${lot.number} ?\n\n${checked.size} valeur(s) reçue(s) — ${money(recTotal)} DH${missing ? `\n⚠️ ${missing} valeur(s) MANQUANTE(S) : le lot sera marqué « reçu partiellement ».` : ''}`)) return
+    const missing = lot.parcelIds.length - recCount
+    if (!window.confirm(`Confirmer la réception du lot ${lot.number} ?\n\n${recCount} valeur(s) reçue(s) — ${money(recTotal)} DH${missing ?`\n⚠️ ${missing} valeur(s) MANQUANTE(S) : le lot sera marqué « reçu partiellement ».` : ''}`)) return
     setBusy(true)
     try {
       const res = await receiveValeursLot(lot, [...checked], note.trim(), myName || 'Encaisseur central', myUid)
@@ -245,10 +256,11 @@ function LotToReceive({ lot, canReceive, myUid, myName, onPrint, highlight, open
           </tbody>
         </table>
       </div>
+      {((lot.removed || []).length > 0 || (lot.added || []).length > 0) && <div className="px-5 pb-2"><LotChangesNote lot={lot} /></div>}
       {canReceive ? (
         <div className="flex flex-wrap items-center gap-2 px-5 py-3 border-t border-amber-100 bg-amber-50/40">
           <input value={note} onChange={e => setNote(e.target.value)} placeholder="Remarque (facultatif)" className="flex-1 min-w-48 px-3 py-2 rounded-xl border border-amber-200 text-sm" />
-          <span className="text-xs text-slate-600">{checked.size}/{lot.parcelIds.length} reçue(s) · <b>{money(recTotal)} DH</b></span>
+          <span className="text-xs text-slate-600">{recCount}/{lot.parcelIds.length} reçue(s) · <b>{money(recTotal)} DH</b></span>
           <button onClick={confirm} disabled={busy} className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white text-sm font-black shadow">
             <CheckCircle2 className="w-4 h-4" /> Confirmer la réception
           </button>

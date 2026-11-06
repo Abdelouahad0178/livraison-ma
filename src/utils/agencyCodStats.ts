@@ -5,11 +5,13 @@
 //   - Situation caisse : argent réellement passé — reçues = valeurs ENCAISSÉES à destination,
 //     envoyées = valeurs déjà RÉGLÉES aux expéditeurs.
 // Montant par type (espèces / chèque / traite, RF mixte compris) : caisseCodAmountOfType — même règle que Caisse Agence.
-// Exclus : services sans valeur (simple, Retour BL), expéditions retournées, argent encaissé avant le 05/10/2026.
+// Exclus : services sans valeur (simple, Retour BL), expéditions retournées.
+// (01/11/2026, demande de l'admin) Les COD encaissés AVANT le 05/10/2026 (période d'essai) sont COMPTÉS, comme dans la page
+// du chef d'agence (ex. Agadir 01/10 : 85 616 DH et non 82 896) — dans les deux vues, donc « Reste à encaisser » inchangé.
 import { CITIES, RETURN_STATUSES } from '../firebase/constants'
 import { caisseCodAmountOfType } from './agencyCaisseRules'
 import { isMixedCod } from './codParts'
-import { isCodMoneyBeforeStart, isCodSenderPaid } from './moneyFlow'
+import { isCodSenderPaid } from './moneyFlow'
 import { isSentFromAgency, isReceivedInAgency, type AgencyDirection } from './billingAgency'
 
 export type CodViewMode = 'theoretical' | 'physical'
@@ -32,13 +34,12 @@ export interface AgencyCodStat {
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 
-/** Valeur (COD) à compter : montant > 0, service avec valeur, pas retournée, pas d'argent d'avant le 05/10/2026. */
+/** Valeur (COD) à compter : montant > 0, service avec valeur, pas retournée (y compris encaissée avant le 05/10/2026). */
 export const hasCountedCod = (p: any): boolean => {
   if (!((parseFloat(p?.codAmount) || 0) > 0)) return false
   const s = String(p?.serviceType ?? '').trim().toLowerCase()
   if (s === 'simple' || s === 'retour_bl' || s === 'bon_livraison') return false
-  if (p?.wasReturned || RETURN_STATUSES.includes(p?.status)) return false
-  return !isCodMoneyBeforeStart(p)
+  return !(p?.wasReturned || RETURN_STATUSES.includes(p?.status))
 }
 /** Valeur encaissée à destination (collectée, remise au chef, réglée). */
 export const isCodCollected = (p: any): boolean => !!p?.codStatus && p.codStatus !== 'pending'

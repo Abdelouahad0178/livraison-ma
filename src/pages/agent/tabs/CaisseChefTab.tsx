@@ -28,6 +28,7 @@ import { updateParcel, searchParcels, subscribeAgencyReturnParcels, portTypeChan
 import { useRecentCollected } from '../../../hooks/useRecentCollected'
 import { useAgencyParcelsFull } from '../../../hooks/useAgencyParcelsFull'
 import LoadProgress from '../../../components/LoadProgress'
+import OldUnsettledCard from '../../../components/caisse/OldUnsettledCard'
 import { collection, query, where, onSnapshot, documentId, doc as fsDoc, getDoc, arrayUnion, updateDoc, Timestamp } from 'firebase/firestore'
 import { db } from '../../../firebase/db'
 import { auth } from '../../../firebase/config'
@@ -227,7 +228,7 @@ export default function CaisseChefTab() {
   const { datePreset, dateFrom, dateTo, operationalDay, driverFilter, statusFilter } = deferredCaisseFilters
   const caisseFiltersPending = deferredCaisseFilters !== urgentCaisseFilters
   const [searchQuery, setSearchQuery] = useState('')
-  const [includeArchived, setIncludeArchived] = useState(false)
+  const [includeArchived, setIncludeArchived] = useState(true) // 🗄️ archives TOUJOURS comprises (lot 2, 05/11/2026)
   const [searchResults, setSearchResults] = useState<any[] | null>(null)
   const [searching, setSearching] = useState(false)
 
@@ -290,6 +291,8 @@ export default function CaisseChefTab() {
 
   // État collecte ports
   const [collectingPortIds, setCollectingPortIds] = useState<Set<string>>(new Set())
+  // 📋 Port dû payé PAR CHÈQUE, collecté depuis la recherche (04/11/2026) : détails du chèque
+  const [portChequeModal, setPortChequeModal] = useState<null | { parcel: any; banque: string; numero: string; dateEncaissement: string; error: string }>(null)
 
   // État livraison
   const [deliveringParcelIds, setDeliveringParcelIds] = useState<Set<string>>(new Set())
@@ -361,7 +364,7 @@ export default function CaisseChefTab() {
       setSearchResults(null)
       setSearching(false)
       setStatusFilter('all')
-      setIncludeArchived(false)
+      setIncludeArchived(true)
       // Ne PAS vider le cache ici - il persiste pour l'affichage normal
       return
     }
@@ -391,11 +394,11 @@ export default function CaisseChefTab() {
         // COMPLÈTE via l'écoute temps réel ci-dessous ; Caisse Agence calcule déjà sur parcelsLite (journées passées).
         // limit : plafond des recherches par DÉBUT de nom — aucun plafond effectif, comme avant (l'option
         // était ignorée) : les chiffres affichés en mode recherche restent identiques.
-        const results = await searchParcels(searchTerm, { limit: 50000, includeArchived, lite: true })
+        const results = await searchParcels(searchTerm, { limit: 50000, includeArchived, lite: true, wordSearch: true })
         if (cancelled) return
-        // Filtrer par ville si chef d'agence
+        // Filtrer par ville si chef d'agence (départ, arrivée ou ville de retour)
         const filtered = results.filter((p: any) =>
-          p.destinationCity === profile?.city || p.originCity === profile?.city
+          p.destinationCity === profile?.city || p.originCity === profile?.city || p.returnToCity === profile?.city
         )
         setSearchResults(filtered)
         console.log(`✅ ${filtered.length} résultats trouvés`)
@@ -813,6 +816,18 @@ export default function CaisseChefTab() {
     `${parcel.portStatus === 'collected' ? 'Recevoir' : 'Collecter'} vous-même le port dû de ${fmtAmt(parcel.price)} DH (${nicOf(parcel)}), en l'absence du chef d'exploitation ?\n\nIl sera marqué reçu par vous (chef d'agence) et enregistré en caisse.`
       + autoDeliverMsg(parcel) + linkedMsg(parcel),
     () => chefReceivePortDu(parcel, chefActor))
+  // 📋 Port dû payé PAR CHÈQUE (recherche, comme le chef d'exploitation) : détails du chèque, pas d'entrée de caisse espèces
+  const openPortCheque = (parcel: any) => setPortChequeModal({ parcel, banque: '', numero: '', dateEncaissement: new Date().toISOString().slice(0, 10), error: '' })
+  const submitPortCheque = () => {
+    if (!portChequeModal) return
+    const { parcel, banque, numero, dateEncaissement } = portChequeModal
+    if (!banque.trim() || !numero.trim()) { setPortChequeModal({ ...portChequeModal, error: 'Banque et numéro du chèque obligatoires.' }); return }
+    setPortChequeModal(null)
+    return runChefPort(parcel,
+      `Collecter vous-même le port dû de ${fmtAmt(parcel.price)} DH (${nicOf(parcel)}) payé PAR CHÈQUE (${banque.trim()} n° ${numero.trim()}) ?\n\nLe chèque suit le circuit des chèques (onglet « Ports dû chèque ») : rien n'entre en caisse espèces.`
+        + autoDeliverMsg(parcel) + linkedMsg(parcel),
+      () => chefReceivePortDu(parcel, chefActor, true, { banque: banque.trim(), numero: numero.trim(), dateEncaissement }))
+  }
   // 💰 COD (RETOUR FOND) : collecter (pas encore encaissé) ou recevoir (encaissé par le livreur / la gare), en
   // remplacement du chef d'exploitation — marqué à mon nom, part espèces écrite en caisse (chefReceiveCod)
   const handleCollectCod = (parcel: any) => runChefPort(parcel,
@@ -1402,6 +1417,9 @@ Le reste sera le ${docLabel} (total inchangé).`)
       {/* Contenu des onglets */}
       {activeTab === 'livreurs' && (
         <div className="space-y-4">
+          {/* 🗂️ Anciennes à régler (05/11/2026) : plus de 45 jours, pas rangées car pas terminées / pas réglées — 🔎 ouvre
+              l'expédition dans la recherche ci-dessous (encaisser le port dû / le COD, livrer…) */}
+          {profile?.city && <OldUnsettledCard city={profile.city} onOpen={nic => setSearchQuery(nic)} />}
           {/* (Filtre de date déplacé en haut de la page — même filtre) */}
           {/* Filtres */}
           <div className="bg-white border border-gray-200 rounded-xl p-4 space-y-3">
@@ -1448,19 +1466,9 @@ Le reste sera le ${docLabel} (total inchangé).`)
                 </div>
               </div>
 
-              {/* 🗄️ Checkbox Archives (visible seulement si recherche active) */}
-              {searchQuery.trim() && (
-                <label className="flex items-center gap-2 px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg cursor-pointer hover:bg-amber-100 transition-colors whitespace-nowrap">
-                  <input
-                    type="checkbox"
-                    checked={includeArchived}
-                    onChange={e => setIncludeArchived(e.target.checked)}
-                    className="w-4 h-4 text-amber-600 border-amber-300 rounded focus:ring-amber-500 cursor-pointer"
-                  />
-                  <span className="text-sm font-medium text-amber-900">
-                    🗄️ Inclure archives (+30j)
-                  </span>
-                </label>
+              {/* 🗄️ Archives TOUJOURS comprises dans la recherche (lot 2, 05/11/2026) : plus de case à cocher */}
+              {searchQuery.trim() && includeArchived && (
+                <span className="px-3 py-2 bg-amber-50 border border-amber-200 rounded-lg text-xs font-medium text-amber-900 whitespace-nowrap">🗄️ archives comprises</span>
               )}
             </div>
           </div>
@@ -1509,7 +1517,8 @@ Le reste sera le ${docLabel} (total inchangé).`)
                           <th className="text-left py-2 px-3 font-semibold text-gray-700">Date livraison</th>
                           <th className="text-left py-2 px-3 font-semibold text-gray-700">Client</th>
                           <th className="text-center py-2 px-3 font-semibold text-gray-700">Type</th>
-                          <th className="text-right py-2 px-3 font-semibold text-gray-700">Montant</th>
+                          <th className="text-right py-2 px-3 font-semibold text-gray-700">Port</th>
+                          <th className="text-right py-2 px-3 font-semibold text-gray-700">COD</th>
                           <th className="text-center py-2 px-3 font-semibold text-gray-700">Status</th>
                           <th className="text-center py-2 px-3 font-semibold text-gray-700">Actions</th>
                         </tr>
@@ -1547,9 +1556,9 @@ Le reste sera le ${docLabel} (total inchangé).`)
                                   <span className="font-mono text-xs font-semibold text-blue-600">
                                     {parcel.senderNic || parcel.sender?.nic || parcel.trackingId}
                                   </span>
-                                  {parcel.isArchived && (
-                                    <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded w-fit">
-                                      🗄️ Archivé
+                                  {(parcel.isArchived || parcel.rangee) && (
+                                    <span className="px-2 py-0.5 bg-amber-100 text-amber-700 text-xs rounded w-fit" title="Expédition rangée — toujours encaissable">
+                                      🗄️ rangée
                                     </span>
                                   )}
                                   {/* 🎯 La recherche couvre toute la base : expédition hors de la période choisie signalée */}
@@ -1604,6 +1613,17 @@ Le reste sera le ${docLabel} (total inchangé).`)
                               </td>
                               <td className="py-2 px-3 text-right font-semibold text-gray-900">
                                 {fmtAmt(parcel.price)} DH
+                                {isPortDu && isCollected && parcel.portDuReceivedMethod === 'cheque' && <div className="text-[10px] font-medium text-blue-700">📋 chèque{parcel.portDuChequeNumero ? ` n° ${parcel.portDuChequeNumero}` : ''}</div>}
+                              </td>
+                              {/* 💰 COD (RETOUR FOND) : mêmes actions que les tableaux des livreurs — collecter / recevoir, chèque + espèces, annuler (04/11/2026) */}
+                              <td className="py-2 px-3 text-right">
+                                {(parseFloat(parcel.codAmount) || 0) > 0 ? (
+                                  <>
+                                    <div className="font-semibold text-gray-900 whitespace-nowrap">{fmtAmt(parcel.codAmount)} DH</div>
+                                    <div className="text-[10px] text-gray-500">{isMixedCod(parcel) ? codPartsBreakdown(parcel) : ({ especes: '💵 espèces', cheque: '📋 chèque', traite: '📝 traite' } as Record<string, string>)[String(parcel.codPaymentType || parcel.serviceType || '').toLowerCase()] || ''}</div>
+                                    {codActionCell(parcel)}
+                                  </>
+                                ) : <span className="text-gray-300">—</span>}
                               </td>
                               <td className="py-2 px-3 text-center">
                                 {isReturnPortDu(parcel) && <div className="text-[10px] font-semibold text-red-600 mb-0.5">↩️ Retour — port dû ici</div>}
@@ -1640,6 +1660,24 @@ Le reste sera le ${docLabel} (total inchangé).`)
                                     <span className="text-xs text-gray-500 italic">-</span>
                                   ) : (
                                     <>
+                                      {/* 📬 Port payé ramassé : recevoir / annuler — même logique que les tableaux des livreurs (lot 3, 05/11/2026) */}
+                                      {(isPortPayeRamasse || isPortPayeRecu) && (
+                                        guichetGroupIdOf(parcel, profile?.city || '') ? (
+                                          <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-amber-100 text-amber-800" title={`Port payé encaissé au guichet : il se reçoit dans la carte « ${parcel.portGuichetHolderName || 'En gare'} »`}>Payé au guichet · {ramasseGuichetEtat(parcel).label}</span>
+                                        ) : isPortPayeRecu ? (
+                                          <button onClick={() => handleUncollectPortPaye(parcel)} disabled={collectingPortIds.has(parcel.id)}
+                                            className="px-3 py-1 rounded-lg text-xs font-semibold transition bg-red-100 text-red-700 hover:bg-red-200 disabled:opacity-50">
+                                            {collectingPortIds.has(parcel.id) ? '...' : 'Annuler PP'}
+                                          </button>
+                                        ) : portPayeExpReceived(parcel) ? (
+                                          <span className="text-[11px] font-semibold text-indigo-700" title="Déjà remis au chef d'exploitation : il arrivera par son envoi (Valeurs à valider)">Remis chef d'exploitation (envoi)</span>
+                                        ) : (
+                                          <button onClick={() => handleReceivePortPaye(parcel)} disabled={collectingPortIds.has(parcel.id)}
+                                            className="px-3 py-1 rounded-lg text-xs font-semibold transition bg-indigo-100 text-indigo-700 hover:bg-indigo-200 disabled:opacity-50">
+                                            {collectingPortIds.has(parcel.id) ? '...' : '📬 Recevoir PP'}
+                                          </button>
+                                        )
+                                      )}
                                       {isPortDu && (
                                         <>
                                           <button
@@ -1658,9 +1696,19 @@ Le reste sera le ${docLabel} (total inchangé).`)
                                             ) : isCollected ? (
                                               'Annuler'
                                             ) : (
-                                              'Collecter'
+                                              '💵 Espèces'
                                             )}
                                           </button>
+                                          {/* 📋 Port dû payé par chèque — comme la page du chef d'exploitation (pas pour un retour : espèces seulement) */}
+                                          {!isCollected && !isReturnPortDu(parcel) && !parcel.wasReturned && (
+                                            <button
+                                              onClick={() => openPortCheque(parcel)}
+                                              disabled={collectingPortIds.has(parcel.id)}
+                                              className="px-3 py-1 rounded-lg text-xs font-semibold transition bg-blue-100 hover:bg-blue-200 text-blue-800 disabled:opacity-50"
+                                            >
+                                              📋 Chèque
+                                            </button>
+                                          )}
 
                                           {parcel.status === 'En cours de livraison' && isDestinationHere(parcel) && (
                                             <button
@@ -2811,6 +2859,42 @@ Le reste sera le ${docLabel} (total inchangé).`)
         </div>
         )
       })()}
+
+      {/* 📋 Port dû payé par chèque (recherche) */}
+      {portChequeModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" onClick={() => setPortChequeModal(null)}>
+          <div className="bg-white rounded-xl max-w-md w-full" onClick={e => e.stopPropagation()}>
+            <div className="p-5 border-b border-gray-200 flex items-center justify-between">
+              <h3 className="text-lg font-bold text-gray-900">📋 Port dû payé par chèque</h3>
+              <button onClick={() => setPortChequeModal(null)} className="text-gray-400 hover:text-gray-600 transition"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-5 space-y-3">
+              <div className="bg-gray-50 rounded-lg p-3 text-sm flex items-center justify-between">
+                <span className="font-mono font-semibold text-blue-600">{nicOf(portChequeModal.parcel)}</span>
+                <span className="font-bold text-gray-900">{fmtAmt(portChequeModal.parcel.price)} DH</span>
+              </div>
+              <label className="block text-sm font-medium text-gray-700">Banque
+                <input value={portChequeModal.banque} onChange={e => setPortChequeModal({ ...portChequeModal, banque: e.target.value, error: '' })}
+                  className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500" autoFocus />
+              </label>
+              <label className="block text-sm font-medium text-gray-700">N° du chèque
+                <input value={portChequeModal.numero} onChange={e => setPortChequeModal({ ...portChequeModal, numero: e.target.value, error: '' })}
+                  className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500" />
+              </label>
+              <label className="block text-sm font-medium text-gray-700">Date d'encaissement
+                <input type="date" value={portChequeModal.dateEncaissement} onChange={e => setPortChequeModal({ ...portChequeModal, dateEncaissement: e.target.value, error: '' })}
+                  className="mt-1 w-full px-3 py-2 border border-gray-200 rounded-lg text-sm focus:outline-none focus:border-blue-500" />
+              </label>
+              {portChequeModal.error && <p className="text-sm text-red-600">{portChequeModal.error}</p>}
+              <p className="text-xs text-gray-500">Le chèque suit le circuit des chèques (onglet « Ports dû chèque ») : rien n'entre en caisse espèces.</p>
+            </div>
+            <div className="p-5 border-t border-gray-200 flex justify-end gap-2">
+              <button onClick={() => setPortChequeModal(null)} className="px-4 py-2 rounded-lg text-sm font-semibold bg-gray-100 hover:bg-gray-200 text-gray-700">Annuler</button>
+              <button onClick={submitPortCheque} className="px-4 py-2 rounded-lg text-sm font-semibold bg-blue-600 hover:bg-blue-700 text-white">Collecter le chèque</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Modal retard */}
       {delayModal && (

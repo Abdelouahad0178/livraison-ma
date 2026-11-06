@@ -1,7 +1,7 @@
 import { X, ChevronDown, Save, Edit2 } from 'lucide-react'
 import { CITIES, STATUSES } from '../../../firebase/constants'
 import { CitySelect } from '../../../components/CitySelect'
-import { docPartKeepingTotal } from '../../../utils/codParts'
+import { SERVICE_CHOICES, applyServiceChoice, serviceChoiceOf } from '../../../utils/codParts'
 import { useState } from 'react'
 import { auth } from '../../../firebase/config'
 import { moveParcelDate } from '../../../firebase/parcels'
@@ -141,16 +141,21 @@ export default function AdminEditParcelModal({
               <div>
                 <label className="block text-xs text-gray-500 mb-1">Type de service</label>
                 <div className="relative">
+                  {/* 🔀 (03/11/2026) « Chèque + espèces » / « Traite + espèces » sont des choix de la liste (avant : case cachée
+                      sous le montant) ; Simple / Retour BL => pas de RETOUR FOND */}
                   <select
-                    value={adminEditModal.form.serviceType}
+                    value={serviceChoiceOf(adminEditModal.form)}
                     onChange={e => {
-                      // Un seul type ; Simple / Retour BL => pas de RETOUR FOND
-                      const st = e.target.value
-                      setAdminEditModal((m: any) => ({ ...m, error: '', form: { ...m.form, serviceType: st, codAmount: st === 'simple' || st === 'retour_bl' ? '0' : m.form.codAmount, ...((st === 'cheque' || st === 'traite') ? {} : { codMixed: false, codCashAmount: '' }) } }))
+                      const p = adminEditModal.parcel
+                      const signal = p?.codDocMismatch === true ? { received: p.codDocMismatchReceived, cash: p.codDocMismatchCash } : null
+                      setAdminEditModal((m: any) => ({ ...m, error: '', form: applyServiceChoice(m.form, e.target.value, signal) }))
                     }}
                     className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm appearance-none bg-white focus:outline-none focus:border-purple-400"
                   >
-                    {['simple','especes','cheque','traite','retour_bl'].map(t => <option key={t} value={t}>{t}</option>)}
+                    {SERVICE_CHOICES.map(([v, label]) => <option key={v} value={v}>{label}</option>)}
+                    {!SERVICE_CHOICES.some(([v]) => v === serviceChoiceOf(adminEditModal.form)) && (
+                      <option value={serviceChoiceOf(adminEditModal.form)}>{serviceChoiceOf(adminEditModal.form) || '—'} (ancien type)</option>
+                    )}
                   </select>
                   <ChevronDown className="absolute right-3 top-2.5 w-4 h-4 text-gray-400 pointer-events-none" />
                 </div>
@@ -285,28 +290,54 @@ export default function AdminEditParcelModal({
                   <ChevronDown className="w-4 h-4 text-gray-400 absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
                 </div>
               </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">{adminEditModal.form.codMixed ? (adminEditModal.form.serviceType === 'traite' ? '📝 Montant traite (DH)' : '📋 Montant chèque (DH)') : 'RETOUR FOND (DH)'}</label>
-                <input type="number" min="0" step="0.01" value={adminEditModal.form.codAmount}
-                  onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, codAmount: e.target.value } }))}
-                  className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400" />
-                {(adminEditModal.form.serviceType === 'cheque' || adminEditModal.form.serviceType === 'traite') && (
-                  <label className="mt-1 flex items-center gap-1.5 text-[11px] font-semibold text-green-800 cursor-pointer">
-                    <input type="checkbox" checked={adminEditModal.form.codMixed === true}
-                      onChange={e => { const on = e.target.checked; setAdminEditModal((m: any) => ({ ...m, error: '', form: { ...m.form, codMixed: on, codCashAmount: on ? m.form.codCashAmount : '' } })) }} />
-                    💵 + Espèces (RF mixte)
-                  </label>
-                )}
-                {adminEditModal.form.codMixed === true && (
-                  <div className="mt-1">
-                    <label className="block text-xs text-gray-500 mb-1">💵 Montant espèces (DH)</label>
-                    <input type="number" min="0" step="0.01" value={adminEditModal.form.codCashAmount}
-                      onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, codCashAmount: e.target.value, codAmount: docPartKeepingTotal(m.form.codAmount, m.form.codCashAmount, e.target.value) } }))}
-                      className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400" />
-                    <div className="text-[11px] font-bold text-gray-600 mt-1">Total : {((parseFloat(adminEditModal.form.codAmount) || 0) + (parseFloat(adminEditModal.form.codCashAmount) || 0)).toLocaleString('fr-MA')} DH <span className="font-normal text-gray-500">— la part espèces est retirée du {adminEditModal.form.serviceType === 'traite' ? 'montant traite' : 'montant chèque'} (total inchangé)</span></div>
+              {adminEditModal.form.codMixed === true ? (() => {
+                // 📋 + 💵 COD mixte : DEUX montants saisis séparément (chèque / traite, espèces), total = la somme
+                const f = adminEditModal.form, p = adminEditModal.parcel
+                const isTraite = f.serviceType === 'traite'
+                const newTotal = (parseFloat(f.codAmount) || 0) + (parseFloat(f.codCashAmount) || 0)
+                const oldTotal = parseFloat(p?.codAmount) || 0
+                const signal = p?.codDocMismatch === true && Number(p.codDocMismatchCash) > 0
+                return (
+                  <div className="col-span-2 rounded-xl border-2 border-green-200 bg-green-50/50 p-3 space-y-2">
+                    <p className="text-xs font-bold text-green-900">{isTraite ? '📝 Traite' : '📋 Chèque'} + 💵 espèces — retour de fonds en deux parties</p>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-xs text-gray-600 mb-1">{isTraite ? '📝 Montant de la traite (DH)' : '📋 Montant du chèque (DH)'}</label>
+                        <input type="number" min="0" step="0.01" value={f.codAmount}
+                          onChange={e => setAdminEditModal((m: any) => ({ ...m, error: '', form: { ...m.form, codAmount: e.target.value } }))}
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-purple-400" />
+                      </div>
+                      <div>
+                        <label className="block text-xs text-gray-600 mb-1">💵 Montant en espèces (DH)</label>
+                        <input type="number" min="0" step="0.01" value={f.codCashAmount}
+                          onChange={e => setAdminEditModal((m: any) => ({ ...m, error: '', form: { ...m.form, codCashAmount: e.target.value } }))}
+                          className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm bg-white focus:outline-none focus:border-purple-400" />
+                      </div>
+                    </div>
+                    <p className={`text-xs font-bold ${Math.abs(newTotal - oldTotal) < 0.01 ? 'text-green-800' : 'text-amber-700'}`}>
+                      Total retour de fonds : {newTotal.toLocaleString('fr-MA')} DH
+                      {Math.abs(newTotal - oldTotal) < 0.01 ? ' ✓ inchangé' : ` — avant : ${oldTotal.toLocaleString('fr-MA')} DH (${newTotal > oldTotal ? '+' : ''}${(newTotal - oldTotal).toLocaleString('fr-MA')} DH)`}
+                    </p>
+                    {signal && (
+                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-amber-900 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1.5">
+                        <span>⚠️ Signalé par {p.codDocMismatchBy || "l'encaisseur central"} : chèque reçu <b>{Number(p.codDocMismatchReceived || 0).toLocaleString('fr-MA')} DH</b>, espèces <b>{Number(p.codDocMismatchCash || 0).toLocaleString('fr-MA')} DH</b>{p.codDocMismatchShare === true ? ' (part de cette expédition)' : ''}</span>
+                        <button type="button" onClick={() => setAdminEditModal((m: any) => ({ ...m, error: '', form: { ...m.form, codAmount: String(Number(p.codDocMismatchReceived) || 0), codCashAmount: String(Number(p.codDocMismatchCash) || 0) } }))}
+                          className="px-2 py-0.5 rounded-md bg-amber-600 hover:bg-amber-700 text-white font-bold">Utiliser ces montants</button>
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
+                )
+              })() : (
+                <div>
+                  <label className="block text-xs text-gray-500 mb-1">RETOUR FOND (DH)</label>
+                  <input type="number" min="0" step="0.01" value={adminEditModal.form.codAmount}
+                    onChange={e => setAdminEditModal((m: any) => ({ ...m, form: { ...m.form, codAmount: e.target.value } }))}
+                    className="w-full border border-gray-200 rounded-xl px-3 py-2 text-sm focus:outline-none focus:border-purple-400" />
+                  {(adminEditModal.form.serviceType === 'cheque' || adminEditModal.form.serviceType === 'traite') && (
+                    <p className="mt-1 text-[11px] text-gray-500">Payé en partie en espèces ? Choisissez « {adminEditModal.form.serviceType === 'traite' ? 'Traite' : 'Chèque'} + espèces » dans Type de service.</p>
+                  )}
+                </div>
+              )}
               <div className="col-span-2">
                 <label className="block text-xs text-gray-500 mb-1">Nature marchandise</label>
                 <input value={adminEditModal.form.natureOfGoods}

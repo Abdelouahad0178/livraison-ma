@@ -7,7 +7,8 @@ import { collection, query, orderBy, onSnapshot, where, Timestamp } from 'fireba
 import { db } from '../../../firebase/config'
 import { getLiteDaySliceCached, PARCELS_LITE_COLLECTION } from '../../../firebase/parcels'
 import { ALL_CITIES } from '../../../utils/liteDayCache'
-import { getOperationalDayRange, getCurrentOperationalDay } from '../../../config/operationalDay'
+import { getOperationalDayRange, getCurrentOperationalDay, getOperationalDayString } from '../../../config/operationalDay'
+import { usePortAgencyDays } from '../../../hooks/usePortAgencyDays'
 import { useOperationalDay } from '../../../hooks/useOperationalDay'
 import { useStartOnPreviousWorkedDay } from '../../../hooks/useStartOnPreviousWorkedDay'
 import { buildDaySlices, opDayOf } from '../../../utils/daySlices'
@@ -153,6 +154,16 @@ export default function AdminPortAgenciesTab({
   const periodStartMs = period.start.getTime()
   const periodEndMs = period.end.getTime()
 
+  // 📮 (01/11/2026) TOTAUX TENUS PAR LE SERVEUR (portAgencyDays, Cloud Function syncPortAgencyStats — même règle
+  // computeAgencyPortStats) : Résumé et tableau par agence sans charger les expéditions (téléphone, 7 jours : ~25 s →
+  // ~1 s). Les filtres Direction / Ville d'origine / Type de port et la vue « Reste à encaisser » (lignes détaillées,
+  // suivi de l'agence) lisent toujours les expéditions elles-mêmes, comme avant.
+  const serverTotals = directionFilter === 'all' && originCityFilter === 'all' && portTypeFilter === 'all' && !showReste
+  const server = usePortAgencyDays(
+    getOperationalDayString(period.start), getOperationalDayString(new Date(periodEndMs - 1)),
+    CITIES, viewMode, serverTotals && startReady,
+  )
+
   // États de chargement
   // ⚡ Journée d'opération EN COURS : écoute temps réel (onSnapshot). Journées PASSÉES : lues UNE fois
   // en version allégée (parcelsLite) via la MÉMOIRE DES JOURNÉES (firebase/parcels getLiteDaySliceCached,
@@ -171,6 +182,9 @@ export default function AdminPortAgenciesTab({
   const [loadedCount, setLoadedCount] = useState(0)
   const [dayProgress, setDayProgress] = useState<{ done: number; total: number; label: string } | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // ✅ Période dont les expéditions sont ENTIÈREMENT chargées (publiée avec elles) : en passant des totaux du serveur aux
+  // expéditions (filtre, liste), aucun chiffre n'est affiché avant la fin du chargement — pas de zéros d'un instant
+  const [parcelsFor, setParcelsFor] = useState('')
   // 🔢 Génération : toute réponse d'un chargement précédent (autre période) est ignorée
   const loadGenRef = useRef(0)
 
@@ -194,6 +208,14 @@ export default function AdminPortAgenciesTab({
   // donnée de l'ancienne période ne peut revenir (génération).
   useEffect(() => {
     if (!startReady) return
+    // 📮 Totaux du serveur : aucune expédition à charger (elles le seront si un filtre ou « Reste à encaisser » les demande)
+    if (serverTotals) {
+      loadGenRef.current += 1
+      startTransition(() => setPeriodParcels([]))
+      setLoading(false); setSyncing(false); setLoadedCount(0); setLoadError(null); setDayProgress(null)
+      setParcelsFor('')
+      return
+    }
     const gen = ++loadGenRef.current
     const start = new Date(periodStartMs)
     const end = new Date(periodEndMs)
@@ -246,6 +268,7 @@ export default function AdminPortAgenciesTab({
           allReady = true
           setDayProgress(null)
           publish() // résultat complet, publié d'un seul coup (comme avant)
+          startTransition(() => setParcelsFor(`${periodStartMs}|${periodEndMs}`))
           setLoading(false)
         }
       }
@@ -354,7 +377,7 @@ export default function AdminPortAgenciesTab({
       if (refreshTimer) clearInterval(refreshTimer)
       unsubs.forEach((u) => u())
     }
-  }, [periodStartMs, periodEndMs, startReady])
+  }, [periodStartMs, periodEndMs, startReady, serverTotals])
   // Note: ville, type de port, direction et mode sont appliqués côté frontend (useMemo) : pas de
   // rechargement Firestore pour ces filtres.
 
@@ -384,15 +407,17 @@ export default function AdminPortAgenciesTab({
   }, [periodParcels, deferredFilters])
 
   const periodRangeText = `${fmtDay(period.start)} 08h00 → ${fmtDay(period.end)} 06h00`
+  const parcelsReady = !loading && parcelsFor === `${periodStartMs}|${periodEndMs}`
 
   // ✅ Calculer les statistiques par agence
   // Mode theoretical = tous les ports (actuel)
   // Mode physical = argent réellement collecté en caisse
   // Règles PARTAGÉES avec le « Suivi de l'agence » (utils/agencyFollowUp → computeAgencyPortStats)
   const portStats = useMemo(() => {
+    if (serverTotals && server.stats) return server.stats
     const { directionFilter, originCityFilter, viewMode } = deferredFilters
     return computeAgencyPortStats(filteredByDate, { viewMode, directionFilter, originCityFilter })
-  }, [filteredByDate, deferredFilters])
+  }, [filteredByDate, deferredFilters, serverTotals, server.stats])
 
   // Appliquer les filtres de ville et type de port
   const filteredStats = useMemo(() => {
@@ -424,13 +449,17 @@ export default function AdminPortAgenciesTab({
   // En « Toutes », le total ci-dessus compte 2 fois une expédition envoyée ET reçue par les agences
   // affichées (locales pour une agence ; aussi les inter-agences quand toutes les villes sont affichées).
   const uniqueExpeditionsCount = useMemo(() => {
+    // Totaux du serveur : toutes les agences → expéditions distinctes (nUnion) ; une agence → ses expéditions (nbUnique)
+    if (serverTotals && server.stats) {
+      return deferredFilters.selectedCity === 'all' ? server.nUnion : filteredStats.reduce((n, s) => n + s.nbUnique, 0)
+    }
     const { directionFilter, originCityFilter } = deferredFilters
     const cities = filteredStats.map(s => s.city)
     const agencyDir: AgencyDirection = directionFilter === 'sent' ? 'sent' : directionFilter === 'received' ? 'received' : 'all'
     return filteredByDate.filter((p: any) =>
       (directionFilter !== 'received' || originCityFilter === 'all' || p.originCity === originCityFilter) &&
       cities.some(c => isInAgencyScope(p, c, agencyDir))).length
-  }, [filteredByDate, filteredStats, deferredFilters])
+  }, [filteredByDate, filteredStats, deferredFilters, serverTotals, server.stats, server.nUnion])
 
   const totauxFiltres = useMemo(() => {
     const totaux = filteredStats.reduce((acc, stat) => ({
@@ -1027,8 +1056,24 @@ export default function AdminPortAgenciesTab({
         </div>
       </div>
 
+      {/* 📮 Totaux du serveur : lecture impossible → message (aucun chiffre faux affiché) */}
+      {serverTotals && server.error && (
+        <div className="bg-red-50 border-2 border-red-300 rounded-xl p-4 flex items-center gap-3 print:hidden">
+          <AlertCircle className="w-6 h-6 text-red-600 flex-shrink-0" />
+          <p className="text-sm font-bold text-red-900">Totaux du serveur indisponibles : {server.error}</p>
+        </div>
+      )}
+
       {/* ⏳ Chargement de la période : aucune donnée d'une autre période n'est affichée */}
-      {loading && (
+      {serverTotals && !server.ready && !server.error && (
+        <div className="bg-white rounded-2xl border border-purple-200 shadow-sm p-6 print:hidden">
+          <div className="flex items-center gap-3">
+            <Loader2 className="w-6 h-6 text-purple-600 animate-spin flex-shrink-0" />
+            <p className="text-sm font-bold text-purple-900">Chargement des totaux de la période…</p>
+          </div>
+        </div>
+      )}
+      {!serverTotals && !parcelsReady && (
         <div className="bg-white rounded-2xl border border-purple-200 shadow-sm p-6 print:hidden">
           <div className="flex items-center gap-3">
             <Loader2 className="w-6 h-6 text-purple-600 animate-spin flex-shrink-0" />
@@ -1045,7 +1090,7 @@ export default function AdminPortAgenciesTab({
         </div>
       )}
 
-      {!loading && showReste && (
+      {parcelsReady && showReste && (
         <ResteParAgence rows={resteRows} subject={"Ports"} periodText={restePeriodText} kindLabels={undefined} help={"ports dus et ports payés attendus moins encaissés (en compte exclus)"}>
           {/* 🧭 Suivi de l'agence (déplacé ici depuis le bas du résumé) */}
           <AgencyFollowUpBlock
@@ -1058,7 +1103,7 @@ export default function AdminPortAgenciesTab({
         </ResteParAgence>
       )}
 
-      {!loading && !showReste && (
+      {(serverTotals ? server.ready : parcelsReady) && !showReste && (
       <>
       {/* Carte résumé (filtré) */}
       <div className="bg-gradient-to-br from-amber-50 to-orange-50 border-2 border-orange-200 rounded-xl p-6 shadow-lg print:bg-gray-50 print:rounded-none print:mb-6">
@@ -1073,6 +1118,7 @@ export default function AdminPortAgenciesTab({
             {(
               <p className="text-xs text-gray-500 mt-0.5">
                 🗓️ {period.label} — journées d'opération : {periodRangeText}
+                {serverTotals && <span className="ml-1 text-emerald-700 font-semibold">· ⚡ totaux du serveur, en temps réel</span>}
               </p>
             )}
           </div>

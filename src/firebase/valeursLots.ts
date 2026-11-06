@@ -1,6 +1,8 @@
 /**
  * 📦 Lots d'envoi des valeurs : chaque bordereau imprimé est enregistré comme un LOT. Une expédition entre dans un
- * seul lot (fiche valeursLotItems/{id de l'expédition}, jamais modifiable) → jamais envoyée deux fois.
+ * seul lot (fiche valeursLotItems/{id de l'expédition}, jamais modifiable) → jamais envoyée deux fois. La fiche est
+ * libérée par l'annulation du lot, ou par le retrait de l'expédition (removeFromValeursLot, tracé dans `removed`) ;
+ * une expédition peut être ajoutée à un lot en attente (addToValeursLot, tracé dans `added`).
  * Les expéditions elles-mêmes ne sont pas modifiées.
  */
 import { collection, doc, onSnapshot, orderBy, query, runTransaction, where, writeBatch } from 'firebase/firestore'
@@ -12,6 +14,15 @@ export interface LotRow {
   /** Champs de l'expédition nécessaires à la réimpression */
   p: { id: string; createdAt: string; sender: { name: string }; receiver: { name: string }; codDocuments: any[]; controlledBy: string; controlledAt: string }
 }
+/** ➖ Trace d'une expédition retirée du lot après sa création (qui, quand, quoi, et l'état du lot à ce moment). */
+export interface LotRemoval {
+  id: string; nic: string; total: number; amounts: { especes: number; cheque: number; traite: number }; docs: string[]
+  by: string; byId: string; at: string; reason: string; lotStatus: ValeursLot['status']
+}
+/** ➕ Trace d'expéditions ajoutées au lot après sa création (qui, quand, lesquelles). */
+export interface LotAddition {
+  ids: string[]; nics: string[]; total: number; by: string; byId: string; at: string
+}
 export interface ValeursLot {
   id: string; number: string; fromCity: string; toCity: string; periodText: string
   parcelIds: string[]; nics: string[]; rows: LotRow[]
@@ -21,6 +32,8 @@ export interface ValeursLot {
   /** cree = envoyé, en attente de réception ; recu / recu_partiel = réceptionné par la ville destinataire */
   status: 'cree' | 'annule' | 'recu' | 'recu_partiel'; cancelledAt?: string; cancelledBy?: string
   receivedAt?: string; receivedBy?: string; receivedById?: string; receivedIds?: string[]; missingIds?: string[]; receiveNote?: string
+  removed?: LotRemoval[]
+  added?: LotAddition[]
 }
 
 const norm = (s: any) => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').trim()
@@ -49,8 +62,8 @@ export const LOT_STATUS_LABEL: Record<string, string> = {
  * « Confirmer arrivée » : deliveryControlled*), sauf si elle est déjà confirmée.
  */
 export async function receiveValeursLot(lot: ValeursLot, receivedIds: string[], note: string, by: string, byId: string) {
-  const received = lot.parcelIds.filter(id => receivedIds.includes(id))
-  const missing = lot.parcelIds.filter(id => !receivedIds.includes(id))
+  let received: string[] = []
+  let missing: string[] = []
   const now = new Date().toISOString()
   await runTransaction(db, async tx => {
     const ref = doc(db, 'valeursLots', lot.id)
@@ -58,6 +71,10 @@ export async function receiveValeursLot(lot: ValeursLot, receivedIds: string[], 
     if (!s.exists()) throw new Error('Lot introuvable.')
     const cur: any = s.data()
     if (cur.status !== 'cree') throw new Error(`Ce lot n'est plus en attente (${LOT_STATUS_LABEL[cur.status] || cur.status}).`)
+    // Liste du lot relue ici : une expédition retirée par l'expéditeur pendant la réception n'y est plus
+    const ids: string[] = Array.isArray(cur.parcelIds) ? cur.parcelIds : lot.parcelIds
+    received = ids.filter(id => receivedIds.includes(id))
+    missing = ids.filter(id => !receivedIds.includes(id))
     tx.update(ref, {
       status: missing.length ? 'recu_partiel' : 'recu', receivedAt: now, receivedBy: by, receivedById: byId,
       receivedIds: received, missingIds: missing, receiveNote: note || '',
@@ -106,6 +123,47 @@ export async function createValeursLot(lot: Omit<ValeursLot, 'id' | 'status' | '
     }))
   })
   return { ...lot, id: lotRef.id, status: 'cree', createdAt }
+}
+
+/**
+ * ➖ Retire UNE expédition d'un lot (son auteur, même après réception — demande du 03/11/2026), en une transaction :
+ * le lot est relu, `patchOf` calcule le nouveau contenu à partir de cette version (lotRemovalPatch : totaux,
+ * chèques / traites, trace dans `removed`), et la fiche valeursLotItems est libérée → l'expédition redevient
+ * proposée pour un autre lot. La fiche n'est supprimée que si elle appartient bien à CE lot.
+ */
+export async function removeFromValeursLot(lotId: string, parcelId: string, patchOf: (cur: ValeursLot) => Record<string, any>) {
+  await runTransaction(db, async tx => {
+    const ref = doc(db, 'valeursLots', lotId)
+    const itemRef = doc(db, 'valeursLotItems', parcelId)
+    const [s, item] = await Promise.all([tx.get(ref), tx.get(itemRef)])
+    if (!s.exists()) throw new Error('Lot introuvable.')
+    tx.update(ref, patchOf({ id: s.id, ...(s.data() as any) }))
+    if (item.exists() && (item.data() as any).lotId === lotId) tx.delete(itemRef)
+  })
+}
+
+/**
+ * ➕ Ajoute des expéditions à un lot EN ATTENTE (demande du 03/11/2026), en une transaction : le lot est relu,
+ * `patchOf` calcule le nouveau contenu (lotAdditionPatch : totaux, chèques / traites, trace dans `added`), et une
+ * fiche valeursLotItems est créée pour chaque ajoutée → refus si une seule est déjà dans un lot.
+ * Renvoie le lot tel qu'enregistré (pour réimprimer le bordereau tout de suite).
+ */
+export async function addToValeursLot(lotId: string, rows: LotRow[], patchOf: (cur: ValeursLot) => Record<string, any>, byId: string): Promise<ValeursLot> {
+  let saved: ValeursLot | null = null
+  await runTransaction(db, async tx => {
+    const ref = doc(db, 'valeursLots', lotId)
+    const [s, ...items] = await Promise.all([tx.get(ref), ...rows.map(r => tx.get(doc(db, 'valeursLotItems', r.id)))])
+    if (!s.exists()) throw new Error('Lot introuvable.')
+    const taken = items.filter(x => x.exists())
+    if (taken.length) throw new Error(`Déjà dans un lot : ${taken.map(x => `${rows.find(r => r.id === x.id)?.nic || x.id} (lot ${(x.data() as any).lotNumber})`).join(', ')}. Actualisez la liste.`)
+    const cur: ValeursLot = { id: s.id, ...(s.data() as any) }
+    const patch = patchOf(cur)
+    tx.update(ref, patch)
+    const at = new Date().toISOString()
+    rows.forEach(r => tx.set(doc(db, 'valeursLotItems', r.id), { lotId, lotNumber: cur.number, nic: r.nic || '', toCity: cur.toCity, createdAt: at, createdById: byId }))
+    saved = { ...cur, ...patch }
+  })
+  return saved!
 }
 
 /** Annule un lot : ses expéditions redeviennent disponibles pour un autre lot. */

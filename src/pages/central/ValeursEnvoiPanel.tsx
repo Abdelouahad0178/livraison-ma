@@ -7,10 +7,10 @@ import { db } from '../../firebase/config'
 import { codMoneyOnly } from '../../utils/moneyFlow'
 import DateInput from '../../components/DateInput'
 import { openPrint } from './ControlReports'
-import { subscribeValeursLots, createValeursLot, cancelValeursLot, freezeRow, lotRowsMatching, LOT_STATUS_LABEL, type ValeursLot } from '../../firebase/valeursLots'
+import { subscribeValeursLots, createValeursLot, cancelValeursLot, removeFromValeursLot, addToValeursLot, freezeRow, lotRowsMatching, LOT_STATUS_LABEL, type LotRow, type ValeursLot } from '../../firebase/valeursLots'
 import { LotFilterBar, applyLotFilters, lotFilterSince, EMPTY_LOT_FILTERS, type LotFilterState } from './LotFilters'
 import { LotDetails, LotToggle } from './LotDetails'
-import { VALUE_TYPES, bordereauHtml, fmtD, fmtDT, physicalDocs, sumRows, toValueRow, type ValueRow, type ValueType } from './valeursEnvoi'
+import { VALUE_TYPES, bordereauHtml, fmtD, fmtDT, lotAdditionPatch, lotRemovalPatch, physicalDocs, sumRows, toValueRow, type ValueRow, type ValueType } from './valeursEnvoi'
 import { opPeriodRange } from '../../utils/dateFilter'
 import { getCurrentOperationalDay } from '../../config/operationalDay'
 
@@ -143,6 +143,51 @@ export function ValeursEnvoiPanel({ myCity, myUid, myName, staffCities, docOnly,
     setBusy(true)
     try { await cancelValeursLot(lot, myName, myUid) } catch (e: any) { alert(`❌ ${e?.message || e}`) } finally { setBusy(false) }
   }
+  // ➕ (03/11/2026) Ajouter les expéditions cochées à un lot DÉJÀ CRÉÉ, tant qu'il n'est pas reçu : mes lots en attente
+  // vers la même agence, préparés depuis la même agence de pointage (comme à la création)
+  const [addFor, setAddFor] = useState<{ toCity: string; lotId: string } | null>(null)
+  const openLotsFor = (toCity: string) => lots.filter(l => l.status === 'cree' && l.createdById === myUid && l.toCity === toCity && l.fromCity === fromCityOf())
+  const addToLot = async (lot: ValeursLot | undefined, list: ValueRow[]) => {
+    if (!lot) { alert('Choisissez le lot.'); return }
+    const chosen = list.filter(r => !excluded.has(r.id))
+    if (!chosen.length) { alert('Cochez au moins une expédition.'); return }
+    const t = sumRows(chosen)
+    if (!window.confirm(`Ajouter ${chosen.length} expédition(s) (${money(t.total)} DH) au lot ${lot.number} vers ${lot.toCity} ?\n\n`
+      + `Le lot passera à ${lot.parcelIds.length + chosen.length} expédition(s). Mettez ces valeurs dans le même colis et réimprimez le bordereau.`)) return
+    setBusy(true)
+    try {
+      const rows = chosen.map(freezeRow)
+      const saved = await addToValeursLot(lot.id, rows, cur => lotAdditionPatch(cur, rows, { by: myName || 'Encaisseur central', byId: myUid, at: new Date().toISOString() }), myUid)
+      setExcluded(prev => { const n = new Set(prev); chosen.forEach(r => n.delete(r.id)); return n })
+      setAddFor(null)
+      if (window.confirm(`✅ ${chosen.length} expédition(s) ajoutée(s) au lot ${lot.number}.\n\nRéimprimer son bordereau maintenant ?`)) printLot(saved)
+    } catch (e: any) {
+      alert(`❌ ${e?.message || e}`)
+    } finally {
+      setBusy(false)
+    }
+  }
+  // ➖ (03/11/2026) Retirer UNE expédition d'un lot, même après sa réception : elle redevient proposée pour un autre lot,
+  // le lot est recalculé (réimprimer le bordereau) et le retrait reste tracé dans le lot (qui, quand, motif).
+  const removeRow = async (lot: ValeursLot, row: LotRow) => {
+    const received = lot.status === 'recu' || lot.status === 'recu_partiel'
+    const last = lot.parcelIds.length === 1
+    const reason = window.prompt(`Retirer l'expédition ${row.nic} (${money(row.total)} DH) du lot ${lot.number} ?\n\n`
+      + `Elle redeviendra disponible pour un autre lot. Le total du lot sera recalculé : réimprimez ensuite son bordereau.`
+      + (received ? `\n\n⚠️ Ce lot a déjà été reçu par ${lot.toCity}${lot.receivedBy ? ` (${lot.receivedBy}, ${fmtDT(lot.receivedAt)})` : ''} : le retrait restera visible dans le lot, des deux côtés.` : '')
+      + (last ? '\n\nC\'est la dernière expédition du lot : le lot sera annulé.' : '')
+      + '\n\nMotif du retrait (facultatif), puis OK :', '')
+    if (reason === null) return
+    setBusy(true)
+    try {
+      await removeFromValeursLot(lot.id, row.id, cur => lotRemovalPatch(cur, row.id, { by: myName || 'Encaisseur central', byId: myUid, at: new Date().toISOString(), reason: reason.trim() }))
+      if (!last) alert(`✅ ${row.nic} retirée du lot ${lot.number}. Pensez à réimprimer le bordereau.`)
+    } catch (e: any) {
+      alert(`❌ ${e?.message || e}`)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   const sel = 'px-3 py-2.5 rounded-2xl border-2 border-pink-100 focus:border-pink-300 bg-white/70 text-sm font-semibold text-purple-700 cursor-pointer'
   return (
@@ -209,12 +254,30 @@ export function ValeursEnvoiPanel({ myCity, myUid, myName, staffCities, docOnly,
                 <p className="text-xs text-slate-600">{chosen.length}/{list.length} expédition(s) cochée(s) · <b className="text-purple-800">{money(t.total)} DH</b>
                   {t.especes > 0 && <> · 💵 {money(t.especes)} DH</>}{t.cheque > 0 && <> · 📋 {docs.cheques} chèque(s) {money(t.cheque)} DH</>}{t.traite > 0 && <> · 📝 {docs.traites} traite(s) {money(t.traite)} DH</>}</p>
               </div>
-              <button onClick={() => createLot(toCity, list)} disabled={busy || chosen.length === 0}
-                title="Enregistre les expéditions cochées dans un nouveau lot (elles ne seront plus proposées) et imprime son bordereau"
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-black shadow">
-                <Printer className="w-4 h-4" /> Créer le lot ({chosen.length}) et imprimer
-              </button>
+              <div className="flex flex-wrap gap-2">
+                {(() => { const open = openLotsFor(toCity); return (
+                  <button onClick={() => setAddFor(addFor?.toCity === toCity ? null : { toCity, lotId: open[0]?.id || '' })} disabled={busy || chosen.length === 0 || open.length === 0}
+                    title={open.length ? 'Ajouter les expéditions cochées à un lot déjà créé (pas encore reçu)' : `Aucun de vos lots vers ${toCity} n'est en attente de réception`}
+                    className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white text-sm font-black shadow">
+                    ➕ Ajouter à un lot existant
+                  </button>) })()}
+                <button onClick={() => createLot(toCity, list)} disabled={busy || chosen.length === 0}
+                  title="Enregistre les expéditions cochées dans un nouveau lot (elles ne seront plus proposées) et imprime son bordereau"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-purple-600 hover:bg-purple-700 disabled:opacity-50 text-white text-sm font-black shadow">
+                  <Printer className="w-4 h-4" /> Créer le lot ({chosen.length}) et imprimer
+                </button>
+              </div>
             </div>
+            {addFor?.toCity === toCity && (() => { const open = openLotsFor(toCity); const target = open.find(l => l.id === addFor.lotId); return (
+              <div className="flex flex-wrap items-center gap-2 px-5 py-3 bg-sky-50 border-b border-sky-200 text-sm">
+                <span className="font-bold text-sky-900">➕ Ajouter {chosen.length} expédition(s) · {money(t.total)} DH au lot :</span>
+                <select value={addFor.lotId} onChange={e => setAddFor({ toCity, lotId: e.target.value })} className="px-3 py-2 rounded-xl border-2 border-sky-200 bg-white text-sm font-semibold text-sky-900">
+                  {open.map(l => <option key={l.id} value={l.id}>{l.number} — {l.parcelIds.length} exp. · {money(l.totals.total)} DH · créé {fmtDT(l.createdAt)}</option>)}
+                </select>
+                <button onClick={() => addToLot(target, list)} disabled={busy || !target} className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 disabled:opacity-50 text-white text-sm font-black">Ajouter</button>
+                <button onClick={() => setAddFor(null)} disabled={busy} className="px-3 py-2 rounded-xl bg-white border border-slate-200 text-slate-600 text-sm font-bold">Annuler</button>
+                <span className="w-full text-xs text-slate-500">Seulement vos lots vers {toCity} pas encore reçus. Un lot déjà reçu ne change plus : mettez la valeur dans un nouveau lot.</span>
+              </div>) })()}
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
@@ -258,7 +321,9 @@ export function ValeursEnvoiPanel({ myCity, myUid, myName, staffCities, docOnly,
         <section className="bg-white/70 rounded-3xl border border-slate-200 shadow-lg overflow-hidden">
           <div className="px-5 py-3 bg-slate-50 border-b border-slate-200">
             <h3 className="font-black text-slate-800">📚 Lots déjà créés ({visibleLots.filter(l => l.status !== 'annule').length})</h3>
-            <p className="text-xs text-slate-500">Leurs expéditions ne sont plus proposées ci-dessus. Réimprimez un bordereau à tout moment ; annulez un lot seulement si son colis n'est pas parti.</p>
+            <p className="text-xs text-slate-500">Leurs expéditions ne sont plus proposées ci-dessus. Réimprimez un bordereau à tout moment ; annulez un lot seulement si son colis n'est pas parti.
+              Pour sortir UNE expédition d'un lot (même reçu), dépliez le lot puis « ➖ Retirer ». Pour ajouter une valeur oubliée à un lot pas encore reçu,
+              cochez-la plus haut puis « ➕ Ajouter à un lot existant ».</p>
             <div className="mt-2">
               <LotFilterBar value={lotFilters} onChange={setLotFilters} cities={[...new Set(visibleLots.map(l => l.toCity))].sort()} cityLabel="📦 Vers"
                 statuses={['cree', 'recu', 'recu_partiel', 'annule']} count={shownLots.length} total={visibleLots.length} />
@@ -295,6 +360,8 @@ export function ValeursEnvoiPanel({ myCity, myUid, myName, staffCities, docOnly,
                       <td className="px-3 py-2 text-xs" title={l.nics.join(', ')}>
                         {l.parcelIds.length} exp.{l.totals.especes > 0 && <> · 💵 {money(l.totals.especes)}</>}{l.cheques > 0 && <> · 📋 {l.cheques} chèque(s)</>}{l.traites > 0 && <> · 📝 {l.traites} traite(s)</>}
                         <p className="text-[10px] text-slate-400 truncate max-w-72">{l.nics.join(', ')}</p>
+                        {(l.added || []).length > 0 && <p className="text-[10px] font-black text-sky-700">➕ ajoutée(s) après coup : {(l.added || []).flatMap(a => a.nics).join(', ')}</p>}
+                        {(l.removed || []).length > 0 && <p className="text-[10px] font-black text-orange-700">➖ {(l.removed || []).length} retirée(s) : {(l.removed || []).map(r => r.nic).join(', ')}</p>}
                         {hits.length > 0 && <p className="text-[10px] font-black text-amber-700">🔎 {hits.map(r => `${r.nic} (${r.p?.sender?.name || '—'})`).join(', ')}</p>}
                       </td>
                       <td className="px-3 py-2 text-right font-black text-emerald-700 whitespace-nowrap">{money(l.totals.total)} DH</td>
@@ -310,7 +377,8 @@ export function ValeursEnvoiPanel({ myCity, myUid, myName, staffCities, docOnly,
                         )}
                       </td>
                     </tr>
-                    {open && <tr><td colSpan={6} className="p-0"><LotDetails lot={l} highlight={new Set(hits.map(r => r.id))} /></td></tr>}
+                    {open && <tr><td colSpan={6} className="p-0"><LotDetails lot={l} highlight={new Set(hits.map(r => r.id))} busy={busy}
+                      onRemove={!cancelled && l.createdById === myUid ? row => removeRow(l, row) : undefined} /></td></tr>}
                     </Fragment>
                   )
                 })}
