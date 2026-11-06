@@ -8,7 +8,8 @@ import { db } from '../../../firebase/config'
 import app from '../../../firebase/appCore'
 
 interface Item { label?: string; count?: number; checked?: number; diff?: number; examples?: string[] }
-interface Report { at: string; scanned: number; sample: number; problems: number; rules: Record<string, Item>; copies: Record<string, Item>; aggregates: Record<string, Item> }
+interface BackupStatus { count: number; lastAt: string | null; ageDays: number | null; sizeBytes: number; documents: number | null; errors: number; stale: boolean; readError?: string }
+interface Report { backup?: BackupStatus; at: string; scanned: number; sample: number; problems: number; rules: Record<string, Item>; copies: Record<string, Item>; aggregates: Record<string, Item> }
 
 const COPY_LABEL: Record<string, string> = {
   lite: 'Copie allégée des expéditions (parcelsLite)',
@@ -27,6 +28,9 @@ export default function HealthCheckCard() {
   const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
   const [open, setOpen] = useState(false)
+  // ☁️ Lancer la sauvegarde cloud à la demande (06/11/2026)
+  const [backupRunning, setBackupRunning] = useState(false)
+  const [backupResult, setBackupResult] = useState<{ ok: boolean; text: string } | null>(null)
 
   useEffect(() => onSnapshot(doc(db, 'healthChecks', 'latest'),
     s => { setR(s.exists() ? (s.data() as Report) : null); setLoaded(true) },
@@ -37,6 +41,19 @@ export default function HealthCheckCard() {
     try { await httpsCallable(getFunctions(app, 'europe-west1'), 'runHealthCheckNow', { timeout: 540000 })({}) }
     catch (e: any) { setError(e?.message || String(e)) }
     finally { setRunning(false) }
+  }
+
+  const runBackupNow = async () => {
+    setBackupRunning(true); setBackupResult(null)
+    try {
+      const res: any = await httpsCallable(getFunctions(app), 'runCloudBackupNow', { timeout: 540000 })({})
+      const d = res.data || {}
+      const failed = Object.keys(d.errors || {})
+      setBackupResult(failed.length
+        ? { ok: false, text: `Sauvegarde enregistrée (${Number(d.documents).toLocaleString('fr-FR')} documents), mais incomplète : ${failed.join(', ')}.` }
+        : { ok: true, text: `Sauvegarde réussie : ${Number(d.documents).toLocaleString('fr-FR')} documents en ${d.seconds} s. L'alerte se mettra à jour au prochain contrôle.` })
+    } catch (e: any) { setBackupResult({ ok: false, text: `Sauvegarde en échec : ${e?.message || e}` }) }
+    finally { setBackupRunning(false) }
   }
 
   const rules = r ? Object.values(r.rules || {}) : []
@@ -60,6 +77,19 @@ export default function HealthCheckCard() {
         </button>
       </div>
       {error && <p className="mt-2 text-sm text-red-700">{error}</p>}
+      {/* ☁️ Sauvegarde cloud : alerte si plus de 8 jours ou incomplète, et lancement à la demande */}
+      <div className={`mt-3 rounded-xl border px-3 py-2 text-sm flex flex-wrap items-center gap-2 ${r?.backup?.stale ? 'border-red-300 bg-red-50 text-red-800' : 'border-slate-200 bg-white text-slate-700'}`}>
+        <span className="flex-1 min-w-60">
+          <b>{r?.backup?.stale ? '⚠️ Sauvegarde cloud à vérifier' : '☁️ Sauvegarde cloud'}</b>
+          {r?.backup?.lastAt
+            ? <> — dernière : {fmtAt(r.backup.lastAt)} (il y a {r.backup.ageDays} jour{(r.backup.ageDays || 0) > 1 ? 's' : ''}){r.backup.documents ? `, ${r.backup.documents.toLocaleString('fr-FR')} documents` : ''}{r.backup.errors ? `, ${r.backup.errors} collection(s) incomplète(s)` : ''}. Chaque dimanche, automatiquement.</>
+            : r?.backup ? <> — aucune sauvegarde trouvée{r.backup.readError ? ` (${r.backup.readError})` : ''}.</> : <> — chaque dimanche, automatiquement. L'état s'affichera après le prochain contrôle.</>}
+        </span>
+        <button onClick={runBackupNow} disabled={backupRunning} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-900 text-white text-xs font-bold disabled:opacity-50">
+          {backupRunning ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />} {backupRunning ? 'Sauvegarde en cours… (3 à 5 min)' : 'Lancer la sauvegarde maintenant'}
+        </button>
+        {backupResult && <p className={`w-full font-semibold ${backupResult.ok ? 'text-emerald-700' : 'text-red-700'}`}>{backupResult.text}</p>}
+      </div>
       {loaded && !r && !error && <p className="mt-3 text-sm text-slate-600">Pas encore de contrôle : il tournera demain à 5 h, ou cliquez sur « Relancer maintenant ».</p>}
       {r && (
         <>

@@ -16,6 +16,7 @@ const { versementOf, holdersByCity, sameContribution, BUCKETS } = require('./ver
 const { envoiContribOf, envoiKey, holderTotalsOf, HOLDER_GROUPS } = require('./envoiContrib')
 const { PORT_DAY_FIELDS, PORT_ALL_CITY } = require('./portAgency')
 const { codDayDeltas, COD_DAY_FIELDS, COD_UNION_FIELDS, COD_ALL_CITY } = require('./codAgency')
+const { BACKUP_FILE_PREFIX, backupStatusOf } = require('./shared/backupCloud')
 
 const RETURN_STATUSES = ['Retourné', 'Retour en transit', 'Retour arrivé', 'Retour finalisé']
 const MAX_EXAMPLES = 15
@@ -166,10 +167,19 @@ async function runHealthCheck(db, { save = true } = {}) {
     }
   })
 
+  // ☁️ Sauvegarde cloud (06/11/2026) : alerte si la dernière a plus de 8 jours ou est incomplète (elle a échoué 8 semaines sans que personne le sache)
+  let backup
+  try {
+    const [files] = await admin.storage().bucket('arelanc.firebasestorage.app').getFiles({ prefix: BACKUP_FILE_PREFIX })
+    backup = backupStatusOf(files.map(f => ({ name: f.name, timeCreated: f.metadata.timeCreated, size: f.metadata.size, documents: f.metadata.metadata?.documents, errors: f.metadata.metadata?.errors })), Date.now())
+  } catch (e) {
+    backup = { count: 0, lastAt: null, ageDays: null, sizeBytes: 0, documents: null, errors: 0, stale: true, readError: String(e?.message || e).slice(0, 200) }
+  }
+
   const now = new Date()
   const day = new Date(now.getTime() + 3600e3).toISOString().slice(0, 10) // journée, heure du Maroc
-  const report = { at: now.toISOString(), day, durationMs: Date.now() - t0, scanned: active.size, sample: recent.size, rules, copies, aggregates,
-    problems: Object.values(rules).reduce((s, r) => s + r.count, 0) + Object.values(copies).reduce((s, c) => s + c.diff, 0) + Object.values(aggregates).reduce((s, c) => s + c.diff, 0) }
+  const report = { at: now.toISOString(), day, durationMs: Date.now() - t0, scanned: active.size, sample: recent.size, rules, copies, aggregates, backup,
+    problems: (backup.stale ? 1 : 0) + Object.values(rules).reduce((s, r) => s + r.count, 0) + Object.values(copies).reduce((s, c) => s + c.diff, 0) + Object.values(aggregates).reduce((s, c) => s + c.diff, 0) }
   if (save) await Promise.all([db.collection('healthChecks').doc(day).set(report), db.collection('healthChecks').doc('latest').set(report)])
   return report
 }

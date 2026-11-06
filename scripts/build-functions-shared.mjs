@@ -7,7 +7,7 @@ import { build } from 'esbuild'
 // Règles partagées : versements chef d'agence → admin, argent détenu par le chef d'exploitation (envoi au chef d'agence)
 // + totaux de « Port par agence » (01/11/2026) + index de recherche par mot (03/11/2026)
 // + archivage des passagers à 15 jours (04/11/2026) + archivage « terminé et réglé » / réveil / anciennes à régler (05/11/2026)
-for (const name of ['versementContribution', 'exploitationEnvoi', 'portAgencyContribution', 'codAgencyContribution', 'searchWords', 'passagerArchive', 'archiveRule']) {
+for (const name of ['versementContribution', 'exploitationEnvoi', 'portAgencyContribution', 'codAgencyContribution', 'searchWords', 'passagerArchive', 'archiveRule', 'backupCloud']) {
   await build({
     entryPoints: [`src/utils/${name}.ts`],
     outfile: `functions/shared/${name}.js`,

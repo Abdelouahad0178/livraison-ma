@@ -297,10 +297,15 @@ export default function DirectorPage() {
     setBackupBusy(true)
     setBackupMessage(null)
     try {
-      const backup = await exportSiteBackup()
+      const { saveBlobToPc, backupSizeLabel } = await import('../utils/backupFileWriter')
+      const backup = await exportSiteBackup(({ collection, index, total, docs, size }) =>
+        setBackupMessage({ type: 'info', text: `Export en cours… ${collection} (${index + 1}/${total}) — ${docs} document(s) · ${backupSizeLabel(size || 0)}. Gardez cette page ouverte.` }))
       const totalDocs = (Object.values(backup.counts || {}) as any[]).reduce((s: any, n: any) => s + n, 0)
-      downloadJson('bg-express-sauvegarde-directeur', backup)
-      setBackupMessage({ type: 'success', text: `Sauvegarde exportee : ${totalDocs} document(s).` })
+      saveBlobToPc('bg-express-sauvegarde-directeur', backup.blob)
+      const failedNames = Object.keys(backup.errors || {})
+      setBackupMessage(failedNames.length
+        ? { type: 'error', text: `Sauvegarde enregistree : ${totalDocs} document(s), mais collection(s) incomplete(s) : ${failedNames.join(', ')}.` }
+        : { type: 'success', text: `Sauvegarde enregistree : ${totalDocs} document(s), fichier de ${backupSizeLabel(backup.blob.size)} dans le dossier Telechargements.` })
       _log('backup_export', `Sauvegarde exportee : ${totalDocs} document(s)`, {
         totalDocs,
         exportedAt: backup.exportedAt,
@@ -823,7 +828,7 @@ export default function DirectorPage() {
               </div>
               {backupMessage && (
                 <div className={`mt-4 text-sm font-semibold px-4 py-3 rounded-xl ${
-                  backupMessage.type === 'success' ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-red-50 text-red-700 border border-red-100'
+                  backupMessage.type === 'success' ? 'bg-green-50 text-green-700 border border-green-100' : backupMessage.type === 'info' ? 'bg-blue-50 text-blue-700 border border-blue-100' : 'bg-red-50 text-red-700 border border-red-100'
                 }`}>
                   {backupMessage.text}
                 </div>

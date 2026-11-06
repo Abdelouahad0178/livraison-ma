@@ -630,14 +630,16 @@ export function useAdminHandlers(s: React.MutableRefObject<Record<string, any>>)
     setBackupMessage(null)
     try {
       const { exportSiteBackup } = await import('../../../firebase/backup')
-      const backup = await exportSiteBackup(({ collection, index, total, docs }) =>
-        setBackupMessage({ type: 'info', text: `Export en cours… ${collection} (${index + 1}/${total}) — ${docs.toLocaleString('fr-MA')} document(s)` }))
-      downloadJson('bg-express-sauvegarde-complete', backup)
+      const { saveBlobToPc, backupSizeLabel } = await import('../../../utils/backupFileWriter')
+      const backup = await exportSiteBackup(({ collection, index, total, docs, size }) =>
+        setBackupMessage({ type: 'info', text: `Export en cours… ${collection} (${index + 1}/${total}) — ${docs.toLocaleString('fr-MA')} document(s) · ${backupSizeLabel(size || 0)}. Gardez cette page ouverte.` }))
+      saveBlobToPc('bg-express-sauvegarde-complete', backup.blob)
       const total = (Object.values(backup.counts) as any[]).reduce((sum: any, n: any) => sum + n, 0)
       const failed = Object.entries(backup.errors || {})
+      const fichier = `${total.toLocaleString('fr-MA')} document(s), fichier de ${backupSizeLabel(backup.blob.size)} dans le dossier Téléchargements de votre PC`
       setBackupMessage(failed.length
-        ? { type: 'error', text: `Sauvegarde exportée : ${total.toLocaleString('fr-MA')} document(s), mais ${failed.length} collection(s) non exportée(s) : ${failed.map(([n, e]) => `${n} (${e})`).join(', ')}` }
-        : { type: 'success', text: `Sauvegarde exportée : ${total.toLocaleString('fr-MA')} document(s).` })
+        ? { type: 'error', text: `Sauvegarde enregistrée : ${fichier}, mais ${failed.length} collection(s) incomplète(s) : ${failed.map(([name, msg]) => `${name} (${msg})`).join(', ')}.` }
+        : { type: 'success', text: `Sauvegarde enregistrée : ${fichier}.` })
     } catch (err: any) {
       setBackupMessage({ type: 'error', text: err?.message || "Erreur pendant l'export de la sauvegarde." })
     } finally {
