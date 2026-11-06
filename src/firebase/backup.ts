@@ -1,27 +1,17 @@
-import { addDoc, collection, doc, documentId, getDocs, limit, orderBy, query, startAfter, Timestamp, writeBatch } from 'firebase/firestore'
+import { addDoc, collection, doc, documentId, GeoPoint, getDocs, limit, orderBy, query, startAfter, Timestamp, writeBatch } from 'firebase/firestore'
 import { db } from './db'
+import { restListPage } from './restQuery'
+import { createBackupWriter, readPagesWithRetry, serializeBackupValue, type PagedDoc } from '../utils/backupFileWriter'
 export { BACKUP_COLLECTIONS } from './backupCollections'
 import { BACKUP_COLLECTIONS } from './backupCollections'
-
-function serializeBackupValue(value: any): any {
-  if (value?.toDate && typeof value.toDate === 'function') {
-    return { __type: 'timestamp', value: value.toDate().toISOString() }
-  }
-  if (value instanceof Date) return { __type: 'date', value: value.toISOString() }
-  if (Array.isArray(value)) return value.map(serializeBackupValue)
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, nested]: [string, any]) => [key, serializeBackupValue(nested)])
-    )
-  }
-  return value
-}
 
 function reviveBackupValue(value: any): any {
   if (Array.isArray(value)) return value.map(reviveBackupValue)
   if (value && typeof value === 'object') {
     if (value.__type === 'timestamp' && value.value) return Timestamp.fromDate(new Date(value.value))
     if (value.__type === 'date' && value.value) return new Date(value.value)
+    if (value.__type === 'reference' && value.path) return doc(db, value.path)
+    if (value.__type === 'geopoint') return new GeoPoint(value.latitude, value.longitude)
     return Object.fromEntries(
       Object.entries(value).map(([key, nested]: [string, any]) => [key, reviveBackupValue(nested)])
     )
@@ -32,50 +22,55 @@ function reviveBackupValue(value: any): any {
 const errorText = (err: any) =>
   err?.code === 'permission-denied' ? 'accès refusé par les règles' : (err?.message || String(err))
 
-/** Lit TOUTE une collection par pages (ordre par identifiant) : pas de requête géante unique
- *  (≈45 000 expéditions) qui faisait échouer ou figer l'export. */
-async function readCollectionPaged(name: string, onProgress?: (n: number) => void, pageSize = 1000) {
-  const out: { id: string; data: any }[] = []
-  let last: any = null
-  for (let guard = 0; guard < 1000; guard++) {
-    const q = query(collection(db, name), orderBy(documentId()), ...(last ? [startAfter(last)] : []), limit(pageSize))
+/** Une page de collection : lecture directe (sans cache local) ; en cas d'échec, lecture habituelle par la bibliothèque Firebase. */
+async function fetchBackupPage(name: string, afterId: string | null, pageSize: number): Promise<PagedDoc[]> {
+  try {
+    return (await restListPage(name, pageSize, afterId)).map(d => ({ id: d.id, data: d.data }))
+  } catch (err: any) {
+    console.warn(`Sauvegarde - lecture directe de ${name} en échec, lecture habituelle :`, err?.message || err)
+    const q = query(collection(db, name), orderBy(documentId()), ...(afterId ? [startAfter(afterId)] : []), limit(pageSize))
     const snap = await getDocs(q)
-    snap.docs.forEach(d => out.push({ id: d.id, data: serializeBackupValue(d.data()) }))
-    onProgress?.(out.length)
-    if (snap.docs.length < pageSize) break
-    last = snap.docs[snap.docs.length - 1]
+    return snap.docs.map(x => ({ id: x.id, data: x.data() }))
   }
-  return out
 }
 
-export type BackupProgress = (info: { collection: string; index: number; total: number; docs: number }) => void
+export type BackupProgress = (info: { collection: string; index: number; total: number; docs: number; size?: number }) => void
 
+/**
+ * 💾 Sauvegarde complète pour le PC : écrite morceau par morceau (utils/backupFileWriter), sans jamais tenir toute la base
+ * en mémoire. Une collection illisible ne bloque pas les autres : elle est signalée dans `errors`. Renvoie le fichier prêt à enregistrer.
+ */
 export async function exportSiteBackup(onProgress?: BackupProgress) {
-  const collections: Record<string, any[]> = {}
   const counts: Record<string, number> = {}
   const errors: Record<string, string> = {}
-
-  for (let i = 0; i < BACKUP_COLLECTIONS.length; i++) {
-    const name = BACKUP_COLLECTIONS[i]
-    try {
-      const docs = await readCollectionPaged(name, n => onProgress?.({ collection: name, index: i, total: BACKUP_COLLECTIONS.length, docs: n }))
-      collections[name] = docs
-      counts[name] = docs.length
-    } catch (err: any) {
-      // Une collection illisible ne bloque plus toute la sauvegarde : elle est signalée.
-      console.error(`Sauvegarde - collection ${name}:`, err)
-      errors[name] = errorText(err)
+  const exportedAt = new Date().toISOString()
+  const writer = createBackupWriter(exportedAt)
+  // Fermer la page pendant l'export ferait tout perdre : le navigateur demande confirmation
+  const keepOpen = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = '' }
+  window.addEventListener('beforeunload', keepOpen)
+  try {
+    for (let i = 0; i < BACKUP_COLLECTIONS.length; i++) {
+      const name = BACKUP_COLLECTIONS[i]
+      let docs = 0
+      writer.beginCollection(name)
+      onProgress?.({ collection: name, index: i, total: BACKUP_COLLECTIONS.length, docs, size: writer.size })
+      try {
+        await readPagesWithRetry((after, size) => fetchBackupPage(name, after, size), page => {
+          for (const d of page) writer.addDoc({ id: d.id, data: serializeBackupValue(d.data) })
+          docs += page.length
+          onProgress?.({ collection: name, index: i, total: BACKUP_COLLECTIONS.length, docs, size: writer.size })
+        })
+      } catch (err: any) {
+        console.error(`Sauvegarde - collection ${name}:`, err)
+        errors[name] = `${errorText(err)}${docs ? ` (${docs} document(s) seulement)` : ''}`
+      }
+      writer.endCollection()
+      counts[name] = docs
     }
+  } finally {
+    window.removeEventListener('beforeunload', keepOpen)
   }
-
-  return {
-    app: 'BG Express',
-    schema: 'firestore-backup-v1',
-    exportedAt: new Date().toISOString(),
-    collections,
-    counts,
-    errors,
-  }
+  return { blob: writer.finish(counts, errors), counts, errors, exportedAt }
 }
 
 export async function importSiteBackup(backup: any, importedBy = 'Admin', onProgress?: BackupProgress) {

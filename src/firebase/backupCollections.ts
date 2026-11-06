@@ -1,3 +1,8 @@
+// 💾 Collections de la sauvegarde manuelle sur le PC (Admin › Exporter JSON).
+// Toutes les VRAIES données. Ne sont PAS ici, volontairement, les copies et totaux que le serveur recalcule à partir de
+// parcels (parcelsLite, parcelsFacturier, parcelSearch, clientsLite, *Contrib, *Days, envoiHolders, commercialClients /
+// Agencies / Days, stats, archiveWatch, presence, healthChecks…) : ≈ 250 Mo de plus, sans rien protéger de plus.
+// ⚠️ Nouvelle collection de données dans le site → l'ajouter ici (src/firebase/backupCollections.test.ts le rappelle).
 export const BACKUP_COLLECTIONS = [
   'settings',
   'parcels',
@@ -42,4 +47,37 @@ export const BACKUP_COLLECTIONS = [
   'adminTransfers',
   'bonRamasageBatches',
   'modificationRequests',
+  // Ajoutées le 06/11/2026 (de vraies données qui n'étaient pas sauvegardées)
+  'valeursLots',
+  'valeursLotItems',
+  'deliverySignatures',
+  'controlReports',
+  'controlAiReports',
+  'backupImports',
+  'agencies',
+  'agentNotes',
+  'centralCash',
+  'versementExceptions',
+  'clientGroups',
+  'clientAccounts',
+  // Gestion commerciale : saisies à la main dans bgexpress.web.app
+  'commercialContracts',
+  'commercialQuotes',
+  'commercialInvoices',
+  'commercialReminders',
+  'commercialPurchases',
+  'commercialEmployees',
+  'commercialPayslips',
+  'commercialTvaDeclarations',
+  'commercialSettings',
+  'commercialCounters',
+]
+
+// Copies et totaux recalculés par le serveur, journaux techniques (director_logs : illisible depuis le site, règles) :
+// volontairement hors sauvegarde
+export const BACKUP_EXCLUDED_DERIVED = [
+  'parcelsLite', 'parcelsLiteGone', 'parcelsFacturier', 'parcelSearch', 'clientsLite',
+  'portAgencyContrib', 'portAgencyDays', 'codAgencyContrib', 'codAgencyDays', 'commercialContrib', 'commercialClients',
+  'commercialDays', 'commercialAgencies', 'envoiContrib', 'envoiHolders', 'versementContrib', 'versementDays',
+  'stats', 'archiveWatch', 'presence', 'healthChecks', 'director_logs',
 ]

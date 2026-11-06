@@ -59,7 +59,7 @@ export default function AdminExportsTab({
         </div>
         {backupMessage && (
           <div className={`mt-4 text-sm font-semibold px-4 py-3 rounded-xl ${
-            backupMessage.type === 'success' ? 'bg-green-50 text-green-700 border border-green-100' : 'bg-red-50 text-red-700 border border-red-100'
+            backupMessage.type === 'success' ? 'bg-green-50 text-green-700 border border-green-100' : backupMessage.type === 'info' ? 'bg-blue-50 text-blue-700 border border-blue-100' : 'bg-red-50 text-red-700 border border-red-100'
           }`}>
             {backupMessage.text}
           </div>

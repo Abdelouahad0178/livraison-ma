@@ -28,79 +28,11 @@ const BACKUP_API_KEY = defineSecret('BACKUP_API_KEY')
 const { timingSafeEqual } = require('crypto')
 const sameKey = (a, b) => { const x = Buffer.from(String(a)), y = Buffer.from(String(b)); return x.length === y.length && timingSafeEqual(x, y) }
 
-const BACKUP_COLLECTIONS = [
-  'settings', 'parcels', 'users', 'clients', 'payments',
-  'caisseEntries', 'agentRemises', 'caissierRemarks', 'caisseClotures',
-  'caissierTransactions', 'caissierRequests', 'agentCashRecoveryRequests',
-  'agentCodRequests', 'agencyCashes', 'vehicles', 'directorLogs',
-  'cities', 'clientMessages', 'clientPortals', 'reglements',
-  'reglementsRapports', 'bankDeposits', 'centralCodDeposits', 'centralSupplierPayments',
-]
-const MAX_BACKUPS     = 10
+// ☁️ Sauvegarde automatique dans Storage : functions/cloudBackup.js (réécrite le 06/11/2026 : mémoire stable, fichier compressé,
+// mêmes collections et même format que l'export manuel). Avant : « heap out of memory », plus aucun fichier depuis le 13/09/2026.
+const { runCloudBackup } = require('./cloudBackup')
 const BACKUP_FOLDER   = 'auto-backups'
-
-function serializeForBackup(value) {
-  if (value && value.constructor && value.constructor.name === 'Timestamp') {
-    return { __type: 'timestamp', value: value.toDate().toISOString() }
-  }
-  if (value instanceof Date) return { __type: 'date', value: value.toISOString() }
-  if (Array.isArray(value)) return value.map(serializeForBackup)
-  if (value && typeof value === 'object') {
-    return Object.fromEntries(
-      Object.entries(value).map(([k, v]) => [k, serializeForBackup(v)])
-    )
-  }
-  return value
-}
-
-async function runWeeklyBackup() {
-  const bucket = getStorage().bucket('arelanc.firebasestorage.app')
-  const collections = {}
-  const counts = {}
-
-  for (const name of BACKUP_COLLECTIONS) {
-    try {
-      const snap = await db.collection(name).get()
-      collections[name] = snap.docs.map(d => ({ id: d.id, data: serializeForBackup(d.data()) }))
-      counts[name] = snap.size
-      console.log(`[backup] ${name}: ${snap.size} docs`)
-    } catch (err) {
-      console.warn(`[backup] ${name} ignoré:`, err.message)
-      collections[name] = []
-      counts[name] = 0
-    }
-  }
-
-  const backup = {
-    app: 'BG Express',
-    schema: 'firestore-backup-v1',
-    exportedAt: new Date().toISOString(),
-    collections,
-    counts,
-  }
-
-  const ts       = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-  const filename = `${BACKUP_FOLDER}/backup-bgexpress-${ts}.json`
-  const content  = JSON.stringify(backup)
-
-  await bucket.file(filename).save(content, {
-    contentType: 'application/json',
-    metadata: { exportedAt: backup.exportedAt },
-  })
-  console.log(`[backup] Sauvegardé : ${filename} (${(content.length / 1024).toFixed(0)} Ko)`)
-
-  // Rotation : garder seulement les MAX_BACKUPS derniers
-  const [allFiles] = await bucket.getFiles({ prefix: BACKUP_FOLDER + '/' })
-  const sorted = allFiles
-    .filter(f => f.name.startsWith(BACKUP_FOLDER + '/backup-bgexpress-'))
-    .sort((a, b) => a.name.localeCompare(b.name))
-
-  if (sorted.length > MAX_BACKUPS) {
-    const toDelete = sorted.slice(0, sorted.length - MAX_BACKUPS)
-    await Promise.all(toDelete.map(f => f.delete()))
-    console.log(`[backup] Supprimé ${toDelete.length} ancien(s) backup(s)`)
-  }
-}
+const runWeeklyBackup = () => runCloudBackup(db, getStorage().bucket('arelanc.firebasestorage.app'))
 
 // Sauvegarde automatique chaque dimanche à 03h00 (heure Casablanca)
 exports.scheduledWeeklyBackup = onSchedule({
@@ -110,6 +42,16 @@ exports.scheduledWeeklyBackup = onSchedule({
   timeoutSeconds: 540,
 }, async () => {
   await runWeeklyBackup()
+})
+
+// Lancer la sauvegarde maintenant (Admin › Santé des données) : administrateur seulement
+exports.runCloudBackupNow = onCall({ memory: '1GiB', timeoutSeconds: 540, maxInstances: 1,
+  cors: ['https://arelanc.web.app', 'http://localhost:5173'] }, async (request) => {
+  if (!request.auth) throw new HttpsError('unauthenticated', 'Connexion requise.')
+  const me = await db.collection('users').doc(request.auth.uid).get()
+  if (!me.exists || me.data().role !== 'admin') throw new HttpsError('permission-denied', "Réservé à l'administrateur.")
+  const r = await runWeeklyBackup()
+  return { name: r.name, documents: r.documents, errors: r.errors, seconds: r.seconds }
 })
 
 // Endpoint sécurisé pour que le PC serveur télécharge le dernier backup

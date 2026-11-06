@@ -53,3 +53,35 @@ export async function restRunQuery(opts: {
   }
   return out
 }
+
+/**
+ * 💾 Une page de TOUTE une collection, triée par identifiant (sauvegarde manuelle sur le PC, 06/11/2026) : aucun filtre, et
+ * aucun passage par le cache local de la bibliothèque Firebase, qui recopierait des dizaines de milliers de documents.
+ */
+export async function restListPage(collectionId: string, pageSize: number, afterId: string | null): Promise<RestDoc[]> {
+  const user = auth.currentUser
+  if (!user) throw new Error('lecture directe : non connecté')
+  const token = await user.getIdToken()
+  const projectId = app.options.projectId
+  const root = `projects/${projectId}/databases/(default)/documents`
+  const structuredQuery: any = {
+    from: [{ collectionId }],
+    orderBy: [{ field: { fieldPath: '__name__' }, direction: 'ASCENDING' }],
+    limit: pageSize,
+    ...(afterId ? { startAt: { values: [{ referenceValue: `${root}/${collectionId}/${afterId}` }], before: false } } : {}),
+  }
+  const res = await fetch(`https://firestore.googleapis.com/v1/${root}:runQuery`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ structuredQuery }),
+  })
+  if (!res.ok) throw new Error(`lecture directe : ${res.status} ${(await res.text()).slice(0, 200)}`)
+  const rows: any[] = await res.json()
+  const out: RestDoc[] = []
+  for (const r of rows) {
+    const d = r?.document
+    if (!d?.name) continue
+    out.push({ id: String(d.name).split('/').pop() as string, name: d.name, data: fromRestFields(d.fields || {}, REF), raw: d.fields || {} })
+  }
+  return out
+}
